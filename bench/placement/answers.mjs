@@ -40,7 +40,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, constants, fstatSync, lstatSync, openSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { finalBlock, problems, starts, stated } from "./mask.mjs";
+import { finalBlock, finalLines, problems, starts, stated } from "./mask.mjs";
 
 /** A failure this module says as it is, with no stack. */
 export class Refusal extends Error {}
@@ -162,21 +162,26 @@ function finalLine(raw) {
 
 /**
  * An answer's header lines as compared, from the bytes curl wrote: each line's own CR before its
- * LF taken off, every Date line left out, each line of a header the plan masks "<name>: <masked>",
- * and every other byte as it is (no whitespace folded, every line kept, however many). An interim
- * 1xx response's block is part of them, compared like the final one's: an answer sent with early
- * hints differs from one sent without; so are any chunked trailers curl wrote after the final
- * block, though the mask's checks read the final block alone (mask.mjs).
+ * LF taken off, every Date line left out, each line of a header the plan masks in the final
+ * response's block (mask.mjs, finalBlock) "<name>: <masked>", and every other byte as it is (no
+ * whitespace folded, every line kept, however many). An interim 1xx response's block is part of
+ * them, and so are any chunked trailers curl wrote after the final block, with no header masked
+ * in either: the mask's checks show that a masked header differs between starts in the final
+ * block alone (mask.mjs), and nothing shows it may differ in an interim block or a trailer. So an
+ * answer sent with early hints differs from one sent without, and from one whose early hints
+ * differ, even in a header the plan masks.
  */
 export function masked(raw, mask) {
   const names = new Set(mask.map((m) => m.header.toLowerCase())), out = [];
-  for (let at = 0; at < raw.length;) {
+  const final = finalLines(raw.toString("latin1"));
+  for (let at = 0, i = 0; at < raw.length; i++) {
     const nl = raw.indexOf(0x0a, at), stop = nl < 0 ? raw.length : nl;
     let line = raw.subarray(at, stop);
     if (nl >= 0 && line.at(-1) === 0x0d) line = line.subarray(0, -1);
     // A header's name is ASCII: latin1 reads each byte as itself.
     const name = /^([^:]*):/.exec(line.toString("latin1"))?.[1].toLowerCase();
-    if (name !== "date") out.push(name !== undefined && names.has(name) ? Buffer.from(`${name}: <masked>`) : line, nl < 0 ? Buffer.alloc(0) : Buffer.from("\n"));
+    const hidden = name !== undefined && names.has(name) && final !== null && i > final.at && i < final.end;
+    if (name !== "date") out.push(hidden ? Buffer.from(`${name}: <masked>`) : line, nl < 0 ? Buffer.alloc(0) : Buffer.from("\n"));
     at = stop + 1;
   }
   return Buffer.concat(out);

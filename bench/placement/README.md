@@ -239,7 +239,10 @@ one of the commands above with its output under `<run dir>/log`:
    answer with early hints differs from one without. The mask's checks (every masked header sent
    once, different in two starts, and within its stated range) read the final response's header
    block alone, from its status line to the blank line that ends it, so a masked header only an
-   interim response or a chunked trailer sends is sent 0 times. Both scripts run `answers.mjs` with an
+   interim response or a chunked trailer sends is sent 0 times. The comparison masks a header in
+   that final block alone, so an interim block and any trailers are compared with no header
+   masked: two answers whose early hints preload different files differ, even when the plan masks
+   `Link`, because nothing shows an interim block's value may differ between starts. Both scripts run `answers.mjs` with an
    environment of `PATH` alone (so no `NODE_OPTIONS` holds it) under `timeout`, 30 s (60 s for a
    placement's comparison, which takes three answers) and KILL 5 s after, and fail saying so when
    it is stopped. That stop reaches `answers.mjs` alone, so each command it runs has a bound of its
@@ -247,8 +250,9 @@ one of the commands above with its output under `<run dir>/log`:
    `diff`. `serve.mjs` publishes its
    server's process number by writing it to a staging file it creates new (`.pid.tmp`) and renaming
    that over the published path, so anything already at the staging path, a FIFO included, stops
-   the server and fails the start instead of holding `serve.mjs`, and whatever was at the published
-   path is replaced. So a server that takes a
+   the server and fails the start instead of holding `serve.mjs`. A file or link at the published
+   path is replaced; anything `rename` cannot replace, such as a directory, stops the server and
+   fails the start. So a server that takes a
    connection and never answers holds neither script, nor a signal it has held off until that
    request ends, any longer. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
@@ -355,7 +359,7 @@ while it ran.
 | The map check | `map.mjs check` | With aligned code, the placement's map against the unpadded link's by LLD's layout rule, in place of "moved by the pad". |
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
-| The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every compared answer (the two starts are checked for presence and difference only). Both read each answer's final response's header block, never an interim `1xx` one's header lines or a trailer `curl` writes after it. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
+| The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every compared answer (the two starts are checked for presence and difference only). Both read each answer's final response's header block, never an interim `1xx` one's header lines or a trailer `curl` writes after it, and the comparison masks a header in that block alone, comparing the others with nothing masked. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
 | Answers | `plan.mjs`, `verify.sh`, `turns.sh`, `answers.mjs` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. Each answer is captured once by `curl`, with the plan's status, and every fact about it is taken from those bytes, the headers' difference by the system `diff`; the difference and the bodies line are compared and written as `diff.txt` once, created new, and never read back, with `bodies.txt` and a `handoff.json` that names the outcome and both files' SHA-256s. Anything already at a file it writes (a file, or a link, to `/dev/null` or the expected difference say), an answer of another status, cut short or not sent in 10 s, fails the placement. `verify.sh` records a placement only as `answers.mjs verified` reads it from that handoff. |
 | Turns | `turns.sh`, `answers.mjs` | Every turn on a fresh start on the server's CPU, its `perf` and `wrk` output written to files created new for that turn and kept byte for byte; a failed request, output that is not exactly one complete `RESULT` line of decimal counts and each counter once in a row that ends with a newline, or a counter that is zero or whose percentage is not `100.00` (or `100`) as written, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |

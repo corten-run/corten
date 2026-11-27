@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { capture, compare, create, handoff, masked, Refusal, sha256, turn } from "./answers.mjs";
+import { starts } from "./mask.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "placement-answers-")));
@@ -101,12 +102,13 @@ test("a masked header's stated range is held by the final response's header line
   t.after(hinted.close);
   await refused(compare({ dir: fresh(), ports: [hinted.port, hinted.port], path: "/page", lines: [], status: 200, mask, say: () => {} }), "a masked header is not within the range the plan states: A: age: sent 0 times, not once");
   // Age in the final 200, within the range, and an interim 103 that sends one out of it: the
-  // final one is held to the range, and the interim block stays in the headers compared.
+  // final one is held to the range, and the interim block stays in the headers compared, its Age
+  // unmasked: only the final block's is shown to differ between starts.
   const final = await raw("HTTP/1.1 103 Early Hints\r\nAge: 9\r\n\r\nHTTP/1.1 200 OK\r\nAge: 2\r\n");
   t.after(final.close);
   const dir = fresh();
   assert.equal((await compare({ dir, ports: [final.port, final.port], path: "/page", lines: [], status: 200, mask, say: () => {} })).outcome, "same");
-  assert.ok(readFileSync(join(dir, "A.headers"), "latin1").startsWith("HTTP/1.1 103 Early Hints\nage: <masked>\n\nHTTP/1.1 200 OK\nage: <masked>\n"));
+  assert.ok(readFileSync(join(dir, "A.headers"), "latin1").startsWith("HTTP/1.1 103 Early Hints\nAge: 9\n\nHTTP/1.1 200 OK\nage: <masked>\n"));
 });
 
 test("the final response is its block alone: a line inside it that reads like a status line neither ends it nor is its status, and chunked trailers after it are no evidence for the mask", LINUX, async (t) => {
@@ -132,7 +134,8 @@ test("the final response is its block alone: a line inside it that reads like a 
   }
   const port = await chunked("Age: 2\r\n", "Age: 9\r\n"), dir = fresh();
   assert.equal((await compare({ dir, ports: [port, port], path: "/page", lines: [], status: 200, mask, say: () => {} })).outcome, "same");
-  assert.ok(readFileSync(join(dir, "A.headers"), "latin1").endsWith("\n\nage: <masked>\n"));
+  const kept = readFileSync(join(dir, "A.headers"), "latin1");
+  assert.ok(kept.startsWith("HTTP/1.1 200 OK\nage: <masked>\n") && kept.endsWith("\n\nAge: 9\n"), kept);
 });
 
 test("two starts' proof of the mask reads each start's final response alone: an Age only interim 103s send, differing, does not show the final one differs", () => {
@@ -148,6 +151,27 @@ test("two starts' proof of the mask reads each start's final response alone: an 
   const yes = starts(early(1, "Age: 1\r\n"), early(1, "Age: 2\r\n"));
   assert.equal(yes.status, 0, yes.stderr);
   assert.ok(yes.stdout.includes("every header the plan masks differs between them (age)"), yes.stdout);
+});
+
+test("the mask hides a header in the final block alone: two binaries whose 103s preload different stylesheets, their final Link differing as two starts showed, do not compare the same", LINUX, async (t) => {
+  const mask = [{ header: "link" }];
+  const hinted = (css, n) => `HTTP/1.1 103 Early Hints\r\nLink: </${css}.css>; rel=preload\r\n\r\nHTTP/1.1 200 OK\r\nLink: <${n}>\r\ncontent-type: text/plain\r\n`;
+  // The final Link differs between two starts, so the startup check takes it as masked.
+  assert.deepEqual(starts(mask, `${hinted("a", 1)}\r\n`, `${hinted("a", 2)}\r\n`), []);
+  const a = await raw(hinted("a", 1)), b = await raw(hinted("b", 2)), again = await raw(hinted("a", 2));
+  t.after(a.close);
+  t.after(b.close);
+  t.after(again.close);
+  const dir = fresh(), said = [], r = await compare({ dir, ports: [a.port, b.port], path: "/page", lines: [], status: 200, mask, say: (x) => said.push(String(x)) });
+  assert.equal(r.outcome, "differ");
+  const diff = readFileSync(join(dir, "diff.txt"), "latin1");
+  assert.match(diff, /^< Link: <\/a\.css>; rel=preload$/m);
+  assert.match(diff, /^> Link: <\/b\.css>; rel=preload$/m);
+  assert.ok(!/^[<>] link: <masked>$/m.test(diff), diff);
+  assert.ok(diff.endsWith(`bodies same: 4 bytes, sha256 ${sha256("aaaa")}\n`), diff);
+  assert.deepEqual(said, [diff]);
+  // The same 103 and a final Link that differs only as masked: the same.
+  assert.equal((await compare({ dir: fresh(), ports: [a.port, again.port], path: "/page", lines: [], status: 200, mask, say: () => {} })).outcome, "same");
 });
 
 test("the final response's status is the answer's, an interim 1xx's header lines kept and compared: 103 then 503 refused as 103, 103 then 200 accepted as 200", LINUX, async (t) => {
@@ -422,4 +446,16 @@ test("a turn's perf and wrk output go to the raw log byte for byte, a NUL includ
 test("masked: Date left out, each masked header's line its name and <masked>, whatever case it was sent in, and every other byte as received", () => {
   const raw = Buffer.from("HTTP/1.1 200 OK\r\nDate: x\r\nETag: 1\r\netag: 2\r\nx-a:\t1 \r\nx-b: caf\xe9\r\n\r\n", "latin1");
   assert.deepEqual(masked(raw, [{ header: "etag" }]), Buffer.from("HTTP/1.1 200 OK\netag: <masked>\netag: <masked>\nx-a:\t1 \nx-b: caf\xe9\n\n", "latin1"));
+});
+
+test("masked: a masked header is hidden in the final response's block alone, never in an interim 1xx block or a trailer after the final block, so two answers whose early hints differ in it differ", () => {
+  const mask = [{ header: "link" }];
+  const raw = (css, n, trailer) => Buffer.from(`HTTP/1.1 103 Early Hints\r\nLink: </${css}.css>; rel=preload\r\nDate: x\r\n\r\nHTTP/1.1 200 OK\r\nLink: <${n}>\r\nDate: y\r\n\r\nLink: ${trailer}\r\n`, "latin1");
+  assert.deepEqual(masked(raw("a", 1, "t1"), mask), Buffer.from("HTTP/1.1 103 Early Hints\nLink: </a.css>; rel=preload\n\nHTTP/1.1 200 OK\nlink: <masked>\n\nLink: t1\n", "latin1"));
+  assert.ok(!masked(raw("a", 1, "t"), mask).equals(masked(raw("b", 1, "t"), mask)), "103s that differ in a masked header compared the same");
+  assert.ok(!masked(raw("a", 1, "t1"), mask).equals(masked(raw("a", 1, "t2"), mask)), "trailers that differ in a masked header compared the same");
+  assert.ok(masked(raw("a", 1, "t"), mask).equals(masked(raw("a", 2, "t"), mask)), "final blocks that differ only in a masked header compared different");
+  // Two interim blocks: both left as sent.
+  const two = Buffer.from("HTTP/1.1 100 Continue\r\nLink: 0\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: 1\r\n\r\nHTTP/1.1 200 OK\r\nLink: 2\r\n\r\n", "latin1");
+  assert.deepEqual(masked(two, mask), Buffer.from("HTTP/1.1 100 Continue\nLink: 0\n\nHTTP/1.1 103 Early Hints\nLink: 1\n\nHTTP/1.1 200 OK\nlink: <masked>\n\n", "latin1"));
 });

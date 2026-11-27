@@ -12,7 +12,8 @@
 // response's header block alone (final, below): an interim 1xx response's (early hints, say) are
 // no evidence for the answer's own, so a masked header an interim block sends and the final one
 // does not is sent 0 times, and neither are the chunked trailers curl writes after the final
-// block's blank line. The interim block and the trailers stay in the headers compared (answers.mjs).
+// block's blank line. The comparison masks a header within the final block alone, the block these
+// checks read, and compares an interim block and the trailers byte for byte (answers.mjs).
 //   node mask.mjs sed <mask.json>                       the sed script that masks those values
 //   node mask.mjs starts <mask.json> <headers> <headers>  two starts of one binary: exit 1 unless
 //                                                       each masked header was sent once by both
@@ -61,13 +62,27 @@ const STATUS = /^HTTP\/[0-9.]+ (\d{3})(?: |$)/;
  * trailers) belongs to no block, even a trailer that reads like a status line.
  */
 export function finalBlock(headers) {
-  const lines = headers.split("\n").map((l) => l.replace(/\r$/, ""));
+  const lines = headers.split("\n").map((l) => l.replace(/\r$/, "")), s = span(lines);
+  return s && { line: lines[s.at], code: s.code, lines: lines.slice(s.at, s.end) };
+}
+
+/**
+ * Where the final response's block is (finalBlock) among headers' lines, split at each LF:
+ * { at, end }, the index of its status line and of the line that ends it (its blank line, or one
+ * past the last line), or null when headers do not start with a status line.
+ */
+export function finalLines(headers) {
+  const s = span(headers.split("\n").map((l) => l.replace(/\r$/, "")));
+  return s && { at: s.at, end: s.end };
+}
+
+function span(lines) {
   for (let at = 0; ;) {
     const code = STATUS.exec(lines[at] ?? "")?.[1];
     if (code === undefined) return null;
     let end = at + 1;
     while (end < lines.length && lines[end] !== "") end++;
-    if (!code.startsWith("1") || !STATUS.test(lines[end + 1] ?? "")) return { line: lines[at], code, lines: lines.slice(at, end) };
+    if (!code.startsWith("1") || !STATUS.test(lines[end + 1] ?? "")) return { at, end, code };
     at = end + 1;
   }
 }
