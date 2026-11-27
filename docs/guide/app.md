@@ -1372,7 +1372,8 @@ any `*-cache-control` header and the other caching headers a CDN reads first tha
 visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
 staged answer does: another app of Corten's whose staged middleware relays it inline and takes
 the cookie off still sends it as that visitor's ([Caching](#caching)).
-A `Public` answer, or one of an answer type of the app's own, whose handler drew a form's new
+A `Public` answer, or one of an answer type of the app's own or a JSON answer (`JsonResponse`,
+whose response the handler may replace with a `Public` one), whose handler drew a form's new
 submit key ([Caching](#caching)), in `NoStore` or a tuple of headers too, goes out as one that
 sets a cookie does, carrying that with it to an app that relays it inline as that one does, and
 also loses a tag (`ETag`) it was given: its handler is watched for one, as a staged route's is,
