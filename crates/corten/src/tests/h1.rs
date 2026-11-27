@@ -242,8 +242,9 @@ fn last() -> String {
 
 /// An answer of each kind, to a request of each kind, is the same bytes from Corten's connection
 /// as from hyper's: the status line, each header's name, value and place, how the body is framed
-/// and what closes the connection. Only the `Date` is left out. The requests with a body, and the
-/// one that asks to switch, are answered by hyper on both, behind the answers of Corten's own.
+/// and what closes the connection. Only the `Date` is left out. The requests with a body are read
+/// and answered by Corten's connection; the one that asks to switch, and the HTTP/1.0 ones that
+/// ask to keep their connection, by hyper on both, behind the answers of Corten's own.
 #[tokio::test]
 async fn an_answer_is_hypers_byte_for_byte() {
     let hyper = Served::start(App::new(routes()), false).await;
@@ -986,32 +987,68 @@ impl tower_service::Service<Request<Body>> for Hi {
     }
 }
 
-/// The requests that are hyper's, by what makes each so: any of the four header names, in any
-/// case and whatever it says, `CONNECT`, and an HTTP/1.0 request that asks to keep its connection.
+/// A request with a body that is hyper's on both connections: its `Upgrade` line makes it so,
+/// whatever its route does with it.
+const HANDED: &str = "POST /read HTTP/1.1\r\nhost: localhost\r\nupgrade: echo\r\ncontent-length: 5\r\n\r\nhello";
+
+/// The requests that are hyper's, by what makes each so: an `Upgrade` line, in any case and
+/// whatever it says, with whatever else its head has (a body, framed well or not, among it),
+/// `CONNECT`, and an HTTP/1.0 request that asks to keep its connection.
 fn hypers() -> Vec<String> {
     let with = |method: &str, line: &str, body: &str| format!("{method} /read HTTP/1.1\r\n{HOST}{line}\r\n\r\n{body}");
     vec![
-        with("POST", "content-length: 5", "hello"),
-        with("POST", "Content-Length: 0", ""),
-        with("GET", "CONTENT-LENGTH: 0", ""),
-        with("POST", "content-length: five", "hello"),
-        with("POST", "content-length: 5\r\ncontent-length: 6", "hello"),
-        with("POST", "transfer-encoding: chunked", "5\r\nhello\r\n0\r\n\r\n"),
-        with("POST", "Transfer-Encoding: gzip", "hello"),
-        with("POST", "transfer-encoding:", ""),
-        with("POST", "content-length: 5\r\ntransfer-encoding: chunked", "0\r\n\r\n"),
-        with("POST", "content-length: 5\r\nexpect: 100-continue", "hello"),
-        with("GET", "Expect: nothing", ""),
         with("GET", "connection: upgrade\r\nupgrade: echo", "behind"),
         with("GET", "UPGRADE: websocket", ""),
+        with("GET", "Upgrade:", ""),
+        HANDED.to_owned(),
+        with("POST", "content-length: 5\r\nUpgrade: echo", "hello"),
+        with("POST", "upgrade: echo\r\nContent-Length: 0", ""),
+        with("POST", "upgrade: echo\r\ncontent-length: five", "hello"),
+        with("POST", "upgrade: echo\r\ncontent-length: 5\r\ncontent-length: 6", "hello"),
+        with("POST", "upgrade: echo\r\ntransfer-encoding: chunked", "5\r\nhello\r\n0\r\n\r\n"),
+        with("POST", "Transfer-Encoding: gzip\r\nupgrade: echo", "hello"),
+        with("POST", "upgrade: echo\r\ncontent-length: 5\r\ntransfer-encoding: chunked", "0\r\n\r\n"),
+        with("POST", "upgrade: echo\r\ncontent-length: 5\r\nexpect: 100-continue", "hello"),
         format!("CONNECT /tunnel HTTP/1.1\r\n{HOST}\r\nthrough"),
         format!("CONNECT localhost:443 HTTP/1.1\r\n{HOST}\r\n"),
-        "POST /read HTTP/1.0\r\ncontent-length: 5\r\n\r\nhello".to_owned(),
+        format!("CONNECT localhost:443 HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello"),
         // An HTTP/1.0 client that asks to keep its connection, however it says so.
         "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\n".to_owned(),
         "GET / HTTP/1.0\r\nConnection: close, Keep-Alive\r\n\r\n".to_owned(),
         "GET / HTTP/1.0\r\nconnection: close\r\nCONNECTION: x-keep-alive-y\r\n\r\n".to_owned(),
+        "POST /read HTTP/1.0\r\nconnection: keep-alive\r\ncontent-length: 5\r\n\r\nhello".to_owned(),
     ]
+}
+
+/// A request with a body, of either framing, with `Expect` or on HTTP/1.0, is not hyper's: the
+/// connection answers it, and is not handed over.
+#[tokio::test(start_paused = true)]
+async fn a_request_with_a_body_is_not_hypers() {
+    let with = |line: &str, body: &str| format!("POST /read HTTP/1.1\r\n{HOST}{line}\r\n\r\n{body}");
+    let bodies = [
+        with("content-length: 5", "hello"),
+        with("Content-Length: 0", ""),
+        with("transfer-encoding: chunked", "5\r\nhello\r\n0\r\n\r\n"),
+        with("content-length: 5\r\nexpect: 100-continue", "hello"),
+        with("Expect: nothing", ""),
+        "POST /read HTTP/1.0\r\ncontent-length: 5\r\n\r\nhello".to_owned(),
+    ];
+    for request in bodies {
+        let (mut client, server) = tokio::io::duplex(1 << 20);
+        let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
+        let serving = crate::h1::serve(server, Hi(handled.clone()), 32 * 1024, &ending);
+        let asking = async {
+            client.write_all(format!("{request}GET / HTTP/1.1\r\n{HOST}connection: close\r\n\r\n").as_bytes()).await.unwrap();
+            let mut got = Vec::new();
+            client.read_to_end(&mut got).await.unwrap();
+            String::from_utf8(got).unwrap()
+        };
+        let (handed, got) = tokio::join!(serving, asking);
+        assert!(handed.is_none(), "{request:?}: the connection is not hyper's");
+        let answered: Vec<u16> = statuses(&got).into_iter().filter(|status| *status != 100).collect();
+        assert_eq!(answered.len(), handled.load(SeqCst), "{request:?}: {got}");
+        assert!(!answered.is_empty() && answered.iter().all(|status| *status == 200), "{request:?}: {got}");
+    }
 }
 
 /// The bytes hyper is given at a handoff are the ones the client sent from the head of the first
@@ -1083,15 +1120,15 @@ fn relay(req: &mut Request<Body>) {
     });
 }
 
-/// A request that is hyper's (one with a body, one that asks to switch, a `CONNECT`) is not
-/// answered by Corten's own connection: the answers before it go out, and the connection is
-/// hyper's from that request on, with everything the client sent behind it. So a route switches
-/// with hyper's `upgrade::on` on both, a body is read by hyper on both, and a client receives the
-/// same bytes from both: the answers before in their order, the `101` (or a tunnel's `200`), then
-/// the new protocol's bytes, those that came in one write with the request among them. A request
-/// with `Upgrade` its route does not take is answered, and so are the requests behind it.
-/// Shutdown closes a connection that was handed over and is idle, and lets one that was handed
-/// over at a request still being answered finish it.
+/// A request that is hyper's (one that asks to switch, a `CONNECT`) is not answered by Corten's
+/// own connection: the answers before it go out, and the connection is hyper's from that request
+/// on, with everything the client sent behind it, bodies among it. So a route switches with
+/// hyper's `upgrade::on` on both, and a client receives the same bytes from both: the answers
+/// before in their order, the `101` (or a tunnel's `200`), then the new protocol's bytes, those
+/// that came in one write with the request among them. A request with `Upgrade` its route does
+/// not take is answered, and so are the requests behind it. Shutdown closes a connection that
+/// was handed over and is idle, and lets one that was handed over at a request still being
+/// answered finish it.
 #[tokio::test]
 async fn a_request_that_is_hypers_takes_the_rest_of_its_connection() {
     let entered = Arc::new(AtomicUsize::new(0));
@@ -1200,7 +1237,8 @@ async fn a_request_that_is_hypers_takes_the_rest_of_its_connection() {
         got.push(one(&mut idle).await);
         let mut busy = TcpStream::connect(addr).await.unwrap();
         let reached = entered.load(SeqCst);
-        busy.write_all(format!("{GET}{}", post("/held", "hello")).as_bytes()).await.unwrap();
+        let held = post("/held", "hello").replacen("content-length", "upgrade: echo\r\ncontent-length", 1);
+        busy.write_all(format!("{GET}{held}").as_bytes()).await.unwrap();
         got.push(one(&mut busy).await);
         let wait = tokio::time::timeout(SOON, async {
             while entered.load(SeqCst) == reached {
@@ -1224,10 +1262,10 @@ async fn a_request_that_is_hypers_takes_the_rest_of_its_connection() {
 /// hyper keeps a connection whose handler left a request's body unread only if the rest of that
 /// body had arrived when the answer was written, so where its reads ended decides whether the
 /// requests behind are answered. Corten's own connection reads less at a time than hyper does (a
-/// head no further than the app's limit, a first read of [`crate::h1::FIRST`] bytes), so the bytes
-/// it hands over can end inside a body that came whole in one write. hyper is given them with
-/// what waits in the socket in the same read, and so keeps the connection where it would have
-/// had it read the stream itself.
+/// head no further than the app's limit, a first read of [`crate::h1::FIRST`] bytes), so a read
+/// of its can end inside a body that came whole in one write. A piece that such a read cut is
+/// one piece with what waits in the socket, as it would have been in hyper's read, and so the
+/// connection is kept where hyper keeps it.
 #[tokio::test]
 async fn a_body_left_unread_behind_a_head_that_fills_a_read_keeps_its_connection() {
     // The app's limit on a head when it is lower than a first read, and a first read.
@@ -1264,10 +1302,10 @@ async fn a_body_left_unread_behind_a_head_that_fills_a_read_keeps_its_connection
     }
 }
 
-/// Where a client's own writes end decides the same thing on both connections, since the request
-/// is hyper's on both: a chunk whose data comes in two writes behind a handler that does not read
-/// it closes the connection after its answer, and the request behind it is not answered. So what
-/// the test above holds is that Corten's own connection adds no such cut, not that there is none.
+/// Where a client's own writes end decides the same thing on both connections: a chunk whose
+/// data comes in two writes behind a handler that does not read it closes the connection after
+/// its answer, and the request behind it is not answered. So what the test above holds is that
+/// Corten's own connection adds no such cut, not that there is none.
 #[tokio::test]
 async fn a_body_left_unread_that_comes_in_two_writes_closes_its_connection_on_both() {
     let mut all = Vec::new();
@@ -1307,10 +1345,17 @@ async fn a_connection_waits_for_a_head_only_as_long_as_the_app_allows() {
         let (got, closed) = served.within(format!("GET /slow HTTP/1.1\r\n{HOST}\r\n{GET}"), wait).await;
         assert!(closed && statuses(&got) == [200, 200] && got.ends_with("hi"), "own: {own}, a slow handler: {got}");
         assert!(began.elapsed() >= Duration::from_millis(900), "own: {own}: closed after {:?}", began.elapsed());
-        // Handed to hyper at a body, and idle since.
+        // Idle since a request with a body.
         let post = format!("{GET}POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello");
         let (got, closed) = served.within(post, wait).await;
         assert!(closed && statuses(&got) == [200, 200] && got.ends_with("read 5"), "own: {own}, after a body: {got}");
+        // A body that stops coming is not a head: the timeout does not cut it, as with hyper.
+        let half = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhe");
+        let (got, closed) = served.within(half, Duration::from_millis(900)).await;
+        assert_eq!((got.as_str(), closed), ("", false), "own: {own}, half a body");
+        // Handed to hyper, and idle since.
+        let (got, closed) = served.within(format!("{GET}{HANDED}"), wait).await;
+        assert!(closed && statuses(&got) == [200, 200] && got.ends_with("read 5"), "own: {own}, handed over: {got}");
         served.stop().await;
 
         // Without it, an idle connection stays.
@@ -1378,8 +1423,8 @@ async fn a_request_is_held_to_its_deadline() {
 
 /// A connection keeps one timer for its requests' deadlines on Corten's connection as on hyper's
 /// (`docs/design.md#choice-deadline-timer`): none at its first request to wait, made at its
-/// second, and taken by each that waits after it. The timer is the connection's task's, so a
-/// connection handed to hyper has the one it made, and a request with a body waits on it. It is
+/// second, and taken by each that waits after it, a request with a body as one without. The
+/// timer is the connection's task's, so a connection handed to hyper has the one it made. It is
 /// dropped with the connection.
 #[tokio::test]
 async fn a_connection_keeps_its_deadlines_timer_and_takes_it_to_hyper() {
@@ -1404,14 +1449,15 @@ async fn a_connection_keeps_its_deadlines_timer_and_takes_it_to_hyper() {
         let (timers, taken) = (LIVE.get(), TAKEN.get());
         let mut client = TcpStream::connect(served.addr).await.unwrap();
         let mut seen = Vec::new();
-        // The two with a body are hyper's on either connection, and everything behind them.
-        for request in [&waits[..], GET, &waits, &waits, &posts, &posts, GET, &waits] {
+        // The last three are hyper's on either connection: the first of them hands it over.
+        for request in [&waits[..], GET, &waits, &waits, &posts, &posts, GET, &waits, HANDED, &waits, &posts] {
             client.write_all(request.as_bytes()).await.unwrap();
             assert_eq!(statuses(&one(&mut client).await), [200], "own: {own}: {request}");
             seen.push((LIVE.get() - timers, TAKEN.get() - taken));
         }
         // How many timers the connection has, and how many of its deadlines have taken one.
-        assert_eq!(seen, [(0, 0), (0, 0), (1, 0), (1, 1), (1, 2), (1, 3), (1, 3), (1, 4)], "own: {own}");
+        let expected = [(0, 0), (0, 0), (1, 0), (1, 1), (1, 2), (1, 3), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7)];
+        assert_eq!(seen, expected, "own: {own}");
         drop(client);
         let dropped = tokio::time::timeout(Duration::from_secs(10), async {
             while LIVE.get() != timers {
@@ -1435,7 +1481,7 @@ async fn no_more_connections_are_open_than_the_app_allows() {
             held.write_all(GET.as_bytes()).await.unwrap();
             assert_eq!(statuses(&one(&mut held).await), [200]);
             if handed {
-                held.write_all(format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello").as_bytes()).await.unwrap();
+                held.write_all(HANDED.as_bytes()).await.unwrap();
                 assert!(one(&mut held).await.ends_with("read 5"));
             }
             let addr = served.addr;
@@ -2246,7 +2292,7 @@ impl tokio::io::AsyncWrite for Chopped {
 /// at any byte of those answers, the connection is over and is not handed to hyper.
 #[tokio::test]
 async fn a_handoff_follows_the_answers_before_it_however_the_socket_takes_them() {
-    let theirs = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello{GET}");
+    let theirs = format!("{HANDED}{GET}");
     let serve = |sent: String, most: usize, vectored: bool, fails_at: Option<usize>, seed: u64| async move {
         let output = Arc::new(std::sync::Mutex::new(Vec::new()));
         let io = Chopped { input: sent.into_bytes(), at: 0, output: output.clone(), dice: Dice(seed), most, vectored, fails_at };
@@ -2327,8 +2373,7 @@ async fn shutdown_begun_before_a_handoff_ends_the_connection_at_the_answers_befo
     let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
     let serving = crate::h1::serve(server, Hi(handled.clone()), 32 * 1024, &ending);
     let asking = async {
-        let theirs = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello");
-        client.write_all((GET.repeat(BEFORE) + &theirs).as_bytes()).await.unwrap();
+        client.write_all((GET.repeat(BEFORE) + HANDED).as_bytes()).await.unwrap();
         // The answers are more than the pipe holds: the connection waits for its client to take
         // them, with the request that is hyper's read behind them.
         turns().await;
@@ -2512,9 +2557,10 @@ async fn a_header_name_longer_than_http_takes_is_refused_as_hyper_refuses_it() {
 
 /// A connection over an IO of the app's own (the step `serve_wrapped` takes), one that holds what
 /// it is written and gives it to the socket as it is flushed, as a TLS stream does, is handed to
-/// hyper as a plain one is: requests with a body, behind requests without and in front of them,
-/// are each answered once and in order, with the bytes hyper's connection answers, in one write
-/// and one request at a time.
+/// hyper as a plain one is, and reads a body as over a plain one: requests with a body, read by
+/// Corten's connection and, behind the one that hands it over, by hyper, with requests without
+/// one between them, are each answered once and in order, with the bytes hyper's connection
+/// answers, in one write and one request at a time.
 ///
 /// This is a stand-in and not TLS: the crate has no TLS library among its dependencies, those of
 /// its tests included, so a handoff under a real TLS stream has no test here
@@ -2535,17 +2581,17 @@ async fn a_connection_over_a_wrapped_io_is_handed_to_hyper_as_a_plain_one_is() {
         // In one write: the answers of Corten's connection are behind the stand-in's flush when
         // the connection becomes hyper's, and hyper's when it is closed.
         let mut client = TcpStream::connect(addr).await.unwrap();
-        let sent = format!("{GET}GET /stream HTTP/1.1\r\n{HOST}\r\n{post}{GET}{post}{}", last());
+        let sent = format!("{GET}GET /stream HTTP/1.1\r\n{HOST}\r\n{post}{GET}{HANDED}{GET}{post}{}", last());
         client.write_all(sent.as_bytes()).await.unwrap();
         let (all, closed) = read(&mut client, SOON).await;
         assert!(closed, "own: {own}: the connection is closed: {all:.300}");
-        assert_eq!(statuses(&all), [200; 6], "own: {own}: {all:.300}");
-        assert_eq!(all.matches("\r\n\r\nread 5").count(), 2, "own: {own}: each body was read once");
+        assert_eq!(statuses(&all), [200; 8], "own: {own}: {all:.300}");
+        assert_eq!(all.matches("\r\n\r\nread 5").count(), 3, "own: {own}: each body was read once");
         got.push(dateless(&all));
-        // One request at a time: a request without a body, the one that makes the connection
-        // hyper's, and one of each behind it.
+        // One request at a time: a request without a body, one with, the one that makes the
+        // connection hyper's, and one of each behind it.
         let mut client = TcpStream::connect(addr).await.unwrap();
-        for request in [GET, post.as_str(), GET, post.as_str()] {
+        for request in [GET, post.as_str(), HANDED, GET, post.as_str()] {
             client.write_all(request.as_bytes()).await.unwrap();
             let answer = one(&mut client).await;
             assert_eq!(statuses(&answer), [200], "own: {own}: {answer}");
