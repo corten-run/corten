@@ -832,8 +832,9 @@ fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
 /// Whether a header line of an answer leaves it without a tag ([`tag`]): a tag or an encoding of
 /// its own, a part of a body, or a `Cache-Control` that keeps it out of every cache or says it
 /// never changes. In line in [`tag`], which asks it of every answer whose lines it searches: as a
-/// call, with the lookup of `Cache-Control` a call inside it, a page's request counted 67
-/// instructions more (`bench/request-cost`, `page-browser`).
+/// function `tag` called, with the lookup of `Cache-Control` a call inside it, a compressed
+/// page's request counted 59 instructions more than with it in line (`bench/request-cost`,
+/// `page-browser`).
 #[inline(always)]
 fn untagged(headers: &HeaderMap) -> bool {
     headers.contains_key(header::ETAG)
