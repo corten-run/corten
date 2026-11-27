@@ -203,11 +203,13 @@ impl Mode {
             return ((mode, true), "");
         }
         let accept = accept().and_then(|accept| accept.to_str().ok()).unwrap_or("");
-        let mode = if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
-            Mode::Data
-        } else {
-            Mode::Document
-        };
+        // The first item's media type, without its parameters and the whitespace around it, is
+        // JSON: the line starts with it after whitespace, and whitespace then ends the item or
+        // starts its parameters. Read so, a line that starts otherwise is not looked at further.
+        let json = accept.trim_ascii_start().strip_prefix(crate::api::JSON).is_some_and(|rest| {
+            matches!(rest.trim_ascii_start().as_bytes().first(), None | Some(b',' | b';'))
+        });
+        let mode = if json { Mode::Data } else { Mode::Document };
         ((mode, false), accept)
     }
 
@@ -4649,5 +4651,58 @@ mod carried_tests {
             assert_eq!(read(corten, accept, true), ((mode, fetched), html), "{said}");
             assert_eq!(read(corten, accept, false), ((mode, fetched), false), "{said}");
         }
+    }
+
+    /// `Mode::said` stops at the first item's start, and decides as reading that whole item does:
+    /// its media type, cut at the first `;` and trimmed, is JSON. Every line made of these parts
+    /// is decided both ways, and with a runtime's header, which `Accept` never overrides.
+    #[test]
+    fn the_first_accept_item_is_json_as_reading_the_whole_item_says() {
+        let whole = |line: &str| crate::api::media_type(line.split(',').next().unwrap_or("")) == crate::api::JSON;
+        let before = ["", " ", "\t", " \t "];
+        let types = [
+            "application/json",
+            "application/jsonx",
+            "application/json+x",
+            "application/json/",
+            "application/jso",
+            "Application/JSON",
+            "application/problem+json",
+            "text/html",
+            "*/*",
+            "application/*",
+            "",
+        ];
+        let after = ["", " ", "\t", " \t"];
+        let then = ["", ",", ";", ";q=0", "; q=0.5", ", text/html", ",application/json", "x", " x", ";,", ",;"];
+        let rest = ["", ", */*;q=0.8", ", application/json", "  "];
+        let mut decided = [0; 2];
+        for before in before {
+            for ty in types {
+                for after in after {
+                    for then in then {
+                        for rest in rest {
+                            let line = format!("{before}{ty}{after}{then}{rest}");
+                            let value = HeaderValue::from_str(&line).unwrap();
+                            let ((mode, fetched), accept) = Mode::said(None, || Some(&value));
+                            assert_eq!(mode == Mode::Data, whole(&line), "{line:?}");
+                            assert_eq!((fetched, accept), (false, line.as_str()), "{line:?}");
+                            decided[usize::from(mode == Mode::Data)] += 1;
+                            for runtime in ["nav", "action", "page"] {
+                                let runtime = HeaderValue::from_static(runtime);
+                                let ((mode, fetched), accept) = Mode::said(Some(&runtime), || Some(&value));
+                                assert!(mode != Mode::Data && fetched && accept.is_empty(), "{line:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Both answers are among the lines, so neither reading is the same for all of them.
+        assert!(decided.iter().all(|&n| n > 100), "{decided:?}");
+        // No line, and one that is not text, are no JSON.
+        assert_eq!(Mode::said(None, || None).0, (Mode::Document, false));
+        let not_text = HeaderValue::from_bytes(b"application/json\xff").unwrap();
+        assert_eq!(Mode::said(None, || Some(&not_text)), ((Mode::Document, false), ""));
     }
 }
