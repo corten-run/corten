@@ -61,7 +61,10 @@ const page = Number(pageText);
 if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText) || !Number.isSafeInteger(page)) throw new Error("getconf PAGESIZE did not give the page size");
 
 const probe = await start(binary, configuration, { cpu: values.cpu, port });
-const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
+// run.test.mjs names the directory its stand-in writes a status in, `<pid>/status` as in /proc,
+// so a test knows each reading; a run on a host sets no IDLE_STATUS_ROOT and reads the probe's own.
+const status = `${process.env.IDLE_STATUS_ROOT ?? "/proc"}/${probe.pid}/status`;
+const memory = () => resident(readFileSync(status, "utf8"));
 const files = () => readdirSync(`/proc/${probe.pid}/fd`).length;
 /** The run as JSON, printed after the probe has stopped. @type {string | undefined} */
 let json;

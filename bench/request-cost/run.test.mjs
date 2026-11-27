@@ -1,9 +1,10 @@
 // node --test bench/request-cost/run.test.mjs
 // count.mjs and idle.mjs run whole, with stand-ins on PATH for taskset, valgrind and
 // callgrind_control and stand-in.mjs for the probe: which dump a count reads, what its window
-// holds, and what makes a run print no figure. The stand-ins are shell scripts and idle.mjs reads
-// /proc, so these run on Linux with sh and are skipped elsewhere; the refusals of an option run
-// anywhere.
+// holds, and what makes a run print no figure. idle.mjs reads the stand-in's resident memory from
+// the status it writes (IDLE_STATUS_ROOT), so a test knows each reading, and its open files from
+// /proc. The stand-ins are shell scripts and idle.mjs reads /proc, so these run on Linux with sh
+// and are skipped elsewhere; the refusals of an option run anywhere.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -40,7 +41,7 @@ function standIns() {
     writeFileSync(join(directory, name), `#!/bin/sh\n${script}\n`);
     chmodSync(join(directory, name), 0o755);
   }
-  const env = { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH}`, STAND_IN: directory };
+  const env = { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH}`, STAND_IN: directory, IDLE_STATUS_ROOT: join(directory, "proc") };
   const notes = (/** @type {string} */ name) => JSON.parse(readFileSync(join(directory, name), "utf8"));
   return { directory, env, probe: join(directory, "probe"), notes, remove: () => rmSync(directory, { recursive: true, force: true }) };
 }
@@ -88,17 +89,33 @@ function sent(name, port) {
 /**
  * Requires the line an idle run over 40 connections printed for `what` (`answered 1 pipeline`),
  * whole: the readings the counted gate decides by, its growth after less before, and its figure
- * that growth over the connections. @param {string} stdout @param {string} what @param {number} [page]
+ * that growth over the connections. With `requests`, the readings are the stand-in's: 10,240 kB
+ * before, and two 4,096-byte pages more after for each connection and one for each request on it.
+ * @param {string} stdout @param {string} what @param {{ page?: number, requests?: number }} [expected]
  */
-function printedWhole(stdout, what, page = 4096) {
+function printedWhole(stdout, what, { page = 4096, requests } = {}) {
   const line = new RegExp(`^(-?\\d+) bytes a connection \\(40 that ${what}, opened in \\d+\\.\\d s; (\\d+) before, (\\d+) after, (-?\\d+) grown, in ${page}-byte pages\\)$`, "m").exec(stdout);
   assert.ok(line, stdout);
   const [, figure, before, after, grown] = line.map(Number);
   assert.equal(grown, after - before);
   assert.equal(figure, Math.round(grown / 40));
+  if (requests !== undefined) assert.deepEqual([before, after, grown, figure], standInReadings(requests), stdout);
 }
 
-/** A script of the kit run with the stand-ins. @param {string} script @param {string[]} args @param {Record<string, string>} [asked] */
+/**
+ * The stand-in's before, after, growth and figure over 40 connections that each sent `requests`.
+ * @param {number} requests @returns {number[]}
+ */
+function standInReadings(requests) {
+  const before = 10_240 * 1024;
+  const grown = 40 * (2 + requests) * 4096;
+  return [before, before + grown, grown, grown / 40];
+}
+
+/**
+ * A script of the kit run with the stand-ins. An `asked` variable that is undefined is left out.
+ * @param {string} script @param {string[]} args @param {Record<string, string | undefined>} [asked]
+ */
 async function running(script, args, asked = {}) {
   const stand = standIns();
   try {
@@ -203,13 +220,18 @@ test("count.mjs --allocations prints calls a request, and no figure for a dump w
 test("idle.mjs prints a figure when the probe's open files grew by the connections, counted from after the warm ones closed", { skip }, async () => {
   const run = await running("idle.mjs", ["--connections", "40"]);
   assert.equal(run.status, 0, run.stderr);
-  printedWhole(run.stdout, "answered 1 pipeline");
+  printedWhole(run.stdout, "answered 1 pipeline", { requests: 1 });
+  // Without IDLE_STATUS_ROOT it reads the process's own status in /proc, as on a host.
+  const own = await running("idle.mjs", ["--connections", "40"], { IDLE_STATUS_ROOT: undefined });
+  assert.equal(own.status, 0, own.stderr);
+  printedWhole(own.stdout, "answered 1 pipeline");
+  assert.notEqual(Number(/; (\d+) before,/.exec(own.stdout)?.[1]), standInReadings(1)[0], own.stdout);
 });
 
 test("idle.mjs prints the case and the requests an active run sent", { skip }, async () => {
   const run = await running("idle.mjs", ["--connections", "40", "--case", "get-browser", "--requests", "3"]);
   assert.equal(run.status, 0, run.stderr);
-  printedWhole(run.stdout, "answered 3 get-browser");
+  printedWhole(run.stdout, "answered 3 get-browser", { requests: 3 });
   // The 50 warm connections sent the case once each, then the 40 sent it 3 times each.
   const request = sent("get-browser", run.port);
   assert.deepEqual(run.connections?.filter((heads) => heads.length), [...Array(50).fill([request]), ...Array(40).fill([request, request, request])]);
@@ -219,7 +241,7 @@ test("idle.mjs names the case a silent run's probe was set up and warmed for", {
   for (const name of ["text", "pipeline"]) {
     const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", name]);
     assert.equal(run.status, 0, run.stderr);
-    printedWhole(run.stdout, `sent nothing to the probe for ${name}`);
+    printedWhole(run.stdout, `sent nothing to the probe for ${name}`, { requests: 0 });
     // The 50 warm connections sent the case once each, and the 40 nothing.
     assert.deepEqual(run.connections?.filter((heads) => heads.length), Array(50).fill([sent(name, run.port)]), name);
   }
@@ -228,7 +250,7 @@ test("idle.mjs names the case a silent run's probe was set up and warmed for", {
 test("idle.mjs prints the page size getconf gives, and starts nothing without a whole one", { skip }, async () => {
   const large = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: "65536" });
   assert.equal(large.status, 0, large.stderr);
-  printedWhole(large.stdout, "answered 1 pipeline", 65536);
+  printedWhole(large.stdout, "answered 1 pipeline", { page: 65536, requests: 1 });
   for (const page of ["fail", "4096.5", "0", "4k", "9007199254740992", "9".repeat(310)]) {
     const run = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: page });
     assert.equal(run.status, 1, `page ${JSON.stringify(page)}`);
@@ -269,12 +291,13 @@ test("each kind of run compare.mjs asks for is one the kit takes, and its --json
   for (const [file, requests] of /** @type {const} */ ([["idle-request-1.json", 1], ["idle-browser-1.json", 3], ["idle-silent-1.json", 0]])) {
     const { text, expect, found } = await take(file, ["--connections", "40"], { connections: 40 });
     // The growth and the page size the gate decides by, beside the rounded figure.
-    assert.deepEqual([found.requests, found.connections, found.grown, found.page, found.bytes], [requests, 40, found.after - found.before, 4096, Math.round((found.after - found.before) / 40)], file);
+    const [before, after, grown, bytes] = standInReadings(requests);
+    assert.deepEqual([found.requests, found.connections, found.before, found.after, found.grown, found.page, found.bytes], [requests, 40, before, after, grown, 4096, bytes], file);
     assert.equal(compare.figure(text, expect), null, file);
   }
-  // The page size getconf gives is the one the JSON carries. Its resident memory is still read in
-  // this host's pages, so the run need not be whole 65,536-byte pages and `figure` may refuse it:
-  // the printed JSON is read here, and the 65,536-byte rule is tested on figures of its own.
+  // The page size getconf gives is the one the JSON carries. Its resident memory is still the
+  // stand-in's, in 4,096-byte pages: the printed JSON is read here, and the 65,536-byte rule is
+  // tested on figures of its own.
   const large = await take("idle-silent-1.json", ["--connections", "40"], { connections: 40 }, { STAND_IN_PAGE: "65536" });
   assert.equal(JSON.parse(large.text).page, 65536);
 });

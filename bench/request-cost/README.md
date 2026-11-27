@@ -472,3 +472,10 @@ with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 47 of the 6
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).
+
+The resident memory `idle.mjs` reads in `run.test.mjs` is the stand-in's: it writes a status of
+its own, which `IDLE_STATUS_ROOT` names in place of `/proc`, and grows it by two pages for each
+open connection and one for each request answered on it. A test asserts each run's before, after
+and growth exactly, so a run that read memory once would fail it. One run sets no
+`IDLE_STATUS_ROOT` and reads the stand-in's own status in `/proc`, as a host does; nothing in
+[the hosted job](#the-hosted-job) sets it.
