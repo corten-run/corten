@@ -640,9 +640,11 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
 
     /// What the connection does while an answer's body waits: `Err` when the client is gone, and
     /// the request with it. The client's end is looked for before anything more is written, as
-    /// hyper reads before it writes (`looked`: it has been, since the task was last polled).
-    fn poll_meanwhile(&mut self, cx: &mut Context<'_>, looked: bool) -> io::Result<()> {
-        if !looked {
+    /// hyper reads before it writes. For [`Conn::poll_body`] alone, which has looked already in
+    /// this poll of the task where the task has waited (`waited`, which nothing changes while
+    /// the body is polled): then nothing is looked for here.
+    fn poll_meanwhile(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
+        if !self.waited {
             self.poll_left(cx)?;
         }
         // Everything written so far goes out: the answers before this one, the pieces of a
@@ -773,7 +775,8 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// anything is written: a piece that is ready by then is not written to a client that has
     /// closed its side by then, as hyper, which reads before it writes each time its task is
     /// woken, writes none. A body polled in the turn its handler answered is not looked for
-    /// here: its handler was ([`Conn::poll_answer`]), in that turn.
+    /// here: its handler was ([`Conn::poll_answer`]), in that turn, and it pays for this the
+    /// read of the flag (3 instructions a request counted, 10 for a 12 KB page).
     fn poll_body(
         &mut self,
         cx: &mut Context<'_>,
@@ -782,8 +785,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         ahead: &mut Option<Option<Bytes>>,
     ) -> Poll<io::Result<bool>> {
         use http_body::Body;
-        let looked = self.waited;
-        if looked {
+        if self.waited {
             self.poll_left(cx)?;
         }
         loop {
@@ -798,19 +800,19 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                     match Self::poll_piece(cx, body)? {
                         Poll::Ready(next) => *ahead = Some(next),
                         Poll::Pending => {
-                            self.poll_meanwhile(cx, looked)?;
+                            self.poll_meanwhile(cx)?;
                             return Poll::Pending;
                         }
                     }
                 }
-                ready!(self.poll_deliver(cx, looked))?;
+                ready!(self.poll_deliver(cx, self.waited))?;
             }
             let next = match ahead.take() {
                 Some(next) => next,
                 None => match Self::poll_piece(cx, body)? {
                     Poll::Ready(next) => next,
                     Poll::Pending => {
-                        self.poll_meanwhile(cx, looked)?;
+                        self.poll_meanwhile(cx)?;
                         return Poll::Pending;
                     }
                 },
