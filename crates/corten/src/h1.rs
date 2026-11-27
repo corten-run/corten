@@ -35,7 +35,11 @@
 //! to go leaves no part of it with the client. What the client sent is read only when the
 //! connection needs it (a head) and never while bytes of a head wait to be read, so a client
 //! that sends without reading is held back by the socket; the read buffer holds one read
-//! ([`Inbox`]): [`READ`] bytes or fewer, or a head of the app's limit.
+//! ([`Inbox`]): [`READ`] bytes or fewer, or a head of the app's limit. A head's bytes are its
+//! request's while it is answered (its header values share them), and a look for the client's
+//! end behind a head that filled the buffer is given another, of [`READ`] bytes at the most:
+//! so while one request is answered a connection holds no more of what its client sent than
+//! the app's limit and a read.
 //!
 //! **When an answer cannot be finished.** A body that fails, or panics, before any byte of its
 //! answer has gone ends the connection without that answer: the answers before it are sent, and
@@ -58,9 +62,16 @@
 //! request with it, as with hyper, which reads to find that out each time its task is woken with
 //! an answer unfinished and nothing of the client's unread. Here it is looked for when a head
 //! has been read with nothing behind it (before the handler is asked), while the handler or the
-//! body waits, and where a write waits for the client to read, an answer being unfinished until
-//! all of it has gone. The answers before that one are the client's and are sent; of that one
-//! nothing more is written.
+//! body waits, each time the task is polled for a body after it has waited (before the body is
+//! asked for more, so a piece that is ready by then is not written), and where a write waits
+//! for the client to read, an answer being unfinished until all of it has gone, shutdown or
+//! none. The answers before that one are the client's and are sent, for as long as the send
+//! timeout lets a write wait; of that one nothing more is written.
+//!
+//! What no look makes the same is how much each connection has written by the time it can
+//! learn of the end. Where nothing waits (the body gives every piece at once and the client
+//! takes every write) each goes on writing until its task next yields, and the two yield after
+//! different amounts: of an answer neither finishes, either may have sent more.
 //!
 //! **What a connection that waits for a request holds.** Its two buffers, each as large as its
 //! client made it and no larger than a bound: the read buffer begins at [`FIRST`] bytes and
@@ -178,10 +189,12 @@ pub(crate) struct Inbox {
     small: u8,
     /// The largest piece taken since the last read.
     most: usize,
-    /// The buffer's allocation is larger than a waiting connection keeps ([`KEPT_READ`]): it was
-    /// made for a long head. (What the buffer says of its room is not enough to tell: it counts
-    /// from what has been taken. Every allocation is made here, of a size that is known, and
-    /// none is made larger afterwards.)
+    /// The buffer's allocation is larger than a waiting connection keeps ([`KEPT_READ`]), or one
+    /// was since the connection last waited: it was made for a long head. (What the buffer says
+    /// of its room is not enough to tell: it counts from what has been taken. Every allocation
+    /// is made here, of a size that is known, and none is made larger afterwards; the one a
+    /// look is given is no larger than the bound, and leaves this as it was, so the connection
+    /// begins again from its first size when it next waits.)
     grown: bool,
     /// The last read filled what it was offered: more of what the client sent with those bytes
     /// may wait in the socket.
@@ -241,8 +254,7 @@ impl Inbox {
     /// Reads from `io` once. Room is made when little is left: in the same allocation when
     /// nothing else holds its bytes (a request's headers share them until they are dropped), in
     /// a new one otherwise. `limit`: how long what is unread may be with what is read behind it
-    /// (a head, up to the app's limit; `usize::MAX` for a read made while a request is
-    /// answered); no room is made for more.
+    /// (a head, up to the app's limit); no room is made for more.
     pub(crate) fn poll_fill<I: AsyncRead + Unpin>(
         &mut self,
         io: &mut I,
@@ -262,8 +274,9 @@ impl Inbox {
             // unread: taken back in the allocation where it has that much and nothing else holds
             // a part of it, and otherwise in a new one of just that size. So the room made
             // grows with what is held, and a head that comes in small reads is moved to a new
-            // allocation only when it has grown by half since the last: each byte of it is
-            // copied three times at the most, however many reads bring it. (`BytesMut::reserve`
+            // allocation only when it has grown by half since the last: about three times its
+            // length is copied in all, however many reads bring it (its first bytes at every
+            // move, its last at none). (`BytesMut::reserve`
             // would make the allocation larger: twice what it was, or the room asked for behind
             // everything taken of it so far.) And for no more than the limit leaves: a head
             // that does not end is read in a buffer that grows to the app's limit for a head
@@ -314,14 +327,25 @@ impl Inbox {
     /// request it is made for still holds the bytes of its head, and room could only be made
     /// beside them. What a look does read (a request sent behind this one) is read again from,
     /// with room made, when the connection comes to it.
+    ///
+    /// Where there is none (what was read filled the buffer, and all of it has been taken: a
+    /// head exactly as long as the app's limit, or a pipeline that ended where a read did) the
+    /// look is given a new buffer of what a read is offered, and a read's worth at the most
+    /// ([`READ`]), whatever the reads before it were offered: it is made beside the last
+    /// request's bytes, which that request holds while it is answered, so it is not sized by
+    /// them. Nothing is unread when a look is made, so nothing is copied.
     pub(crate) fn poll_look<I: AsyncRead + Unpin>(&mut self, io: &mut I, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let offered = self.buf.capacity() - self.buf.len();
-        if offered == 0 {
-            let read = self.poll_fill(io, cx, usize::MAX);
+        if self.buf.capacity() == self.buf.len() {
+            let mut fresh = BytesMut::with_capacity(self.buf.len() + self.room.min(READ));
+            fresh.extend_from_slice(&self.buf);
+            self.buf = fresh;
             #[cfg(test)]
-            LOOKED.set(LOOKED.get().max(self.buf.capacity()));
-            return read;
+            {
+                HELD.set(HELD.get().max(self.buf.capacity()));
+                LOOKED.set(LOOKED.get().max(self.buf.capacity()));
+            }
         }
+        let offered = self.buf.capacity() - self.buf.len();
         let count = {
             let mut read = pin!(tokio::io::AsyncReadExt::read_buf(io, &mut self.buf));
             ready!(read.as_mut().poll(cx))?
@@ -377,7 +401,9 @@ struct Conn<I> {
     /// The client has closed its side, with a request of its being answered or an answer to it
     /// waiting to be sent ([`Conn::poll_left`], [`Conn::poll_head`]).
     left: bool,
-    /// The task has waited since the date was last brought up to date.
+    /// The task has waited since the last answer's head was written: the date is brought up to
+    /// date before the next is, and a body asked for more is asked after a look for its
+    /// client's end ([`Conn::poll_body`]).
     waited: bool,
     vectored: bool,
 }
@@ -605,9 +631,11 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
 
     /// What the connection does while an answer's body waits: `Err` when the client is gone, and
     /// the request with it. The client's end is looked for before anything more is written, as
-    /// hyper reads before it writes.
-    fn poll_meanwhile(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
-        self.poll_left(cx)?;
+    /// hyper reads before it writes (`looked`: it has been, since the task was last polled).
+    fn poll_meanwhile(&mut self, cx: &mut Context<'_>, looked: bool) -> io::Result<()> {
+        if !looked {
+            self.poll_left(cx)?;
+        }
         // Everything written so far goes out: the answers before this one, the pieces of a
         // stream.
         if let Poll::Ready(Err(error)) = self.poll_send(cx) {
@@ -621,14 +649,15 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// client has closed its side, as when the IO fails. hyper looks each time its task is woken
     /// while a request is being answered, which an answer is until all of it is flushed, and
     /// before it writes any more; so here, once a send has waited, and from then on before the
-    /// next. A send that does not wait looks for nothing: it is as it was.
-    fn poll_deliver(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    /// next. A send that does not wait looks for nothing: it is as it was. `looked`: the caller
+    /// has looked since the task was last polled, and nothing is looked for here.
+    fn poll_deliver(&mut self, cx: &mut Context<'_>, looked: bool) -> Poll<io::Result<()>> {
         let waited = self.stalled;
-        if waited {
+        if waited && !looked {
             self.poll_left(cx)?;
         }
         let sent = self.poll_send(cx);
-        if sent.is_pending() && !waited {
+        if sent.is_pending() && !waited && !looked {
             self.poll_left(cx)?;
         }
         sent
@@ -641,7 +670,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// there, as hyper drops what it has not written of an answer it gives up.
     async fn deliver(&mut self) -> bool {
         let sent = poll_fn(|cx| {
-            let sent = self.poll_deliver(cx);
+            let sent = self.poll_deliver(cx, false);
             self.waited |= sent.is_pending();
             sent
         });
@@ -729,6 +758,13 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// Writes an answer's body as it comes: whether the connection can go on to another request.
     /// `ahead`: what the body gave while the piece before it waited to go, kept by the caller
     /// from one poll to the next.
+    ///
+    /// Once the task has waited since the answer's head was written (`waited`), the client's end
+    /// is looked for each time the task is polled, before the body is asked for more or
+    /// anything is written: a piece that is ready by then is not written to a client that has
+    /// closed its side by then, as hyper, which reads before it writes each time its task is
+    /// woken, writes none. A body polled in the turn its handler answered is not looked for
+    /// here: its handler was ([`Conn::poll_answer`]), in that turn.
     fn poll_body(
         &mut self,
         cx: &mut Context<'_>,
@@ -737,6 +773,10 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         ahead: &mut Option<Option<Bytes>>,
     ) -> Poll<io::Result<bool>> {
         use http_body::Body;
+        let looked = self.waited;
+        if looked {
+            self.poll_left(cx)?;
+        }
         loop {
             // A piece too large to copy, or enough to fill a write, goes out before anything is
             // written behind it: a client that reads slowly holds the stream back. The body is
@@ -749,19 +789,19 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                     match Self::poll_piece(cx, body)? {
                         Poll::Ready(next) => *ahead = Some(next),
                         Poll::Pending => {
-                            self.poll_meanwhile(cx)?;
+                            self.poll_meanwhile(cx, looked)?;
                             return Poll::Pending;
                         }
                     }
                 }
-                ready!(self.poll_deliver(cx))?;
+                ready!(self.poll_deliver(cx, looked))?;
             }
             let next = match ahead.take() {
                 Some(next) => next,
                 None => match Self::poll_piece(cx, body)? {
                     Poll::Ready(next) => next,
                     Poll::Pending => {
-                        self.poll_meanwhile(cx)?;
+                        self.poll_meanwhile(cx, looked)?;
                         return Poll::Pending;
                     }
                 },
@@ -927,9 +967,13 @@ where
                 // The client is done, the header timeout has passed, or the server is shutting
                 // down. A client that closed its side while the last answer waited for it to
                 // read has left (`poll_head`): the answers before that one are sent if none of
-                // it has gone, and otherwise it is cut short where it is.
+                // it has gone, and otherwise it is cut short where it is. So with one that
+                // closes its side while what is unsent goes out here (shutdown began with an
+                // answer still waiting for its client): the client's end is looked for while
+                // that waits (`deliver`), as hyper looks while it drains.
                 _ => {
-                    if !conn.left || conn.unwrite() {
+                    let sent = if conn.left { conn.unwrite() } else { conn.deliver().await };
+                    if sent {
                         conn.close().await;
                     }
                     return false;
