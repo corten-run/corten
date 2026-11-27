@@ -8523,7 +8523,9 @@ rules something out.
     form's new submit key is the request's alone: not kept, and sent `private, no-cache` without
     a CDN's caching header, as a page whose render drew the key is, and without a tag it was
     given (the app's, a middleware's or a relayed upstream's): that tag names a body whose key a
-    browser may have sent already, and a `304` to it would keep that body. A lifetime a middleware
+    browser may have sent already, and a `304` to it would keep that body. The store reads the
+    request's signal before it keeps an answer, so one whose key `req.rendered` drew on a thread
+    the handler's watch did not poll is not kept either. A lifetime a middleware
     or the app gave it goes too, so the browser asks again before it shows a key it may have sent:
     a plain `private, max-age=60` goes out `private, no-cache`, and one with a `no-store`
     (`private, no-store, max-age=60`) `private, no-store`, which `b910dedf7` sent as written
@@ -9718,8 +9720,8 @@ rules something out.
     2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
     `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-26 for the stages' mark
-    past the middleware, the probe of `bench/request-cost` at `d10bedc5f` (this change; the
-    commits after it change comments and docs only), the control `da6420d62`, `273e27b05`,
+    past the middleware, the probe of `bench/request-cost` at `d10bedc5f` (this change as it was
+    then, before its later production changes: a historical count, not taken again since), the control `da6420d62`, `273e27b05`,
     `66d66c28e` and `cf2ea1a01` against `9b8834fcc` (`9c8cd07e7` in an earlier run), built
     one after another in one directory with rustc 1.100.0, counted with valgrind 3.24.0 and
     `--cpu 2` in a `rust:1-trixie` container on a 12-CPU workstation, answers compared first
