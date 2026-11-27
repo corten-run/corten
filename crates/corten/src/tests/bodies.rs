@@ -322,7 +322,10 @@ async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_br
 /// has it: its length is zero, reading it gives nothing, a limit of no bytes holds it, and no
 /// `100 Continue` is sent for it. One sent chunked has not ended and has no length until it is
 /// read, with data, with none, or with trailers alone, which the handler still reads. None is a
-/// body held whole, and each prints as any body that is not empty does.
+/// body held whole, and each prints as any body that is not empty does. What differs is what was
+/// kept for it: the body of a request without one holds nothing, so the box it is kept in was not
+/// allocated, and any other holds its stream. HTTP/1.0 is the same by its length, and so are a
+/// request with a length that asks to switch protocols and a `CONNECT`.
 #[tokio::test]
 async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunked_one_has_not() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -332,7 +335,9 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
         let switches = request.extensions().get::<hyper::upgrade::OnUpgrade>().is_some();
         let mut body = request.into_body();
         let (ended, length, whole) = (body.is_end_stream(), body.size_hint().exact(), body.is_whole());
-        let said = format!("ended {ended}, length {length:?}, whole {whole}, {body:?}, switches {switches}");
+        // A box of a value with no size is not allocated.
+        let keeps = if body.boxed_size() == 0 { "nothing" } else { "a stream" };
+        let said = format!("ended {ended}, length {length:?}, whole {whole}, {body:?}, keeps {keeps}, switches {switches}");
         let (mut data, mut trailers) = (0, Vec::new());
         while let Some(frame) = body.frame().await {
             match frame.expect("a body that arrived").into_data() {
@@ -342,12 +347,17 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
         }
         format!("{said}; read {data} and {trailers:?}")
     }
+    // A `2xx` to a `CONNECT` has no body to say it in, so this one is refused.
+    async fn refused(request: Request<Body>) -> (StatusCode, String) {
+        (StatusCode::FORBIDDEN, told(request).await)
+    }
     async fn within_none(request: Request<Body>) -> Result<String, Error> {
         Ok(format!("{:?}", crate::extract::bytes_up_to(request.into_body(), 0).await?.map(|bytes| bytes.len())))
     }
     let routes = Table::new()
         .route("/told", crate::router::any(told))
         .route("/none", crate::router::any(within_none))
+        .route("/refused", crate::router::any(refused))
         .route("/text", crate::router::post(|text: String| async move { format!("{text:?}") }));
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
@@ -367,7 +377,7 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
         answer(format!("{method} {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n{lines}\r\n{body}"))
     };
 
-    const ENDED: &str = "ended true, length Some(0), whole false, Body(..), switches false; read 0 and []";
+    const ENDED: &str = "ended true, length Some(0), whole false, Body(..), keeps nothing, switches false; read 0 and []";
     for (method, lines) in [
         ("GET", ""),
         ("POST", "content-length: 0\r\n"),
@@ -386,6 +396,12 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
         answer("GET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close, Upgrade\r\nupgrade: websocket\r\n\r\n".into()).await;
     let switching = ENDED.replace("switches false", "switches true");
     assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&switching), "{got}");
+    // So does a `CONNECT`.
+    let got = ask("CONNECT", "/refused", "", "").await;
+    assert!(got.starts_with("HTTP/1.1 403") && got.ends_with(&switching), "{got}");
+    // HTTP/1.0 has no chunks, and a request of it with no length has no body.
+    let got = answer("GET /told HTTP/1.0\r\nhost: localhost\r\n\r\n".into()).await;
+    assert!(got.starts_with("HTTP/1.0 200") && got.ends_with(ENDED), "{got}");
     // The connection goes on to its next request.
     let got = answer(
         "GET /told HTTP/1.1\r\nhost: localhost\r\n\r\nGET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n".into(),
@@ -395,7 +411,7 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
     assert_eq!(got.matches(ENDED).count(), 2, "{got}");
 
     // Chunked, the end of the body is in the body: nothing is known of it until it is read.
-    const OPEN: &str = "ended false, length None, whole false, Body(..), switches false; read";
+    const OPEN: &str = "ended false, length None, whole false, Body(..), keeps a stream, switches false; read";
     for (body, read) in [
         ("0\r\n\r\n", "0 and []"),
         ("0\r\nx-sum: 1\r\n\r\n", "0 and [\"x-sum\"]"),
@@ -409,10 +425,15 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
     assert!(got.starts_with("HTTP/1.1 200") && got.ends_with("Some(0)"), "chunked with no data, no byte allowed: {got}");
     // With a length that is not zero, the body is still to come.
     let got = ask("POST", "/told", "content-length: 2\r\n", "hi").await;
-    let sized = "ended false, length Some(2), whole false, Body(..), switches false; read 2 and []";
+    let sized = "ended false, length Some(2), whole false, Body(..), keeps a stream, switches false; read 2 and []";
     assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(sized), "{got}");
     let got = ask("POST", "/told", "content-length: 2\r\nexpect: 100-continue\r\n", "hi").await;
     assert!(got.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200") && got.ends_with(sized), "{got}");
+    let got = answer("POST /told HTTP/1.0\r\nhost: localhost\r\ncontent-length: 2\r\n\r\nhi".into()).await;
+    assert!(got.starts_with("HTTP/1.0 200") && got.ends_with(sized), "{got}");
+    // A length on a request that asks to switch protocols is a body to read, like any other.
+    let got = ask("POST", "/told", "connection: Upgrade\r\nupgrade: websocket\r\ncontent-length: 2\r\n", "hi").await;
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&sized.replace("switches false", "switches true")), "{got}");
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
