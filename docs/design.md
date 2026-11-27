@@ -12860,6 +12860,13 @@ rules something out.
       over it; and a listener that pressed another form there made the runtime's own replace count
       as the page's. Telling whose replace is running takes tracking of the kind this Choice has
       cut; the press keeps the entry, and any replace since it leaves the address.
+    - Dropping a marked answer that comes after another marked form's answer put its address in,
+      so a panel never shows an older scope under a newer address (Day's answer held while Week's
+      drew, then drawn at `?scope=week`): two forms may patch different parts of the screen, which
+      the runtime cannot tell from two that patch the same part short of comparing what each
+      draws, and dropping one would lose a part its press asked for; a form without the mark draws
+      such an answer too. An app that wants one address for one panel drives it from one form,
+      whose newer press drops the older answer.
     - Putting the action's `#fragment` on a redirected answer's URL, as an earlier build did:
       `fetch` shows no fragment of the `Location`, so a 303 to `/result#server` from an action
       ending in `#button` put `/result#button` in, where the browser's own GET reaches
@@ -12896,9 +12903,12 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 3,318 bytes larger raw (46,502 to 49,820), 1,342
-    with gzip (16,718 to 18,060) and 1,199 with brotli (15,106 to 16,305), paid once a release by
-    every user (87, 23 and 21 larger than the build before this one, which ended a held replace's
+    What it costs: the runtime every page loads is 3,361 bytes larger raw (46,502 to 49,863), 1,356
+    with gzip (16,718 to 18,074) and 1,213 with brotli (15,106 to 16,319), paid once a release by
+    every user (43, 14 and 14 larger than the build before this one, which looked through every nav
+    link on the page again after each marked answer it drew, one that changed only the query too,
+    though a link is current by the path alone; that build was 87, 23 and 21 larger than the one
+    before it, which ended a held replace's
     hold only as its own callback on the held navigation's `finished` ran, so a press a page's own
     callback there made, run first, was refused though the navigation had ended; and took a draw
     that had begun and then threw as superseded once a press its own elements made was the form's
@@ -12950,7 +12960,8 @@ rules something out.
     is none): a marked press reads that record, and so does a marked read, other than that
     press's, where it could draw, and while it holds a navigation reads `navigation.transition`
     once to compare with it. A patch tracks whether it placed every
-    element as it walks them, without a separate scan;
+    element as it walks them, without a separate scan, and reads the path before and after a marked
+    answer's replace, looking through the nav links only when it changed;
     each `currententrychange` compares the key with the last seen and adds one to a count of
     changes, keeping its `navigationType`, or, for a change of the state alone, to a count of
     state writes kept by the entry on screen in a weak map; without the Navigation API each trusted

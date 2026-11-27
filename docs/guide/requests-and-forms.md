@@ -2355,7 +2355,8 @@ and still says its notice. Give the form a
 leaves the address for a press of a marked form that has none (a spread that writes none), whose
 presses it cannot tell apart. Two marked forms are not ordered against each other: their answers
 are drawn as they come, and the address is left by one pressed before the other's answer put its
-own in.
+own in. A panel that should show the scope its address names is driven by one form, whose newer
+press drops an older one's answer.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
 page shows (a list's results) is a navigation, `data-keep-place`: each change reads the page,

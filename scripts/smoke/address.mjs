@@ -302,11 +302,31 @@ export async function dataAddress(browser) {
     // A marked form sent to another route's address: the address is that one and its nav link the
     // current one, in the same entry, and Back goes to the page before the screen.
     const current = () => scope.evaluate(() => Array.from(document.querySelectorAll("main nav a[aria-current=page]"), (a) => a.getAttribute("href")).join());
+    // A nav link is current by the address's path alone, so the runtime looks through the page's
+    // nav links again for a marked answer that changes the path, not for one that changes only the
+    // query: each look through them is counted (`document.querySelectorAll` for a nav link).
+    await scope.evaluate(() => {
+      const doc = /** @type {any} */ (document);
+      const all = doc.querySelectorAll;
+      Object.assign(window, { __navLooks: 0 });
+      doc.querySelectorAll = function (/** @type {string} */ selector) {
+        if (selector === "a[href][data-nav]") /** @type {any} */ (window).__navLooks += 1;
+        return all.call(this, selector);
+      };
+    });
+    const looks = () => scope.evaluate(() => /** @type {any} */ (window).__navLooks);
+    const queryOnly = { drawn: await press("Day"), at: await at(), looks: await looks() };
     const wasCurrent = await current();
     const beforeAway = await entries();
     asked.length = 0;
     await press("Elsewhere");
-    const away = { at: await at(), shown: await shown(), asked: asked.splice(0), current: await current(), added: (await entries()) - beforeAway };
+    const away = { at: await at(), shown: await shown(), asked: asked.splice(0), current: await current(), added: (await entries()) - beforeAway, looks: await looks() };
+    await scope.evaluate(() => delete (/** @type {any} */ (document)).querySelectorAll);
+    check(
+      "a data-address form's answer that changes only the query looks through no nav link, and one that changes the path does",
+      queryOnly.drawn && queryOnly.at === "/smoke/address?scope=day" && queryOnly.looks === 0 && away.looks > 0,
+      JSON.stringify({ queryOnly, looks: away.looks }),
+    );
     const awayBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
     check(
       "a data-address form sent to another route's address marks its nav link current, and Back from it goes to the page before",

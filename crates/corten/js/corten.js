@@ -1149,11 +1149,13 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
       }
     }
     const complete = done && placed && !skipped;
+    const path = location.pathname;
     if (complete) done();
     // The server marked a nav link in the patch against the request that made it (a form's action),
-    // not this page: mark it as a navigation would. Only then, or once the address changed: a patch
-    // without one (a ticker's) only looks through what it put.
-    if (complete || navs || put.some(holdsNav)) markCurrent();
+    // not this page: mark it as a navigation would. Only then, or once a marked answer changed the
+    // path, which is all a nav link is current by: a patch without one (a ticker's, a marked answer
+    // that changed only the query) only looks through what it put.
+    if ((complete && location.pathname !== path) || navs || put.some(holdsNav)) markCurrent();
     for (const el of put) setVars(el);
   } finally {
     // A ref read would normally already have swept. End those lives before the observer wires
