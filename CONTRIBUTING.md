@@ -677,16 +677,23 @@ same document is told as the place case's is, by an init script added before the
 each document the tab makes: the document once the load returns and once the wait for `Saved.` ends
 must both be the first, so a read again that loads the page in full, even before Playwright's load
 returns, is not taken for the load's own document. The check that navigating away stops the
-reads leaves a page that has armed its read again (the head's read-again tag) by its header's News
-link, pressed in the page, and requires only that the page start no read of the alerts page from
-that press on: no fetch of `/alerts` other than a prefetch the page started after its press, the
-press and each fetch's start numbered in the page by one count in the order they happen, from notes
-the page has before it is asked to navigate, so a fetch started in the same instant as the press
-counts as after it (News can come from a prefetch sent before the press, so no request marks the
-moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
-document replaced meanwhile, which leaves no notes, fails it, and the page's `fetch` is put back
-and its press listener removed however it ends, an install of them the page runs only after that
-removal doing nothing. Its route and request listener are
+reads leaves the page of a write that has not landed by its header's News link, clicked by
+Playwright as soon as the page is in, and requires only that the page start no read of the alerts
+page from that press on: no fetch of `/alerts` other than a prefetch the page started after its
+press, the press (a capture listener in the page for a click on the link) and each fetch's start
+numbered in the page by one count in the order they happen, from notes the page has before it is
+asked to navigate, so a fetch started in the same instant as the press counts as after it (News
+can come from a prefetch sent before the press, so no request marks the moment it left), and no
+load of `/alerts` in the page's request log from just before Playwright is asked to click, a
+boundary at or before the press, read 2.2 s after News is drawn; a document replaced meanwhile,
+which leaves no notes, fails it. A try counts only when the page's note of its press shows its
+read again still armed (the head's read-again tag, with no part's tag in `<main>`) and its next
+read not yet due (no fetch of `/alerts` started since the navigation's own, the first after the
+try asked the page to navigate), so a read again that drew `Saved.` and stopped, or was on its
+way, before the press cannot pass it; a try that does not count is tried again, up to five
+in all, and the check fails when none counts; a read after the press fails it on any try. The page's `fetch` is put back and its press
+listener removed however it ends, an install of them the page runs only after that removal doing
+nothing. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
 leaves by the header's link and then requires no further read for a while, the press and the wait
 for News are each bounded to 30 seconds by the smoke's clock, and sending the alert until it says
