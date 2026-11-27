@@ -190,10 +190,38 @@ async fn move_market(
     Form(input): Form<MoveInput>,
 ) -> HtmlResult {
     let roll = market.writes.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ listing::now();
-    let written = write_market(&pool, &market, &at.seller, 5, roll, Some(input.submit.as_str())).await.map_err(write_failed)?;
+    let written = write_market(&pool, &market, &at.seller, 5, roll, Some(input.submit.as_str())).await;
+    moved(&req, &at.seller, written).await
+}
+
+/// What the form answers once its write is done or refused.
+async fn moved(req: &Req, seller: &str, written: Result<Written, corten_cluster::Error>) -> HtmlResult {
+    let written = match written {
+        Ok(written) => written,
+        Err(e) if e.is::<corten_cluster::IdempotencyKeyReused>() => return key_reused(req, seller).await,
+        Err(e) => return Err(unavailable(e)),
+    };
     req.patch_or(
         html! { <MoveStatus text="Market lows moved. The rows change when the feed brings the change, on every instance." /> },
-        || async { req.redirect(&url::Seller { seller: &at.seller, after: written.seq }) },
+        || async { req.redirect(&url::Seller { seller, after: written.seq }) },
+    )
+    .await
+}
+
+/// Why a submit whose key another seller's write already used moved nothing. It names no seller.
+const KEY_REUSED: &str = "Nothing moved: this form's key was already used for another write.";
+
+/// A submit whose key another seller's write already used (a form copied from that seller's
+/// page, say): a 422 that says so. With JavaScript the status line says it, and the runtime gives
+/// the form a new key, so sending it again moves the lows; without, a page whose link opens the
+/// seller's page with a fresh form. A data client gets the Problem Details document with it.
+async fn key_reused(req: &Req, seller: &str) -> HtmlResult {
+    let mut errors = Errors::new();
+    errors.add_form(KEY_REUSED);
+    req.invalid(
+        &errors,
+        html! { <MoveStatus text={html! { {KEY_REUSED}" Send it again; it has a new key now." }} /> },
+        || async { req.page(page::refused(req, seller, html! { {KEY_REUSED}" Open the listings again for a fresh form." })) },
     )
     .await
 }
@@ -235,7 +263,12 @@ async fn market(
     let key = headers.get("idempotency-key").and_then(|v| v.to_str().ok());
     let roll = market.writes.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ listing::now();
     let n = at.n.unwrap_or(5).clamp(1, 100);
-    Ok(Json(write_market(&pool, &market, &at.seller, n, roll, key).await.map_err(write_failed)?))
+    market_written(write_market(&pool, &market, &at.seller, n, roll, key).await)
+}
+
+/// What a market write answers a JSON client.
+fn market_written(written: Result<Written, corten_cluster::Error>) -> JsonResult<Written> {
+    Ok(Json(written.map_err(write_failed)?))
 }
 
 async fn write_market(
@@ -319,9 +352,9 @@ fn unavailable(e: corten_cluster::Error) -> Error {
     Error::new(e).with_status(StatusCode::SERVICE_UNAVAILABLE)
 }
 
-/// A market write's failure: a key another seller's write already used is the client's to fix, a
-/// 422 that says so (it names no seller), not a 503 that invites the same retry; anything else is
-/// [`unavailable`].
+/// A JSON market write's failure: a key another seller's write already used is the client's to
+/// fix, a 422 whose `detail` says so (it names no seller), not a 503 that invites the same retry;
+/// anything else is [`unavailable`].
 fn write_failed(e: corten_cluster::Error) -> Error {
     if e.is::<corten_cluster::IdempotencyKeyReused>() {
         Error::new(e).with_status(StatusCode::UNPROCESSABLE_ENTITY)
@@ -355,15 +388,90 @@ mod tests {
         assert!(link.is_some_and(|href| href.starts_with("/assets/") && href.ends_with("/style.css")), "{html}");
     }
 
-    /// A market write whose key another seller's write used is refused as the client's mistake;
-    /// Postgres out of reach is still a 503.
-    #[test]
-    fn a_key_another_seller_used_is_a_422_and_an_outage_a_503() {
-        let reused = super::write_failed(corten_cluster::IdempotencyKeyReused.into());
-        assert_eq!(reused.status_code(), corten::http::StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(reused.to_string(), corten_cluster::IdempotencyKeyReused.to_string());
-        let down = super::write_failed("connection refused".into());
-        assert_eq!(down.status_code(), corten::http::StatusCode::SERVICE_UNAVAILABLE);
+    /// The form's and the JSON route's answers to a write `begin` refused or could not start,
+    /// without Postgres: each handler's answer to the write's result, sent through an app with
+    /// the error page and assets.
+    #[corten::routes]
+    mod refused {
+        #[route("/sellers/{seller}/market", post = reused_form)]
+        pub struct Move<'a> {
+            pub seller: &'a str,
+        }
+
+        #[route("/sellers/{seller}/down", post = down_form)]
+        pub struct Down<'a> {
+            pub seller: &'a str,
+        }
+
+        #[route("/api/feeds/{seller}/market", post = reused_json)]
+        pub struct Write<'a> {
+            pub seller: &'a str,
+        }
+
+        #[route("/api/feeds/{seller}/down", post = down_json)]
+        pub struct WriteDown<'a> {
+            pub seller: &'a str,
+        }
+    }
+
+    async fn reused_form(req: Req, Params(at): Params<refused::Move<'_>>) -> HtmlResult {
+        super::moved(&req, &at.seller, Err(corten_cluster::IdempotencyKeyReused.into())).await
+    }
+
+    async fn down_form(req: Req, Params(at): Params<refused::Down<'_>>) -> HtmlResult {
+        super::moved(&req, &at.seller, Err("connection refused".into())).await
+    }
+
+    async fn reused_json(Params(_): Params<refused::Write<'_>>) -> JsonResult<super::Written> {
+        super::market_written(Err(corten_cluster::IdempotencyKeyReused.into()))
+    }
+
+    async fn down_json(Params(_): Params<refused::WriteDown<'_>>) -> JsonResult<super::Written> {
+        super::market_written(Err("connection refused".into()))
+    }
+
+    /// A market write whose key another seller's write used is refused as the client's mistake,
+    /// a 422 in every answer: the page without JavaScript says what happened and links back to a
+    /// fresh form, the patch says so in the status line, and JSON says so in its `detail`. None
+    /// names a seller but this one. Postgres out of reach is still a 503 with the error page.
+    #[tokio::test]
+    async fn a_key_another_seller_used_is_a_422_that_says_so_and_an_outage_a_503() {
+        use corten::http::{Method, StatusCode};
+        let app = App::new(refused::router()).assets(crate::page::Static).error_page(crate::page::error_page, ()).test();
+        // As the page writes it, with its apostrophe escaped.
+        let reused = "this form&#39;s key was already used for another write";
+
+        let page = app.post(&refused::Move { seller: "s1" }).await;
+        assert_eq!(page.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let html = page.text();
+        assert!(html.contains("<h1>Not moved</h1>") && html.contains(reused), "{html}");
+        assert!(html.contains("Open the listings again for a fresh form."), "{html}");
+        assert!(html.contains(r#"<a href="/sellers/s1">Back to the listings for s1</a>"#), "{html}");
+        assert!(!html.contains("Please try again"), "{html}");
+
+        let patch = app.post(&refused::Move { seller: "s1" }).mode(Mode::Action).await;
+        assert_eq!(patch.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let html = patch.text();
+        assert!(html.contains(r#"role="status""#) && html.contains(reused), "{html}");
+        assert!(html.contains("Send it again; it has a new key now."), "{html}");
+
+        let data = app.post(&refused::Move { seller: "s1" }).mode(Mode::Data).await;
+        assert_eq!(data.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = serde_json::from_str(data.text()).expect("a JSON body");
+        assert_eq!(body["status"], 422, "{body}");
+        assert_eq!(body["form"], super::KEY_REUSED, "{body}");
+
+        let json = app.call(Method::POST, &refused::Write { seller: "s1" }).mode(Mode::Data).await;
+        assert_eq!(json.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = serde_json::from_str(json.text()).expect("a JSON body");
+        assert_eq!(body["status"], 422, "{body}");
+        assert_eq!(body["detail"], corten_cluster::IdempotencyKeyReused.to_string(), "{body}");
+
+        let down = app.post(&refused::Down { seller: "s1" }).await;
+        assert_eq!(down.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(down.text().contains("Please try again."), "{}", down.text());
+        let down = app.call(Method::POST, &refused::WriteDown { seller: "s1" }).mode(Mode::Data).await;
+        assert_eq!(down.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     /// The listing type the table's script reads (`types/app.d.ts`), and its row's view.

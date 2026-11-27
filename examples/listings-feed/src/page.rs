@@ -75,6 +75,18 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
     })
 }
 
+/// A move the app refused, for a browser without JavaScript: why, in the layout, and a link back
+/// to the seller's page, whose form has a fresh key.
+pub fn refused<'a>(req: &'a Req, seller: &'a str, text: impl Render + 'a) -> impl Document + 'a {
+    html! {
+        <Layout req={req} title="Not moved" head="">
+            <h1>"Not moved"</h1>
+            <p>{text}</p>
+            <p><a href={url::Seller { seller, after: None }}>"Back to the listings for "{seller}</a></p>
+        </Layout>
+    }
+}
+
 pub fn page<'a>(
     req: &'a Req,
     seller: &'a str,
