@@ -1,7 +1,8 @@
 // Synthetic OS/native records for the real Live readers, not a native benchmark.
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, posix } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { deploymentSha256 } from "../../deployments.mjs";
 import { liveCaptureSchema, liveContracts } from "../../live.mjs";
 import { runnerFor } from "../../registry.mjs";
@@ -12,15 +13,15 @@ import { processIdentity } from "../host-lifetime.mjs";
 import { liveActorCpus, liveApplication } from "../native-roles.mjs";
 import { executableReference } from "../participant-executables.mjs";
 
-export async function isolatedLiveCapture(t, group, round) {
-  const f = await syntheticFixture(t, group, { allRegistered: true, round });
+async function isolatedBinding(t, group, round, profile) {
+  const f = await syntheticFixture(t, group, { allRegistered: true, round, profile });
   const { binding, plan } = f;
   const options = binding.execution.effectiveOptions;
   Object.assign(options, { isolated: true, measure: true });
   Object.assign(plan, { isolated: true, measurement: fanoutProfile });
   binding.execution.settings.measurement = fanoutProfile;
   const { entry, selection } = runnerFor(group);
-  binding.execution.invocation.argv = [entry, round, ...selection, "--build", "--isolated", "--profile", "native-feed", "--measure"];
+  binding.execution.invocation.argv = [entry, round, ...selection, "--build", "--isolated", "--profile", options.profile, "--measure"];
   binding.request.recipe = "native-feed-measure";
   Object.assign(binding.resources, { actorCpus: liveActorCpus, app: liveApplication, requestedCpuEnv: null });
   binding.preparation = { fixtures: [] };
@@ -29,6 +30,11 @@ export async function isolatedLiveCapture(t, group, round) {
 
   const tools = { node: hash("driver"), browser: hash("chromium") };
   await f.json("host-actor-tools.json", tools);
+  return { ...f, tools };
+}
+
+export async function isolatedLiveCapture(t, group, round) {
+  const f = await isolatedBinding(t, group, round, "native-feed"), { plan } = f;
   const start = Date.parse(plan.startedAt), records = [];
   for (const [appIndex, app] of plan.apps.entries()) {
     const id = hash(`synthetic container ${app}`), imageId = `sha256:${hash(`synthetic image ${app}`)}`;
@@ -57,7 +63,62 @@ export async function isolatedLiveCapture(t, group, round) {
       records.push({ at: scenarioStart + 5, container, path });
     }
   }
-  return { ...f, tools, records, start, end: records.at(-1).at + 10 };
+  return { ...f, records, start, end: records.at(-1).at + 10 };
+}
+
+// Use real successful Express traces with synthetic phase identity, actor
+// windows and OS samples. Only the test process narrows the registry.
+export async function isolatedLiveSuccess(t, round, clockAt) {
+  const group = "live-delivery", app = "express", f = await isolatedBinding(t, group, round, "bounded");
+  const { plan, ledger } = f;
+  assert.deepEqual(plan.apps, [app]);
+  const sample = (name) => JSON.parse(gunzipSync(readFileSync(new URL(
+    `../../../live/evidence/review-v3-express/${name}`, import.meta.url))));
+  const measurement = fanoutProfile.clients.map((n) => sample(`express-fanout-${n}.json.gz`));
+  const native = JSON.parse(measurement[0].kernel.before.receipt.instance.stdout);
+  const appStart = Date.parse(native.startedAt), start = appStart - 500;
+  plan.startedAt = new Date(start).toISOString();
+  await f.json("plan.json", plan);
+  const original = JSON.parse(gunzipSync(readFileSync(join(f.folder, "express-normal.json.gz"))));
+  const provenance = { ...original.provenance, containerId: native.id, imageId: native.image,
+    processInventory: measurement[0].provenance.processInventory };
+  const files = [], measured = [], samples = new Set();
+  for (const [i, scenario] of plan.scenarios.entries()) {
+    const name = `express-${scenario}.json.gz`, artifact = sample(name);
+    const timeOrigin = appStart + 100 + i * 1500, capturedAt = Math.ceil(artifact.capture.records.at(-1).at) + 1;
+    artifact.costs = { ...artifact.costs, timeOrigin, capturedAt };
+    const endedAt = timeOrigin + capturedAt;
+    artifact.actorWindow = { startedAt: timeOrigin, endedAt, renderer: { startedAt: timeOrigin, endedAt } };
+    artifact.provenance = provenance;
+    files.push(await f.compressed(name, artifact));
+    samples.add(timeOrigin + 5);
+  }
+  let last;
+  for (const artifact of measurement) {
+    const startedAt = Math.floor(artifact.host.timeOrigin + artifact.interval.startedAt);
+    const endedAt = Math.ceil(artifact.host.timeOrigin + artifact.interval.finishedAt) + 1;
+    artifact.actorWindow = { startedAt, endedAt, renderer: { startedAt, endedAt }, endedClock: clockAt(endedAt - start) };
+    Object.assign(artifact, { provenance, qualification: files });
+    measured.push(await f.compressed(`express-fanout-${artifact.clients}.json.gz`, artifact));
+    samples.add(startedAt + 10); last = endedAt;
+  }
+  await f.json("express-artifacts.json", { app, group, files });
+  await f.json("express-measurements.json", { app, group, profile: fanoutProfile, files: measured });
+  Object.assign(ledger.cells[0], { parity: "passed", measurement: "complete", measurementArtifact: "express-measurements.json",
+    reason: `${files.length}/${files.length} bounded native browser journeys passed; no load qualification` });
+  ledger.readyForLoad = true;
+  await f.json("coverage.json", ledger);
+  const window = { startedAt: appStart, endedAt: last + 10 };
+  const state = { Status: "running", Running: true, Pid: native.pid, Paused: false, Restarting: false, Dead: false,
+    ExitCode: 0, OOMKilled: false, StartedAt: native.startedAt, FinishedAt: "0001-01-01T00:00:00Z" };
+  const container = { id: native.id, imageId: native.image, restartCount: 0, state };
+  await f.json("express-host-actor.json", { id: native.id, imageId: native.image, role: "application", app, window,
+    terminal: { ...container, limits: { CpusetCpus: liveActorCpus.application, NanoCpus: liveApplication.cpu * 1e9,
+      Memory: liveApplication.memoryBytes }, state: { ...state, Status: "exited", Running: false, Pid: 0,
+        FinishedAt: new Date(window.endedAt).toISOString() } } });
+  for (let at = appStart; at <= window.endedAt; at += 800) samples.add(at);
+  const path = `/system.slice/docker-${native.id}.scope`;
+  return { ...f, start, end: window.endedAt + 10, records: [...samples].sort((a, b) => a - b).map((at) => ({ at, path, container })) };
 }
 
 function cgroup(path, pids = [], cpus = "0-7", quota = "max", memory = "max") {

@@ -19,7 +19,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
-  recheckExternalFailedHost, recheckSetupAttempt, recheckSetupRetirement } from "./fleet-verify.mjs";
+  recheckExternalFailedHost, recheckSetupAttempt, recheckSetupRetirement, replacementQuarantine } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -306,9 +306,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   try {
   let checkHistoricalDispatch;
-  const setupDispatchRefusals = new WeakSet();
+  const createDispatchRefusals = new WeakSet();
   const run = productionDispatch({ processRun, provider: () => providerRun, interrupted,
-    historicalDispatch: () => checkHistoricalDispatch, dispatchRefusals: setupDispatchRefusals });
+    historicalDispatch: () => checkHistoricalDispatch, dispatchRefusals: createDispatchRefusals });
   const manifest = options.group === undefined ? undefined
     : requireStagedFleet(JSON.parse(regular(resolve(options.fleet), 1024 * 1024)));
   const stagedSibling = manifest && options.group !== manifest.jobs[0].group;
@@ -343,8 +343,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   const continuation = manifest?.single ? admission?.subject.continuation : undefined;
   const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
   const quarantined = continuation?.quarantinedCreates ?? [];
-  assert.ok(quarantined.every((row) => row.group !== options.group && row.accountId === manifest.provider.accountId),
-    "create quarantine permits only other groups in the saved account");
+  const replacement = !preview && replacementQuarantine(quarantined, options.group, manifest?.single?.replacesQuarantineSha256);
+  assert.ok(quarantined.every((row) => row.accountId === manifest.provider.accountId
+    && (row.group !== options.group || row === replacement && Number(row.round.slice(1)) < Number(options.round.slice(1)))),
+    "create quarantine permits only other groups or its exact replacement in the saved account");
   const exitOneRetirements = continuation?.exitOneRetirements ?? [];
   const setupRetirements = continuation?.setupRetirements ?? [];
   const historicalIds = new Set([...unconfirmed, ...exitOneRetirements, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
@@ -392,13 +394,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       }
       if (beforeCreate !== "census") {
         for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
-        const checkSetup = (check) => {
+        const checkCustody = (check) => {
           try { return check(); } catch (error) {
-            if (beforeCreate === "dispatch" && error instanceof Error) setupDispatchRefusals.add(error);
+            if (beforeCreate === "dispatch" && error instanceof Error) createDispatchRefusals.add(error);
             throw error;
           }
         };
-        const setupIdleChecks = checkSetup(() => setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody)));
+        const setupIdleChecks = checkCustody(() => setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody)));
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
         // A continuation approval predating this binding cannot create beside
         // an unbound r78 slot. Do not try to replay its archive from the child.
@@ -410,16 +412,28 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
           assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
         }
         if (beforeCreate === "dispatch" && setupIdleChecks.length) {
-          checkSetup(() => {
+          checkCustody(() => {
             recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
             for (const stillIdle of setupIdleChecks) stillIdle();
           });
+        }
+        if (beforeCreate === "dispatch") {
+          for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
         }
       }
       return currentPeers;
     }
   });
-  if (exitOneRetirements.length || externalFailures.length || setupRetirements.length) checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
+  if (exitOneRetirements.length || externalFailures.length || setupRetirements.length || quarantined.length) {
+    checkHistoricalDispatch = () => {
+      try { return checkFleetAdmission("dispatch"); } catch (error) {
+        // A quarantined successor must not strand another creating state on a
+        // local admission refusal before any request reaches the provider.
+        if (quarantined.length && error instanceof Error) createDispatchRefusals.add(error);
+        throw error;
+      }
+    };
+  }
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");

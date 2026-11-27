@@ -20,6 +20,7 @@ import { verifyResources } from "./resources.mjs";
 import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout, waitForFanoutDrain } from "./fanout.mjs";
 import { liveActorCpus, liveApplication } from "../workloads/isolated/native-roles.mjs";
 import { containerState, requireNativeCommandCpuSet, requireNativeContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
+import { liveWorkloadClock, liveWorkloadEndFile, liveWorkloadEndSchema } from "../workloads/isolated/host-observation.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), root = resolve(here, "../..");
 const nativeInstanceFormat = '{"Id":{{json .Id}},"Image":{{json .Image}},"NetworkSettings":{"Ports":{{json .NetworkSettings.Ports}}}}';
@@ -321,6 +322,7 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
   await writeFile(join(out, "plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(join(out, "source.diff.gz"), gzipSync(diff));
   const cells = [];
+  const retainWorkloadEnd = group === "live-delivery" && isolated && measure;
   const stop = new AbortController(), signal = testSignal ? AbortSignal.any([stop.signal, testSignal]) : stop.signal;
   const handlers = ["SIGINT", "SIGTERM", "SIGHUP"].map((name) => [name, () => stop.abort(new Error(`native live runner cancelled (${name})`))]);
   for (const [name, handler] of handlers) process.on(name, handler);
@@ -448,6 +450,7 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
               console.error(`${app}/fanout-${clients}: ${error.message}`);
             }
             actor.finish(a);
+            if (retainWorkloadEnd && a.schema === "native-live-fanout/v3") a.actorWindow.endedClock = liveWorkloadClock();
             let teardownFailure = teardown.failure;
             if (!teardownFailure && a.schema === "native-live-fanout-failure/v1"
               && index + 1 < fanoutProfile.clients.length && !signal.aborted) {
@@ -483,6 +486,15 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
             ...(artifact ? { artifact } : {}), ...(measurementArtifact ? { measurementArtifact } : {}),
             reason: artifact ? `${qualified.length}/${scenarios(group).length} bounded native browser journeys passed; no load qualification`
               : adapterError?.message ?? "Cancelled before first scenario" });
+          if (retainWorkloadEnd && !signal.aborted && cells.length === plan.apps.length
+            && cells.every((c) => c.parity === "passed" && c.measurement === "complete")) {
+            // All actor windows and their manifests are complete. The last
+            // browser and application still belong to this invocation.
+            const clock = liveWorkloadClock();
+            if (clock) await writeFile(join(out, liveWorkloadEndFile), JSON.stringify({
+              schema: liveWorkloadEndSchema, round: plan.round, commit, pid: process.pid, clock,
+            }), { flag: "wx" });
+          }
         } finally {
           try { await launched?.close(); }
           finally {

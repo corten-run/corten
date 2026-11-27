@@ -974,9 +974,10 @@ uncertain, retains locks and cannot take this recovery shortcut.
 A single group whose only create has an unacknowledged response and no saved
 droplet or action ID may be isolated in its existing continuation root. This
 does not settle the POST, record deletion, release the child or fleet locks, or
-allow the failed group to retry. Its row stays `quarantined-create`, not verified
-or retryable. Other groups can continue only in the same provider account, and
-their approved create uses one fresh, account-bracketed provider response for
+allow the original reservation to issue another POST. Its row stays
+`quarantined-create`, not verified or retryable. Other groups can continue only
+in the same provider account, and their approved create uses one fresh,
+account-bracketed provider response for
 both the quarantine and historical ID checks and the ordinary pre-create
 census. Only a complete inventory with unique, checkable rows proves absence;
 there is no second read, page or retake. Nonempty pagination links, an inconsistent
@@ -996,6 +997,25 @@ custody. Read-only continuation reports show a valid witness as a blocked
 `quarantined-create-witnessed` attempt and still replay unrelated result
 evidence. Neither a sighting nor a quarantine report authorizes binding or
 cleanup.
+
+A failed group may instead prepare a distinct, higher round in the same root
+and provider account with `--replace-quarantined-create <quarantine-file-sha256>`.
+Use this only after independently checking the original custody proof and
+reviewing the risk that the unacknowledged allocation could still appear. The
+prepared fleet binds exactly one earlier, same-group quarantine. It has its own
+ownership, launch intent and approval. It takes the same account-bracketed
+census as another group: any sighting in the census is witnessed and refuses
+before the new create intent. After the intent, a final local admission check
+before hand-off to the provider worker refuses on changed custody. This
+proven-unsent refusal withdraws only the replacement's create intent, leaving
+the custody records as found. The only controller path that publishes a witness
+is the pre-create census under the shared continuation lock; another launch
+cannot publish one while that lock is held. The local check does not see
+out-of-band writes during worker hand-off. This does not prove that an earlier
+create cannot surface at the provider later.
+A replacement does not settle or edit the original
+attempt, and another replacement requires the preceding attempt to be settled
+or superseded under the ordinary rules for a never-launched reservation.
 
 The operator must stop dispatch to the root and positively account for the
 original local controller, worker and their descendants. A stale PID, a missing
@@ -1446,14 +1466,32 @@ v1 and v2 setup retirements save their intent before the DELETE's preflight, as
 before (a pinned unused proof that expires during that verification likewise
 saves no intent); a v1 or v2 setup retirement keeps its existing check of 60 seconds from
 the proof's end, made before the intent. Expiry before the intent does not
-consume the intent; expiry after the intent forbids another DELETE, so a later
-collect only verifies the saved receipt and checks exact absence. For a drain
-proof that leaves only the interval between the intent and the request (the
-dispatch guards, the production checkpoint and worker IPC, and the provider's own
-deadline check), which has no provider read; a proof that expires there still
-leaves the host retired with no DELETE sent, which
-[#2166 A failed-setup retirement whose drain proof expires before its DELETE is sent stays retired with no way to a fresh proof](https://github.com/corten-run/corten/issues/2166)
-tracks.
+consume the intent; expiry after the intent forbids another DELETE whenever that
+DELETE may have been sent, so a later collect only verifies the saved receipt and
+checks exact absence. For a drain proof, the only window after the intent is the
+interval before the request (the dispatch guards, the production checkpoint and
+worker IPC, and the provider's own deadline check), which has no provider read. A
+drain proof's DELETE is sent with `allowFail`, so a refusal in that interval that
+positively reports the request unsent (the production checkpoint cancelled before
+the action reached the provider, or the provider engine's own deadline check
+before its request, which the worker carries back over IPC) withdraws the intent:
+the controller restores the state it saved just before it (the receipt's recorded
+digest, with no intent or retirement) through its own fresh exclusive stage
+(`state.json.delete-unsent-<random>.tmp`), under the same custody check as the
+intent, and refuses with `DELETE was not dispatched; the next collect retires on
+a fresh proof`. The not-dispatched answer does not say whether expiry or
+cancellation refused, so the message names neither. The next collect keeps that
+receipt as an interrupted one (below) and retires on a fresh drain proof of the
+same session.
+The restore only records how the DELETE ended, so it runs even after
+cancellation; a custody mismatch at the restore refuses and keeps the intent,
+which leaves the host as a torn withdrawal does (below). Any
+other outcome after the intent keeps the intent, with recovery by exact absence
+alone: a request that started (an HTTP error, a timeout or a lost
+acknowledgement), an unacknowledged worker result, or a refusal by the
+controller's own dispatch guard. The pinned unused and v1 and v2 setup
+retirements send their DELETE without `allowFail`, as before, so for them any
+expiry after the intent keeps the intent.
 
 Expiry after the receipt is written but before the intent leaves a receipt with no
 intent. The next collect runs a fresh status check and host query, which appends
@@ -1491,7 +1529,56 @@ digest is saved through its own fresh exclusive staging file
 (`state.json.pending-retirement-<random>.tmp`), as `createErrored` is, so a
 save torn there leaves that stage and no digest, and the next collect retires
 on a fresh proof. The stage is never read or removed; it stays for the operator
-to archive. A v2 or
+to archive.
+
+Every deletion intent and `destroyedAt` the controller saves goes through its
+own fresh exclusive stage the same way (`state.json.deletion-intent-<random>.tmp`
+and `state.json.destroyed-<random>.tmp`), and so does every withdrawal of a
+positively unsent DELETE's intent (`state.json.delete-unsent-<random>.tmp`). A
+torn save of any of them leaves only that unread stage and the previous
+`state.json`, never the fixed-name `state.json.tmp`. What the next collect does
+with it depends on the retirement kind:
+
+1. The unused, failed-setup (v1, v2 and v3) and failed-native (without a handoff)
+   retirements, and an ordinary deletion, recover. A torn intent leaves the state
+   before it, which the next collect recovers as an intent that was never saved
+   (for a v2 or v3 receipt, through its recorded digest: the receipt is kept and a
+   fresh proof retires). A torn `destroyedAt` leaves the intent after the one
+   DELETE, so the next collect only checks exact absence and records
+   `destroyedAt`, with no second DELETE.
+2. A torn withdrawal (the drain proof's or an ordinary collect's) does not
+   recover by itself. It keeps the intent of a DELETE that was never sent, while
+   the droplet still exists, so every later collect waits for an exact absence
+   that does not come and refuses with `deletion not confirmed; outcome
+   uncertain`, sending no DELETE. Nothing clears the intent. The operator
+   cleanup below removes that exact host and leaves the intent as saved; the
+   next collect then confirms exact absence and records `destroyedAt`, sending
+   no DELETE of its own.
+3. The handoff and exit-one retirements refuse. Their state save rechecks handoff
+   custody and keeps the operation lock when it fails, and their publication check
+   refuses every `state.json.*.tmp` name as an unsettled publication.
+4. The pinned unused retirement refuses. Its custody check admits only a closed
+   list of names in the state root, so a leftover stage refuses with
+   `unexpected local bootstrap custody; preserve host`.
+
+The refusals in items 3 and 4 fail closed with no DELETE, as before, until the
+operator archives the stage (operator cleanup below). Other ordinary saves keep
+the fixed-name `state.json.tmp` stage, and one left by a torn ordinary save
+still refuses the next ordinary save with `EEXIST` until the operator archives
+it: fleet verification's external-failure check treats that exact name as an
+unsettled publication, and the handoff publication check treats every
+`state.json.*.tmp` name that way, so it is not bypassed.
+
+A torn save in items 1, 2 and 4 fails with an error, after which the collect
+releases the lock it holds: `operation.lock`, or `stream-recovery.lock` for an
+invalid-monitor recovery collect, which leaves any original `operation.lock` as
+it found it (below). The handoff and exit-one saves in item 3 keep the operation
+lock when they fail. A controller killed during any of these saves (or anywhere
+else under a lock) leaves the lock it held. A later collect that needs that lock
+refuses on it until the operator accounts for that process tree and releases it
+by the custody step for retained locks (above).
+
+A v2 or
 v3 receipt and its history copy are published whole: each is written and synced
 as `<name>.stage` in the same directory, then hard-linked to its final name,
 which fails rather than replace an existing file, and the directory is synced

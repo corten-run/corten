@@ -137,8 +137,11 @@ pub enum Begin {
 }
 
 /// Starts a write to feed `key`. With an idempotency key (from the client, one per user intent),
-/// a retry of a write that already committed gets [`Begin::Done`] instead of writing twice, and
-/// a retry that races the original waits for it. A key that breaks Corten's subject rules is
+/// a retry that races the original waits for it, and while the store keeps the key (until
+/// [`prune`] drops it) a retry of a write that already committed gets [`Begin::Done`] instead of
+/// writing twice. An idempotency key is unique across the whole cluster store, not per feed: while
+/// it is kept, one already used for a write to another feed is
+/// [`IdempotencyKeyReused`](crate::IdempotencyKeyReused) and nothing is written. A feed key that breaks Corten's subject rules is
 /// [`InvalidFeedKey`](crate::InvalidFeedKey), refused before a transaction starts.
 pub async fn begin(pool: &PgPool, key: &str, idempotency_key: Option<&str>) -> Result<Begin, Error> {
     check_key(key)?;
@@ -152,12 +155,15 @@ pub async fn begin(pool: &PgPool, key: &str, idempotency_key: Option<&str>) -> R
             .await?
             .rows_affected();
         if inserted == 0 {
-            let (seq, committed_at): (Option<i64>, Option<i64>) =
-                sqlx::query_as("SELECT seq, committed_at FROM corten_idempotency WHERE key = $1")
+            let (feed, seq, committed_at): (String, Option<i64>, Option<i64>) =
+                sqlx::query_as("SELECT feed, seq, committed_at FROM corten_idempotency WHERE key = $1")
                     .bind(idem)
                     .fetch_one(&mut *tx)
                     .await?;
             tx.rollback().await?;
+            if feed != key {
+                return Err(crate::IdempotencyKeyReused.into());
+            }
             let written = Written { seq: seq.map(|s| s as u64), committed_at: committed_at.unwrap_or(0) as u64, replayed: true };
             return Ok(Begin::Done(written));
         }

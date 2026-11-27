@@ -322,6 +322,26 @@ test("Django's Granian ASGI deployment is declared only for Mixed Production and
   }
 });
 
+test("Spring WebFlux declares the matched runtime only for dedicated Mixed Production", () => {
+  for (const group of groupNames) {
+    const row = deploymentPlan(group).apps.find((entry) => entry.app === "spring");
+    const webflux = row?.deployments.find((entry) => entry.id === "spring-webflux");
+    if (row) {
+      const { configuration: mvc } = row.deployments[0];
+      assert.equal(row.representative, "spring-native");
+      assert.equal(mvc.profile, "framework-default");
+      assert.equal(mvc.environment.PROFILE, "");
+      for (const { dockerfile } of Object.values(mvc.builds)) assert.match(dockerfile, /\/Dockerfile$/);
+    }
+    if (group !== "mixed-production") { assert.equal(webflux, undefined); continue; }
+    assert.equal(webflux.qualification, "pending");
+    assert.equal(webflux.configuration.profile, "matched");
+    assert.equal(webflux.configuration.environment.PROFILE, "matched");
+    assert.deepEqual(webflux.configuration.builds.app.args, {});
+    assert.match(webflux.configuration.builds.app.dockerfile, /\/Dockerfile\.mixed$/);
+  }
+});
+
 test("all visible receipt outcomes fail closed and references or saved flags alone never assert a full pass", () => {
   for (const status of ["failed", "unsupported", "pending"]) {
     const f = fixture(descriptor(), { status });

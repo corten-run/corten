@@ -340,9 +340,18 @@ export function readCreateQuarantine(fleet, { report = false } = {}) {
     sha256, nameSha256: digest(state.name), tagSha256: digest(state.tag), ...(witnessSha256 ? { witnessSha256 } : {}) };
 }
 
+export function replacementQuarantine(rows, group, sha256) {
+  if (sha256 === undefined) return undefined;
+  const same = rows.filter((row) => row.group === group);
+  assert.ok(same.length === 1 && same[0].sha256 === sha256, "replacement requires exactly one matching create quarantine");
+  return same[0];
+}
+
 export function recheckCreateQuarantine(root, row, selection) {
-  assert.ok(dirname(row.root) === root && row.group !== selection.single.group
-    && row.accountId === selection.provider.accountId, "create quarantine permits only other groups in the saved account");
+  const replacement = row.sha256 === selection.single.replacesQuarantineSha256
+    && Number(row.round.slice(1)) < Number(selection.round.slice(1));
+  assert.ok(dirname(row.root) === root && (row.group !== selection.single.group || replacement)
+    && row.accountId === selection.provider.accountId, "create quarantine permits only other groups or its exact replacement in the saved account");
   assert.ok(isDeepStrictEqual(readCreateQuarantine(readFleet(row.root, row.round, { priorSelection: true })), row), "create quarantine changed");
 }
 

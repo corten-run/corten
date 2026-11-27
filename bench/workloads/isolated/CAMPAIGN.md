@@ -129,10 +129,12 @@ finalization. Historical result paths, standalone commands and the archive layou
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
 groups and mixed-production-measure in the legacy full campaign. Dedicated Mixed
-campaigns use `mixed-production-django-asgi`: the same `--measure --profile matched`,
-plus the fixed `--django-deployment django-granian-asgi` selection. The build and
-audit bind that deployment for both sources, without changing the measured workload
-or its gates. The older mixed-measure remains the default-profile recipe,
+campaigns use `mixed-production-asgi-webflux`: the same `--measure --profile matched`,
+plus `--django-deployment django-granian-asgi --spring-deployment spring-webflux`.
+The build and audit bind both deployments for both sources, without changing the
+measured workload or its gates. The earlier Django-only recipe remains
+`mixed-production-django-asgi`; replay uses the measured commit.
+The older mixed-measure remains the default-profile recipe,
 unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
 client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
 legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
@@ -425,8 +427,24 @@ a supplied but invalid settlement cannot fall back to the first census.
 The last native command must have a verified sealed terminal lifetime, including
 proof that its accounting scope is empty, before the five-second wait begins. For
 official timing, each worker's Linux start ticks must place its birth strictly after
-the sealed terminal cutoff. For untimed JSON preparation, the same strict comparison
-uses the pre-phase census cutoff instead.
+the sealed terminal cutoff unless the following Live Delivery proof applies. For
+untimed JSON preparation, the same strict comparison uses the pre-phase census
+cutoff instead.
+
+Isolated measured Live Delivery can also settle a cohort born after measured
+work but before command exit. The successful native command records one workload
+end after every measured actor window and before the last browser and owned
+application are torn down. The phase seal binds that record to the command PID,
+round and commit. Each measured end also records both clocks on that boot. Replay
+orders the measurements, workload end and sealed terminal in each clock separately.
+Linux uptime and worker start ticks share the boot-time clock, including suspend;
+the monotonic clock excludes suspend and is never converted into boot-time ticks.
+A worker in the same 10 ms bucket as the workload end is ambiguous and is refused.
+Missing boot-time readings do not establish this proof. No baseline udev worker or
+child of that daemon may be present, and every worker in the first-after cohort must
+have been born strictly after the workload end tick. This does not establish the
+absence of transient workers outside that cohort. The ordinary post-terminal route does not require
+this evidence; historical rounds cannot use wall times to reconstruct it.
 
 Both uptime and the monotonic apparatus samples must support the wait. Cancellation
 keeps the first-after inventory and skips the second census. Exact cgroup, parent
