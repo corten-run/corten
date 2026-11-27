@@ -15,9 +15,10 @@
 // million for a connection opened and ten million for one closed; the other thread ran what the
 // clock runs in a tick.
 //
-// The server's resident memory is what it writes in `$STAND_IN/proc/<pid>/status`, for idle.mjs
-// to read in place of /proc: 10,240 kB, and two 4 kB pages more for each connection open and one
-// for each request answered on it.
+// The server's resident memory is what it writes in `$STAND_IN/proc/<pid>/status`, which
+// run.test.mjs has idle.mjs read in place of /proc (stand-in-status.mjs): 10,240 kB and a 4 kB
+// page each connection it has closed left behind, and two pages more for each connection open and
+// one for each request answered on it.
 //
 // What a test can ask for, each by a variable:
 //   STAND_IN_THREAD=2            the second thread serves, the first runs nothing
@@ -105,11 +106,12 @@ function serve() {
   const connections = [];
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     part.opened += 1;
-    // What this connection holds until it is closed: nothing once it is.
+    // What this connection holds until it is closed, and the page it leaves behind once it is.
     let held = 2;
     hold(held);
     const release = () => {
-      hold(-held);
+      if (held === 0) return;
+      hold(1 - held);
       held = 0;
     };
     const seen = /** @type {string[]} */ ([]);

@@ -473,9 +473,15 @@ The hosted check runs on Linux. What no test covers is checked by running the ki
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).
 
-The resident memory `idle.mjs` reads in `run.test.mjs` is the stand-in's: it writes a status of
-its own, which `IDLE_STATUS_ROOT` names in place of `/proc`, and grows it by two pages for each
-open connection and one for each request answered on it. A test asserts each run's before, after
-and growth exactly, so a run that read memory once would fail it. One run sets no
-`IDLE_STATUS_ROOT` and reads the stand-in's own status in `/proc`, as a host does; nothing in
-[the hosted job](#the-hosted-job) sets it.
+The resident memory `idle.mjs` reads in `run.test.mjs` is the stand-in's. `idle.mjs` reads only
+the probe's `/proc/<pid>/status`; the tests start it with `node --import` of
+[`stand-in-status.mjs`](stand-in-status.mjs), which turns that read into one of the status
+`stand-in.mjs` writes, and nothing else loads that file. The stand-in's status is 10,240 kB and a
+page each connection it closed left behind, and two pages more for each open connection and one
+for each request answered on it. Each idle run that reads it and prints a figure is checked for
+its exact before, after, growth and figure, so a run that read memory once, or read its before
+ahead of the warm connections, fails. Two runs are checked less: one starts `idle.mjs` without
+the preload and reads the stand-in's own status in `/proc`, as a host does, and is checked only for
+a growth that is its after less its before, a figure that is that growth over the connections and
+a before that is not the stand-in's; the `--json` run with a 65,536-byte page is checked only for
+the page size it carries.

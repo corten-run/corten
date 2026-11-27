@@ -1,10 +1,11 @@
 // node --test bench/request-cost/run.test.mjs
 // count.mjs and idle.mjs run whole, with stand-ins on PATH for taskset, valgrind and
 // callgrind_control and stand-in.mjs for the probe: which dump a count reads, what its window
-// holds, and what makes a run print no figure. idle.mjs reads the stand-in's resident memory from
-// the status it writes (IDLE_STATUS_ROOT), so a test knows each reading, and its open files from
-// /proc. The stand-ins are shell scripts and idle.mjs reads /proc, so these run on Linux with sh
-// and are skipped elsewhere; the refusals of an option run anywhere.
+// holds, and what makes a run print no figure. idle.mjs runs with stand-in-status.mjs preloaded,
+// so it reads the stand-in's resident memory from the status the stand-in writes and a test knows
+// each reading, and its open files from /proc. The stand-ins are shell scripts and idle.mjs reads
+// /proc, so these run on Linux with sh and are skipped elsewhere; the refusals of an option run
+// anywhere.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -13,7 +14,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as compare from "./compare.mjs";
 import { counted } from "./probe.mjs";
 import { cases } from "./requests.mjs";
@@ -41,7 +42,7 @@ function standIns() {
     writeFileSync(join(directory, name), `#!/bin/sh\n${script}\n`);
     chmodSync(join(directory, name), 0o755);
   }
-  const env = { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH}`, STAND_IN: directory, IDLE_STATUS_ROOT: join(directory, "proc") };
+  const env = { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH}`, STAND_IN: directory };
   const notes = (/** @type {string} */ name) => JSON.parse(readFileSync(join(directory, name), "utf8"));
   return { directory, env, probe: join(directory, "probe"), notes, remove: () => rmSync(directory, { recursive: true, force: true }) };
 }
@@ -89,8 +90,9 @@ function sent(name, port) {
 /**
  * Requires the line an idle run over 40 connections printed for `what` (`answered 1 pipeline`),
  * whole: the readings the counted gate decides by, its growth after less before, and its figure
- * that growth over the connections. With `requests`, the readings are the stand-in's: 10,240 kB
- * before, and two 4,096-byte pages more after for each connection and one for each request on it.
+ * that growth over the connections. With `requests`, the readings are the stand-in's: 10,440 kB
+ * before (10,240 and a 4,096-byte page each of the 50 warm connections left behind), and two
+ * pages more after for each connection and one for each request on it.
  * @param {string} stdout @param {string} what @param {{ page?: number, requests?: number }} [expected]
  */
 function printedWhole(stdout, what, { page = 4096, requests } = {}) {
@@ -107,20 +109,22 @@ function printedWhole(stdout, what, { page = 4096, requests } = {}) {
  * @param {number} requests @returns {number[]}
  */
 function standInReadings(requests) {
-  const before = 10_240 * 1024;
+  const before = (10_240 + 4 * 50) * 1024;
   const grown = 40 * (2 + requests) * 4096;
   return [before, before + grown, grown, grown / 40];
 }
 
 /**
- * A script of the kit run with the stand-ins. An `asked` variable that is undefined is left out.
- * @param {string} script @param {string[]} args @param {Record<string, string | undefined>} [asked]
+ * A script of the kit run with the stand-ins and stand-in-status.mjs preloaded, so that idle.mjs
+ * reads the stand-in's status; with `{ preload: false }` it is run as on a host.
+ * @param {string} script @param {string[]} args @param {Record<string, string>} [asked] @param {{ preload?: boolean }} [how]
  */
-async function running(script, args, asked = {}) {
+async function running(script, args, asked = {}, { preload = true } = {}) {
   const stand = standIns();
   try {
     const port = await free();
-    const run = spawnSync(process.execPath, [join(kit, script), stand.probe, "--cpu", "3", "--port", String(port), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
+    const loaded = preload ? ["--import", pathToFileURL(join(kit, "stand-in-status.mjs")).href] : [];
+    const run = spawnSync(process.execPath, [...loaded, join(kit, script), stand.probe, "--cpu", "3", "--port", String(port), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
     // The request heads each connection to the probe sent, which the stand-in notes as it stops.
     const noted = join(stand.directory, "connections.json");
     const connections = existsSync(noted) ? /** @type {string[][]} */ (JSON.parse(readFileSync(noted, "utf8"))) : null;
@@ -221,8 +225,9 @@ test("idle.mjs prints a figure when the probe's open files grew by the connectio
   const run = await running("idle.mjs", ["--connections", "40"]);
   assert.equal(run.status, 0, run.stderr);
   printedWhole(run.stdout, "answered 1 pipeline", { requests: 1 });
-  // Without IDLE_STATUS_ROOT it reads the process's own status in /proc, as on a host.
-  const own = await running("idle.mjs", ["--connections", "40"], { IDLE_STATUS_ROOT: undefined });
+  // Without the preload it reads the process's own status in /proc, as on a host, though STAND_IN
+  // names the directory the stand-in wrote its status in: idle.mjs has no way to read another.
+  const own = await running("idle.mjs", ["--connections", "40"], {}, { preload: false });
   assert.equal(own.status, 0, own.stderr);
   printedWhole(own.stdout, "answered 1 pipeline");
   assert.notEqual(Number(/; (\d+) before,/.exec(own.stdout)?.[1]), standInReadings(1)[0], own.stdout);
