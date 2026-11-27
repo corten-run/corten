@@ -427,6 +427,13 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     participantGroup(path, id);
     stage = "kernel-census";
     const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    // The entry PID can exit after the opening stat but before the complete
+    // cgroup census. A nonempty census or an unconfirmed exit is still a gap.
+    if (observed.processes.length === 0 && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+      && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+      const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+      if (stopped) throw new ClosingDockerExit(stopped);
+    }
     assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
     stage = "process-identity-close";
     const closing = processIdentity(readFileSync(`${at}/stat`, "utf8"));
