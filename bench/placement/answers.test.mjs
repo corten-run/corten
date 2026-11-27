@@ -1,22 +1,27 @@
-// answers.mjs on its own: the one request turns.sh's and verify.sh's checks send, an answer of
-// another status refused, each answer taken from the bytes received alone, every file created new
-// (a link put in its place first refused), the handoff the trend and verify.sh read a comparison
-// by, and a recorded turn's perf and wrk output. On every platform, with servers of its own.
+// answers.mjs on its own: the one request turns.sh's and verify.sh's checks send, captured by
+// curl into files created new, an answer of another status refused, each answer taken from the
+// bytes curl wrote alone, its header lines compared as they are (whitespace and every line), the
+// difference the system diff's, every file created new (a link put in its place first refused),
+// the handoff the trend and verify.sh read a comparison by, and a recorded turn's perf and wrk
+// output. The handoff and the turns on every platform; the captures on Linux, with curl and diff,
+// and servers of its own.
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as tcp } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { compare, create, difference, handoff, masked, Refusal, request, sha256, turn } from "./answers.mjs";
+import { capture, compare, create, handoff, masked, Refusal, sha256, turn } from "./answers.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "placement-answers-")));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 let made = 0;
 const fresh = () => { const d = join(tmp, `a-${++made}`); mkdirSync(d); return d; };
+const LINUX = { skip: process.platform === "linux" && spawnSync("sh", ["-c", "command -v curl && command -v diff"]).status === 0 ? false : "needs Linux with curl and diff" };
 
 /** A server on a port of its own: answer(q, s) answers each request. Resolves to { port, asked, close }. */
 async function serving(answer) {
@@ -25,28 +30,35 @@ async function serving(answer) {
   await new Promise((done) => s.listen(0, "127.0.0.1", done));
   return { port: s.address().port, asked, close: () => new Promise((done) => { s.closeAllConnections(); s.close(done); }) };
 }
+/** A server that answers every request with exactly the bytes of head (its status and header lines, CRLF each) and body. */
+async function raw(head, body = "aaaa") {
+  const s = tcp((c) => { let got = Buffer.alloc(0); c.on("data", (d) => { got = Buffer.concat([got, d]); if (got.includes("\r\n\r\n")) c.end(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(`content-length: ${body.length}\r\nconnection: close\r\n\r\n${body}`, "latin1")])); }); c.on("error", () => {}); });
+  await new Promise((done) => s.listen(0, "127.0.0.1", done));
+  return { port: s.address().port, close: () => new Promise((done) => s.close(done)) };
+}
 const plain = (body, more = {}) => (q, s) => { s.setHeader("content-type", "text/plain"); for (const [k, v] of Object.entries(more)) s.setHeader(k, v); s.end(body); };
 const refused = (p, word) => p.then(() => assert.fail(`not refused (${word})`), (e) => { assert.ok(e instanceof Refusal, e?.stack); assert.ok(e.message.includes(word), e.message); });
+const compared = (ports, more = {}) => compare({ dir: fresh(), ports, path: "/page", lines: [], status: 200, mask: [], say: () => {}, ...more });
 
-test("the one request: Host and the plan's header lines alone, none of a client's own (no User-Agent, Accept or Connection), and the answer as received", async (t) => {
+test("the one request: Host and the plan's header lines alone, none of curl's own (no User-Agent or Accept), and the answer as curl wrote it", LINUX, async (t) => {
   const s = await serving(plain("aaaa", { "x-one": "1" }));
   t.after(s.close);
-  const bare = await request(s.port, "/page", []);
-  const given = await request(s.port, "/page?x=1", ["X-Plan: 1", "User-Agent: the plan's"]);
+  const dir = fresh(), bare = await capture(s.port, "/page", [], join(dir, "bare"));
+  const given = await capture(s.port, "/page?x=1", ["X-Plan: 1", "User-Agent: the plan's"], join(dir, "given"));
   assert.deepEqual(s.asked.map((a) => [a.url, a.names.map((n) => n.toLowerCase()).sort().join(",")]), [["/page", "host"], ["/page?x=1", "host,user-agent,x-plan"]]);
-  assert.equal(bare.status, 200);
   assert.equal(bare.body.toString(), "aaaa");
-  assert.equal(bare.head[0], "HTTP/1.1 200 OK");
-  assert.ok(bare.head.includes("x-one: 1") && bare.head.some((l) => /^date: /i.test(l)), bare.head.join("\n"));
-  assert.equal(given.status, 200);
+  assert.match(bare.raw.toString("latin1"), /^HTTP\/1\.1 200 OK\r\n[^]*x-one: 1\r\n[^]*\r\n\r\n$/i);
+  // The files curl wrote are the bytes returned.
+  assert.deepEqual([readFileSync(join(dir, "bare.raw-headers")), readFileSync(join(dir, "bare.body"))], [bare.raw, bare.body]);
+  assert.equal(given.body.toString(), "aaaa");
 });
 
-test("the one request goes to 127.0.0.1 itself, whatever proxy the environment names, NODE_USE_ENV_PROXY included", async (t) => {
+test("the one request goes to 127.0.0.1 itself, whatever proxy the environment names", LINUX, async (t) => {
   const target = await serving(plain("target")), proxy = await serving(plain("proxy"));
   t.after(target.close);
   t.after(proxy.close);
-  const url = `http://127.0.0.1:${proxy.port}`, env = { ...process.env, NODE_USE_ENV_PROXY: "1", http_proxy: url, HTTP_PROXY: url, NO_PROXY: "", no_proxy: "" };
-  const code = `import(${JSON.stringify(new URL("./answers.mjs", import.meta.url).href)}).then(async (m) => process.stdout.write((await m.request(${target.port}, "/page", [])).body))`;
+  const url = `http://127.0.0.1:${proxy.port}`, env = { ...process.env, http_proxy: url, HTTP_PROXY: url, ALL_PROXY: url, all_proxy: url, NO_PROXY: "", no_proxy: "" };
+  const code = `import(${JSON.stringify(new URL("./answers.mjs", import.meta.url).href)}).then(async (m) => process.stdout.write((await m.capture(${target.port}, "/page", [], ${JSON.stringify(join(fresh(), "x"))})).body))`;
   const child = spawn(process.execPath, ["-e", code], { env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "", err = "";
   child.stdout.on("data", (d) => { out += d; });
@@ -57,7 +69,7 @@ test("the one request goes to 127.0.0.1 itself, whatever proxy the environment n
   assert.deepEqual(proxy.asked, []);
 });
 
-test("an answer of another status than the plan's is refused, by the comparison and by a start, kept as received but never mask evidence", async (t) => {
+test("an answer of another status than the plan's is refused, by the comparison and by a start, kept as received but never mask evidence", LINUX, async (t) => {
   // Two 503s that differ in a header the plan masks: no evidence that the header varies in the answer the plan asks for.
   let n = 0;
   const s = await serving((q, r) => { r.statusCode = 503; r.setHeader("x-nonce", String(++n)); r.end("busy"); });
@@ -73,7 +85,7 @@ test("an answer of another status than the plan's is refused, by the comparison 
   assert.equal(start.stdout, "");
 });
 
-test("a comparison takes every fact from the answers as received, once each: the difference, the lengths, the SHA-256s and the kept bodies", async (t) => {
+test("a comparison takes every fact from the answers curl wrote, once each: the difference, the lengths, the SHA-256s and the kept bodies", LINUX, async (t) => {
   const a = await serving(plain("aaaa", { "x-side": "a" })), b = await serving(plain("bbbb", { "x-side": "b" }));
   t.after(a.close);
   t.after(b.close);
@@ -87,14 +99,16 @@ test("a comparison takes every fact from the answers as received, once each: the
   assert.equal(bodies, `body 4 bytes as received, sha256 ${sha256("aaaa").slice(0, 16)} A and ${sha256("bbbb").slice(0, 16)} B\n`);
   assert.deepEqual(["A", "A-again", "B"].map((x) => readFileSync(join(dir, `${x}.body`), "utf8")), ["aaaa", "aaaa", "bbbb"]);
   assert.equal(sha256(readFileSync(join(dir, "handoff.json"))), r.seal);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "handoff.json"), "utf8")), { outcome: "differ", diff: sha256(diff), bodies: sha256(bodies) });
-  assert.equal(said.join(""), diff);
+  assert.equal(readFileSync(join(dir, "handoff.json"), "utf8"), `${JSON.stringify({ outcome: "differ", diff: sha256(diff), bodies: sha256(bodies) })}\n`);
+  assert.equal(Buffer.concat(said.map((x) => Buffer.from(x))).toString(), diff);
+  // The difference is the system diff's, of the masked headers' files.
+  assert.equal(diff.slice(0, diff.indexOf("bodies differ")), spawnSync("diff", [join(dir, "A.headers"), join(dir, "B.headers")], { encoding: "utf8" }).stdout);
   // That difference expected: the same answers pass, and a third body of B's length does not.
-  const held = await compare({ dir: fresh(), ports: [a.port, b.port], path: "/page", lines: [], status: 200, mask: [], expect: Buffer.from(diff), say: () => {} });
+  const held = await compared([a.port, b.port], { expect: Buffer.from(diff) });
   assert.equal(held.outcome, "expected");
   const c = await serving(plain("cccc", { "x-side": "b" }));
   t.after(c.close);
-  await refused(compare({ dir: fresh(), ports: [a.port, c.port], path: "/page", lines: [], status: 200, mask: [], expect: Buffer.from(diff), say: () => {} }), "the answers differ other than as the plan's expected difference says");
+  await refused(compared([a.port, c.port], { expect: Buffer.from(diff) }), "the answers differ other than as the plan's expected difference says");
   // The same answers, masked headers that differ included, leave an empty difference.
   let n = 0;
   const m = await serving((q, s) => plain("aaaa", { etag: String(++n) })(q, s));
@@ -105,28 +119,64 @@ test("a comparison takes every fact from the answers as received, once each: the
   assert.ok(readFileSync(join(same, "A.headers"), "utf8").includes("etag: <masked>\n"));
 });
 
-test("an answer cut short, or one never sent within the bound, fails the comparison rather than reading as an answer", async (t) => {
+test("header lines are compared as curl wrote them: whitespace that differs, and a difference after the thousandth line, are differences", LINUX, async (t) => {
+  // Both read as "X-Test: alpha" once a client parses them, as Node's does.
+  const tab = await raw("HTTP/1.1 200 OK\r\nX-Test:\t alpha  \r\n"), bare = await raw("HTTP/1.1 200 OK\r\nX-Test: alpha\r\n");
+  t.after(tab.close);
+  t.after(bare.close);
+  const one = fresh(), r = await compare({ dir: one, ports: [tab.port, bare.port], path: "/page", lines: [], status: 200, mask: [], say: () => {} });
+  assert.equal(r.outcome, "differ");
+  assert.ok(readFileSync(join(one, "diff.txt"), "latin1").startsWith("2c2\n< X-Test:\t alpha  \n---\n> X-Test: alpha\n"), readFileSync(join(one, "diff.txt"), "latin1"));
+  // 1,001 header lines, the last of which differs.
+  const many = (last) => `HTTP/1.1 200 OK\r\n${Array.from({ length: 1000 }, (_, i) => `x-${i}: ${i}\r\n`).join("")}x-last: ${last}\r\n`;
+  const x = await raw(many("a")), y = await raw(many("b"));
+  t.after(x.close);
+  t.after(y.close);
+  const two = fresh();
+  assert.equal((await compare({ dir: two, ports: [x.port, y.port], path: "/page", lines: [], status: 200, mask: [], say: () => {} })).outcome, "differ");
+  assert.ok(readFileSync(join(two, "diff.txt"), "latin1").startsWith("1002c1002\n< x-last: a\n---\n> x-last: b\n"));
+});
+
+test("the difference is the system diff's: B,A,B against A,A,B is one change, as diff prints it", LINUX, async (t) => {
+  const x = await raw("HTTP/1.1 200 OK\r\nx: B\r\nx: A\r\nx: B\r\n"), y = await raw("HTTP/1.1 200 OK\r\nx: A\r\nx: A\r\nx: B\r\n");
+  t.after(x.close);
+  t.after(y.close);
+  const dir = fresh();
+  await compare({ dir, ports: [x.port, y.port], path: "/page", lines: [], status: 200, mask: [], say: () => {} });
+  const diff = readFileSync(join(dir, "diff.txt"), "latin1");
+  assert.ok(diff.startsWith("2c2\n< x: B\n---\n> x: A\nbodies same: "), diff);
+});
+
+test("a header byte that is not UTF-8 is kept as received, in the headers, the difference and the expected difference it is held to", LINUX, async (t) => {
+  const x = await raw("HTTP/1.1 200 OK\r\nx-name: cafe\r\n"), y = await raw("HTTP/1.1 200 OK\r\nx-name: caf\xe9\r\n");
+  t.after(x.close);
+  t.after(y.close);
+  const dir = fresh();
+  await compare({ dir, ports: [x.port, y.port], path: "/page", lines: [], status: 200, mask: [], say: () => {} });
+  const diff = readFileSync(join(dir, "diff.txt"));
+  assert.ok(diff.includes(Buffer.from("> x-name: caf\xe9\n", "latin1")), diff.toString("latin1"));
+  assert.equal((await compared([x.port, y.port], { expect: diff })).outcome, "expected");
+});
+
+test("an answer cut short, or one never sent within the bound, fails the capture rather than reading as an answer", LINUX, async (t) => {
   const cut = await serving((q, s) => { s.setHeader("content-length", "10"); s.write("aaaa"); setTimeout(() => s.socket.destroy(), 20); });
   t.after(cut.close);
-  await refused(request(cut.port, "/page", []), "cut short");
+  await refused(capture(cut.port, "/page", [], join(fresh(), "cut")), `the answer on ${cut.port} could not be taken whole: curl ended with status 18`);
   const hang = await serving(() => {});
   t.after(hang.close);
-  await refused(request(hang.port, "/page", [], { bound: 300 }), "no whole answer on");
+  await refused(capture(hang.port, "/page", [], join(fresh(), "hang"), { bound: 300 }), "no whole answer on");
 });
 
 // Something put at diff.txt as B answers, after every other file but before diff.txt is made:
 // no check of the path comes before the create, which is itself exclusive (O_CREAT|O_EXCL, wx),
 // so nothing is written through a link, to /dev/null (which takes every write and stays empty)
-// or to the expected difference, and the comparison fails.
-const links = (() => { const d = join(tmp, "probe"); mkdirSync(d); try { symlinkSync(join(d, "x"), join(d, "l")); return true; } catch { return false; } })();
-test("something put at diff.txt just before the comparison makes it, a link to /dev/null or to the expected difference or a file, is refused and never written through", { skip: links ? false : "needs symbolic links" }, async (t) => {
+// or to the expected difference, and the comparison fails. A capture's own files likewise.
+test("something put at diff.txt or a capture's files just before the comparison makes them, a link to /dev/null or to the expected difference or a file, is refused and never written through", LINUX, async (t) => {
   const a = await serving(plain("aaaa"));
   t.after(a.close);
   const expected = join(fresh(), "expect.txt"), want = `bodies differ: 4 and 4 bytes, sha256 ${sha256("aaaa")} and ${sha256("bbbb")}\n`;
   writeFileSync(expected, want);
-  // Windows, where the kit does not run, follows a dangling link when it creates a file, so that case is Linux's alone.
-  const sink = process.platform === "win32" ? join(tmp, "sink") : "/dev/null", puts = [["devnull", (f) => symlinkSync(sink, f)], ["expected", (f) => symlinkSync(expected, f)], ["file", (f) => writeFileSync(f, "")]];
-  if (process.platform === "win32") writeFileSync(sink, ""); else puts.push(["dangling", (f) => symlinkSync(join(tmp, "nowhere", "diff.txt"), f)]);
+  const puts = [["devnull", (f) => symlinkSync("/dev/null", f)], ["expected", (f) => symlinkSync(expected, f)], ["file", (f) => writeFileSync(f, "")], ["dangling", (f) => symlinkSync(join(tmp, "nowhere", "diff.txt"), f)]];
   for (const [name, put] of puts) {
     const dir = fresh();
     const b = await serving((q, s) => { put(join(dir, "diff.txt")); plain("bbbb")(q, s); });
@@ -134,6 +184,10 @@ test("something put at diff.txt just before the comparison makes it, a link to /
     await refused(compare({ dir, ports: [a.port, b.port], path: "/page", lines: [], status: 200, mask: [], expect: Buffer.from(want), say: () => {} }), `${join(dir, "diff.txt")} cannot be written as a new file: something is there before the check made it`);
     assert.equal(readFileSync(expected, "utf8"), want, `${name}: the expected difference was written through the link`);
     assert.ok(!existsSync(join(dir, "handoff.json")) && !existsSync(join(dir, "bodies.txt")), name);
+    const early = fresh();
+    put(join(early, "A.body"));
+    await refused(capture(a.port, "/page", [], join(early, "A")), `${join(early, "A.body")} cannot be written as a new file`);
+    assert.equal(readFileSync(expected, "utf8"), want, `${name}: the expected difference was written through a capture`);
   }
   const there = fresh();
   writeFileSync(join(there, "x"), "there");
@@ -142,18 +196,18 @@ test("something put at diff.txt just before the comparison makes it, a link to /
 });
 
 /** A comparison's files, sealed as compare() seals them, and the handoff line turns.sh prints for them. */
-function sealed({ outcome = "same", diff = "", bodies = `body 4 bytes as received, sha256 ${"1".repeat(16)} A and ${"1".repeat(16)} B\n` } = {}) {
+function sealed({ outcome = "same", diff = "", bodies = `body 4 bytes as received, sha256 ${"1".repeat(16)} A and ${"1".repeat(16)} B\n`, form = (h) => `${JSON.stringify(h)}\n` } = {}) {
   const dir = fresh();
   writeFileSync(join(dir, "diff.txt"), diff);
   writeFileSync(join(dir, "bodies.txt"), bodies);
-  const seal = `${JSON.stringify({ outcome, diff: sha256(diff), bodies: sha256(bodies) })}\n`;
+  const seal = form({ outcome, diff: sha256(diff), bodies: sha256(bodies) });
   writeFileSync(join(dir, "handoff.json"), seal);
   return { dir, log: `answers: same\nturns: plain: handoff sha256 ${sha256(seal)}\n` };
 }
 
 test("a handoff binds the outcome, diff.txt and bodies.txt: a regular file put in place of any of them, or another outcome, is refused", () => {
   const ok = sealed(), one = "1".repeat(16);
-  assert.deepEqual(handoff(ok.dir, ok.log, "turns: plain", ["same"]), { outcome: "same", diff: "", bodies: { line: `body 4 bytes as received, sha256 ${one} A and ${one} B`, bytes: 4, a: one, b: one } });
+  assert.deepEqual(handoff(ok.dir, ok.log, "turns: plain", ["same"]), { outcome: "same", diff: Buffer.alloc(0), bodies: { line: `body 4 bytes as received, sha256 ${one} A and ${one} B`, bytes: 4, a: one, b: one } });
   const has = (r, word) => { assert.equal(typeof r, "string", JSON.stringify(r)); assert.ok(r.includes(word), r); };
   has(handoff(ok.dir, ok.log, "turns: plain", ["differ"]), 'sealed the outcome "same", not differ');
   for (const [file, text, word] of [["diff.txt", "1c1\n< a\n---\n> b\nbodies same: 4 bytes, sha256 x\n", "is not the difference the comparison sealed"], ["bodies.txt", `body 4 bytes as received, sha256 ${"2".repeat(16)} A and ${"2".repeat(16)} B\n`, "is not the bodies line the comparison sealed"], ["handoff.json", '{"outcome":"same","diff":"x","bodies":"y"}\n', "is not the handoff turns.sh said it sealed"]]) {
@@ -174,6 +228,15 @@ test("a handoff binds the outcome, diff.txt and bodies.txt: a regular file put i
   has(handoff(two.dir, two.log, "turns: plain", ["same"]), "with a difference that does not say so");
   const odd = sealed({ bodies: "body 4 bytes\n" });
   has(handoff(odd.dir, odd.log, "turns: plain", ["same"]), "is not a bodies line the kit writes");
+  // A handoff in any other form than the one the kit writes, a key twice (JSON.parse keeps the
+  // last, so the first would never be read), other spacing or order, is no handoff, though the line names its bytes.
+  for (const form of [(h) => `{"outcome":"differ","outcome":"${h.outcome}","diff":"${h.diff}","bodies":"${h.bodies}"}\n`, (h) => `${JSON.stringify(h, null, 1)}\n`, (h) => `${JSON.stringify({ diff: h.diff, outcome: h.outcome, bodies: h.bodies })}\n`, (h) => JSON.stringify(h)]) {
+    const s = sealed({ form });
+    has(handoff(s.dir, s.log, "turns: plain", ["same"]), "is not a handoff the kit writes");
+  }
+  // diff.txt's bytes come back as they are, not as text.
+  const bytes = Buffer.from("1c1\n< x: cafe\n---\n> x: caf\xe9\nbodies same: 4 bytes, sha256 x\n", "latin1"), kept = sealed({ outcome: "differ", diff: bytes });
+  assert.deepEqual(handoff(kept.dir, kept.log, "turns: plain", ["differ"]).diff, bytes);
 });
 
 const RESULT = "RESULT 100 0 0 0 0 0\n", PERF = "12345,,cycles:u,1000,100.00,,\n";
@@ -192,7 +255,10 @@ test("a turn is recorded only from exactly one complete RESULT line of decimal c
   no(PERF, "RESULT 100 0 1 0 0 0\n", "errors in pair 1 base");
   no(PERF, "RESULT 0 0 0 0 0 0\n", "no requests in pair 1 base");
   // A percentage that is not one, or not 100; a count that is not one, or zero; an event twice or not at all.
-  for (const pct of ["100oops", "99.99", "100.01", "", "1e2", "+100", "100 ", "0x64"]) no(PERF.replace("100.00", pct), RESULT, "counter not at 100%");
+  for (const pct of ["100oops", "99.99", "100.01", "", "1e2", "+100", "100 ", "0x64", "99.99999999999999999", "100.000", "100.0"]) no(PERF.replace("100.00", pct), RESULT, "counter not at 100%");
+  // A row that does not end with a newline is not a complete row, however it ends.
+  no("12345,,cycles:u,1000,100", RESULT, "does not end with a complete row");
+  no(`${PERF}12345,,cycles:u,1000,100`, RESULT, "does not end with a complete row");
   for (const v of ["0", "12a", "<not counted>", "-1", ""]) no(PERF.replace("12345", v), RESULT, "unusable counter");
   no(`${PERF}${PERF}`, RESULT, "not reported once");
   no("", RESULT, "not reported once");
@@ -211,21 +277,7 @@ test("a turn's perf and wrk output go to the raw log byte for byte, a NUL includ
   assert.equal(readFileSync(csv, "utf8"), "1,base,100,12345\n", "a row was recorded for a turn that is not one");
 });
 
-test("the difference is in diff's normal format, as POSIX diff prints it where diff is there to ask", () => {
-  const cases = [[["a", "b", "c"], ["a", "x", "c"]], [["a", "b", "c", "d", "e"], ["a", "x", "c", "d", "y"]], [["a"], ["a", "b"]], [["a", "b"], ["a"]], [["a", "b"], []], [[], ["a"]], [["a", "b"], ["a", "b"]], [["s", "h1", "h2", "h3"], ["s", "h2", "h3", "h4"]], [["s", "a", "b", "c"], ["s", "x", "y"]]];
-  assert.equal(difference(...cases[0]), "2c2\n< b\n---\n> x\n");
-  assert.equal(difference(...cases[1]), "2c2\n< b\n---\n> x\n5c5\n< e\n---\n> y\n");
-  assert.equal(difference(...cases[2]), "1a2\n> b\n");
-  assert.equal(difference(...cases[3]), "2d1\n< b\n");
-  assert.equal(difference(...cases[4]), "1,2d0\n< a\n< b\n");
-  assert.equal(difference(...cases[6]), "");
-  if (spawnSync("diff", ["--version"]).status === null) return;
-  for (const [x, y] of cases) {
-    const dir = fresh(), f = (n, l) => { writeFileSync(join(dir, n), l.map((s) => `${s}\n`).join("")); return join(dir, n); };
-    assert.equal(difference(x, y), spawnSync("diff", [f("a", x), f("b", y)], { encoding: "utf8" }).stdout, JSON.stringify([x, y]));
-  }
-});
-
-test("masked: Date left out, each masked header's line its name and <masked>, whatever case it was sent in", () => {
-  assert.deepEqual(masked(["HTTP/1.1 200 OK", "Date: x", "ETag: 1", "etag: 2", "x-a: 1"], [{ header: "etag" }]), ["HTTP/1.1 200 OK", "etag: <masked>", "etag: <masked>", "x-a: 1"]);
+test("masked: Date left out, each masked header's line its name and <masked>, whatever case it was sent in, and every other byte as received", () => {
+  const raw = Buffer.from("HTTP/1.1 200 OK\r\nDate: x\r\nETag: 1\r\netag: 2\r\nx-a:\t1 \r\nx-b: caf\xe9\r\n\r\n", "latin1");
+  assert.deepEqual(masked(raw, [{ header: "etag" }]), Buffer.from("HTTP/1.1 200 OK\netag: <masked>\netag: <masked>\nx-a:\t1 \nx-b: caf\xe9\n\n", "latin1"));
 });

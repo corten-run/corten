@@ -51,7 +51,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `workloads[].reads` | The thresholds this run reads across placements: `["margin"]`, `["reduction"]` or both. One a single build already read outside its band is left out and stays as that build read it, but for the margin of a workload read for the catalog's `page` or `json`: see [what it does not do](#what-it-does-not-do), item 14. |
 | `workloads[].reduction` | The smallest worthwhile reduction as a fraction (`0.02`), or `null` when the plan declares no benefit side. |
 | `workloads[].recordsSpread` | Whether the plan declares, before the run, that its A/A records a placement spread. |
-| `workloads[].expect` | Optional: a file holding the exact difference between base's and head's answers that the change makes by design, as `turns.sh` writes it to `answers/diff.txt`: the difference of their masked headers in `diff`'s normal format (empty when those are the same), then one bodies line, `bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>` when the bodies differ and `bodies same: <N> bytes, sha256 <its>` when they do not, each SHA-256 in full. `turns.sh` compares the two files byte for byte, so an expected difference binds the header lines that differ, every other header line to being the same on both sides, and both bodies by their lengths and SHA-256s, whether the bodies differ or not. `plan.mjs` refuses one that does not end with exactly one bodies line of those two forms, and a `bodies same` line alone, which `turns.sh` writes only after the headers' difference. Without it the two must answer the same, and `diff.txt` is empty. [`answers.mjs`](answers.mjs) fetches each answer once, and takes whether the two differ, the difference held to `expect`, the lengths and the SHA-256s from those bytes as it received them; it writes `diff.txt` once, created new, and never reads it back: anything already at `diff.txt` when it is written, a link included, fails the placement. |
+| `workloads[].expect` | Optional: a file holding the exact difference between base's and head's answers that the change makes by design, as `turns.sh` writes it to `answers/diff.txt`: the difference of their masked headers in `diff`'s normal format (empty when those are the same), then one bodies line, `bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>` when the bodies differ and `bodies same: <N> bytes, sha256 <its>` when they do not, each SHA-256 in full. `turns.sh` compares the two files byte for byte, so an expected difference binds the header lines that differ, every other header line to being the same on both sides, and both bodies by their lengths and SHA-256s, whether the bodies differ or not. `plan.mjs` refuses one that does not end with exactly one bodies line of those two forms, and a `bodies same` line alone, which `turns.sh` writes only after the headers' difference. Without it the two must answer the same, and `diff.txt` is empty. [`answers.mjs`](answers.mjs) has `curl` capture each answer once, into files it has just created, and takes whether the two differ, the difference held to `expect`, the lengths and the SHA-256s from those bytes as `curl` wrote them; the headers' difference is the system `diff`'s, run once on the two masked headers' files. It writes `diff.txt` once, created new, and never reads it back: anything already at `diff.txt` when it is written, a link included, fails the placement. The difference is kept as bytes throughout, so a header byte that is not UTF-8 is compared and kept as it was sent. |
 
 The pad lists are not in the plan: `pads.mjs` gives the two lists for a K, and `plan.mjs` refuses a
 K whose lists miss the fourth point's phase rules.
@@ -227,9 +227,15 @@ one of the commands above with its output under `<run dir>/log`:
    and the checks of a port, run with `--disable`, so a `.curlrc` (a retry, a header) changes
    neither a request nor its bound, and with `--noproxy '*'`, so no `http_proxy` or `ALL_PROXY`
    of the environment's answers for the servers, each bound to a second. The answers both
-   scripts check are fetched by `answers.mjs` with Node's own HTTP client, which reads no proxy
-   setting: one request each, sending the `Host` line and the plan's header lines and nothing
-   else, bound to 10 s, and refused unless it has the plan's status. So a server that takes a
+   scripts check are captured by `curl`, which `answers.mjs` runs with `--disable` and
+   `--noproxy '*'` as well: one request each, sending the `Host` line and the plan's header lines
+   (`curl`'s own `Accept` and `User-Agent` left out unless the plan has them), bound to 10 s, its
+   header lines kept as `curl` writes them and its body as received, and refused unless it has the
+   plan's status. Both scripts run `answers.mjs` with an environment of `PATH` alone (so no
+   `NODE_OPTIONS` holds it) under `timeout`, 30 s (60 s for a placement's comparison, which takes
+   three answers) and KILL 5 s after, and fail saying so when it is stopped. `serve.mjs` publishes its
+   server's process number through a file it creates new, so anything already at that path, a FIFO
+   included, stops the server and fails the start instead of holding `serve.mjs`. So a server that takes a
    connection and never answers holds neither script, nor a signal it has held off until that
    request ends, any longer. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
@@ -248,7 +254,9 @@ one of the commands above with its output under `<run dir>/log`:
    it opens a port after that check, it is not seen. The start command must be, or exec, the
    server. `turns.sh` prints, after that stop, one line `turns: <workload>: handoff sha256
    <SHA-256>` naming `answers/handoff.json`, which `answers.mjs` wrote with the outcome (the
-   same, as expected, or differ) and the SHA-256s of `diff.txt` and `bodies.txt`; the trend reads
+   same, as expected, or differ) and the SHA-256s of `diff.txt` and `bodies.txt`, in one form
+   (those three keys in that order, as `JSON.stringify` writes them, and a newline), which is read
+   only when its bytes are exactly that form again, so a key given twice is refused; the trend reads
    the outcome, the difference and the bodies line only from files whose bytes have those
    SHA-256s, so a file put in place of one of them after the comparison leaves the workload not
    read. The difference is kept
@@ -335,8 +343,8 @@ while it ran.
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
 | The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
-| Answers | `plan.mjs`, `verify.sh`, `turns.sh`, `answers.mjs` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. Each answer is fetched once, with the plan's status, and every fact about it is taken from those bytes; the difference and the bodies line are compared and written as `diff.txt` once, created new, and never read back, with `bodies.txt` and a `handoff.json` that names the outcome and both files' SHA-256s. Anything already at a file it writes (a file, or a link, to `/dev/null` or the expected difference say), an answer of another status, cut short or not sent in 10 s, fails the placement. `verify.sh` records a placement only as `answers.mjs verified` reads it from that handoff. |
-| Turns | `turns.sh`, `answers.mjs` | Every turn on a fresh start on the server's CPU, its `perf` and `wrk` output kept byte for byte; a failed request, output that is not exactly one complete `RESULT` line of decimal counts and each counter once, or a counter that is zero or not at exactly 100%, fails the placement, and nothing is run again. |
+| Answers | `plan.mjs`, `verify.sh`, `turns.sh`, `answers.mjs` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. Each answer is captured once by `curl`, with the plan's status, and every fact about it is taken from those bytes, the headers' difference by the system `diff`; the difference and the bodies line are compared and written as `diff.txt` once, created new, and never read back, with `bodies.txt` and a `handoff.json` that names the outcome and both files' SHA-256s. Anything already at a file it writes (a file, or a link, to `/dev/null` or the expected difference say), an answer of another status, cut short or not sent in 10 s, fails the placement. `verify.sh` records a placement only as `answers.mjs verified` reads it from that handoff. |
+| Turns | `turns.sh`, `answers.mjs` | Every turn on a fresh start on the server's CPU, its `perf` and `wrk` output written to files created new for that turn and kept byte for byte; a failed request, output that is not exactly one complete `RESULT` line of decimal counts and each counter once in a row that ends with a newline, or a counter that is zero or whose percentage is not `100.00` (or `100`) as written, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |
 | Eligibility and K | `pilot.mjs`, `plan.mjs --sized-from` | The A/A may size a run, on this plan's setup as far as item 11 below compares it, and the K passes under each model kept, at that K itself. A K nothing checked is said to be unchecked in every reading. |
 
@@ -437,16 +445,22 @@ tags `evidence/placement-sizing-1999` (an A/A's counts) and `evidence/placement-
 (the maps), which are too large for `bench/`; in a checkout without those tags they fail with the
 `git fetch` that brings them ([`tags.mjs`](tags.mjs)).
 
-`answers.test.mjs` runs `answers.mjs` on servers of its own, on any platform: the one request
-sends the `Host` line and the plan's header lines alone and reaches no proxy of the environment's;
-an answer of another status is refused by the comparison and by a start; the difference, the
-lengths, the SHA-256s and the kept bodies come from one request per answer, and the difference is
-in `diff`'s normal format (checked against the system's `diff` where there is one); an answer cut
-short or never sent is refused; something put at `diff.txt` while B is answering (a link to
+`answers.test.mjs` runs `answers.mjs` on servers of its own; its captures and comparisons need
+Linux, `curl` and `diff` and are skipped elsewhere: the one request sends the `Host` line and the
+plan's header lines alone and reaches no proxy of the environment's; an answer of another status is
+refused by the comparison and by a start; the difference, the lengths, the SHA-256s and the kept
+bodies come from one request per answer, and the difference is the system `diff`'s of the masked
+headers; a header that differs only in its whitespace (`X-Test:\t alpha  ` against
+`X-Test: alpha`), a change after the 1,000th header line, and lines B,A,B against A,A,B (`2c2`)
+are each found as `diff` finds them; a header byte that is not UTF-8 (`0xe9`) is kept in the
+difference byte for byte and matches it as `expect`; an answer cut short or never sent is refused;
+something put at `diff.txt` or at a capture's files just before they are made (a link to
 `/dev/null`, to the expected difference or nowhere, or a file) is refused and never written
-through; a handoff refuses a regular file put in place of `diff.txt`, `bodies.txt` or
-`handoff.json`, or another outcome; and a turn is recorded only from exactly one complete `RESULT`
-line at exactly 100% (not `100oops`, `99.99`, `1e2` or `+100`), its output kept byte for byte, a
+through. On any platform: a handoff refuses a regular file put in place of `diff.txt`,
+`bodies.txt` or `handoff.json`, another outcome, and a handoff in any other form (a key twice,
+pretty-printed, reordered, no newline); and a turn is recorded only from exactly one complete
+`RESULT` line and newline-ended `perf` rows at `100.00` or `100` as written (not `100oops`,
+`99.99`, `99.99999999999999999`, `100.0`, `1e2` or `+100`), its output kept byte for byte, a
 NUL included.
 
 Two shell scripts are run, and only on Linux: `trend.test.mjs` runs the trend's answers
@@ -456,15 +470,17 @@ difference in a header alone and, under it, another body both sides share, a dif
 headers with one between them, whose first hunk alone, expected, must fail, a `diff.txt` that
 cannot be written, an empty file, a link to `/dev/null`, a lone first hunk or a link to the
 expected difference put at `diff.txt` by a server while it answers, which must fail and leave
-that file as it was, a stand-in `cmp` that replaces B's body with a third of the same length,
-which must change nothing, answers of another status under a stand-in `head` that prints a
+that file as it was, a stand-in `diff` that replaces B's body with a third of the same length,
+which must change nothing, headers that differ only in their whitespace or after the 1,000th
+line and the B,A,B lines, each found as `diff` finds them, answers of another status under a stand-in `head` that prints a
 `200` line, which must leave no verdict, no handoff and no counts, an answer cut short, a side
 that never answers, answers that differ after which a start command that forks its server
 leaves it listening, which must not read as a difference, and a proxy of the environment's
 that answers everything, which no request may reach), on a CPU the test may run on, and fails
 saying so when the kit's two ports are in use. Its trend runs, with a stand-in for the kit, also
-refuse a regular file put at `diff.txt` or `bodies.txt` after the check, or another outcome
-sealed, and a FIFO there. It also runs `turns.sh` itself on two servers that ignore TERM: after
+refuse a regular file put at `diff.txt` or `bodies.txt` after the check, another outcome
+sealed, a handoff with a key twice, and a FIFO there, and keep a recorded difference that is not
+UTF-8 byte for byte in `expect-<workload>.txt`. It also runs `turns.sh` itself on two servers that ignore TERM: after
 answers that are the same, sent TERM while it stops them after answers that differ (which then
 must say no difference), sent TERM alone while a readiness request waits on a server that takes
 the connection and never answers, and under the check's own deadline, whose TERM reaches the
@@ -477,7 +493,9 @@ later, while the other's stop takes 5 s, it must fail, after answers that differ
 same, rather than say the stop was confirmed; and with something on its port that takes a
 connection and never answers before it starts, it must refuse at once and start no server. With
 stand-ins for `perf` and `wrk`, a turn's output must reach the raw log byte for byte, a NUL
-included, and two incomplete `RESULT` lines or a percentage of `100oops` must record no row.
+included; two incomplete `RESULT` lines, a percentage of `100oops` or `99.99999999999999999`,
+or a `perf` row cut before its newline must record no row; and a second turn whose `perf` writes
+nothing must fail rather than read the first turn's output.
 `verify.test.mjs`, which `npm run check` runs too, runs the second, `verify.sh`, and with a plan
 of no placement, on a base that ignores TERM: after its two starts, ended by a failed request
 while the base runs, sent TERM while it stops the base after a request that succeeded (which
@@ -485,7 +503,9 @@ must then fail it) and killed outright while the base runs, it must have the bas
 a bound and leave nothing on its port; it must fail when a start command forks the server and
 leaves it listening, give each readiness request to a base that never answers at most a second
 under a `.curlrc` that asks for retries, send no request to a proxy of the environment's, keep a
-caller's `NODE_OPTIONS` from `serve.mjs`, and, with a stand-in `serve.mjs` that does not end when
+caller's `NODE_OPTIONS` from `serve.mjs` and `answers.mjs`, stop an `answers.mjs` that stalls and
+ignores TERM at 30 s and fail with nothing left running, stop the server and fail at once when a
+FIFO is at `serve.mjs`'s process-number file, and, with a stand-in `serve.mjs` that does not end when
 its input closes, fail about 15 s later saying the cleanup is unconfirmed, signalling nothing.
 With a placement, its starts and `turns.sh`'s comparison must send the same one request, answers
 of another status must be no evidence for the mask though they differ in the masked header, and

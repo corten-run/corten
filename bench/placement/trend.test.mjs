@@ -369,7 +369,7 @@ function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, prom
 const DIFF = `5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf50c33ce3fc2\nbodies differ: 6124 and 6124 bytes, sha256 ${DIGEST.base.repeat(4)} and ${DIGEST.head.repeat(4)}\n`;
 const DIFFERS = (w) => `turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked\n`;
 let made = 0;
-function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], differed = {}, build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], undiffed = {}, piped = {}, swapped = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
+function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], differed = {}, build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], undiffed = {}, piped = {}, swapped = {}, forms = {}, diffs = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
   const dir = join(tmp, `run-${++made}`), page = join(tmp, `page-${made}.md`), calls = [], said = [];
   writeFileSync(page, before ? insert(BLANK, before) : BLANK);
   const env = { ...process.env, ...(dry ? { DRYRUN: "1" } : {}) };
@@ -410,12 +410,13 @@ function command({ reports = {}, differ = ["plain"], real = false, silent = {}, 
       // is read here from the command itself.
       const given = join(work, /turns\.sh" "\$1\/([a-z]+)" "\$W" 0 /.exec(args[1])[1], "answers");
       mkdirSync(given, { recursive: true });
-      const found = differ.includes(w) ? DIFF : "";
+      const found = diffs[w] ?? (differ.includes(w) ? DIFF : "");
       writeFileSync(join(given, "bodies.txt"), BODY(DIGEST.base, mine));
       // The same answers leave an empty diff.txt (undiffed: none, or with "dir" one that cannot be read).
       if (undiffed[w] === "dir") mkdirSync(join(given, "diff.txt")); else if (!undiffed[w]) writeFileSync(join(given, "diff.txt"), found);
       // As answers.mjs seals the comparison, and turns.sh then names the seal after its stop.
-      const handoff = `${JSON.stringify({ outcome: swapped[w]?.outcome ?? (found ? "differ" : "same"), diff: sha256(found), bodies: sha256(BODY(DIGEST.base, mine)) })}\n`;
+      const sealing = { outcome: swapped[w]?.outcome ?? (found.length ? "differ" : "same"), diff: sha256(found), bodies: sha256(BODY(DIGEST.base, mine)) };
+      const handoff = forms[w] ? forms[w](sealing) : `${JSON.stringify(sealing)}\n`;
       writeFileSync(join(given, "handoff.json"), handoff);
       if (swapped[w]?.at) writeFileSync(join(given, swapped[w].at), swapped[w].text);
       const sealed = `turns: ${w}: handoff sha256 ${sha256(handoff)}\n`;
@@ -688,6 +689,20 @@ test("what the check before any turn left is read as its handoff sealed it: a re
   }
 });
 
+test("a handoff in another form than the kit writes, a key given twice say, leaves the workload not read, though its line names its bytes", () => {
+  const twice = (h) => `{"outcome":"differ","outcome":"${h.outcome}","diff":"${h.diff}","bodies":"${h.bodies}"}\n`;
+  const r = command({ reports: PASS, differ: [], forms: { plain: twice } });
+  assert.equal(r.exit, 3, r.line);
+  assert.ok(r.line.includes(`\`plain\` not read: the two sides' answers were compared, and what the check left is not what it sealed: ${join("check-plain", "compare", "answers", "handoff.json")} is not a handoff the kit writes; ${UNSTAGED} |`), r.line);
+});
+
+test("a recorded difference is kept as the bytes the check sealed, a header byte that is not UTF-8 included", () => {
+  const bytes = Buffer.concat([Buffer.from("5c5\n< x-name: cafe\n---\n> x-name: caf\xe9\n", "latin1"), Buffer.from(`bodies same: 6124 bytes, sha256 ${DIGEST.base.repeat(4)}\n`)]);
+  const r = command({ reports: PASS, diffs: { plain: bytes } });
+  assert.ok(r.line.includes(`${PLAIN}, answers differ as recorded;`), r.line);
+  assert.deepEqual(readFileSync(join(r.dir, "expect-plain.txt")), bytes);
+});
+
 // A FIFO the kit left where a file is read, on Linux alone. A read that opened it would wait for
 // a writer; each has one, a process that opens it to write after OPEN_AFTER and so lets such a
 // read end, which takes the run past BOUND. A run that opens no FIFO ends well within BOUND.
@@ -922,15 +937,40 @@ test("the answers check on real servers: the difference the check recorded holds
   assert.ok(third.said.includes("turns: plain: the answers differ other than as the plan's expected difference says"), third.said);
 });
 
-test("the answers check on real servers: each answer is taken once, so a body replaced after it was received changes neither the difference, the bodies line nor the body kept", LINUX, () => {
-  // A stand-in for cmp, which the check once ran on the kept bodies after it had hashed them,
-  // replaces B's kept body with a third of the same length as it runs. Nothing the check says or
-  // keeps may come from a body other than the one B answered with.
-  const first = stand("swapped", "cmp", 'case "$3" in */B.body) printf cccc >"$3" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
+test("the answers check on real servers: each answer is taken once, so a body replaced after it was received changes neither the difference nor the bodies line", LINUX, () => {
+  // A stand-in for diff, which the check runs once every answer has been taken, replaces B's
+  // kept body with a third of the same length as it runs. Nothing the check says may come from a
+  // body other than the one B answered with.
+  const kept = join(tmp, "answers-swapped", "compare", "answers", "B.body");
+  const first = stand("swapped", "diff", `printf cccc >'${kept}'\nPATH=\${PATH#*:} exec diff "$@"`);
   const r = answers("answers-swapped", serve("aaaa"), serve("bbbb"), 60, { first });
   assert.equal(r.status, 4, r.said);
+  assert.equal(readFileSync(kept, "utf8"), "cccc", "the stand-in diff did not run");
   assert.equal(readFileSync(join(r.answers, "diff.txt"), "utf8"), `bodies differ: 4 and 4 bytes, sha256 ${full("aaaa")} and ${full("bbbb")}\n`);
-  assert.deepEqual([bodies(join(r.answers, "bodies.txt")).b, readFileSync(join(r.answers, "B.body"), "utf8")], [digest("bbbb"), "bbbb"], "the body kept, or the bodies line, is not B's answer");
+  assert.equal(bodies(join(r.answers, "bodies.txt")).b, digest("bbbb"), "the bodies line is not B's answer");
+});
+
+/** A server that answers every request with exactly head's bytes (its status and header lines, CRLF each) and then body. */
+const rawly = (head, body = "aaaa") => `const head = Buffer.from(${JSON.stringify(head)}, "latin1"), rest = Buffer.from(${JSON.stringify(`content-length: ${body.length}\r\nconnection: close\r\n\r\n${body}`)}, "latin1");
+require("node:net").createServer((c) => { let got = Buffer.alloc(0); c.on("error", () => {}); c.on("data", (d) => { got = Buffer.concat([got, d]); if (got.includes("\\r\\n\\r\\n")) c.end(Buffer.concat([head, rest])); }); }).listen(Number(process.argv[2]), "127.0.0.1");`;
+
+test("the answers check on real servers: header lines are compared as sent, so whitespace that differs, or a line after the thousandth, is a difference", LINUX, () => {
+  // The two read as one "X-Test: alpha" once a client parses them.
+  const ws = answers("answers-whitespace", rawly("HTTP/1.1 200 OK\r\nX-Test:\t alpha  \r\n"), rawly("HTTP/1.1 200 OK\r\nX-Test: alpha\r\n"), 60);
+  assert.equal(ws.status, 4, ws.said);
+  assert.ok(readFileSync(join(ws.answers, "diff.txt"), "latin1").startsWith("2c2\n< X-Test:\t alpha  \n---\n> X-Test: alpha\n"), ws.said);
+  const many = (last) => `HTTP/1.1 200 OK\r\n${Array.from({ length: 1000 }, (_, i) => `x-${i}: ${i}\r\n`).join("")}x-last: ${last}\r\n`;
+  const far = answers("answers-thousand", rawly(many("a")), rawly(many("b")), 60);
+  assert.equal(far.status, 4, far.said);
+  assert.ok(readFileSync(join(far.answers, "diff.txt"), "latin1").startsWith("1002c1002\n< x-last: a\n---\n> x-last: b\n"), far.said);
+});
+
+test("the answers check on real servers: the difference is the system diff's of the two masked headers, B,A,B against A,A,B one change", LINUX, () => {
+  const r = answers("answers-diff", rawly("HTTP/1.1 200 OK\r\nx: B\r\nx: A\r\nx: B\r\n"), rawly("HTTP/1.1 200 OK\r\nx: A\r\nx: A\r\nx: B\r\n"), 60);
+  assert.equal(r.status, 4, r.said);
+  const diff = readFileSync(join(r.answers, "diff.txt"), "utf8"), system = spawnSync("diff", [join(r.answers, "A.headers"), join(r.answers, "B.headers")], { encoding: "utf8" }).stdout;
+  assert.equal(diff, `${system}bodies same: 4 bytes, sha256 ${full("aaaa")}\n`);
+  assert.ok(diff.startsWith("2c2\n< x: B\n---\n> x: A\n"), diff);
 });
 
 test("the answers check on real servers: answers of another status than the plan's fail it, whatever a head on PATH prints of them, with no verdict and no counts", LINUX, () => {
@@ -1079,7 +1119,7 @@ test("the answers check on real servers: an answer cut short fails it, and does 
   const cut = 'require("node:http").createServer((q, s) => { if (q.url === "/") return s.end("ok"); s.setHeader("content-length", "10"); s.write("aaaa"); setTimeout(() => s.socket.destroy(), 50); }).listen(Number(process.argv[2]), "127.0.0.1");';
   const r = answers("answers-cut", serve("aaaa"), cut, 60);
   assert.equal(r.status, 1, r.said);
-  assert.ok(r.said.includes("turns: plain: the answer on 18082 was cut short") && !r.said.includes("answers: same") && !r.said.includes("answer differently"), r.said);
+  assert.ok(r.said.includes("turns: plain: the answer on 18082 could not be taken whole: curl ended with status 18") && !r.said.includes("answers: same") && !r.said.includes("answer differently"), r.said);
 });
 
 // turns.sh's servers are stopped however it ends, within a bound, though they ignore TERM. No test
@@ -1289,13 +1329,15 @@ test("turns.sh, killed outright while B's start waits to open its log (a FIFO th
  * writes perf, and wrk prints wrk, each as given (bytes, a NUL included). Returns what stopping()
  * does and the raw log's bytes and the CSV's text, or null for one that is not there.
  */
-async function turned(t, name, perf, wrk) {
+async function turned(t, name, perf, wrk, { once = false } = {}) {
   const dir = join(tmp, `${name}-tools`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "perf.out"), perf);
   writeFileSync(join(dir, "wrk.out"), wrk);
   const cat = spawnSync("sh", ["-c", "command -v cat"], { encoding: "utf8" }).stdout.trim();
-  stand(`${name}-tools`, "perf", `while [ $# -gt 0 ]; do [ "$1" = -o ] && { '${cat}' '${join(dir, "perf.out")}' >"$2"; exit 0; }; shift; done; exit 2`);
+  // once: perf writes its output for the first turn alone, and for the next writes nothing.
+  const first = once ? `[ -e '${join(dir, "wrote")}' ] && exit 0; : >'${join(dir, "wrote")}'; ` : "";
+  stand(`${name}-tools`, "perf", `${first}while [ $# -gt 0 ]; do [ "$1" = -o ] && { '${cat}' '${join(dir, "perf.out")}' >"$2"; exit 0; }; shift; done; exit 2`);
   stand(`${name}-tools`, "wrk", `exec '${cat}' '${join(dir, "wrk.out")}'`);
   const yielding = stubborn("aaaa", false, { yields: true });
   const r = await stopping(t, name, { base: "aaaa", head: "aaaa", servers: { base: yielding, head: yielding }, first: dir, pairs: 1 });
@@ -1316,12 +1358,21 @@ test("turns.sh records a turn from its perf and wrk output as they are, a NUL by
 for (const [what, perf, wrk, word] of [
   ["two incomplete RESULT lines, which joined make six counts", COUNTED, "RESULT 100 0 0\nRESULT 0 0 0\n", "2 RESULT lines from wrk in pair 1 base"],
   ["a counter at 100oops, which reads as a number as 100", COUNTED.replace("100.00", "100oops"), RESULTS, 'counter not at 100% in pair 1 base: cycles:u "100oops"'],
+  ["a counter at 99.99999999999999999, which reads as a number as 100", COUNTED.replace("100.00", "99.99999999999999999"), RESULTS, 'counter not at 100% in pair 1 base: cycles:u "99.99999999999999999"'],
+  ["a row cut short at 100, which is no complete row", "12345,,cycles:u,1000,100", RESULTS, "perf's output in pair 1 base does not end with a complete row"],
 ]) test(`turns.sh refuses a turn whose output has ${what}, and records no row`, LINUX, async (t) => {
   const r = await turned(t, `turned-${what.split(" ")[0]}-${what.length}`, perf, wrk);
   assert.equal(r.status, 1, r.said);
   assert.ok(r.said.includes(`turns: plain: ${word}`), r.said);
   assert.equal(r.csv, "pair,version,requests,cycles_u\n", r.said);
   assert.ok(!r.said.includes(": done, "), r.said);
+});
+
+test("turns.sh reads each turn's output from files of that turn's own, so a perf that writes nothing for the second turn records nothing for it, not the first turn's counts", LINUX, async (t) => {
+  const r = await turned(t, "turned-stale", COUNTED, RESULTS, { once: true });
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("turns: plain: cycles:u not reported once in pair 1 head"), r.said);
+  assert.equal(r.csv, "pair,version,requests,cycles_u\n1,base,100,12345\n", r.said);
 });
 
 /**

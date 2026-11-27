@@ -3,9 +3,10 @@
 # answers the workload's request as its side's unpadded binary does (the placement plan's first
 # point, CONTRIBUTING.md, Pull requests, item 2). run.sh runs it first.
 #   1. The base's unpadded binary is started twice and its answer's headers kept from each start
-#      (<out dir>/start-1.raw-headers, start-2.raw-headers), each answer fetched by answers.mjs,
-#      the request builder turns.sh's comparison uses (Host and the plan's header lines, nothing
-#      else), and of the plan's status, or it is no evidence and fails verify.sh: every header the
+#      (<out dir>/start-1.raw-headers, start-2.raw-headers), each answer taken by curl under
+#      answers.mjs, with the request turns.sh's comparison sends (Host and the plan's header lines,
+#      curl's own Accept and User-Agent left out), and of the plan's status, or it is no evidence
+#      and fails verify.sh: every header the
 #      plan masks, with a stated range or without, must have been sent once by each start and
 #      differ between them (mask.mjs starts, on the headers answers.mjs wrote, by their SHA-256s).
 #      A value that is not shown to differ is not one the plan may mask.
@@ -26,7 +27,9 @@
 # and stopping that server is the operator's. Every curl is run with --disable, so no curl
 # configuration of HOME's (a retry, a header) changes a request or stretches its bound, and with
 # --noproxy '*', so no proxy of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1.
-# answers.mjs reads neither, and gives the answer 10 s.
+# answers.mjs runs its curl so too, giving the answer 10 s. Each answers.mjs is run with an
+# environment of PATH alone, so no NODE_OPTIONS of the caller's (--inspect-brk, say) holds it, and
+# under timeout: 30 s, and KILL 5 s later, so a stalled one holds verify.sh no longer.
 # Every server is started with an environment of PATH, HOME, PORT and BIN alone, kept in
 # <out dir>/server-env.txt. Writes <out dir>/<side>-p<pad>/ and
 # <out dir>/verdicts.txt, one line a binary: "<binary> as <side>: answers: same; ...".
@@ -91,6 +94,12 @@ halt() {
 }
 trap 'halt || :' EXIT
 trap 'exit 1' HUP INT PIPE TERM
+# answers.mjs <mode> <say> <argument>..., as the header says, never with descriptors 3 and 4.
+answers() {
+    hst=0; env -i PATH="$PATH" timeout --foreground -k 5 30 node "$KIT/answers.mjs" "$@" 3>&- 4>&- || hst=$?
+    case $hst in 124|137) echo "verify: answers.mjs $1 did not end within 30 s, and was stopped" >&2 ;; esac
+    return $hst
+}
 # The environment a server is started with, as env prints it and then sorted: two commands, each
 # with its status checked, since a pipeline's status is its last command's alone.
 env -i PATH="$PATH" HOME="$HOME" PORT=18083 BIN="$B/base" env >"$out/server-env.unsorted" || { echo "verify: env could not print the server's environment (status $?)" >&2; exit 1; }
@@ -111,11 +120,11 @@ for s in 1 2; do
         i=$((i + 1)); [ $i -lt 100 ] || { echo "verify: nothing answers on 18083" >&2; exit 1; }; sleep 0.1 3>&-
     done
     # The SHA-256 of the headers it wrote, which the mask's check below reads them by.
-    sha=$(exec 3>&-; exec node "$KIT/answers.mjs" start verify 18083 "$REQ_PATH" "$HEADERS" "$STATUS" "$out/start-$s") || exit 1
+    sha=$(exec 3>&-; answers start verify 18083 "$REQ_PATH" "$HEADERS" "$STATUS" "$out/start-$s") || exit 1
     if [ $s = 1 ]; then sha1=$sha; else sha2=$sha; fi
     halt || exit 1
 done
-said=$(node "$KIT/answers.mjs" starts verify "$MASK_JSON" "$out/start-1.raw-headers" "$sha1" "$out/start-2.raw-headers" "$sha2") || { echo "VERIFY FAILED: the plan's mask" >&2; exit 1; }
+said=$(answers starts verify "$MASK_JSON" "$out/start-1.raw-headers" "$sha1" "$out/start-2.raw-headers" "$sha2") || { echo "VERIFY FAILED: the plan's mask" >&2; exit 1; }
 printf '%s\n' "$said" >"$out/starts.txt"
 printf '%s\n' "$said"
 verified=0
@@ -124,7 +133,7 @@ one() { # <side> <pad>
     timeout -k 30 "$PLACEMENT_SECONDS" taskset -c "$CPU_DRIVER" sh "$KIT/turns.sh" "$d" "$W" 0 "$B/$1" "$B/$1-p$2" >"$d.log" 2>&1 \
         || { cat "$d.log" >&2; echo "VERIFY FAILED: $1-p$2 against $1" >&2; exit 1; }
     # Both the verdict and the bodies' evidence, as answers.mjs verifies them, or nothing is recorded.
-    line=$(node "$KIT/answers.mjs" verified "verify: $1-p$2" "$d/answers" "$d.log" "turns: $W") || { echo "VERIFY FAILED: $1-p$2 against $1: what turns.sh left is not a verified placement" >&2; exit 1; }
+    line=$(answers verified "verify: $1-p$2" "$d/answers" "$d.log" "turns: $W") || { echo "VERIFY FAILED: $1-p$2 against $1: what turns.sh left is not a verified placement" >&2; exit 1; }
     printf '%s as %s: %s\n' "$1-p$2" "$1" "$line" >>"$out/verdicts.txt"
     verified=$((verified + 1))
 }

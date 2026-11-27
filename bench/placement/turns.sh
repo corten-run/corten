@@ -26,26 +26,32 @@
 #   EVENTS      the perf events counted over each turn; every one must be counted once, a count
 #               above zero, and running 100% of the turn
 # A compared answer is the status line, every header line but Date with the plan's mask applied,
-# and the body as received, byte for byte. answers.mjs fetches, checks, compares and keeps the
-# answers, each fetched once into memory by the one request builder verify.sh uses too (Host and
-# the plan's header lines, nothing of curl's), and every fact about it taken from those bytes;
-# it writes every file of answers/ once, as a new file, and reads none back. It reads each turn's
-# perf and wrk output too, once each, as bytes, which go to the raw log as they are. A turn whose
-# wrk output has other than one complete RESULT line of decimal counts, or any error, or whose
-# counter is missing, reported twice, not a count above zero or not at 100%, fails the placement
-# and records nothing.
+# each byte as curl wrote it but the CR before each line's end, and the body as received, byte for
+# byte. answers.mjs captures, checks, compares and keeps the answers: curl takes each answer once,
+# with the request verify.sh's starts send too (Host and the plan's header lines, curl's own Accept
+# and User-Agent left out), straight into answers/ files answers.mjs has just created new and holds
+# open, and the system diff compares the masked headers once, through those same files; the
+# lengths, SHA-256s and bodies line come from the bytes captured, and every file of answers/ is
+# created new. It reads each turn's perf and wrk output too, as bytes, which go to the raw log as
+# they are; each turn writes them to files of its own, created new for it. A turn whose wrk output
+# has other than one complete RESULT line of decimal counts, or any error, or whose counter is
+# missing, reported twice, not in a complete row, not a count above zero or not at exactly 100%
+# (perf's "100.00"), fails the placement and records nothing. answers.mjs is run with an
+# environment of PATH alone, so no NODE_OPTIONS of the caller's reaches it, and under timeout:
+# 60 s for the comparison (three curls of 10 s each, which it stops at 15 s), 30 s for the rest,
+# and KILL 5 s later.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
 # raw-<workload>.log (every turn's perf and wrk output), answers/, serve-{A,B}.log (each server's
 # error output and serve.mjs's) and, while a server runs, serve-{A,B}.pid. answers/ (made afresh)
 # holds each answer's raw-headers, headers and body, diff.txt (the masked headers' diff, in diff's
 # normal format, then the bodies line, or nothing), bodies.txt and handoff.json, which names the
 # outcome and the SHA-256s of diff.txt and bodies.txt; anything already at one of those paths, an
-# answer of another status, a masked header out of its range or two answers of A that differ
-# fail the placement. Every curl is run with --disable, so no curl configuration of HOME's (a
+# answer of another status, a masked header out of its range, two answers of A that differ, or a
+# diff that cannot compare or disagrees with the bytes compared, fail the placement. Every curl is run with --disable, so no curl configuration of HOME's (a
 # retry, a header) changes a request or how long it may take, and with --noproxy '*', so no proxy
 # of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1. Every curl has a bound:
 # a second for the check that nothing accepts on the two ports before the start, each readiness
-# request and each check of a port after a stop, and answers.mjs gives an answer 10 s, so a server
+# request and each check of a port after a stop, and 10 s for an answer, so a server
 # that takes a connection and never answers holds turns.sh, and a signal it has held off, no
 # longer than that.
 # Every server is run by serve.mjs, as verify.sh runs its base's, and stopped by it alone (TERM,
@@ -72,7 +78,7 @@
 # (set -e), so it is that line and status 4 together that say the answers differ and the stop
 # after them passed those checks.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,73p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,79p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 # One command of its own, so its status is the one checked (a pipeline's is its last stage's).
@@ -81,6 +87,16 @@ mkdir -p "$out"
 csv=$out/counts-$workload.csv; raw=$out/raw-$workload.log; ans=$out/answers
 rm -rf "$ans"; mkdir -p "$ans"; : >"$raw"
 fail() { echo "turns: $workload: $*" >&2; exit 1; }
+# answers.mjs <mode> <argument>..., with an environment of PATH alone and within its bound (the
+# header); timeout's --foreground keeps it in this shell's process group, so the placement's
+# deadline TERM reaches it and its curl too. Never with the servers' inputs open.
+answers() {
+    bound=30; [ "$1" != compare ] || bound=60
+    mode=$1; shift
+    hst=0; env -i PATH="$PATH" timeout --foreground -k 5 "$bound" node "$KIT/answers.mjs" "$mode" "turns: $workload" "$@" 5>&- 6>&- || hst=$?
+    case $hst in 124|137) echo "turns: $workload: answers.mjs $mode did not end within $bound s, and was stopped" >&2 ;; esac
+    return $hst
+}
 
 aport=18081; bport=18082
 # Before any start, nothing takes a connection on either port: curl's 7 is a refused one, and
@@ -123,7 +139,7 @@ release() { trap 'exit 1' HUP INT PIPE TERM; [ -z "$late" ] || exit 1; }
 start() { # <A|B> <port> <binary>. Its environment is PATH, HOME, PORT and BIN and what the plan's start command sets, none of the caller's; its error output goes to serve-<A|B>.log.
     hold
     fifo=$out/serve-$1.fifo
-    rm -f "$fifo" "$out/serve-$1.pid" 5>&- 6>&-; mkfifo "$fifo" 5>&- 6>&-
+    rm -f "$fifo" "$out/serve-$1.pid" "$out/serve-$1.pid.tmp" 5>&- 6>&-; mkfifo "$fifo" 5>&- 6>&-
     if [ "$1" = A ]; then exec 5<>"$fifo" 7<"$fifo"; else exec 6<>"$fifo" 7<"$fifo"; fi
     rm -f "$fifo" 5>&- 6>&-
     # exec 5>&- 6>&- first, and for good: a redirection after it that waits (an open of a FIFO)
@@ -196,14 +212,14 @@ fresh() { # <A|B>: (re)starts that binary; its server's process number is then i
 fresh A; fresh B
 
 # The two binaries answer the same: status and headers but Date, after the plan's mask, and the
-# body as received. answers.mjs fetches A's answer twice and B's once, each once, into memory, and
-# takes everything from those bytes (see the header). It runs in a subshell of its own, a command
-# substitution that closes descriptors 5 and 6 before it runs node, so it does not hold the
+# body as received. answers.mjs has curl take A's answer twice and B's once, each once, and diff
+# compare the masked headers once (see the header). It runs in a subshell of its own, a command
+# substitution that closes descriptors 5 and 6 before it runs anything, so it does not hold the
 # servers' inputs open, and a KILL of this shell while it stalls still stops both servers. It
 # prints how the answers compare (same, expected: they differ only as the plan's expected
 # difference says, or differ) and the SHA-256 of the handoff.json it sealed, and says why when it
 # fails, which ends this shell with status 1.
-res=$(exec 5>&- 6>&-; exec node "$KIT/answers.mjs" compare "turns: $workload" "$ans" $aport $bport "$path" "$HEADERS" "$status" "$MASK_JSON" "${EXPECT:-}") || exit 1
+res=$(exec 5>&- 6>&-; answers compare "$ans" $aport $bport "$path" "$HEADERS" "$status" "$MASK_JSON" "${EXPECT:-}") || exit 1
 outcome=${res%% *}; seal=${res#* }
 case $seal in *[!0-9a-f]*|'') fail "the answers' comparison named no handoff: $res";; esac
 [ ${#seal} = 64 ] || fail "the answers' comparison named no handoff: $res"
@@ -227,24 +243,28 @@ esac
 # verdict.txt, no passing line and no handoff line, for answers compared on servers that were
 # then left running.
 halt A B || fail "stopping the two servers after their answers were compared failed or is unconfirmed: no verdict"
-node "$KIT/answers.mjs" put "turns: $workload" "$ans/verdict.txt" "$verdict" || exit 1
+answers put "$ans/verdict.txt" "$verdict" || exit 1
 echo "$verdict"
 echo "turns: $workload: handoff sha256 $seal"
-# A turn's perf and wrk output, each read once, as bytes, by answers.mjs: it appends them to the
-# raw log as they are and, when they are a turn to record, the turn's row to the CSV.
-record() {
-    node "$KIT/answers.mjs" turn "turns: $workload" "$out/turn.perf" "$out/turn.wrk" "$events" "$pair_" "$version_" "$raw" "$csv" 5>&- 6>&- || exit 1
-}
 turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head rows
     if [ "$2" = base ]; then fresh A; pid=$a; port=$aport; else fresh B; pid=$b; port=$bport; fi
-    perf stat -x, -e "$events" -p "$pid" -o "$out/turn.perf" -- sleep "$secs.4" 5>&- 6>&- &
+    # The turn's own two files, created new and empty for it (answers.mjs put refuses anything
+    # already there), so what is read after it is what this turn's perf and wrk wrote, and a perf
+    # or wrk that wrote nothing leaves an empty one, which records nothing.
+    tp=$out/turn-$1-$2.perf; tw=$out/turn-$1-$2.wrk
+    answers put "$tp" || exit 1
+    answers put "$tw" || exit 1
+    perf stat -x, -e "$events" -p "$pid" -o "$tp" -- sleep "$secs.4" 5>&- 6>&- &
     perfpid=$!
     sleep 0.1 5>&- 6>&-
     set --
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    taskset -c "$load" wrk -t"$WRK_T" -c"$WRK_C" -d"${secs}s" "$@" -s "$SCRIPT" "http://127.0.0.1:$port$path" >"$out/turn.wrk" 5>&- 6>&-
+    taskset -c "$load" wrk -t"$WRK_T" -c"$WRK_C" -d"${secs}s" "$@" -s "$SCRIPT" "http://127.0.0.1:$port$path" >"$tw" 5>&- 6>&-
     wait $perfpid
-    record
+    # Its perf and wrk output, each read once, as bytes, by answers.mjs: it appends them to the raw
+    # log as they are and, when they are a turn to record, the turn's row to the CSV.
+    answers turn "$tp" "$tw" "$events" "$pair_" "$version_" "$raw" "$csv" || exit 1
+    rm -f "$tp" "$tw" 5>&- 6>&-
     if [ "$version_" = base ]; then halt A || exit 1; else halt B || exit 1; fi
 }
 one() { pair_=$1; version_=$2; turn "$1" "$2"; }
@@ -257,5 +277,4 @@ while [ $pair -le "$pairs" ]; do
     if [ $((pair % 2)) = 1 ]; then one $pair base; one $pair head; else one $pair head; one $pair base; fi
     pair=$((pair + 1))
 done
-rm -f "$out/turn.perf" "$out/turn.wrk"
 echo "$workload: done, $csv"

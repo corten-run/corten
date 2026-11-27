@@ -85,13 +85,13 @@ setTimeout(() => require("node:http").createServer((q, s) => { if (q.url !== "/"
  * late: how long the server waits before it listens on its port; headers and mask: the plan's
  * headers.txt and mask.json; pads: the plan's PADS_P, each bin/base-p<pad> a copy of bin/base;
  * turns: the text of a turns.sh put in a kit of its own under the work directory, with the kit's
- * own turns.sh beside it as turns-kit.sh.
+ * own turns.sh beside it as turns-kit.sh; answers: likewise, the text of an answers.mjs.
  */
-function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life = LIFE, serve = null, late = 0, headers = "", mask = "[]\n", pads = "", turns = null } = {}) {
+function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life = LIFE, serve = null, late = 0, headers = "", mask = "[]\n", pads = "", turns = null, answers = null } = {}) {
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
   assert.ok(!taken(), "port 18083 is in use, and verify.sh's port is fixed: this test needs it free");
-  const own = serve !== null || turns !== null;
+  const own = serve !== null || turns !== null || answers !== null;
   const work = join(tmp, name), vars = { WORK: work, KIT: own ? join(work, "kit") : here, START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: 60, PADS_P: pads, PADS_Q: "", SIDES: "base" };
   mkdirSync(join(work, "plan"), { recursive: true });
   mkdirSync(join(work, "bin"));
@@ -104,6 +104,7 @@ function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life 
     for (const f of ["serve.mjs", "answers.mjs", "mask.mjs", "turns.sh"]) if (existsSync(join(here, f))) copyFileSync(join(here, f), join(work, "kit", f));
     if (serve !== null) writeFileSync(join(work, "kit", "serve.mjs"), serve);
     if (turns !== null) { copyFileSync(join(here, "turns.sh"), join(work, "kit", "turns-kit.sh")); writeFileSync(join(work, "kit", "turns.sh"), turns); }
+    if (answers !== null) writeFileSync(join(work, "kit", "answers.mjs"), answers);
   }
   t.after(() => settle(work, life + 5000));
   return { work, args: [join(here, "verify.sh"), work, join(work, "verify")] };
@@ -361,16 +362,29 @@ test("verify.sh sends no request through a proxy of the environment's: readiness
   assert.ok(!taken(), "something still answers on 18083");
 });
 
-test("verify.sh runs serve.mjs with no NODE_OPTIONS of the caller's, so a preload that would hold serve.mjs before it starts does not reach it", LINUX, async (t) => {
-  // The preload holds serve.mjs, and nothing else node runs, for 40 s before its own code runs,
-  // as --inspect-brk would without end, noting that it did; after that serve.mjs goes on as ever.
+test("verify.sh runs serve.mjs and answers.mjs with no NODE_OPTIONS of the caller's, so a preload that would hold either before it starts does not reach it", LINUX, async (t) => {
+  // The preload holds serve.mjs and answers.mjs, and nothing else node runs, for 40 s before its
+  // own code runs, as --inspect-brk would without end, noting that it did; after that each goes on as ever.
   const pause = join(tmp, "pause.cjs");
-  writeFileSync(pause, `if (process.argv[1]?.endsWith("serve.mjs")) { require("node:fs").appendFileSync(${JSON.stringify(join(tmp, "paused"))}, process.pid + "\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40000); }\n`);
+  writeFileSync(pause, `if (/(serve|answers)\\.mjs$/.test(process.argv[1] ?? "")) { require("node:fs").appendFileSync(${JSON.stringify(join(tmp, "paused"))}, process.pid + "\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40000); }\n`);
   const r = await verify(t, "node-options", "/page", { kind: "yielding", env: { ...process.env, NODE_OPTIONS: `--require=${pause}` } });
   assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
-  assert.deepEqual(lines(join(tmp, "paused")), [], "the caller's NODE_OPTIONS reached serve.mjs");
+  assert.deepEqual(lines(join(tmp, "paused")), [], "the caller's NODE_OPTIONS reached serve.mjs or answers.mjs");
   assert.equal(r.status, 0, r.said);
   assert.ok(r.seconds < 8, `verify.sh took ${r.seconds} s`);
+});
+
+test("verify.sh stops an answers.mjs that does not end, at its bound, and fails with the base stopped and nothing left on its port", LINUX, async (t) => {
+  // A stand-in for answers.mjs that ignores TERM and would run 45 s: timeout ends it 30 s on, with KILL 5 s after its TERM.
+  const answers = 'process.on("SIGTERM", () => {}); require("node:fs").appendFileSync(require("node:path").join(import.meta.dirname, "..", "stalled"), process.pid + "\\n"); setTimeout(() => process.exit(0), 45000);\n';
+  const r = await verify(t, "answers-stalled", "/page", { kind: "yielding", answers, file: true });
+  assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
+  assert.equal(r.status, 1, r.said);
+  assert.equal(lines(join(r.work, "stalled")).length, 1, r.said);
+  assert.ok(r.said.includes("verify: answers.mjs start did not end within 30 s, and was stopped"), r.said);
+  assert.ok(r.seconds >= 30 && r.seconds < 42, `verify.sh ended ${r.seconds} s on, not at answers.mjs's bound`);
+  assert.deepEqual(r.left, [], "the server verify.sh started is still running");
+  assert.ok(!taken(), "something still answers on 18083");
 });
 
 test("verify.sh, whose serve.mjs does not end when its input closes, fails within its bound saying the cleanup is unconfirmed, and signals nothing", LINUX, async (t) => {
@@ -444,4 +458,25 @@ test("serve.mjs ends, saying so, when its server ends before it is stopped, so i
   assert.ok(end.said.includes("serve: stopped by SIGTERM, not by its input ending; stopping the server"), end.said);
   assert.equal(await alive(sock), false, "the server is still running");
   s.child.stdin.destroy();
+});
+
+test("serve.mjs refuses anything already at its process number's file, a FIFO there included, without waiting on it, and stops its server at once", { skip: process.platform === "linux" && spawnSync("sh", ["-c", "command -v mkfifo"]).status === 0 ? false : "needs Linux with mkfifo" }, async (t) => {
+  // A FIFO with no reader at <file>.tmp: a write that opened it would wait for one, holding
+  // serve.mjs before it reads its input, and its server would outlive the stop it is sent.
+  const dir = mkdtempSync(join(tmpdir(), "placement-serve-")), sock = join(dir, "alive-1.sock"), pid = join(dir, "server.pid");
+  t.after(async () => { await settle(dir, 35000); rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(spawnSync("mkfifo", [`${pid}.tmp`]).status, 0);
+  const child = spawn(process.execPath, [join(here, "serve.mjs"), `--pid=${pid}`, process.execPath, "-e", bounded(sock, 'process.on("SIGTERM", () => {});')], { stdio: ["pipe", "ignore", "pipe"] });
+  let said = "";
+  child.stderr.on("data", (d) => { said += d; });
+  const ended = new Promise((done) => child.on("close", (status) => done(status)));
+  const began = Date.now(), end = await Promise.race([ended, sleep(15000).then(() => null)]), seconds = (Date.now() - began) / 1000;
+  // Ended through its own handle only if it did not end by itself: its server then ends at its own 30 s bound.
+  if (end === null) child.stdin.end();
+  assert.notEqual(end, null, `serve.mjs had not ended 15 s after it started: it waited on the FIFO (${said})`);
+  assert.equal(end, 1, said);
+  assert.ok(said.includes("serve: the server's process number could not be written") && said.includes("stopping the server"), said);
+  assert.ok(seconds < 12, `serve.mjs took ${seconds} s`);
+  assert.equal(await alive(sock), false, "the server is still running");
+  assert.ok(!existsSync(pid), "a process number was published");
 });

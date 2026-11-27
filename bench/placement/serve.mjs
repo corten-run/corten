@@ -3,7 +3,9 @@
 // needs no process number from the shell. The command gets this process's environment (both give
 // it env -i first) and no standard input, output or error. With --pid, the child's process number
 // is written to <file> (whole, by a rename) once it is started, so that turns.sh can check the
-// child's CPU and count it; nothing signals it by that number. Its stop: TERM, and KILL if it is
+// child's CPU and count it; nothing signals it by that number. It is written first to <file>.tmp,
+// created new (O_CREAT|O_EXCL, following no link), so anything already there, a FIFO whose open
+// would hold this process and with it the server's stop, is refused, and the server stopped. Its stop: TERM, and KILL if it is
 // still running 5 s later. A signal is sent only through the child's handle, which Node clears
 // when it reaps the child, and a child is reaped by its parent alone: until then its number cannot
 // name another process, so neither signal can reach one. Exits 0 once the server has ended after
@@ -15,7 +17,7 @@
 // listens. One that starts the server and waits can end on TERM and leave the server listening,
 // which the check of its port that verify.sh and turns.sh make after each stop then fails.
 import { spawn } from "node:child_process";
-import { renameSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, renameSync, writeSync } from "node:fs";
 
 const argv = process.argv.slice(2), pidFile = argv[0]?.startsWith("--pid=") ? argv.shift().slice("--pid=".length) : null;
 const [command, ...args] = argv;
@@ -43,7 +45,11 @@ function stop(why) {
 }
 for (const s of ["SIGHUP", "SIGINT", "SIGTERM"]) process.on(s, () => stop(s));
 if (pidFile !== null && child.pid !== undefined) {
-  try { writeFileSync(`${pidFile}.tmp`, `${child.pid}\n`); renameSync(`${pidFile}.tmp`, pidFile); }
+  try {
+    const fd = openSync(`${pidFile}.tmp`, "wx");
+    try { writeSync(fd, `${child.pid}\n`); } finally { closeSync(fd); }
+    renameSync(`${pidFile}.tmp`, pidFile);
+  }
   catch (e) { say(`the server's process number could not be written: ${e.message}; stopping the server`); stop("pid"); }
 }
 // A closed stderr does not end this process before the server.

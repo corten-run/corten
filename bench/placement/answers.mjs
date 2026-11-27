@@ -1,33 +1,38 @@
-// answers.mjs: the answers of a placement's two binaries, fetched, checked, compared and kept,
+// answers.mjs: the answers of a placement's two binaries, captured, checked, compared and kept,
 // and each recorded turn's perf and wrk output read, for turns.sh and verify.sh (README.md,
-// What it checks, Answers). Standard library only. Every fact about an answer (its status, its
-// header lines with Date left out and the plan's mask applied, its body, the difference, the
-// lengths and SHA-256s) comes from the bytes of that one answer as this process received them;
-// nothing it writes is read back. Every file it writes is created new (O_CREAT|O_EXCL, which on
-// Linux, where the kit runs, follows no link, dangling or not), so anything already at its path,
-// a link to /dev/null included, fails it.
+// What it checks, Answers). Standard library, curl and diff. Node does what the shell cannot do
+// safely: it creates every file it writes new (O_CREAT|O_EXCL, which on Linux, where the kit runs,
+// follows no link, dangling or not, so anything already at its path, a link to /dev/null
+// included, fails it), hashes the bytes captured and seals them, and reads perf's and wrk's output.
+// An answer is captured by curl, once, the request as the kit has always sent it (curl's own
+// Accept and User-Agent left out unless the plan's lines have one, no configuration file, no
+// proxy, 10 s), its header lines as curl writes them (-D) and its body as received, straight into
+// files this process has just created and holds open; the headers' difference is the system
+// diff's, run once, on the masked headers' files, through those descriptors. Every byte stays a
+// Buffer from capture to file; text is made of it only to say something.
 //
 //   node answers.mjs compare <say> <answers dir> <A port> <B port> <path> <headers.txt> <status> <mask.json> [<expect>]
-//       A's answer twice and B's once, each one request (request() below) bounded to 10 s, each
-//       of the planned status. Writes <name>.raw-headers, .headers (masked) and .body for A,
-//       A-again and B, then diff.txt, bodies.txt and handoff.json, and prints
-//       "<same|expected|differ> <SHA-256 of handoff.json>". Exit 1, saying why, for anything else.
+//       A's answer twice and B's once, each of the planned status. Writes <name>.raw-headers,
+//       .body and .headers (masked) for A, A-again and B, then diff.txt, bodies.txt and
+//       handoff.json, and prints "<same|expected|differ> <SHA-256 of handoff.json>". Exit 1,
+//       saying why, for anything else.
 //   node answers.mjs start <say> <port> <path> <headers.txt> <status> <out prefix>
-//       one answer, of the planned status; writes <out prefix>.raw-headers and prints its SHA-256
+//       one answer, of the planned status; writes <out prefix>.raw-headers and .body and prints
+//       the headers' SHA-256
 //   node answers.mjs starts <say> <mask.json> <file> <SHA-256> <file> <SHA-256>
 //       two starts' headers, as start wrote and named them: every masked header differs (mask.mjs)
 //   node answers.mjs verified <say> <answers dir> <turns log> <turns say>
 //       a placement turns.sh passed: prints "<verdict>; <bodies line>" from what handoff() verifies
 //   node answers.mjs turn <say> <perf output> <wrk output> <events> <pair> <version> <raw log> <csv>
 //       appends the turn's two outputs, byte for byte, to the raw log and then, when they hold
-//       exactly one complete RESULT line of decimal counts with no error and each event once, a
-//       count above zero at 100%, its row to the CSV
-//   node answers.mjs put <say> <file> <text>
-//       creates file holding text and a newline
+//       exactly one complete RESULT line of decimal counts with no error and each event once in a
+//       complete row, a count above zero at 100%, its row to the CSV
+//   node answers.mjs put <say> <file> [<text>]
+//       creates file, holding text and a newline, or nothing
 // <say> starts each line this prints when it fails ("turns: <workload>", say).
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { request as http } from "node:http";
+import { appendFileSync, closeSync, constants, fstatSync, lstatSync, openSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { problems, starts, stated } from "./mask.mjs";
@@ -38,6 +43,13 @@ const refuse = (why) => { throw new Refusal(why); };
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 const KINDS = [["isFIFO", "a FIFO"], ["isDirectory", "a directory"], ["isSymbolicLink", "a symbolic link"], ["isSocket", "a socket"], ["isBlockDevice", "a block device"], ["isCharacterDevice", "a character device"]];
+
+/** Every byte of the file open at fd, from its start, whatever offset the descriptor is at. */
+function whole(fd) {
+  const out = Buffer.alloc(fstatSync(fd).size);
+  for (let at = 0; at < out.length;) { const n = readSync(fd, out, at, out.length - at, at); if (n === 0) return out.subarray(0, at); at += n; }
+  return out;
+}
 
 /**
  * The bytes of a file the kit left, read only when it is a regular file of its own: never
@@ -53,15 +65,21 @@ export function regularBytes(file) {
   try {
     const f = fstatSync(fd);
     if (!f.isFile()) throw not(f);
-    return readFileSync(fd);
+    return whole(fd);
   } finally { closeSync(fd); }
 }
 
-/** Creates file, which must not be there in any form (on Linux a link, dangling or not, included), with bytes, once. */
-export function create(file, bytes) {
-  try { writeFileSync(file, bytes, { flag: "wx" }); } catch (e) {
-    refuse(e.code === "EEXIST" ? `${file} cannot be written as a new file: something is there before the check made it` : `${file} cannot be written: ${e.message}`);
+/** Creates file, which must not be there in any form (on Linux a link, dangling or not, included), and returns its descriptor, open to read and write. */
+function createFd(file) {
+  try { return openSync(file, "wx+"); } catch (e) {
+    return refuse(e.code === "EEXIST" ? `${file} cannot be written as a new file: something is there before the check made it` : `${file} cannot be written: ${e.message}`);
   }
+}
+
+/** Creates file, which must not be there in any form, with bytes, once. */
+export function create(file, bytes) {
+  const fd = createFd(file);
+  try { writeFileSync(fd, bytes); } catch (e) { refuse(`${file} cannot be written: ${e.message}`); } finally { closeSync(fd); }
 }
 
 /** A plan's header lines, "Name: value" each, from its headers.txt. */
@@ -72,122 +90,150 @@ export function headerLines(text) {
 }
 
 /**
- * One answer of 127.0.0.1:port to the workload's request, the one request builder turns.sh's and
- * verify.sh's checks share: GET path over HTTP/1.1 with Host and the plan's header lines and
- * nothing else (no User-Agent, Accept or Connection header unless the plan's lines have one), no
- * proxy, no configuration file, on a connection of its own, the whole answer within bound ms.
- * Resolves to { status, head, body }: head, the status line and then each header line as
- * received, "Name: value", in order; body, the body as received (with any chunked framing
- * removed and no content coding undone), byte for byte.
+ * Runs command with args, its standard input closed, its descriptors 1, 3 and up those given
+ * (null: a pipe for its standard output), killed through its handle past bound ms. Resolves to
+ * { code, signal, late, out, err }: out and err its standard output (when piped) and error, as bytes.
  */
-export function request(port, path, lines, { bound = 10000 } = {}) {
-  return new Promise((resolve, reject) => {
-    let settled = false, timer = null;
-    const end = (f, v) => { if (!settled) { settled = true; clearTimeout(timer); f(v); } };
-    const req = http({ host: "127.0.0.1", port, path, method: "GET", agent: false, maxHeaderSize: 102400, setHost: !lines.some((l) => /^host:/i.test(l)) });
-    for (const l of lines) {
-      const at = l.indexOf(":"), name = l.slice(0, at), value = l.slice(at + 1).replace(/^[ \t]+/, ""), had = req.getHeader(name);
-      req.setHeader(name, had === undefined ? value : [].concat(had, value));
-    }
-    // Node adds a Connection header of its own unless one is removed; the plan's, if it has one, is kept.
-    if (!lines.some((l) => /^connection:/i.test(l))) req.removeHeader("connection");
-    timer = setTimeout(() => req.destroy(new Refusal(`no whole answer on ${port} within ${bound / 1000} s`)), bound);
-    req.on("error", (e) => end(reject, e instanceof Refusal ? e : new Refusal(`the request to ${port} failed: ${e.message}`)));
-    req.on("response", (res) => {
-      const chunks = [];
-      res.on("data", (c) => chunks.push(c));
-      res.on("error", (e) => end(reject, e instanceof Refusal ? e : new Refusal(`the answer on ${port} was cut short (${e.message})`)));
-      res.on("close", () => {
-        if (!res.complete) return end(reject, new Refusal(`the answer on ${port} was cut short`));
-        const head = [`HTTP/${res.httpVersion} ${res.statusCode} ${res.statusMessage}`];
-        for (let i = 0; i < res.rawHeaders.length; i += 2) head.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`);
-        end(resolve, { status: res.statusCode, head, body: Buffer.concat(chunks) });
-      });
-    });
-    req.end();
+function run(command, args, { out = null, fds = [], bound, env }) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: ["ignore", out ?? "pipe", "pipe", ...fds], env });
+    const said = [], errs = [];
+    let late = false, failed = null;
+    const timer = setTimeout(() => { late = true; child.kill("SIGKILL"); }, bound);
+    child.stdout?.on("data", (c) => said.push(c));
+    child.stderr.on("data", (c) => errs.push(c));
+    child.on("error", (e) => { failed = e; });
+    child.on("close", (code, signal) => { clearTimeout(timer); resolve({ code, signal, late, failed, out: Buffer.concat(said), err: Buffer.concat(errs) }); });
   });
 }
+const tools = () => ({ PATH: process.env.PATH ?? "", LC_ALL: "C" });
+const brief = (err) => err.toString("latin1").trim().split("\n").at(-1)?.slice(0, 200) ?? "";
 
-/** An answer's header lines as compared: every one but Date, each the plan masks as "<name>: <masked>". */
-export function masked(head, mask) {
-  const names = new Set(mask.map((m) => m.header.toLowerCase()));
-  return head.filter((l) => !/^date:/i.test(l)).map((l) => {
-    const name = /^([^:]+):/.exec(l)?.[1].toLowerCase();
-    return name !== undefined && names.has(name) ? `${name}: <masked>` : l;
-  });
+/**
+ * One answer of 127.0.0.1:port to the workload's request, captured by curl, once, the one request
+ * turns.sh's and verify.sh's checks share: Host and the plan's header lines, and curl's own
+ * Accept and User-Agent left out unless those lines have one, with --disable (no .curlrc),
+ * --noproxy '*' and --max-time 10. curl writes the header lines (-D) and the body into
+ * <prefix>.raw-headers and <prefix>.body, which this process creates new first and hands curl as
+ * its descriptors 3 and 1, so what it captured is in those very files, whatever is put at their
+ * paths since. Resolves to { raw, body }, the bytes as curl wrote them.
+ */
+export async function capture(port, path, lines, prefix, { bound = 15000 } = {}) {
+  const has = (name) => lines.some((l) => l.toLowerCase().startsWith(`${name}:`));
+  const args = ["--disable", "--noproxy", "*", "-sS", "--max-time", "10", "-D", "/dev/fd/3",
+    ...(has("accept") ? [] : ["-H", "Accept:"]), ...(has("user-agent") ? [] : ["-H", "User-Agent:"]),
+    ...lines.flatMap((l) => ["-H", l]), `http://127.0.0.1:${port}${path}`];
+  const head = createFd(`${prefix}.raw-headers`);
+  try {
+    const body = createFd(`${prefix}.body`);
+    try {
+      const r = await run("curl", args, { out: body, fds: [head], bound, env: tools() });
+      if (r.failed) refuse(`curl could not be run: ${r.failed.message}`);
+      if (r.late) refuse(`no whole answer on ${port} within ${bound / 1000} s: curl was stopped`);
+      if (r.code !== 0) refuse(`the answer on ${port} could not be taken whole: curl ended with ${r.signal ?? `status ${r.code}`}${r.err.length ? ` (${brief(r.err)})` : ""}`);
+      return { raw: whole(head), body: whole(body) };
+    } finally { closeSync(body); }
+  } finally { closeSync(head); }
+}
+
+/** The status line of headers as curl wrote them, and its status: { line, status }. */
+function statusOf(raw) {
+  const line = raw.subarray(0, raw.indexOf(0x0a) < 0 ? raw.length : raw.indexOf(0x0a)).toString("latin1").replace(/\r$/, "");
+  return { line, status: /^HTTP\/[0-9.]+ (\d{3})(?: |$)/.exec(line)?.[1] ?? null };
 }
 
 /**
- * The difference of two lists of lines as POSIX diff's default (normal) format prints it, from a
- * longest common subsequence: "" when they are the same.
+ * An answer's header lines as compared, from the bytes curl wrote: each line's own CR before its
+ * LF taken off, every Date line left out, each line of a header the plan masks "<name>: <masked>",
+ * and every other byte as it is (no whitespace folded, every line kept, however many).
  */
-export function difference(a, b) {
-  const n = a.length, m = b.length, lcs = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
-  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-  const range = (from, to) => (to - from > 1 ? `${from + 1},${to}` : `${to}`);
-  let out = "", i = 0, j = 0;
-  while (i < n || j < m) {
-    if (i < n && j < m && a[i] === b[j]) { i++; j++; continue; }
-    const i0 = i, j0 = j;
-    while ((i < n || j < m) && !(i < n && j < m && a[i] === b[j])) {
-      if (j >= m || (i < n && lcs[i + 1][j] >= lcs[i][j + 1])) i++; else j++;
-    }
-    const gone = a.slice(i0, i).map((l) => `< ${l}\n`).join(""), come = b.slice(j0, j).map((l) => `> ${l}\n`).join("");
-    if (i > i0 && j > j0) out += `${range(i0, i)}c${range(j0, j)}\n${gone}---\n${come}`;
-    else if (i > i0) out += `${range(i0, i)}d${j0}\n${gone}`;
-    else out += `${i0}a${range(j0, j)}\n${come}`;
+export function masked(raw, mask) {
+  const names = new Set(mask.map((m) => m.header.toLowerCase())), out = [];
+  for (let at = 0; at < raw.length;) {
+    const nl = raw.indexOf(0x0a, at), stop = nl < 0 ? raw.length : nl;
+    let line = raw.subarray(at, stop);
+    if (nl >= 0 && line.at(-1) === 0x0d) line = line.subarray(0, -1);
+    // A header's name is ASCII: latin1 reads each byte as itself.
+    const name = /^([^:]*):/.exec(line.toString("latin1"))?.[1].toLowerCase();
+    if (name !== "date") out.push(name !== undefined && names.has(name) ? Buffer.from(`${name}: <masked>`) : line, nl < 0 ? Buffer.alloc(0) : Buffer.from("\n"));
+    at = stop + 1;
   }
-  return out;
+  return Buffer.concat(out);
+}
+
+/**
+ * The system diff's difference of the two files open at a and b, in its normal format, run once,
+ * reading those very files through its descriptors 3 and 4: { same, text }. Fails unless diff
+ * says 0 or 1 and its output agrees with that and with the bytes compared (x and y).
+ */
+async function difference(a, b, x, y) {
+  const r = await run("diff", ["/dev/fd/3", "/dev/fd/4"], { fds: [a, b], bound: 10000, env: tools() });
+  if (r.failed) refuse(`diff could not be run: ${r.failed.message}`);
+  if (r.late || r.code === null || r.code > 1) refuse(`diff could not compare the two answers' headers (${r.late ? "not within 10 s" : r.signal ?? `status ${r.code}`}${r.err.length ? `: ${brief(r.err)}` : ""})`);
+  if ((r.code === 0) !== x.equals(y)) refuse(`diff found the two answers' headers ${r.code === 0 ? "the same" : "different"}, and they are not`);
+  if ((r.code === 0) !== (r.out.length === 0)) refuse(r.code === 0 ? "diff reported that the two answers' headers are the same and printed a difference" : "diff reported that the two answers' headers differ and printed no difference: missing evidence");
+  return { same: r.code === 0, text: r.out };
 }
 
 /** The verdict turns.sh publishes for an outcome that passes. */
 export const VERDICT = { same: "answers: same", expected: "answers: differ only as the plan's expected difference says" };
 
+/** The one form of a handoff: these keys in this order, as JSON.stringify writes them, and a newline. */
+const sealOf = ({ outcome, diff, bodies }) => Buffer.from(`${JSON.stringify({ outcome, diff, bodies })}\n`);
+
 /**
  * A's answer twice and B's once, compared, kept and sealed (the usage above): { outcome, seal },
- * the SHA-256 of handoff.json. dir must hold none of the files it writes. say: where it writes a
- * difference that is not expected, and how one differs from the expected one (stderr).
+ * the SHA-256 of handoff.json. dir must hold none of the files it writes. expect: the plan's
+ * expected difference, as bytes, and expected, its file (for diff to show a difference from it).
+ * say: where it writes a difference that is not expected, and how one differs from the expected
+ * one (stderr).
  */
-export async function compare({ dir, ports: [aport, bport], path, lines, status, mask, expect = null, say = (t) => process.stderr.write(t) }) {
+export async function compare({ dir, ports: [aport, bport], path, lines, status, mask, expect = null, expected = null, say = (t) => process.stderr.write(t) }) {
   const why = problems(mask);
   if (why.length) refuse(`the plan's mask is not usable: ${why.join("; ")}`);
-  const answers = {};
-  for (const [name, port] of [["A", aport], ["A-again", aport], ["B", bport]]) {
-    const r = await request(port, path, lines), headers = masked(r.head, mask);
-    // Kept as received, before anything is checked, so a refusal leaves what it refused.
-    create(join(dir, `${name}.raw-headers`), `${r.head.join("\n")}\n`);
-    create(join(dir, `${name}.headers`), `${headers.join("\n")}\n`);
-    create(join(dir, `${name}.body`), r.body);
-    if (r.status !== status) refuse(`${r.head[0]} from ${name === "B" ? "B" : "A"} on ${port} (${join(dir, `${name}.raw-headers`)}), not status ${status}`);
-    const out = stated(mask, r.head.join("\n"));
-    if (out.length) refuse(`a masked header is not within the range the plan states: ${name}: ${out.join("; ")}`);
-    answers[name] = { headers, body: r.body };
-  }
-  const { A, B } = answers, again = answers["A-again"];
-  if (A.headers.join("\n") !== again.headers.join("\n")) refuse(`two answers of A differ in their headers after the mask: ${join(dir, "A*.headers")}`);
-  if (!A.body.equals(again.body)) refuse(`two answers of A differ in their bodies: ${join(dir, "A*.body")}`);
-  const headers = difference(A.headers, B.headers), same = A.body.equals(B.body);
-  const da = sha256(A.body), db = sha256(B.body), na = A.body.length, nb = B.body.length;
-  const line = same ? `bodies same: ${na} bytes, sha256 ${da}` : `bodies differ: ${na} and ${nb} bytes, sha256 ${da} and ${db}`;
-  // The difference: the headers' and then the bodies line, or nothing when neither differs. These
-  // bytes alone are compared with the expected difference and written, once, as diff.txt.
-  const text = Buffer.from(headers === "" && same ? "" : `${headers}${line}\n`, "latin1");
-  const bodies = Buffer.from(`body ${na} bytes as received, sha256 ${da.slice(0, 16)} A and ${db.slice(0, 16)} B\n`);
-  create(join(dir, "diff.txt"), text);
-  create(join(dir, "bodies.txt"), bodies);
-  let outcome;
-  if (expect !== null) {
-    if (!text.equals(expect)) {
-      const lines = (t) => { const l = t.toString("latin1").split("\n"); if (l.at(-1) === "") l.pop(); return l; };
-      say(difference(lines(expect), lines(text)));
-      refuse("the answers differ other than as the plan's expected difference says");
+  const answers = {}, open = [];
+  try {
+    for (const [name, port] of [["A", aport], ["A-again", aport], ["B", bport]]) {
+      const at = join(dir, name), { raw, body } = await capture(port, path, lines, at), headers = masked(raw, mask);
+      const fd = createFd(`${at}.headers`);
+      open.push(fd);
+      writeFileSync(fd, headers);
+      const s = statusOf(raw);
+      if (s.status !== String(status)) refuse(`${s.line} from ${name === "B" ? "B" : "A"} on ${port} (${at}.raw-headers), not status ${status}`);
+      const out = stated(mask, raw.toString("latin1"));
+      if (out.length) refuse(`a masked header is not within the range the plan states: ${name}: ${out.join("; ")}`);
+      answers[name] = { headers, body, fd };
     }
-    outcome = "expected";
-  } else outcome = text.length === 0 ? "same" : "differ";
-  if (outcome === "differ") say(text.toString("latin1"));
-  const seal = Buffer.from(`${JSON.stringify({ outcome, diff: sha256(text), bodies: sha256(bodies) })}\n`);
-  create(join(dir, "handoff.json"), seal);
-  return { outcome, seal: sha256(seal) };
+    const { A, B } = answers, again = answers["A-again"];
+    if (!A.headers.equals(again.headers)) refuse(`two answers of A differ in their headers after the mask: ${join(dir, "A*.headers")}`);
+    if (!A.body.equals(again.body)) refuse(`two answers of A differ in their bodies: ${join(dir, "A*.body")}`);
+    const headers = await difference(A.fd, B.fd, A.headers, B.headers), same = A.body.equals(B.body);
+    const da = sha256(A.body), db = sha256(B.body), na = A.body.length, nb = B.body.length;
+    const line = same ? `bodies same: ${na} bytes, sha256 ${da}` : `bodies differ: ${na} and ${nb} bytes, sha256 ${da} and ${db}`;
+    // The difference: diff's output and then the bodies line, or nothing when neither differs.
+    // These bytes alone are compared with the expected difference and written, once, as diff.txt.
+    const text = headers.same && same ? Buffer.alloc(0) : Buffer.concat([headers.text, Buffer.from(`${line}\n`)]);
+    const bodies = Buffer.from(`body ${na} bytes as received, sha256 ${da.slice(0, 16)} A and ${db.slice(0, 16)} B\n`);
+    const fd = createFd(join(dir, "diff.txt"));
+    open.push(fd);
+    writeFileSync(fd, text);
+    create(join(dir, "bodies.txt"), bodies);
+    let outcome;
+    if (expect !== null) {
+      if (!text.equals(expect)) {
+        // Shown as diff shows it, the expected difference against this one; only said, never read.
+        let shown = null;
+        try { shown = openSync(expected, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); } catch { /* nothing to show it from */ }
+        if (shown !== null) try { if (fstatSync(shown).isFile()) say((await run("diff", ["/dev/fd/3", "/dev/fd/4"], { fds: [shown, fd], bound: 10000, env: tools() })).out); } finally { closeSync(shown); }
+        refuse("the answers differ other than as the plan's expected difference says");
+      }
+      outcome = "expected";
+    } else outcome = text.length === 0 ? "same" : "differ";
+    if (outcome === "differ") say(text);
+    const seal = sealOf({ outcome, diff: sha256(text), bodies: sha256(bodies) });
+    create(join(dir, "handoff.json"), seal);
+    return { outcome, seal: sha256(seal) };
+  } finally { for (const fd of open) closeSync(fd); }
 }
 
 const BODIES = /^body (\d+) bytes as received, sha256 ([0-9a-f]{16}) A and ([0-9a-f]{16}) B$/;
@@ -195,10 +241,11 @@ const BODIES = /^body (\d+) bytes as received, sha256 ([0-9a-f]{16}) A and ([0-9
 /**
  * What a comparison turns.sh made, and then stopped its servers after, left in dir, verified: the
  * line "<say>: handoff sha256 <hex>" it printed after that stop, once, in log (its output); the
- * handoff.json of that SHA-256; diff.txt and bodies.txt of the SHA-256s it names; an outcome
- * among allowed, with a diff.txt empty for "same" and not for the others, and one body for
- * "same". Returns { outcome, diff, bodies: { line, bytes, a, b } }, or why not as a string.
- * Throws for a file that is not a regular file (code ENOTREG) or not there (lstat's error).
+ * handoff.json of that SHA-256, in the one form compare() writes (so no key twice, and nothing
+ * else); diff.txt and bodies.txt of the SHA-256s it names; an outcome among allowed, with a
+ * diff.txt empty for "same" and not for the others, and one body for "same". Returns
+ * { outcome, diff, bodies: { line, bytes, a, b } }, diff diff.txt's bytes, or why not as a
+ * string. Throws for a file that is not a regular file (code ENOTREG) or not there (lstat's error).
  */
 export function handoff(dir, log, say, allowed) {
   const said = log.split("\n").filter((l) => l.startsWith(`${say}: handoff `));
@@ -207,20 +254,22 @@ export function handoff(dir, log, say, allowed) {
   if (sha256(seal) !== said[0].slice(-64)) return `${join(dir, "handoff.json")} is not the handoff turns.sh said it sealed`;
   let h = null;
   try { h = JSON.parse(seal.toString("utf8")); } catch { /* not one */ }
-  if (h === null || typeof h !== "object" || Object.keys(h).join(",") !== "outcome,diff,bodies" || ![h.diff, h.bodies].every((d) => typeof d === "string" && /^[0-9a-f]{64}$/.test(d))) return `${join(dir, "handoff.json")} is not a handoff the kit writes`;
+  if (h === null || typeof h !== "object" || Array.isArray(h) || ![h.outcome, h.diff, h.bodies].every((v) => typeof v === "string") || !seal.equals(sealOf(h)) || ![h.diff, h.bodies].every((d) => /^[0-9a-f]{64}$/.test(d))) return `${join(dir, "handoff.json")} is not a handoff the kit writes`;
   if (!allowed.includes(h.outcome)) return `the comparison sealed the outcome ${JSON.stringify(h.outcome)}, not ${allowed.join(" or ")}`;
   const diff = regularBytes(join(dir, "diff.txt")), bodies = regularBytes(join(dir, "bodies.txt"));
   if (sha256(diff) !== h.diff) return `${join(dir, "diff.txt")} is not the difference the comparison sealed`;
   if (sha256(bodies) !== h.bodies) return `${join(dir, "bodies.txt")} is not the bodies line the comparison sealed`;
-  const text = bodies.toString("utf8"), m = text.endsWith("\n") ? BODIES.exec(text.slice(0, -1)) : null;
+  const text = bodies.toString("latin1"), m = text.endsWith("\n") ? BODIES.exec(text.slice(0, -1)) : null;
   if (!m) return `${join(dir, "bodies.txt")} is not a bodies line the kit writes`;
   if ((h.outcome === "same") !== (diff.length === 0) || (h.outcome === "same" && m[2] !== m[3])) return `the comparison sealed the outcome ${h.outcome} with a difference that does not say so`;
-  return { outcome: h.outcome, diff: diff.toString("utf8"), bodies: { line: m[0], bytes: Number(m[1]), a: m[2], b: m[3] } };
+  return { outcome: h.outcome, diff, bodies: { line: m[0], bytes: Number(m[1]), a: m[2], b: m[3] } };
 }
 
 /**
  * A recorded turn's perf and wrk output, as bytes: { requests, values } (each count as perf wrote
  * it), or throws a Refusal saying why it is not a turn to record. at: "pair <pair> <version>".
+ * Only complete rows are read: perf's output must end with a newline, and a counter's
+ * percentage is perf's own "100.00" (or "100"), as a string, not any number that reads as 100.
  */
 export function turn(perf, wrk, events, at) {
   const text = (b) => b.toString("latin1");
@@ -232,14 +281,16 @@ export function turn(perf, wrk, events, at) {
   if (!r) refuse(`wrk's RESULT line in ${at} is not six decimal counts: ${JSON.stringify(results[0].slice(0, 120))}`);
   if (r.slice(2).some((c) => BigInt(c) !== 0n)) refuse(`errors in ${at}: requests ${r[1]}, connect ${r[2]}, read ${r[3]}, write ${r[4]}, status ${r[5]}, timeout ${r[6]}`);
   if (BigInt(r[1]) === 0n) refuse(`no requests in ${at}`);
-  const rows = text(perf).split("\n").map((l) => l.split(",")), values = [];
+  const all = text(perf).split("\n"), cut = all.pop();
+  if (cut !== "") refuse(`perf's output in ${at} does not end with a complete row: ${JSON.stringify(cut.slice(0, 120))}`);
+  const rows = all.map((l) => l.split(",")), values = [];
   for (const e of events.split(",")) {
     // perf names a cache event without its :u (L1-icache-load-misses), though it counts user space only.
     const bare = e.replace(/:u$/, ""), mine = rows.filter((f) => f[2] === e || f[2] === bare);
     if (mine.length !== 1) refuse(`${e} not reported once in ${at}: ${JSON.stringify(text(perf).slice(0, 400))}`);
     const [v, , , , pct] = mine[0];
     if (!/^\d+$/.test(v) || BigInt(v) === 0n) refuse(`unusable counter ${e} in ${at} (not a count above zero): ${JSON.stringify(v)}`);
-    if (!/^\d+(\.\d+)?$/.test(pct ?? "") || Number(pct) !== 100) refuse(`counter not at 100% in ${at}: ${e} ${JSON.stringify(pct ?? null)}`);
+    if (pct !== "100.00" && pct !== "100") refuse(`counter not at 100% in ${at}: ${e} ${JSON.stringify(pct ?? null)}`);
     values.push(v);
   }
   return { requests: r[1], values };
@@ -247,8 +298,9 @@ export function turn(perf, wrk, events, at) {
 
 async function main([mode, say, ...a]) {
   const usage = () => { console.error("usage: node answers.mjs compare|start|starts|verified|turn|put <say> ... (its header says each)"); process.exit(2); };
-  const json = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch (e) { return refuse(`${f} cannot be read: ${e.message}`); } };
-  const plain = (f) => { try { return readFileSync(f, "utf8"); } catch (e) { return refuse(`${f} cannot be read: ${e.message}`); } };
+  // The plan's files, read only as regular files of their own, so none can hold this process.
+  const json = (f) => { try { return JSON.parse(regularBytes(f).toString("utf8")); } catch (e) { return refuse(`${f} cannot be read: ${e.message}`); } };
+  const lines = (f) => { let t; try { t = new TextDecoder("utf-8", { fatal: true }).decode(regularBytes(f)); } catch (e) { refuse(`${f} cannot be read as UTF-8 header lines: ${e.message}`); } return headerLines(t); };
   const status = (s) => (/^\d{3}$/.test(s) ? Number(s) : refuse(`the planned status ${JSON.stringify(s)} is not a status`));
   const port = (p) => (/^\d+$/.test(p) && Number(p) > 0 && Number(p) < 65536 ? Number(p) : refuse(`${JSON.stringify(p)} is not a port`));
   if (!say) usage();
@@ -256,14 +308,13 @@ async function main([mode, say, ...a]) {
     if (mode === "compare" && (a.length === 7 || a.length === 8)) {
       const [dir, ap, bp, path, headers, st, mask, expect = ""] = a;
       let want = null;
-      if (expect !== "") try { want = readFileSync(expect); } catch (e) { refuse(`the plan's expected difference, ${expect}, cannot be read: ${e.message}`); }
-      const r = await compare({ dir, ports: [port(ap), port(bp)], path, lines: headerLines(plain(headers)), status: status(st), mask: json(mask), expect: want });
+      if (expect !== "") try { want = regularBytes(expect); } catch (e) { refuse(`the plan's expected difference, ${expect}, cannot be read: ${e.message}`); }
+      const r = await compare({ dir, ports: [port(ap), port(bp)], path, lines: lines(headers), status: status(st), mask: json(mask), expect: want, expected: expect || null });
       process.stdout.write(`${r.outcome} ${r.seal}\n`);
     } else if (mode === "start" && a.length === 5) {
-      const [p, path, headers, st, prefix] = a, r = await request(port(p), path, headerLines(plain(headers))), raw = Buffer.from(`${r.head.join("\n")}\n`, "latin1");
-      create(`${prefix}.raw-headers`, raw);
-      if (r.status !== status(st)) refuse(`${r.head[0]} on ${p} (${prefix}.raw-headers), not status ${st}: an answer of another status is no evidence for the plan's mask`);
-      process.stdout.write(`${sha256(raw)}\n`);
+      const [p, path, headers, st, prefix] = a, wanted = status(st), r = await capture(port(p), path, lines(headers), prefix), s = statusOf(r.raw);
+      if (s.status !== String(wanted)) refuse(`${s.line} on ${p} (${prefix}.raw-headers), not status ${st}: an answer of another status is no evidence for the plan's mask`);
+      process.stdout.write(`${sha256(r.raw)}\n`);
     } else if (mode === "starts" && a.length === 5) {
       const [file, one, s1, two, s2] = a, mask = json(file), bad = problems(mask);
       if (bad.length) refuse(`the plan's mask is not usable: ${bad.join("; ")}`);
@@ -281,7 +332,7 @@ async function main([mode, say, ...a]) {
       appendFileSync(raw, Buffer.concat([Buffer.from(`## pair ${pair} ${version}\n`), perf, wrk]));
       const t = turn(perf, wrk, events, `pair ${pair} ${version}`);
       appendFileSync(csv, `${pair},${version},${t.requests},${t.values.join(",")}\n`);
-    } else if (mode === "put" && a.length === 2) create(a[0], `${a[1]}\n`);
+    } else if (mode === "put" && (a.length === 1 || a.length === 2)) create(a[0], a.length === 2 ? `${a[1]}\n` : "");
     else usage();
   } catch (e) {
     console.error(`${say}: ${e instanceof Refusal || e?.code === "ENOTREG" || e?.code === "ENOENT" ? e.message : e?.stack ?? e}`);

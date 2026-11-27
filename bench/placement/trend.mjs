@@ -479,13 +479,14 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
     // sealed, each read once, as a regular file of its own. Anything else leaves the workload not read.
     const sealed = handoff(join(work, "compare", "answers"), log, `turns: ${w}`, [failed ? "differ" : "same"]);
     if (typeof sealed === "string") { why[w] = `the two sides' answers were compared, and what the check left is not what it sealed: ${clean(sealed)}`; continue; }
-    const diff = sealed.diff, b = sealed.bodies, differs = Boolean(failed);
+    // diff.txt's bytes are kept as the sealed bytes, never through text, and made text only to say them.
+    const diff = sealed.diff, shown = diff.toString("utf8"), b = sealed.bodies, differs = Boolean(failed);
     kept[w] = b;
     writeFileSync(join(dir, `bodies-${w}.txt`), `${b.line}\n`);
     if (differs) {
-      expect[w] = `expect-${w}.txt`; expected[w] = diff;
+      expect[w] = `expect-${w}.txt`; expected[w] = shown;
       writeFileSync(join(dir, expect[w]), diff);
-      say(`${w}: ${tag} and ${t.head} answer differently. The run records this difference, which nobody reviewed, and every placement must show it and no other:\n${diff}`);
+      say(`${w}: ${tag} and ${t.head} answer differently. The run records this difference, which nobody reviewed, and every placement must show it and no other:\n${shown}`);
     }
   } catch (e) { why[w] = `what the check before any turn left could not be read (${clean(e?.message ?? e)})`; }
 
