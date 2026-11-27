@@ -2540,16 +2540,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // sent, is parsed in the page as the runtime parses a patch (`readAgainFault`): its status line
     // among its elements and its last read-again tag `ReadAgain::from`'s, asking again from the held
     // read's address after `AGAIN_SECONDS`; an answer that is not is never sent, and fails the check.
+    // It is held only when the server answered the read as a patch (status 200 with `corten-patch`,
+    // without which the runtime draws nothing and asks nothing again, `readPatchAgain`).
     // The hold must be taken within 5 s of the press, before the page leaves, and the answer confirmed
-    // within 15 s of the read reaching the route. Once News is drawn, an observer in the page notes
+    // within 15 s of the read reaching the route. The held read must still be under way as the
+    // departure starts (the check has heard it neither finish nor fail, and the route has sent nothing
+    // for it) and when the page hears the press of News (a wrapper of the page's `fetch`, set before
+    // the write's press, notes whether each of its part reads of the alerts page has settled, and a
+    // listener on the window, in the capture phase, puts that note in `sessionStorage` as the first
+    // click on the link to News reaches the page, before the page acts on it; News then reads it), so
+    // a read that had already ended is not taken for one the departure ended. Once News is drawn, an observer in the page notes
     // any element of the held answer (its status line, marked `data-smoke-held`) entering it, and
     // the answer is let go; the browser must finish loading that exact request with it (its
     // `requestfinished`, with the answer's own `smoke-held` header) within 5 s of the release, by
-    // the time the check heard it; without the Navigation API the page leaves by a full load, so News
-    // must be a new document and the browser must have cancelled the held read with the old one (and
-    // with it, News must be in the same document). Then no part read may come after the held one's own request in the
-    // log, as the log stands 2.2 s after that finish, nor the held answer's status line ever enter the
-    // News page. The route and listeners are removed however the case ends.
+    // the time the check heard it (and with it, News must be in the same document). Without the
+    // Navigation API the page leaves by a full load, so News must be a new document and the browser
+    // must cancel the held read with the old one: its failure must be heard after the departure
+    // started and within 5 s of News being drawn, before the held answer is let go, so one the
+    // route's own release or abort ended is not taken for the departure's. Then no part read may come after
+    // the held one's own request in the log, as the log stands 2.2 s after that finish, nor the held
+    // answer's status line ever enter the News page. The route and listeners are removed however the
+    // case ends.
     /** @type {import("@playwright/test").Request | null} */
     let held = null;
     /** When the route heard the held read, by the smoke's clock (`performance.now()`), or null. @type {number | null} */
@@ -2574,6 +2585,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     let heldReadyIn = () => {};
     /** Whether the held answer was fetched and confirmed to ask again, ready to be let go. @type {Promise<boolean>} */
     const heldReady = new Promise((resolve) => (heldReadyIn = resolve));
+    /** When the route first sent anything for the held read (an abort or its answer), by the smoke's clock, or null. @type {number | null} */
+    let heldSentAt = null;
+    /** The route's answer for the held read, `send` (an abort or a fulfill), noted as sent. @param {() => Promise<unknown>} send */
+    const heldSend = (send) => () => {
+      heldSentAt ??= performance.now();
+      return send();
+    };
     const holdRead = async (/** @type {import("@playwright/test").Route} */ route) => {
       const r = route.request();
       if (holdOver || held !== null || r.method() !== "GET" || r.headers()["corten"] !== "action") return letThrough(route);
@@ -2581,7 +2599,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       heldTime = performance.now();
       heldIn(r);
       // Each step within its bound, and nothing sent once the case is over: the read is aborted.
-      const ex = exchange(route, "the held read's answer", () => holdOver, () => route.abort());
+      const ex = exchange(route, "the held read's answer", () => holdOver, heldSend(() => route.abort()));
       try {
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...r.headers(), "accept-encoding": "identity" } }));
@@ -2590,30 +2608,37 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         delete headers["content-length"];
         const body = await ex.step(5000, "reading its answer", () => res.text());
         const at = new URL(r.url());
+        // The runtime takes a read's answer only with `corten-patch` (`readPatchAgain`): without it
+        // the answer is no patch, drawn by no one and asking nothing, whether or not the page left.
+        const patch = "corten-patch" in headers;
         /** @type {string} */
         let answer;
-        if (res.ok() && body.includes(savingLine)) {
+        if (!res.ok() || !patch) {
+          heldFault = `the server answered the held read with no patch (status ${res.status()}${patch ? "" : ", no corten-patch header"}), so no answer that asks again could be held`;
+          await ex.send(5000, "its abort", heldSend(() => route.abort()));
+          return;
+        } else if (body.includes(savingLine)) {
           heldFrom = "the server's own answer, saying Saving...";
           answer = body;
-        } else if (res.ok() && body.includes(savedLine) && !body.includes("data-corten-read-again")) {
+        } else if (body.includes(savedLine) && !body.includes("data-corten-read-again")) {
           heldFrom = "the stand-in, answering as the server does while the write lands, the server's saying Saved.";
           answer = `${body.replace(savedLine, savingLine)}<template data-corten-read-again="${AGAIN_SECONDS}" data-from="${at.pathname}${at.search}"></template>`;
         } else {
-          heldFault = `the server answered the held read with status ${res.status()} and neither Saving... nor a terminal Saved., so no answer that asks again could be held`;
-          await ex.send(5000, "its abort", () => route.abort());
+          heldFault = `the server answered the held read's patch with neither Saving... nor a terminal Saved., so no answer that asks again could be held`;
+          await ex.send(5000, "its abort", heldSend(() => route.abort()));
           return;
         }
         answer = answer.replace(savingLine, heldLine);
         const wrong = await ex.step(5000, "reading its read-again tag", () => readAgainFault(page, answer, r.url(), heldLine));
         if (wrong !== null) {
           heldFault = `the held answer (${heldFrom}) is not one that asks again: ${wrong}`;
-          await ex.send(5000, "its abort", () => route.abort());
+          await ex.send(5000, "its abort", heldSend(() => route.abort()));
           return;
         }
         heldReadyIn(true);
         await going;
         try {
-          await ex.send(5000, "its fulfill", () => route.fulfill({ status: res.status(), headers: { ...headers, "smoke-held": heldMark }, body: answer }));
+          await ex.send(5000, "its fulfill", heldSend(() => route.fulfill({ status: res.status(), headers: { ...headers, "smoke-held": heldMark }, body: answer })));
         } catch {
           releaseFault = ex.fault || "the held answer's fulfill failed";
         }
@@ -2623,33 +2648,94 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         heldReadyIn(false);
       }
     };
-    /** When the check heard the browser finish the held read with the held answer, by the smoke's clock; or why it did not, `failed` when the browser failed it. @type {(done: { at: number } | { not: string, failed?: true }) => void} */
+    /**
+     * When the check heard the browser finish the held read with the held answer, by the smoke's
+     * clock; or why it did not, with `failedAt`, when the check heard it, when the browser failed it.
+     * @typedef {{ at: number } | { not: string, failedAt?: number }} HeldEnd
+     */
+    /** @type {(done: HeldEnd) => void} */
     let heldEndIn = () => {};
-    /** @type {Promise<{ at: number } | { not: string, failed?: true }>} */
+    /** @type {Promise<HeldEnd>} */
     const heldEnd = new Promise((resolve) => (heldEndIn = resolve));
+    /** When the check first heard the browser finish or fail the held read, by the smoke's clock, or null. @type {number | null} */
+    let heldEndedAt = null;
     const onHeldFinished = (/** @type {import("@playwright/test").Request} */ r) => {
       if (r !== held) return;
       const at = performance.now();
+      heldEndedAt ??= at;
       r.response().then(
         (res) => heldEndIn(res?.headers()["smoke-held"] === heldMark ? { at } : { not: `the browser finished the held read with an answer ${res?.headers()["smoke-held"] === undefined ? "without" : "with another"} smoke-held mark` }),
         () => heldEndIn({ not: "the held read's response could not be read" }),
       );
     };
     const onHeldFailed = (/** @type {import("@playwright/test").Request} */ r) => {
-      if (r === held) heldEndIn({ not: `the browser failed the held read (${r.failure()?.errorText ?? "no reason given"})`, failed: true });
+      if (r !== held) return;
+      const at = performance.now();
+      heldEndedAt ??= at;
+      heldEndIn({ not: `the browser failed the held read (${r.failure()?.errorText ?? "no reason given"})`, failedAt: at });
     };
     let heldSoon = false;
     let heldConfirmed = false;
     /** When the held answer was let go, by the smoke's clock, or null. @type {number | null} */
     let releasedAt = null;
-    /** @type {{ at: number } | { not: string, failed?: true } | null} */
+    /** @type {HeldEnd | null} */
     let heldFinish = null;
+    /** When the departure for News started (just before the press), by the smoke's clock, or null. @type {number | null} */
+    let leftAt = null;
+    /** Whether the held read was still under way as the departure started: neither finished nor failed as the check heard it, and nothing sent for it by the route. */
+    let pendingAtLeave = false;
+    /** The `sessionStorage` key of the departing page's note of its reads at the press of News, this run's own. */
+    const leaveKey = `smoke-leave-${heldMark}`;
+    /**
+     * What the departing page noted as the press of News reached it, read in News: whether the page's
+     * fetch of the held read's address was still unsettled then, or why that is not known; null if
+     * the note was not read.
+     * @type {{ pending: boolean, why: string } | null}
+     */
+    let pendingAtPress = null;
     /** Whether News was drawn in the document the patch's page was in (a client navigation, true) or a new one (a full load, false); null if not read. @type {boolean | null} */
     let inPlace = null;
     try {
       page.on("requestfinished", onHeldFinished);
       page.on("requestfailed", onHeldFailed);
       await within(5000, "the held-read route was not set within 5 s", page.route("**/alerts?saved=*", holdRead));
+      // Before the press, so the held read's own fetch is among those noted.
+      await readWithin(
+        "the departing page's fetch notes",
+        page.evaluate((key) => {
+          const w = /** @type {any} */ (window);
+          /** The page's part reads of the alerts page (`corten: action` GETs), in the order it started them, and whether each fetch had settled. @type {{ url: string, settled: boolean }[]} */
+          const reads = [];
+          const original = window.fetch;
+          w.__smokeLeaveFetch = original;
+          w.__smokeLeaveWrapper = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
+            const out = original.apply(this, /** @type {any} */ (arguments));
+            try {
+              const at = new URL(input instanceof Request ? input.url : String(input), location.href);
+              const corten = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("corten");
+              const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+              if (at.origin === location.origin && at.pathname === "/alerts" && corten === "action" && method === "GET") {
+                const read = { url: at.href, settled: false };
+                reads.push(read);
+                out.then(
+                  () => (read.settled = true),
+                  () => (read.settled = true),
+                );
+              }
+            } catch {}
+            return out;
+          };
+          window.fetch = w.__smokeLeaveWrapper;
+          w.__smokeLeavePress = (/** @type {Event} */ e) => {
+            const link = e.target instanceof Element ? e.target.closest('a[href="/news"]') : null;
+            if (!link || sessionStorage.getItem(key) !== null) return;
+            try {
+              sessionStorage.setItem(key, JSON.stringify(reads));
+            } catch {}
+          };
+          addEventListener("click", w.__smokeLeavePress, { capture: true });
+        }, leaveKey),
+      );
       await submit();
       // Judged by when the route heard the read (`heldTime`), not by when `submit` returned: a
       // press acknowledged late does not fail a read held in time.
@@ -2661,11 +2747,46 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           /** @type {any} */ (window).__smokeLeftFrom = mark;
         }, heldMark),
       );
+      leftAt = performance.now();
+      pendingAtLeave = heldEndedAt === null && heldSentAt === null;
       await leaveForNews();
+      const newsAt = performance.now();
       inPlace = await readWithin(
         "whether News is in the departed page's document",
         page.evaluate((mark) => /** @type {any} */ (window).__smokeLeftFrom === mark, heldMark),
       );
+      if (heldConfirmed && held !== null) {
+        const notes = await readWithin(
+          "the departing page's note of its reads",
+          page.evaluate((key) => {
+            const note = sessionStorage.getItem(key);
+            sessionStorage.removeItem(key);
+            return note;
+          }, leaveKey),
+        );
+        /** @type {{ url: string, settled: boolean }[] | null} */
+        let reads = null;
+        try {
+          reads = notes === null ? null : JSON.parse(notes);
+        } catch {}
+        const url = /** @type {import("@playwright/test").Request} */ (held).url();
+        const own = Array.isArray(reads) ? reads.find((r) => r?.url === url) : undefined;
+        pendingAtPress =
+          notes === null
+            ? { pending: false, why: "the departing page left no note of its reads at the press of News" }
+            : own === undefined
+              ? { pending: false, why: "the departing page noted no fetch of the held read's address" }
+              : own.settled === false
+                ? { pending: true, why: "" }
+                : { pending: false, why: "the page's fetch of the held read had already settled when the press of News reached the page" };
+      }
+      if (heldConfirmed && !swaps) {
+        // The full load's cancellation, heard before the held answer is let go, so neither the
+        // route's release nor its abort at the case's end can stand in for it.
+        heldFinish = (await notedBy(newsAt + 5000, () => heldEndedAt, heldEnd))
+          ? await within(5000, "", heldEnd).catch(() => ({ not: "the browser's end of the held read could not be read within 5 s" }))
+          : { not: heldEndedAt === null ? "the browser neither finished nor failed the held read within 5 s of News being drawn" : `the browser ended the held read only ${Math.round(heldEndedAt - newsAt)} ms after News was drawn` };
+      }
       if (heldConfirmed) {
         await readWithin(
           "the News page's note of the held answer",
@@ -2682,7 +2803,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         );
         releasedAt = performance.now();
         letGo();
-        heldFinish = await within(15_000, "", heldEnd).catch(() => ({ not: "the browser did not finish or fail the held read within 15 s of its release" }));
+        if (swaps) heldFinish = await within(15_000, "", heldEnd).catch(() => ({ not: "the browser did not finish or fail the held read within 15 s of its release" }));
       }
     } finally {
       await cleanUp(
@@ -2693,6 +2814,22 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           page.off("requestfinished", onHeldFinished);
           page.off("requestfailed", onHeldFailed);
         },
+        // Where the page left in place (or did not leave), its fetch is given back and its note
+        // removed; a new document has neither.
+        () =>
+          within(
+            5000,
+            "the departing page's fetch notes were not removed within 5 s",
+            page.evaluate((key) => {
+              const w = /** @type {any} */ (window);
+              if (w.__smokeLeaveWrapper && window.fetch === w.__smokeLeaveWrapper) window.fetch = w.__smokeLeaveFetch;
+              if (w.__smokeLeavePress) removeEventListener("click", w.__smokeLeavePress, { capture: true });
+              delete w.__smokeLeaveWrapper;
+              delete w.__smokeLeaveFetch;
+              delete w.__smokeLeavePress;
+              sessionStorage.removeItem(key);
+            }, leaveKey),
+          ),
       );
     }
     await pause(2200);
@@ -2712,10 +2849,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const delivered = releasedAt !== null && releaseFault === "" && heldFinish !== null && "at" in heldFinish && heldFinish.at - releasedAt <= 5000;
     // Without the Navigation API the page leaves by a full load: its document, with the runtime's
     // reads, is gone, and the browser cancels the held read with it, so the answer cannot be
-    // received. There the departure must be a new document and the held read failed by the browser.
-    const cancelled = heldFinish !== null && "failed" in heldFinish;
+    // received. There the departure must be a new document and the held read, under way as the
+    // departure started, failed by the browser after that start and before the answer was let go.
+    const failedAt = heldFinish !== null && "failedAt" in heldFinish ? heldFinish.failedAt : undefined;
+    const cancelled = failedAt !== undefined && leftAt !== null && failedAt >= leftAt && (heldSentAt === null || heldSentAt > failedAt);
     const leftAsMeant = inPlace === swaps;
-    const departed = leftAsMeant && (swaps ? delivered : cancelled);
+    const departed = leftAsMeant && pendingAtLeave && pendingAtPress?.pending === true && (swaps ? delivered : cancelled);
     check(
       "navigating away stops a patch's reads",
       heldSoon && heldAt >= writeFrom && heldConfirmed && heldFault === "" && departed && drawnOnNews === false && afterHeld.length === 0,
@@ -2731,9 +2870,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 : "News was a new document, though the browser swaps a page in"
             : swaps && !delivered
               ? `the held answer (${heldFrom}) was not received: ${heldFault || releaseFault || (heldFinish === null ? "it was not let go" : "not" in heldFinish ? heldFinish.not : `the browser finished it ${Math.round(heldFinish.at - /** @type {number} */ (releasedAt))} ms after its release`)}`
-              : !swaps && !cancelled
-                ? `the page left by a full load, but the browser did not cancel the held read with its document: ${heldFault || (heldFinish === null ? "it was not let go" : "not" in heldFinish ? heldFinish.not : "it finished the read with the held answer")}`
-                : `${afterHeld.length} reads after the read held as the page left${swaps ? "" : " by a full load, which cancelled it"}, whose answer (${heldFrom}) asked again${drawnOnNews === false ? "" : drawnOnNews ? ", and the News page drew it" : ", and the News page's note of it is missing"}`,
+              : !pendingAtLeave
+                ? `the held read was no longer under way as the page left: ${heldSentAt !== null && (heldEndedAt === null || heldSentAt <= heldEndedAt) ? "the route had already sent it an answer or abort" : `the browser had ended it ${Math.round(/** @type {number} */ (leftAt) - /** @type {number} */ (heldEndedAt))} ms before the departure started`}, so its end shows nothing of the departure`
+                : pendingAtPress?.pending !== true
+                  ? `the held read was not shown under way at the press of News: ${pendingAtPress?.why ?? "the departing page's note was not read"}, so its end shows nothing of the departure`
+                  : !swaps && !cancelled
+                    ? `the page left by a full load, but the browser did not cancel the held read with its document before the held answer was let go: ${heldFault || (heldFinish === null ? "it was not let go" : "not" in heldFinish ? heldFinish.not : "it finished the read with the held answer")}`
+                    : `${afterHeld.length} reads after the read held as the page left${swaps ? "" : ` by a full load, which cancelled it ${Math.round(/** @type {number} */ (failedAt) - /** @type {number} */ (leftAt))} ms after the departure started, before its answer was let go`}, whose answer (${heldFrom}) asked again${drawnOnNews === false ? "" : drawnOnNews ? ", and the News page drew it" : ", and the News page's note of it is missing"}`,
     );
     // A read the server fails (its error page, not a patch) stops the reads without a console
     // error: the server logged the failure, and the part stays as it was. The press's read is the

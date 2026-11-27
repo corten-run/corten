@@ -286,11 +286,13 @@ whose fetches the page-refresh cases' wrapper marks, and `/smoke/written`, `/smo
 and `/smoke/quoted`, every fetch of whose pages the write cases' wrapper marks) loaded, and read by
 a navigation (`corten: nav`), a hover prefetch, a whole read (`corten: page`) and a part's read
 (`corten: action`); the writes to `/smoke/written` and `/smoke/written/again` in action mode, with
-and without `Prefer: corten-draws=whole`; each of these both uncompressed, as a case's route fetches
-it, and with the browser's `Accept-Encoding`, as a request a route lets through reaches the server;
-a screen's data and its revalidation; and a stylesheet under `/assets/`. It sends each with and
-without every mark (`smoke-note`, `smoke-start`, `smoke-styled`) and one the smoke does not use
-(`smoke-canary`), and requires the same status, headers (`Vary` and `Cache-Control` among them)
+and without `Prefer: corten-draws=whole`; each of these uncompressed, as a case's route fetches
+it, and with Firefox's and WebKit's `Accept-Encoding` (`gzip, deflate, br, zstd` and
+`gzip, deflate`), as a request a route lets through reaches the server; a screen's data and its
+revalidation and a stylesheet under `/assets/`, in each browser's encoding. It sends each without
+marks and with each set a wrapper sends, as the browser traces show them (`smoke-note` alone,
+`smoke-start` alone, and `smoke-start` with `smoke-styled`), and with one the smoke does not use
+(`smoke-canary`) alone, and requires the same status, headers (`Vary` and `Cache-Control` among them)
 and body, and each navigation answered as one (`corten-page`) and each whole read as a page. So a case ties
 its claim to its own route's answer to its own request, not to a mark not reaching the server. The
 diagnostic replay of the requests still loading sends no `smoke-*` header, since a replay need not
@@ -750,15 +752,24 @@ press by the time the route heard it, and fetches and holds its answer until the
 News. That answer must ask again, since a terminal one (`Saved.`, no tag) ends the reads whether or
 not the page left: it is the server's own while that says `Saving...`, or, once the write has
 landed, the stand-in's answer as the server's while it lands (`Saving...` and a tag asking again
-from the read's own address after one second), and the route parses it in the page as the runtime
+from the read's own address after one second), held only when the server answered it as a patch
+(status 200 with `corten-patch`, without which the runtime draws nothing and asks nothing again),
+and the route parses it in the page as the runtime
 parses a patch before it lets it go, within 15 seconds of the read; one that does not ask again is
-never sent, and fails the check. Once News is drawn, an observer in the page notes any element of the
+never sent, and fails the check. The held read must still be under way as the departure starts (the
+check has heard it neither finish nor fail, and the route has sent nothing for it) and when the press
+of News reaches the page: a wrapper of the page's `fetch` notes whether each of its part reads of the
+alerts page has settled, and a window listener in the capture phase saves that note to
+`sessionStorage` on the first click on the link to News, before the page acts on it, for News to
+read. Once News is drawn, an observer in the page notes any element of the
 held answer (its status line, marked) entering it, and the answer is let go: the browser must finish
 loading that exact request with it (its `requestfinished`, with the answer's own `smoke-held`
 header) within five seconds of the release, by the time the check heard it. Without the Navigation
 API (WebKit) the page leaves by a full load, which takes the runtime's reads with its document: News
-must then be a new document, and the browser must have cancelled the held read, which is never
-received; with it, News must be drawn in the same document. Then no part read may follow the held
+must then be a new document, and the browser must cancel the held read, which is never received:
+its failure must be heard after the departure started and within five seconds of News being drawn,
+before the answer is let go, so a read that failed earlier, or one ended by the route's own release
+or abort, is not taken for the departure's; with it, News must be drawn in the same document. Then no part read may follow the held
 one in the log, as it stands 2.2 s later, nor the held answer ever enter the News page. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read

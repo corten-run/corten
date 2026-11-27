@@ -640,35 +640,53 @@ mod tests {
     /// The browser smoke marks requests with `smoke-*` headers for its own routes to read
     /// (`smoke-note`, `smoke-start`, `smoke-styled`), and a mark may reach the app, which ignores
     /// them: every kind of request the smoke marks is answered the same, its status, each of its
-    /// headers (`Vary` and `Cache-Control` among them) and its body, with those marks and one the
-    /// smoke does not use (`smoke-canary`) as without. So a mark that gets past a case's route
-    /// cannot change what the case sees.
+    /// headers (`Vary` and `Cache-Control` among them) and its body, with each set of marks a
+    /// wrapper sends ([`MARKS`]) as without, in every way a request reaches the app ([`CODINGS`]).
+    /// A mark the smoke does not use (`smoke-canary`) is sent alone, as its own set, so it stands
+    /// for a mark nobody sends rather than riding with the real ones. So a mark that gets past a
+    /// case's route cannot change what the case sees.
     #[tokio::test]
     async fn the_smokes_request_marks_change_no_answer() {
         let plain = answers(&[]).await;
-        let marks = [("smoke-note", "3"), ("smoke-start", "12.5"), ("smoke-styled", "1"), ("smoke-canary", "1")];
-        let marked = answers(&marks).await;
-        assert_eq!(plain.len(), marked.len());
-        for (plain, marked) in plain.iter().zip(&marked) {
-            let what = &plain.what;
-            assert_eq!(what, &marked.what);
-            assert_eq!(
-                (plain.status, &plain.headers),
-                (marked.status, &marked.headers),
-                "{what}: status and headers, without and with the marks"
-            );
-            let from =
-                plain.body.iter().zip(&marked.body).position(|(a, b)| a != b).unwrap_or(plain.body.len().min(marked.body.len()));
-            let near =
-                |body: &[u8]| String::from_utf8_lossy(&body[from.saturating_sub(40)..body.len().min(from + 40)]).into_owned();
-            assert!(
-                plain.body == marked.body,
-                "{what}: the body with the marks differs from byte {from}: {:?} without, {:?} with",
-                near(&plain.body),
-                near(&marked.body)
-            );
+        for marks in MARKS {
+            let marked = answers(marks).await;
+            assert_eq!(plain.len(), marked.len());
+            for (plain, marked) in plain.iter().zip(&marked) {
+                let what = &plain.what;
+                assert_eq!(what, &marked.what);
+                assert_eq!(
+                    (plain.status, &plain.headers),
+                    (marked.status, &marked.headers),
+                    "{what}: status and headers, without and with {marks:?}"
+                );
+                let from = plain
+                    .body
+                    .iter()
+                    .zip(&marked.body)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(plain.body.len().min(marked.body.len()));
+                let near =
+                    |body: &[u8]| String::from_utf8_lossy(&body[from.saturating_sub(40)..body.len().min(from + 40)]).into_owned();
+                assert!(
+                    plain.body == marked.body,
+                    "{what}: the body with {marks:?} differs from byte {from}: {:?} without, {:?} with",
+                    near(&plain.body),
+                    near(&marked.body)
+                );
+            }
         }
     }
+
+    /// The sets of marks the smoke's wrappers put on a request, as the browser traces show them:
+    /// the page-refresh cases' `smoke-note` alone (a fetch's number on the count), the write cases'
+    /// `smoke-start` alone (before the page has noted the held stylesheet's load) and with
+    /// `smoke-styled` (after it); and, apart from them, a mark no case uses, `smoke-canary`.
+    const MARKS: [&[(&str, &str)]; 4] = [
+        &[("smoke-note", "3")],
+        &[("smoke-start", "12.5")],
+        &[("smoke-start", "12.5"), ("smoke-styled", "1")],
+        &[("smoke-canary", "1")],
+    ];
 
     /// One answer as the test compares it: the request, the status, the headers in the order sent
     /// and the body.
@@ -688,9 +706,14 @@ mod tests {
     /// What a case's route fetches a request it answers with (`accept-encoding: identity`), so the
     /// test reads the body as it is.
     const ROUTED: &str = "identity";
-    /// What a browser accepts on a request it sends itself (Firefox's), which the app tags and
-    /// compresses: what reaches the app with a request a case's route lets through, marks and all.
-    const BROWSER: &str = "gzip, deflate, br, zstd";
+    /// What Firefox accepts on a request it sends itself, which the app tags and compresses: what
+    /// reaches the app with a request a case's route lets through, marks and all.
+    const FIREFOX: &str = "gzip, deflate, br, zstd";
+    /// What WebKit accepts on a request it sends itself, which the app compresses another way.
+    const WEBKIT: &str = "gzip, deflate";
+    /// Every way a marked request reaches the app: fetched by a case's route, or let through as a
+    /// browser sent it.
+    const CODINGS: [&str; 3] = [ROUTED, FIREFOX, WEBKIT];
     /// What a browser's `Accept` asks for on a page load (the test client's).
     const LOAD: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
     /// What `fetch` sends as `Accept` when the runtime names none.
@@ -756,7 +779,7 @@ mod tests {
 
     /// The requests the smoke's cases mark, in order, on an app of their own, each sent with
     /// `marks` and, where a case's route can fetch it or let it through, both as that route fetches
-    /// one ([`ROUTED`]) and as the browser sent it ([`BROWSER`]): the watchlist loaded; an alert
+    /// one ([`ROUTED`]) and as each browser sent it ([`FIREFOX`], [`WEBKIT`]): the watchlist loaded; an alert
     /// written; then each page a marked case reads, in every way of [`READS`]: the alerts page at
     /// its receipt and at the receipt's replaced address (`/alerts?saved=1&shown=1`), whose fetches
     /// to `/alerts` the page-refresh cases' wrapper marks (`smoke-note`), and `/smoke/written`,
@@ -764,7 +787,7 @@ mod tests {
     /// wrapper marks (`smoke-start`, `smoke-styled`); the writes to `/smoke/written` and
     /// `/smoke/written/again` in every way of [`WRITES`]; a screen's data and its revalidation
     /// (`If-None-Match`); and the layout's stylesheet under `/assets/`, the last two as a browser
-    /// asks.
+    /// asks, in each browser's way.
     async fn answers(marks: &[(&'static str, &str)]) -> Vec<Seen> {
         // Writes that take an hour to land, so every read here comes before the write lands.
         let router = crate::app::app_with(Market::new(), AlertStore::new(Duration::from_secs(3600)))
@@ -791,7 +814,7 @@ mod tests {
         // The receipt's address with `shown` set, as the replaced-address case puts it in place.
         let replaced = link(&Local::parse("/alerts?saved=1&shown=1").unwrap());
         let pages = [receipt, replaced, link(&url::Written), link(&url::WrittenAgain), link(&url::Quoted)];
-        for coding in [ROUTED, BROWSER] {
+        for coding in CODINGS {
             for page in &pages {
                 for (way, headers) in READS {
                     let what = format!("GET {page} ({way}; accept-encoding: {coding})");
@@ -826,26 +849,26 @@ mod tests {
         }
         let reading = link(&url::Reading { missing: None, moved: None });
         let json = [("accept", "application/json")];
-        let data =
-            send(&router, "GET /smoke/reading (data)".into(), (Method::GET, &reading), &json, None, (marks, BROWSER)).await;
-        let tag = data.headers.iter().find(|(name, _)| name == "etag").expect("the screen's data is tagged").1.clone();
-        let revalidate = [json[0], ("if-none-match", tag.as_str())];
-        let kept = send(
-            &router,
-            "GET /smoke/reading (data, If-None-Match)".into(),
-            (Method::GET, &reading),
-            &revalidate,
-            None,
-            (marks, BROWSER),
-        )
-        .await;
-        assert_eq!(kept.status, 304);
-        seen.extend([data, kept]);
         let style = [("accept", "text/css,*/*;q=0.1")];
-        let asset =
-            send(&router, "GET /assets/ (stylesheet)".into(), (Method::GET, &stylesheet), &style, None, (marks, BROWSER)).await;
-        assert_eq!(asset.status, 200);
-        seen.push(asset);
+        for coding in [FIREFOX, WEBKIT] {
+            let what = |name: &str| format!("GET {name} (accept-encoding: {coding})");
+            let data = send(&router, what("/smoke/reading (data)"), (Method::GET, &reading), &json, None, (marks, coding)).await;
+            let tag = data.headers.iter().find(|(name, _)| name == "etag").expect("the screen's data is tagged").1.clone();
+            let revalidate = [json[0], ("if-none-match", tag.as_str())];
+            let kept = send(
+                &router,
+                what("/smoke/reading (data, If-None-Match)"),
+                (Method::GET, &reading),
+                &revalidate,
+                None,
+                (marks, coding),
+            )
+            .await;
+            assert_eq!(kept.status, 304, "{}", kept.what);
+            let asset = send(&router, what("/assets/ (stylesheet)"), (Method::GET, &stylesheet), &style, None, (marks, coding)).await;
+            assert_eq!(asset.status, 200, "{}", asset.what);
+            seen.extend([data, kept, asset]);
+        }
         seen
     }
 }
