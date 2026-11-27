@@ -1739,6 +1739,48 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ wholeHeaders, wholeWaits, wholeHash, wholeDone, wholeEnd }),
   );
 
+  // Week's answer is the whole page again, waiting for its stylesheet (held here), when the user
+  // presses Day, with nothing of the page's running: Week's draw had not begun, so once its
+  // stylesheet comes it draws nothing and says nothing (`corten:error`), and Day's answer is drawn
+  // and puts its address in the entry.
+  await page.goto(home);
+  const supersededStyle = `${base}/smoke/address-held-whole-superseded.css`;
+  /** @type {() => void} */
+  let releaseSuperseded = () => {};
+  const supersededHeld = new Promise((resolve) => (releaseSuperseded = () => resolve(undefined)));
+  await page.route(supersededStyle, async (route) => {
+    await supersededHeld;
+    await route.fulfill({ headers: { "content-type": "text/css" }, body: "" }).catch(() => {});
+  });
+  // Asked for with the page's own cookies, so its shell is the one on screen and the runtime draws
+  // it in place rather than loading the page in full.
+  const supersededPage = await page.request.get(week);
+  const supersededHeaders = Object.fromEntries(["corten-shell", "content-type"].flatMap((name) => (name in supersededPage.headers() ? [[name, supersededPage.headers()[name]]] : [])));
+  const supersededMarkup = (await supersededPage.text()).replace("</head>", `<link rel="stylesheet" data-corten-style href="${supersededStyle}"></head>`);
+  await page.route(week, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill({ headers: supersededHeaders, body: supersededMarkup }) : route.continue()));
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    w.__supersededErrors = [];
+    document.addEventListener("corten:error", (event) => w.__supersededErrors.push(/** @type {CustomEvent} */ (event).detail?.status ?? null));
+  });
+  const supersededAsked = page.waitForRequest(supersededStyle, { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const supersededWaits = await supersededAsked;
+  await page.getByRole("button", { name: "Day", exact: true }).click();
+  const supersededDay = await wait(
+    () => location.search === "?scope=day" && document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+  );
+  releaseSuperseded();
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(week);
+  await page.unroute(supersededStyle);
+  const supersededEnd = { errors: await page.evaluate(() => /** @type {any} */ (window).__supersededErrors), ...(await state()) };
+  check(
+    "a marked GET answered with the whole page that waits for a stylesheet as the user presses again draws nothing and says nothing, and the newer answer is drawn",
+    "corten-shell" in supersededHeaders && supersededWaits && supersededDay && Array.isArray(supersededEnd.errors) && supersededEnd.errors.length === 0 && supersededEnd.at === "?scope=day" && supersededEnd.shown === "day",
+    JSON.stringify({ supersededHeaders, supersededWaits, supersededDay, supersededEnd }),
+  );
+
   // A `formdata` listener of the page that, as Week's press reads the form, draws the form again
   // and presses Day on the one it drew: Day was pressed after Week, so Day's answer is the one drawn,
   // whichever comes first.

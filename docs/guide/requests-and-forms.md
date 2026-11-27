@@ -2319,7 +2319,11 @@ held navigation puts that address in, not as the answer draws. An answer that ha
 said to have failed (`corten:error`), whatever a script's getter throws as the runtime reads on
 after it; a patch that throws partway through its draw has not drawn, and says `corten:error` as
 any form's does, whatever came while it drew (a press of the form its own elements made, a
-navigation they began). The runtime neither aborts that
+navigation they began). The runtime trusts the platform objects it reads: a getter a script puts
+in place of the browser's (its own `navigation.transition`) can run any code each time the runtime
+reads it, a press of the form included, and what follows is the script's, not guarded: an answer
+that press superseded may draw all the same, under the address an earlier answer put in, and one
+whose draw had begun but changed nothing may say `corten:error`. The runtime neither aborts that
 navigation nor puts the Navigation API state back when it commits. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
 any submit of the form does, and is sent only if the user is still on that page; if the Save's

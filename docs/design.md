@@ -11364,11 +11364,12 @@ rules something out.
     time from the runtime of `a919f7e71`, one run in each of the three, only that rule's cases
     failed: the count let go on abort the eleventh, the same `action` and a successor that has sent
     nothing each its own case, and the wait while a navigation is on its way both cases where the
-    write fails before the draw); platform (WebKit 27.2 changes the address as a navigation
-    starts; Chromium 159 and Firefox 159 wait for the answer, `precommitHandler`: the twelfth case,
+    write fails before the draw); platform (WebKit 27.2 without `precommitHandler`, as Playwright
+    1.65.1's Windows build of it is, changes the address as a navigation starts; Chromium 159,
+    Firefox 159 and that WebKit's Linux build have it, and wait for the answer: the twelfth case,
     a write sent from a write's own page drawn while a navigation to another address with a form
     of the same `id` is on its way, heard the failure on that address's form in WebKit and on the
-    document in the other two with the runtime of `a919f7e71`, one run in each); measured (with
+    document in Chromium and Firefox with the runtime of `a919f7e71`, one run in each); measured (with
     this change, five runs of each case but the eighth and ninth, which came later, in each of the
     three heard it once, where the case says; with one new rule taken out at a time, one run in each
     of the three, only that rule's cases failed, in all three unless named: the turn read from
@@ -11413,7 +11414,9 @@ rules something out.
     and `method` with one on the page it replaces; or a standard
     gives an event on a removed element a way to reach the document.
 
-    Last checked: 2026-11-25, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
+    Last checked: 2026-11-27, `precommitHandler` in Playwright 1.65.1's WebKit 27.2, which its Linux
+    build has and holds a replace's address with until let go, and its Windows build has not;
+    2026-11-25, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
     27.2, the seventeen smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing
     with the runtime of `babd52d28`, the eleventh with that of `4752cff6d`, the twelfth (in
     WebKit) and the fourteenth with that of `a919f7e71`, the seventeenth with that of
@@ -12495,10 +12498,17 @@ rules something out.
     the replace, and it commits, or not, as that listener decides.
 
     A known limit: the runtime trusts the platform objects it reads, `navigation.transition` as the
-    call returns and while the hold is on, and that transition's `finished`, and the page's own getters on them are
-    outside what it guards. A page that puts its own `navigation.transition` (or another getter of
-    the platform's the runtime reads) in place of the browser's can make the runtime hold the
-    wrong navigation, none, or one for good. The reason: a page's script can already navigate, replace the
+    call returns, while the hold is on and each time it checks whether a press is still to be sent or
+    drawn (as a draw begins too), and that transition's `finished`, and the page's own getters on
+    them are outside what it guards. A getter a page puts in place of the browser's (its own
+    `navigation.transition`, or another of the platform's the runtime reads) runs whatever the page
+    put in it, at each read. It can make the runtime hold the wrong navigation, none, or one for
+    good. It can press a form, the one whose answer is being checked included, and then throw or
+    return what the browser would: an answer that press superseded, already past the check of
+    which press is the latest, draws all the same, under the address an earlier answer put in; and
+    an answer whose draw had begun but changed nothing yet, which the press aborted, says
+    `corten:error` as one whose draw threw partway does. Both are the page's doing, outside what the
+    runtime guards. The reason: a page's script can already navigate, replace the
     entry and draw over the panel itself, so a getter of its own takes nothing from it the page
     did not have; and reading each value from the prototype's own getter instead would cost every
     page bytes and a lookup on each read, for a page working against itself. What it guards is the
@@ -13015,7 +13025,8 @@ rules something out.
     with the address unchanged and `transition` showing it, which commits the address once let go
     (and goes on showing it while a `handler` it was intercepted with runs after the commit), and stops showing it once it finishes, once its
     `precommitHandler` rejects (aborting it) or once a move to an `#id` takes its place, in the
-    smoke's checks in Chromium and Firefox (WebKit 27.2 has no `precommitHandler`); a navigation a
+    smoke's checks in Chromium, Firefox and the Linux build of Playwright 1.65.1's WebKit 27.2 (its
+    Windows build has no `precommitHandler`, and the address goes in as the call returns); a navigation a
     `navigate` listener intercepted with a `handler` is no longer `transition` once it finishes,
     before a callback on its `finished` runs, of which one its `handler` put there runs before one
     put there as the call returned, in the smoke's checks in each engine; `replaceState`
@@ -13060,7 +13071,16 @@ rules something out.
     or the platform gains a call that aborts a navigation on its way without beginning another,
     when a replace a page's listener holds could be ended rather than waited out.
 
-    Last checked: 2026-11-27, the runtime's size with this change against main's runtime, unchanged
+    Last checked: 2026-11-27, a marked GET answered with the whole page whose stylesheet is still
+    loading when the user presses the form again, which draws nothing and says nothing while the
+    newer answer draws, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 on Linux
+    (the smoke's check, which a build that counts that draw begun before the wait fails in Chromium,
+    saying `corten:error`), and `precommitHandler` in Playwright 1.65.1's WebKit 27.2: its Linux
+    build (`mcr.microsoft.com/playwright:v1.65.1-noble`) has it, holds a replace's address until let
+    go and runs the smoke's checks of a held replace, passing each, where its Windows build has none
+    and they skip (the entries below in which WebKit has no `precommitHandler` and skips record a
+    build without it, as that Windows build is);
+    2026-11-27, the runtime's size with this change against main's runtime, unchanged
     since `ab1025517` (main at `2e42c00a1`), and the page's and the patch's bodies on `6ca02c26e`;
     2026-11-27, a marked press made in a page's own callback on a held navigation's (`handler`)
     `finished`, put there before the runtime's, and a marked patch whose drawn form presses again
