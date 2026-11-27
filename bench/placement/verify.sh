@@ -35,9 +35,12 @@ mkdir -p "$out"; : >"$out/verdicts.txt"
 # within 5 s more. Only serve.mjs signals the server, through the child's handle, which holds the
 # process until serve.mjs reaps it, so no signal goes by a process number that may since name
 # another process; this shell sends none. Its standard input is a FIFO whose one writer is this
-# shell's descriptor 3 (opened read and write, so neither end waits for the other; serve.mjs and
-# curl get it closed), so closing it stops the server, and so does this shell's end, however it
-# ends, KILL included. Starting a server and stopping one hold off HUP, INT, PIPE and TERM (late) until
+# shell's descriptor 3 (opened read and write, so neither end waits for the other), read through
+# descriptor 4 while serve.mjs starts. No command this shell runs while either is open has them:
+# serve.mjs gets both closed, and so does every other one that is not a builtin (rm, curl and the
+# readiness loop's sleep), on the command itself. So closing descriptor 3 stops the server, and so
+# does this shell's end, however it ends, KILL included, even while a command it ran still runs.
+# Starting a server and stopping one hold off HUP, INT, PIPE and TERM (late) until
 # they are done, a stop until serve.mjs has ended, and the shell then exits 1 for the signal: one
 # cannot cut a stop short and leave the server running. A trapped signal ends a wait early, with a
 # status above 128, so a wait it woke is made again. serve.mjs is run with an environment of PATH
@@ -87,14 +90,14 @@ for s in 1 2; do
     hold
     rm -f "$fifo"; mkfifo "$fifo"
     exec 3<>"$fifo" 4<"$fifo"
-    rm -f "$fifo"
+    rm -f "$fifo" 3>&- 4>&-
     env -i PATH="$PATH" HOME="$HOME" node "$KIT/serve.mjs" env -i PATH="$PATH" HOME="$HOME" PORT=18083 BIN="$B/base" taskset -c "$CPU_SERVER" sh -c "exec $START" <&4 3>&- 4>&- &
     sup=$!
     exec 4<&-
     release
     i=0
     until curl --disable --noproxy '*' -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null 3>&-; do
-        i=$((i + 1)); [ $i -lt 100 ] || { echo "verify: nothing answers on 18083" >&2; exit 1; }; sleep 0.1
+        i=$((i + 1)); [ $i -lt 100 ] || { echo "verify: nothing answers on 18083" >&2; exit 1; }; sleep 0.1 3>&-
     done
     set --
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
