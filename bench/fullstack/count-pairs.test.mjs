@@ -1098,26 +1098,30 @@ process.exit(status);
 const fakePerf = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path"), net = require("node:net");
 const a = process.argv.slice(2);
-// The probe (perf stat -e <set> -- sleep 1, no cgroup) answers on --log-fd 1 for each event it names.
+// -C's CPUs, or every online one.
+const cpuList = a.includes("-C") ? a[a.indexOf("-C") + 1] : fs.readFileSync("/sys/devices/system/cpu/online", "utf8").trim();
+const cpus = cpuList.split(",").flatMap((p) => { const [x, y = x] = p.split("-").map(Number); return Array.from({ length: y - x + 1 }, (_, i) => x + i); });
+// Each event's name as perf 6.8 prints it: a legacy cache event less its modifier, and with -A
+// with its PMU's name in brackets (captured on perf 6.8.12, #2232).
+const shown = (e) => (e === "L1-icache-load-misses:u" ? (a.includes("-A") ? "L1-icache-load-misses [cpu]" : "L1-icache-load-misses") : e);
+// The probe (perf stat -A -e <set> -- sleep 1, no cgroup) answers on --log-fd 1 for each event it names, a row a CPU.
 // With FAKE_PROBE_HOLD naming its set, it leaves a self-bounded child holding its output as it exits.
 // With FAKE_BREAK too, it first makes that path a directory, so count.mjs's next write there fails.
 if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1] && process.env.FAKE_BREAK) { fs.rmSync(process.env.FAKE_BREAK, { force: true }); fs.mkdirSync(process.env.FAKE_BREAK); }
 if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1]) require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 9000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
-if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "probe.jsonl"), JSON.stringify(a) + "\\n"); process.stdout.write(a[a.indexOf("-e") + 1].split(",").map((e) => \`1000,,\${e},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); }
+const probeRows = (e) => a.includes("-A") ? cpus.map((c) => "CPU" + c + ",1000,," + shown(e) + ",1000000,100.00,,").join("\\n") : "1000,," + shown(e) + ",1000000,100.00,,";
+if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "probe.jsonl"), JSON.stringify(a) + "\\n"); process.stdout.write(a[a.indexOf("-e") + 1].split(",").map(probeRows).join("\\n") + "\\n"); process.exit(0); }
 fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
 const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
 const set = events.join(",");
 const named = (knob) => (process.env[knob] ?? "").split("|").includes(set);
-// With -A a row a CPU, for -C's CPUs or every online one, their counts summing to a whole count's;
-// in a set FAKE_PERF_CPU_GAP names the last CPU's counter never ran, printed as perf 6.1 prints one
-// (its total would still read 100%).
-const cpuList = a.includes("-C") ? a[a.indexOf("-C") + 1] : fs.readFileSync("/sys/devices/system/cpu/online", "utf8").trim();
-const cpus = cpuList.split(",").flatMap((p) => { const [x, y = x] = p.split("-").map(Number); return Array.from({ length: y - x + 1 }, (_, i) => x + i); });
+// With -A a row a CPU, their counts summing to a whole count's; in a set FAKE_PERF_CPU_GAP names
+// the last CPU's counter never ran, printed as perf 6.1 prints one (its total would still read 100%).
 const counting = named("FAKE_PERF_CPU_GAP") ? cpus.length - 1 : cpus.length;
 const share = (i) => Math.floor(500000000 / counting) + (i === 0 ? 500000000 % counting : 0);
 const rows = (e) => a.includes("-A")
-  ? cpus.map((c, i) => "CPU" + c + "," + (i >= counting ? "<not counted>" : share(i)) + ",," + e + "," + cgroup + "," + (i >= counting ? 0 : 1000000) + ",100.00,,").join("\\n")
-  : "500000000,," + e + "," + cgroup + ",1000000,100.00,,";
+  ? cpus.map((c, i) => "CPU" + c + "," + (i >= counting ? "<not counted>" : share(i)) + ",," + shown(e) + "," + cgroup + "," + (i >= counting ? 0 : 1000000) + ",100.00,,").join("\\n")
+  : "500000000,," + shown(e) + "," + cgroup + ",1000000,100.00,,";
 // When this perf counted from ("enable") and to ("disable", "exit"), for each load to be held against.
 const mark = (what) => fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf-times.jsonl"), JSON.stringify({ set, what, at: Date.now() }) + "\\n");
 const print = () => process.stdout.write(events.map(rows).join("\\n") + "\\n");
@@ -1204,6 +1208,10 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
     // instructions:u and instructions:k (#2151); every set a count gives perf was probed first.
     assert.deepEqual(kept.row[0].kernelPass, { requests: 5000, failed: 0 });
     assert.equal(kept.row[0].kernelPerRequest, 100000);
+    // The instruction-cache row is read by the name perf prints it with -A (#2232), and the probe asks with -A as the count does.
+    assert.equal(kept.row[0].userL1iMissesPerRequest, 100000, JSON.stringify(kept.row));
+    assert.deepEqual(kept.row[0].perfDiagnostics, {});
+    assert.ok(kept.probe.length === 3 && kept.probe.every((args) => args.includes("-A")), JSON.stringify(kept.probe));
     const sets = (/** @type {string[][]} */ calls) => calls.map((args) => args[args.indexOf("-e") + 1]);
     assert.deepEqual(sets(kept.perf), ["cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u", "instructions:k"]);
     assert.deepEqual(sets(kept.probe), ["instructions:u", "instructions:k", "cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u"]);

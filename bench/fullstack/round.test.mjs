@@ -1704,7 +1704,8 @@ test("count.mjs counts user and kernel instructions in two perf sessions, never 
   }
   for (const set of PROBE_SETS) assert.doesNotThrow(() => perfProbeArgs(["-C", "1"], set));
   assert.throws(() => passEvents("both"), /unknown perf pass/);
-  assert.deepEqual(perfProbeArgs(["-C", "1"], ["instructions:k"]), ["stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e", "instructions:k", "--", "sleep", "1"]);
+  // The probe asks for a row a CPU (-A) as the count does, so it sees each row named as the count will (#2232).
+  assert.deepEqual(perfProbeArgs(["-C", "1"], ["instructions:k"]), ["stat", "-C", "1", "-A", "-x", ",", "--log-fd", "1", "-e", "instructions:k", "--", "sleep", "1"]);
 });
 
 test("perf's CPUs are every CPU or a CPU list, so nothing else (another -e) reaches its arguments in a count or a probe", () => {
@@ -1723,7 +1724,8 @@ test("perf's CPUs are every CPU or a CPU list, so nothing else (another -e) reac
   }
 });
 
-const mainText = (cacheEvent = "L1-icache-load-misses:u") => [
+// The cache event is named as perf 6.8 prints it with -A (captured, #2232).
+const mainText = (cacheEvent = "L1-icache-load-misses [cpu]") => [
   "# started on bench host",
   "CPU1,12345,,instructions:u,app.scope,60000,100.00,",
   "CPU1,5678,,cycles:u,app.scope,60000,100.00,",
@@ -1737,7 +1739,9 @@ const pass = (text, requests = 10, failed = 0) => ({ counts: parsePerCpuCounts(t
 const measure = (/** @type {any} */ collect, /** @type {any} */ warn, /** @type {any} */ expected = {}) => measurePerfCounts(collect, warn, { cpus: [1], ...expected });
 
 test("count.mjs reads each count over its own pass's load", () => {
-  for (const cacheEvent of ["L1-icache-load-misses", "L1-icache-load-misses:u"]) {
+  // The cache event as perf prints it with -A: with its PMU's name from perf 6.8 on (captured on
+  // 6.8.12), bare on perf 6.1, which adds the name only with --no-merge or on a hybrid CPU (its source).
+  for (const cacheEvent of ["L1-icache-load-misses [cpu]", "L1-icache-load-misses"]) {
     assert.deepEqual(countRow(pass(mainText(cacheEvent)), pass(kernelInstructions)), {
       requests: 10, failed: 0, kernelPass: { requests: 10, failed: 0 }, userPerRequest: 1235, kernelPerRequest: 123,
       userCyclesPerRequest: 568, kernelCyclesPerRequest: 0, userL1iMissesPerRequest: 9,
@@ -1790,6 +1794,61 @@ test("a count's events are summed over each CPU perf was given, and kept only wh
   const row = countRow({ counts: parsePerCpuCounts(real.replaceAll("instructions:u", "instructions:k").replaceAll(",pt,", ",app.scope,"), [0, 1]), requests: 10, failed: 0 }, { counts: parsePerCpuCounts(real.replaceAll("instructions:u", "instructions:k"), [0, 1]), requests: 10, failed: 0 });
   assert.equal(row.kernelPerRequest, null);
   assert.equal(row.perfDiagnostics["instructions:k"], "CPU 1: <not counted>");
+});
+
+// perf 6.8.12's rows under the count's own arguments (`-A -x , --log-fd 1 --delay=-1
+// --control=fd:3,4 -e <set> -G <cgroup>` once an event, enabled and disabled on its control
+// descriptor), captured for a cgroup that ran a loop on CPU 1. perf names a legacy cache event as it
+// was given less its modifier and, with -A, adds its PMU's name in brackets (#2232).
+const capturedMain = [
+  "CPU1,3377767514,,cycles:u,system.slice/fix2232-load.scope,1003410720,100.00,,",
+  "CPU1,10411677,,cycles:k,system.slice/fix2232-load.scope,1003410720,100.00,,",
+  "CPU1,9950791311,,instructions:u,system.slice/fix2232-load.scope,1003410720,100.00,2.95,insn per cycle",
+  "CPU1,168544,,L1-icache-load-misses [cpu],system.slice/fix2232-load.scope,1003410720,100.00,,",
+].join("\n");
+const capturedKernel = "CPU1,5867300,,instructions:k,system.slice/fix2232-load.scope,1002123385,100.00,,";
+// The same, given CPUs 0 and 1: the cgroup never ran on CPU 0, so its counters never ran.
+const capturedTwoCpus = [
+  "CPU0,<not counted>,,cycles:u,system.slice/fix2232-load.scope,0,100.00,,",
+  "CPU1,3384523830,,cycles:u,system.slice/fix2232-load.scope,1005516174,100.00,,",
+  "CPU0,<not counted>,,cycles:k,system.slice/fix2232-load.scope,0,100.00,,",
+  "CPU1,10837258,,cycles:k,system.slice/fix2232-load.scope,1005516174,100.00,,",
+  "CPU0,<not counted>,,instructions:u,system.slice/fix2232-load.scope,0,100.00,,",
+  "CPU1,9939947865,,instructions:u,system.slice/fix2232-load.scope,1005516174,100.00,2.94,insn per cycle",
+  "CPU0,<not counted>,,L1-icache-load-misses [cpu],system.slice/fix2232-load.scope,0,100.00,,",
+  "CPU1,173282,,L1-icache-load-misses [cpu],system.slice/fix2232-load.scope,1005516174,100.00,,",
+].join("\n");
+
+test("a count reads perf's instruction-cache row by the name perf prints it with -A, and no other name (#2232)", async () => {
+  const l1i = "L1-icache-load-misses:u";
+  assert.deepEqual(parsePerCpuCounts(capturedMain, [1]).get(l1i), { count: 168544, runningPct: 100, error: null });
+  const row = countRow({ counts: parsePerCpuCounts(capturedMain, [1]), requests: 10, failed: 0 }, { counts: parsePerCpuCounts(capturedKernel, [1]), requests: 10, failed: 0 });
+  assert.deepEqual([row.userL1iMissesPerRequest, row.userPerRequest, row.kernelPerRequest, row.perfRunningPct[l1i], row.perfDiagnostics], [16854, 995079131, 586730, 100, {}]);
+  // Through both passes, as count.mjs reads them.
+  const measured = await measure((p) => ({ text: p === "main" ? capturedMain : capturedKernel, summary: countSummary(10) }), assert.fail);
+  assert.equal(measured.userL1iMissesPerRequest, 16854);
+  // Under another PMU's name, as perf prints a cache event of another PMU ("%s [%s]") or of a hybrid
+  // CPU's ("%s/%s/"); as asked of a named PMU (captured: `-e cpu/L1-icache-load-misses/u`); or
+  // another cache event: none is the event the kit asked for, so the count has no row for it.
+  for (const other of ["L1-icache-load-misses [cpu_core]", "cpu_core/L1-icache-load-misses/", "cpu/L1-icache-load-misses/u", "L1-dcache-load-misses [cpu]", "L1-icache-loads [cpu]"]) {
+    const text = capturedMain.replace("L1-icache-load-misses [cpu]", other);
+    assert.equal(parsePerCpuCounts(text, [1]).get(l1i), undefined, other);
+    const kept = countRow({ counts: parsePerCpuCounts(text, [1]), requests: 10, failed: 0 }, { counts: parsePerCpuCounts(capturedKernel, [1]), requests: 10, failed: 0 });
+    assert.equal(kept.userL1iMissesPerRequest, null, other);
+    assert.equal(kept.perfDiagnostics[l1i], "no perf row", other);
+  }
+  // 7e5996294's guarantee holds for the row read so: a CPU it was given that did not count, a CPU
+  // with no row (CPU 0's dropped from the capture), a row with no running percentage (CPU 1's
+  // emptied), and a CPU given the event twice, bare and with its PMU's name.
+  assert.equal(parsePerCpuCounts(capturedTwoCpus, [0, 1]).get(l1i)?.error, "CPU 0: <not counted>");
+  const noRow = capturedTwoCpus.split("\n").filter((l) => !l.startsWith("CPU0,<not counted>,,L1-icache")).join("\n");
+  assert.equal(parsePerCpuCounts(noRow, [0, 1]).get(l1i)?.error, "no row for CPU 0");
+  const noPct = capturedMain.replace("L1-icache-load-misses [cpu],system.slice/fix2232-load.scope,1003410720,100.00", "L1-icache-load-misses [cpu],system.slice/fix2232-load.scope,1003410720,");
+  const unpct = countRow({ counts: parsePerCpuCounts(noPct, [1]), requests: 10, failed: 0 }, { counts: parsePerCpuCounts(capturedKernel, [1]), requests: 10, failed: 0 });
+  assert.equal(unpct.userL1iMissesPerRequest, null);
+  assert.equal(unpct.perfDiagnostics[l1i], "missing or invalid perf running percentage");
+  const twice = `${capturedMain}\nCPU1,168544,,L1-icache-load-misses,system.slice/fix2232-load.scope,1003410720,100.00,,`;
+  assert.equal(parsePerCpuCounts(twice, [1]).get(l1i)?.error, "two rows for CPU 1");
 });
 
 test("a count's CPUs are -C's list or every online CPU, and a count with none to read runs no load", async () => {
@@ -1949,7 +2008,7 @@ test("count.mjs records partial and missing optional coverage without reporting 
       userInstructions,
       "CPU1,5678,,cycles:u,app.scope,60000,8.00,",
       "CPU1,1200,,cycles:k,app.scope,60000,100.00,",
-      "CPU1,87,,L1-icache-load-misses:u,app.scope,60000,,",
+      "CPU1,87,,L1-icache-load-misses [cpu],app.scope,60000,,",
     ].join("\n"), summary: countSummary(10) };
   }, assert.fail);
   assert.equal(row.userCyclesPerRequest, null);
@@ -2136,21 +2195,52 @@ test("count.mjs falls back to user instructions when an optional event makes per
 });
 
 test("the probe refuses a set perf cannot count or does not answer for, and notes main's whole set the count falls back from", () => {
-  const counted = (names) => ({ status: 0, signal: null, stdout: names.map((e) => `1000,,${e},1000000,100.00,,`).join("\n"), stderr: "" });
+  // A row a CPU (-A, no cgroup: CPU, count, unit, event, running time, running percentage), the cache event named as perf 6.8 prints it.
+  const shown = (/** @type {string} */ e) => (e === "L1-icache-load-misses:u" ? "L1-icache-load-misses [cpu]" : e);
+  const counted = (names) => ({ status: 0, signal: null, stdout: names.map((e) => `CPU1,1000,,${shown(e)},1000000,100.00,,`).join("\n"), stderr: "" });
   for (const names of PROBE_SETS) assert.deepEqual(probeVerdict(names, counted(names)), { refuse: null, note: null });
   // A required event not counted (a counter the VM does not expose still exits 0), a nonzero exit, no answer.
-  assert.match(probeVerdict(["instructions:k"], { status: 0, stdout: "<not supported>,,instructions:k,0,100.00,,", stderr: "" }).refuse, /gave no count for instructions:k/);
+  assert.match(probeVerdict(["instructions:k"], { status: 0, stdout: "CPU1,<not supported>,,instructions:k,0,100.00,,", stderr: "" }).refuse, /gave no count for instructions:k/);
   assert.match(probeVerdict(["instructions:u"], { status: 1, stdout: "", stderr: "perf_event_open failed" }).refuse, /exited 1: perf_event_open failed/);
   assert.match(probeVerdict(["instructions:u"], { status: null, signal: "SIGKILL", stdout: "", stderr: "", error: "did not finish within 30 s" }).refuse, /did not finish within 30 s/);
   // An optional event of main's whole set may be unusable, as in a count.
   const main = passEvents("main");
-  assert.deepEqual(probeVerdict(main, { status: 0, stdout: "1000,,instructions:u,1,100.00,,\n<not supported>,,cycles:k,0,100.00,,", stderr: "" }), { refuse: null, note: null });
+  assert.deepEqual(probeVerdict(main, { status: 0, stdout: "CPU1,1000,,instructions:u,1,100.00,,\nCPU1,<not supported>,,cycles:k,0,100.00,,", stderr: "" }), { refuse: null, note: null });
   // main's whole set failing by itself is what the count repeats its first load for; one that
   // did not answer within its bound is refused, as any set is.
   const failed = probeVerdict(main, { status: 129, stdout: "", stderr: "event syntax error: 'L1-icache-load-misses:u'" });
   assert.equal(failed.refuse, null);
   assert.match(failed.note, /exited 129: event syntax error.*the count repeats its first load with instructions:u alone/);
   assert.match(probeVerdict(main, { status: null, stdout: "", stderr: "", error: "no answer: it did not finish within 30 s" }).refuse, /no answer/);
+});
+
+test("the probe reads perf's rows as the count does, and refuses a set whose rows the count would not read (#2232)", () => {
+  // perf 6.8.12's probe output with -A on CPU 1, each set as count.mjs gives it (captured).
+  const captured = {
+    "instructions:u": "CPU1,9876399085,,instructions:u,1001211953,100.00,,",
+    "instructions:k": "CPU1,5921134,,instructions:k,1001364859,100.00,,",
+    [passEvents("main").join(",")]: [
+      "CPU1,3369019072,,cycles:u,1001547691,100.00,,",
+      "CPU1,10993968,,cycles:k,1001551530,100.00,,",
+      "CPU1,9924163428,,instructions:u,1001541331,100.00,2.95,insn per cycle",
+      "CPU1,189026,,L1-icache-load-misses [cpu],1001534115,100.00,,",
+    ].join("\n"),
+  };
+  for (const names of PROBE_SETS) assert.deepEqual(probeVerdict(names, { status: 0, signal: null, stdout: `${captured[names.join(",")]}\n`, stderr: "" }), { refuse: null, note: null }, names.join(","));
+  // main's whole set with its cache row under a name the count does not read is refused, not noted:
+  // the count's repeat with instructions:u alone would leave the row unread all the same.
+  const main = passEvents("main");
+  for (const other of ["cpu_core/L1-icache-load-misses/", "L1-icache-load-misses [cpu_core]"]) {
+    const v = probeVerdict(main, { status: 0, signal: null, stdout: captured[main.join(",")].replace("L1-icache-load-misses [cpu]", other), stderr: "" });
+    assert.equal(v.note, null, other);
+    assert.ok(v.refuse?.includes(`printed a row for ${JSON.stringify(other)}, which a count does not read as an event of the set`), String(v.refuse));
+  }
+  // A hybrid CPU's rows name every event by its PMU ("%s/%s/"): a set's required event is unread too.
+  assert.match(probeVerdict(["instructions:u"], { status: 0, signal: null, stdout: "CPU1,9876399085,,cpu_core/instructions:u/,1001211953,100.00,,", stderr: "" }).refuse, /printed a row for "cpu_core\/instructions:u\/"/);
+  // A required event that did not count on one of its CPUs gave no count, whatever its other CPUs did.
+  assert.match(probeVerdict(["instructions:k"], { status: 0, signal: null, stdout: "CPU0,<not counted>,,instructions:k,0,100.00,,\nCPU1,5921134,,instructions:k,1001364859,100.00,,", stderr: "" }).refuse, /gave no count for instructions:k: /);
+  // perf's total with no CPU column (the probe as it was before -A, captured) is no row a count reads.
+  assert.match(probeVerdict(["instructions:u"], { status: 0, signal: null, stdout: "9875347976,,instructions:u,1001701573,100.00,2.93,insn per cycle", stderr: "" }).refuse, /gave no count for instructions:u/);
 });
 
 test("a bounded run kills a command past its bound and gives up one that does not exit, instead of waiting it out", async () => {

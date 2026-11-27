@@ -228,9 +228,10 @@ async function counted(id, name, work, events) {
 }
 
 // Before any load: the kernel and CPU this runs on, and `perf` counting an idle second on the
-// count's CPUs with each event set a count gives it (PROBE_SETS), one at a time, each within a
-// bound, so a `perf` that does not fit the running kernel, cannot count a set or does not answer
-// stops the step here with the reason. Each set is written to count-kernel.txt before it runs, so
+// count's CPUs with each event set a count gives it (PROBE_SETS), a row a CPU as a count asks, one
+// at a time, each within a bound, so a `perf` that does not fit the running kernel, cannot count a
+// set, names a row as a count would not read it (#2232) or does not answer stops the step here
+// with the reason. Each set is written to count-kernel.txt before it runs, so
 // a host that stops as one runs leaves its name (#2151); a stopped host cannot refuse, and is the
 // watcher's to notice (droplet.mjs). r8's droplet locked up as counting started (#466); this probe
 // has no `-G`, so it would not have caught that, but the round's log says how far counting got.

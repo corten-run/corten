@@ -1599,7 +1599,13 @@ three runs:
    CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
    count, a running time above zero and 100% of its enabled time (read from the digits perf
    printed: a percentage above 100 is refused, not read as 100, and one just below 100 is not taken
-   as 100), and no other CPU did. A CPU the
+   as 100), and no other CPU did. A row is read by the name `perf` prints: a cache event without its
+   `:u`, and with `-A`, from `perf` 6.8 on, with its PMU's name in brackets, so the user L1i row is
+   `L1-icache-load-misses [cpu]` on a CPU with one core PMU, or `L1-icache-load-misses`; a row
+   under another PMU's name (a hybrid CPU's `cpu_core/L1-icache-load-misses/`) or of an event the
+   count did not ask for is not read, and the count has no row for that event
+   ([#2232 The catalog count reads no L1i row since perf is run with -A: perf names the row with a suffix, so every invocation is not valid](https://github.com/corten-run/corten/issues/2232)).
+   A CPU the
    app never ran on during the load gives no running time either and cannot be told from one whose
    counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
    CPU it is counted on (`BENCH_APP_CPUS=1`); an unpinned local count with `-a` is kept only where
@@ -1618,13 +1624,15 @@ three runs:
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).
    It first writes the running kernel (and any package waiting for a reboot) and the CPU model to
    `count-kernel.txt` and has `perf` count an idle second on the count's CPUs with each event set
-   a count gives it, one at a time (`instructions:u`, `instructions:k`, then the first pass's
-   whole set), each in a process group of its own that is killed after 30 s (never once its
+   a count gives it, a row a CPU (`-A`) as a count asks, one at a time (`instructions:u`,
+   `instructions:k`, then the first pass's whole set), each in a process group of its own that is killed after 30 s (never once its
    leader has exited, when the group's number may be another's) and given up as no answer 5 s
    after that rather than waited out; a probe whose `perf` exits while something it started
    holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with the reason when `perf` does not fit that kernel, cannot count a set's
-   required event, or does not answer; the first pass's whole set failing by itself is noted, not
-   refused, since the count then repeats that load with `instructions:u` alone. Each set is written
+   required event on every row of it, prints a row a count would not read as an event of the set,
+   or does not answer; the first pass's whole set failing by itself is noted, not
+   refused, since the count then repeats that load with `instructions:u` alone (a row a count
+   would not read is refused there too, since the repeat would leave it unread). Each set is written
    to `count-kernel.txt` before it runs, so a host that stops during one leaves its name. A host
    that stops cannot refuse: `droplet.mjs` notices one that does not answer (`--stall`). A count's
    `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails

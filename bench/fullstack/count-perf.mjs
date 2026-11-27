@@ -159,11 +159,14 @@ export function acknowledgments(ackMs = ACK_MS) {
   };
 }
 
-/** The probe of one event set before the first count: the same CPUs and events, over an idle second, no cgroup. */
+/**
+ * The probe of one event set before the first count: the same CPUs and events over an idle second,
+ * no cgroup, a row a CPU (`-A`) as a count asks, so each row is named as a count's will be (#2232).
+ */
 export function perfProbeArgs(/** @type {string[]} */ cpus, /** @type {string[]} */ names) {
   const flags = cpuFlags(cpus);
   supportedSet(names);
-  return ["stat", ...flags, "-x", ",", "--log-fd", "1", "-e", names.join(","), "--", "sleep", "1"];
+  return ["stat", ...flags, "-A", "-x", ",", "--log-fd", "1", "-e", names.join(","), "--", "sleep", "1"];
 }
 
 /** Every set a count gives perf, in the order the probe runs them: each alone first, then main's whole set. */
@@ -181,7 +184,9 @@ export function probeError(names, r) {
   const said = (r.stderr ?? "").trim() || (r.stdout ?? "").trim();
   if (r.error) return `perf stat -e ${names.join(",")}: ${r.error}`;
   if (r.status !== 0) return `perf stat -e ${names.join(",")} exited ${r.status ?? r.signal ?? "-"}${said ? `: ${said}` : ""}`;
-  const counts = parsePerfCounts(r.stdout ?? "");
+  const unread = unreadRows(names, r.stdout ?? "");
+  if (unread.length) return `perf stat -e ${names.join(",")} printed a row for ${unread.map((e) => JSON.stringify(e)).join(", ")}, which a count does not read as an event of the set`;
+  const { counts } = parsePerfCounts(r.stdout ?? "");
   for (const event of names.filter((e) => Object.values(REQUIRED).includes(e))) {
     if (counts.get(event)?.count == null) return `perf stat -e ${names.join(",")} gave no count for ${event}${said ? `: ${said}` : ""}`;
   }
@@ -267,7 +272,8 @@ export function runBounded(command, args, { timeoutMs = PROBE_MS, graceMs = GRAC
 /**
  * Whether a probe refuses the count: every fault of a set does, but one perf answered for in main's
  * whole set (it exited by itself, not within a bound's kill), which the count meets by repeating its
- * first load with user instructions alone, the set probed first; that is a note, not a refusal.
+ * first load with user instructions alone, the set probed first; that is a note, not a refusal. A
+ * row a count would not read is refused in every set: the repeat would leave it unread all the same.
  * @param {string[]} names
  * @param {Parameters<typeof probeError>[1]} r
  * @returns {{ refuse: string | null, note: string | null }}
@@ -276,25 +282,51 @@ export function probeVerdict(names, r) {
   const why = probeError(names, r);
   if (!why) return { refuse: null, note: null };
   const whole = names.join(",") === passEvents("main").join(",");
-  return whole && !r.error ? { refuse: null, note: `${why}; the count repeats its first load with ${REQUIRED.main} alone` } : { refuse: why, note: null };
+  return whole && !r.error && !unreadRows(names, r.stdout ?? "").length ? { refuse: null, note: `${why}; the count repeats its first load with ${REQUIRED.main} alone` } : { refuse: why, note: null };
 }
 
-/** Some perf versions omit :u when displaying a generic cache event. */
-const eventOf = (/** @type {string | undefined} */ event) => (event === "L1-icache-load-misses" ? events.userL1iMissesPerRequest : event);
+/**
+ * The names perf prints the kit's one cache event by, `L1-icache-load-misses:u`: a legacy cache event
+ * is named as it was given less its modifier, and with `-A`, from perf 6.8 on, with its PMU's name in
+ * brackets, `cpu` on a CPU with one core PMU (#2232). The sets a count gives perf hold that one cache
+ * event between them, so either name is it. Every other name is read as written, so a row under
+ * another PMU's name (a hybrid CPU's `cpu_core/L1-icache-load-misses/`) or of an event the kit did
+ * not ask for is none of its events.
+ */
+const L1I_ROWS = Object.freeze(["L1-icache-load-misses", "L1-icache-load-misses [cpu]"]);
+const eventOf = (/** @type {string | undefined} */ event) => (event !== undefined && L1I_ROWS.includes(event) ? events.userL1iMissesPerRequest : event);
 
-/** A probe's counts, perf's total over its CPUs (`perf stat -x ,` with no `-A`): only whether each event gave a count is read from it. */
-export function parsePerfCounts(/** @type {string} */ text) {
+/**
+ * A probe's counts from its rows a CPU (`-A -x ,` with no `-G`: CPU, count, unit, event, running time,
+ * running percentage), named as a count's rows are. Only whether each event gave a count is read: a
+ * whole count on every row of it. `unread` holds each name a row gave that is none of the kit's events.
+ * @param {string} text
+ */
+export function parsePerfCounts(text) {
+  /** @type {Map<string, { count: number | null, error: string | null }>} */
   const counts = new Map();
+  /** @type {string[]} */
+  const unread = [];
   for (const line of text.split("\n")) {
-    const [value, , event, , , running] = line.split(",");
+    const [cpu, value = "", , event] = line.split(",");
+    if (!/^CPU\d+$/.test(cpu?.trim() ?? "") || event === undefined) continue;
     const name = eventOf(event);
-    if (!eventNames.includes(name)) continue;
-    const raw = value.trim();
-    const runningPct = /^\d+(?:\.\d+)?$/.test(running?.trim() ?? "") ? Number(running) : null;
+    if (!eventNames.includes(name)) {
+      if (!unread.includes(event)) unread.push(event);
+      continue;
+    }
+    const raw = value.trim(), was = counts.get(name);
     const count = /^\d+$/.test(raw) ? Number(raw) : null;
-    counts.set(name, { count, runningPct, error: count === null ? raw || "missing count" : null });
+    if (was?.count === null) continue;
+    counts.set(name, count === null ? { count: null, error: raw || "missing count" } : { count: (was?.count ?? 0) + count, error: null });
   }
-  return counts;
+  return { counts, unread };
+}
+
+/** The names a probe's rows give that a count of `names` would not read as one of its events. */
+function unreadRows(/** @type {string[]} */ names, /** @type {string} */ text) {
+  const { counts, unread } = parsePerfCounts(text);
+  return [...unread, ...[...counts.keys()].filter((e) => !names.includes(e))];
 }
 
 /**
