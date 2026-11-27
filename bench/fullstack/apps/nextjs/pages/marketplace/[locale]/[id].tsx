@@ -1,9 +1,9 @@
 import Head from "next/head";
 import type { GetServerSideProps } from "next";
 import { Marketplace, type MarketplaceProps } from "../../../lib/marketplace-page";
-import { isLocale, readQuery, sameOrigin } from "../../../lib/marketplace";
+import { isLocale, readQuery } from "../../../lib/marketplace";
 import { fetchMarketplaceRecord } from "../../../lib/marketplace-server";
-import { submitAlert } from "../../../lib/alerts-http";
+import { marketplaceFormIsSameOrigin, submitAlert } from "../../../lib/alerts-http";
 
 type Props = MarketplaceProps | { error: string; locale: string };
 export const getServerSideProps: GetServerSideProps<Props> = async ({ params, req, res, resolvedUrl }) => {
@@ -21,14 +21,9 @@ export const getServerSideProps: GetServerSideProps<Props> = async ({ params, re
   }
   let form: URLSearchParams | undefined;
   if (req.method === "POST") {
-    const headers = new Headers();
-    for (const name of ["origin", "sec-fetch-site"]) {
-      const value = req.headers[name];
-      if (typeof value === "string") headers.set(name, value);
-    }
     const requestUrl = new URL(url);
     requestUrl.protocol = (req.socket as { encrypted?: boolean }).encrypted ? "https:" : "http:";
-    if (!sameOrigin(new Request(requestUrl, { headers }))) {
+    if (!marketplaceFormIsSameOrigin(req, requestUrl)) {
       res.statusCode = 403;
       return { props: { error: "Forbidden", locale } };
     }

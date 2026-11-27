@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { auditWaitMs, campaignRounds } from "./campaign-contract.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { catalogFleetPlacement, jsonFleetPlacement } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, jsonFleetPlacementFor } from "../cloud-contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { digest, durable, physical, readRegular } from "./evidence.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
@@ -13,7 +13,7 @@ import { superviseControlStream } from "./control-stream-remote.mjs";
 export { auditWaitMs };
 export function parseCampaignArgs(args) {
   assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string"));
-  assert.ok([5, 7, 9].includes(args.length), `usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP [--load-layout c16-generator-v1|json-c16-generator-v1 | --placement ${alternateCampaignPlacements.join("|")}]]`);
+  assert.ok([5, 7, 9].includes(args.length), `usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP [--load-layout c16-generator-v1|json-c16-generator-v1|json-c32-generator-v1 | --placement ${alternateCampaignPlacements.join("|")}]]`);
   const [round, commitFlag, commit, stateFlag, stateRoot, groupFlag, group, modeFlag, mode] = args;
   campaignRounds(round);
   assert.equal(commitFlag, "--commit"); assert.match(commit, /^[a-f0-9]{40}$/);
@@ -23,7 +23,7 @@ export function parseCampaignArgs(args) {
   }
   if (args.length === 9) {
     assert.ok(modeFlag === "--load-layout" && group === "catalog-page" && mode === catalogFleetPlacement.loadLayout
-      || modeFlag === "--load-layout" && group === "json-api" && mode === jsonFleetPlacement.loadLayout
+      || modeFlag === "--load-layout" && jsonFleetPlacementFor(group, mode)
       || modeFlag === "--placement" && group !== "catalog-page" && alternateCampaignPlacements.includes(mode), "unknown group placement");
   }
   return Object.freeze({ round, commit, stateRoot, ...(group === undefined ? {} : { group }),

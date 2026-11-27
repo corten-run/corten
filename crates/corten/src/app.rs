@@ -2097,7 +2097,8 @@ where
             };
             let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
-            let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
+            // With the timer its requests' deadlines wait on, kept from one to the next.
+            let mut conn = std::pin::pin!(crate::deadline::Keeps::new(http.serve_connection(io, service).with_upgrades()));
             // The wait for shutdown has a waker of its own ([`Heard`]) and is polled only when
             // that waker has fired, and at first. So a wake of the task for the connection (every
             // read and write) asks only whether it has, one load, where polling the wait again
@@ -2128,7 +2129,7 @@ where
                     None => return,
                 }
             };
-            conn.as_mut().graceful_shutdown();
+            conn.as_mut().conn().graceful_shutdown();
             // The server gone without a shutdown: close now.
             let Some(closing) = closing else {
                 let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;
@@ -2653,7 +2654,7 @@ impl<S: Steps> Layer<S> {
         let credentials = cache::Credentials::read(headers);
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
         let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
-        if let Some(refused) = self.policy.refuse(req.method(), &mut origin, cors.is_some() && !credentials.has_cookie()) {
+        if let Some(refused) = self.policy.refuse(req, &mut origin, cors.is_some() && !credentials.has_cookie()) {
             let (mut refused, vary) = match mount {
                 Some(mount) => {
                     let refused = crate::api::json_failure(refused, false, mount.errors.as_ref()).await;

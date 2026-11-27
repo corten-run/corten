@@ -31,8 +31,9 @@ node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
 # The reviewed fleet reservation passes its named layout to the same entry:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page --load-layout c16-generator-v1
-# An independent json-api fleet saved with the opt-in JSON API c-16 layout passes it the same way:
+# An independent json-api fleet passes its saved c-16 or c-32 layout the same way:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --load-layout json-c16-generator-v1
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --load-layout json-c32-generator-v1
 # For a non-catalog group only at the placement authorized by the fleet:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --placement dedicated-sfo2
 ```
@@ -44,11 +45,13 @@ The catalog job keeps its separate `c16-generator-v1` layout.
 The argument order and root are fixed. No selection, recipe, command, validator, image,
 environment, output-path, retry or resume argument is accepted. The parent provisions a
 private, same-UID `/bench/campaign` outside a clean checkout, a Linux host with Node 24+,
-at least eight available CPUs (16 for either named layout), Docker and the
+at least eight available CPUs (16 for a c-16 layout, 32 for c-32), Docker and the
 actual native build/browser dependencies. Only the catalog group accepts
-`c16-generator-v1`, and only json-api accepts `json-c16-generator-v1`, whose binding
-requests `JSON_API_LOAD_LAYOUT=json-c16-generator-v1` with CPUs 1, 2-3 and 4-15
-([JSON API c-16 placement](../CLOUD.md#json-api-c-16-placement-opt-in)). Without a layout
+`c16-generator-v1`. Only json-api accepts
+[`json-c16-generator-v1`](../CLOUD.md#json-api-c-16-placement-opt-in) and
+[`json-c32-generator-v1`](../CLOUD.md#json-api-c-32-placement-opt-in). Their
+bindings set `JSON_API_LOAD_LAYOUT` to the named value and pin the app to 1,
+the upstream to 2-3, and k6 to 4-15 or 4-23 respectively. Without a layout
 the existing CPU binding is unchanged. The parent separately
 establishes the reserved host identity, authorized operator launch, unit/cgroup
 ownership and exclusive fresh-host use. This code does not authenticate a cloud size or

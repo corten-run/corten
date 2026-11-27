@@ -29,23 +29,49 @@ item 2 asks for cycles under load as well, which this kit does not give.
 ## The cases
 
 Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
-API and no pages, and `pages`, an app without an API. Both keep every `App` default.
+API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
+to the names an app answers to by default (`localhost`, a name under it and IP addresses) but in
+the eight cases with `-any` in their name, where the probe is started with `HOSTS=*` and answers
+to any host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 
 | Case | Configuration | Request | Answer |
 | --- | --- | --- | --- |
 | `get` | `api` | `GET /baseline11?a=1&b=2`: a staged route, typed query parameters in, a short `String` out | `3` |
 | `post` | `api` | `POST /baseline11?a=1&b=2` with a two-byte `text/plain` body | `23` |
+| `post-absolute` | `api` | `post` with an absolute-form target and a matching `Host` and `Origin`, no `Sec-Fetch-Site` | `23` |
 | `unstaged` | `api` | `GET /unstaged11?a=1&b=2`: the same answer from a route that says `unstaged` | `3` |
 | `pipeline` | `api` | `GET /pipeline`: an `unstaged` route | `ok` |
 | `text` | `pages` | `GET /text` | `ok` |
 | `page` | `pages` | `GET /page` | A page of about 12 KB |
 | `get-browser`, `text-browser`, `page-browser` | as above | The same with the seven header lines a browser sends with a navigation | The same; the page compressed with zstd |
+| `get-any`, `unstaged-any` | `api`, `HOSTS=*` | As `get` and `unstaged` | `3` |
+| `get-any-last`, `unstaged-any-last` | `api`, `HOSTS=*` | As `get` and `unstaged` with the browser's seven lines before `Host`, which is the last of eight | `3` |
+| `unstaged-any-name` | `api`, `HOSTS=*` | As `unstaged` to `Host: shop-2.example-cdn.region-9.example.test` and the port, a name of 40 bytes | `3` |
+| `unstaged-any-long` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,095 `a` and a `_` and the port | `3` |
+| `unstaged-any-encoded` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,093 `a` and `%4a` and the port | `3` |
+| `unstaged-any-short` | `api`, `HOSTS=*` | As `unstaged` to `Host: a.test` and the port, a name of 6 bytes | `3` |
+| `unstaged-subdomain` | `api` | As `unstaged` to `Host: seller-desk.localhost` and the port, a name under `localhost` whose 11 bytes before it are read as a name | `3` |
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
 refuses it), so that one reads none.
 
-Every request has a `Host` line and nothing else it does not need. Every answer is checked
+Every request has a `Host` line and nothing else it does not need. An app that answers to any host
+reads its `Host` by itself and not against names, and finds it on a later line by other searches
+than on the first: the cases of `HOSTS=*` count those reads, with `Host` first and last, with a
+name of 6 bytes, fewer than the eight a name needs to be read in line, and with names longer than
+`localhost`: one of the letters, digits, `-` and `.` most names are made of, and
+one whose last byte is none of those, which is read to its end before that byte is found, and one
+whose last three bytes are a percent-encoded byte, which is read from the look that found the `%`
+and not again from the name's start. That case counts the read but does not by itself catch a
+reader given the name from its start again, as the merge base it is counted against reads the
+whole name twice; a unit test in `crates/corten/src/security.rs`
+(`a_long_names_encoded_bytes_are_read_from_the_look_that_found_them`) does, by seeing the bytes
+that reader is given. An app that names its hosts matches `localhost` and its own names as they
+are written; a name it holds subdomains under is matched at the end, and what is before it is
+read as a name (a name it matches no way is read whole before its 421):
+`unstaged-subdomain` counts the subdomain's read, of `seller-desk` in `seller-desk.localhost`, 11 bytes,
+which are read in line. Every answer is checked
 against the table: a 200, the encoding or none, and the body, which for the page is the whole of
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
 and checked as the page is. `count.mjs --depth 16` writes 16
@@ -191,9 +217,9 @@ The count is not corrected for it. The line is rendered while these requests are
 part of what serving them cost; how many seconds a window crosses is not its length but where it
 began in a second; and the 600 is this commit's, which a commit to compare could change. So
 `count.mjs` prints the seconds, and two counts are compared as they are when their seconds are
-alike. On the 16-CPU host these were read on, a window lasts 0.7 to 1.9 seconds for the nine
-cases and 0.7 to 0.8 at a depth of 16, and one binary's counts agree closely there: 30 counts
-of each of the 13 rows spanned at most 1 instruction, and 30 of `get`, `post`, `text` and
+alike. On the 16-CPU host these were read on, a window lasted 0.7 to 1.9 seconds for the nine
+cases in that run and 0.7 to 0.8 at a depth of 16. One binary's counts agreed closely: 30 counts
+of each of that run's 13 rows spanned at most 1 instruction, and 30 of `get`, `post`, `text` and
 `page` with two busy loops on the probe's own CPU spanned at most 1 and read at most 1 more
 (rustc 1.100.0, valgrind 3.24.0). That is that host's, not the method's. On a slower, loaded
 machine, where windows last longer and vary more, the second review of the pull request that
@@ -244,7 +270,7 @@ give each a container of its own.
 writes sets (`tcache_max:524288`). That image also turns jemalloc's background thread on; here
 it is off, so what the allocator does is done by the thread that asked and is in its count. The
 probe refuses to start when jemalloc is not the allocator in use. With the 64 KiB cache of
-earlier images the nine cases count up to 22 instructions fewer (`get` 18,972 against 18,987,
+earlier images the nine cases measured then counted up to 22 instructions fewer (`get` 18,972 against 18,987,
 `unstaged` 12,838 against 12,860, `page-browser` the same).
 
 ## What a count is not
@@ -320,8 +346,8 @@ On one runner it does what [Running it](#running-it) says, the first three by
    written without its figures.
 2. Writes both builds' answers (`count.mjs --answers`).
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
-   `--json`, on base and then on head, a case a run: the nine cases' instructions, three counts
-   each, the four at a depth of 16, the nine cases' allocations, and the three idle readings
+   `--json`, on base and then on head, a case a run: each case's instructions, three counts
+   each, the four at a depth of 16, each case's allocations, and the three idle readings
    three times a build. A run ends in 120 seconds or is stopped, and none starts once 24
    minutes have gone since the job's first step, which leaves six of the job's 30 for the
    table, a reserve in name and not a guarantee, since a run stopped at its time can take 10
@@ -457,17 +483,30 @@ for them.
 
 | File | What it holds |
 | --- | --- |
-| `requests.test.mjs` | Each case's request byte for byte and the answer it must get, splitting a connection's bytes into answers, the masking |
+| `requests.test.mjs` | Each case's request byte for byte, its `HOSTS`, and the answer it must get, splitting a connection's bytes into answers, the masking |
 | `figures.test.mjs` | The arithmetic of a count and of an idle reading, and when a window or a run is refused |
 | `allocations.test.mjs` | Reading a profile |
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
-| `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, what is printed, and each refusal |
+| `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
 | `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one page over base's agreeing three passing, two pages failing, more than base's span failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
 | `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
-with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 47 of the 69 tests run.
+with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 49 of the 74 tests run.
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).
+
+The resident memory `idle.mjs` reads in `run.test.mjs` is the stand-in's. `idle.mjs` reads only
+the probe's `/proc/<pid>/status`; the tests start it with `node --import` of
+[`stand-in-status.mjs`](stand-in-status.mjs), which turns that read into one of the status
+`stand-in.mjs` writes, and nothing else loads that file. The stand-in's status is 10,240 kB and a
+page each connection it closed left behind, and two pages more for each open connection and one
+for each request answered on it. Each idle run that reads it and prints a figure is checked for
+its exact before, after, growth and figure, so a run that read memory once, or read its before
+ahead of the warm connections, fails. Two runs are checked less: one starts `idle.mjs` without
+the preload and reads the stand-in's own status in `/proc`, as a host does, and is checked only for
+a growth that is its after less its before, a figure that is that growth over the connections and
+a before that is not the stand-in's; the `--json` run with a 65,536-byte page is checked only for
+the page size it carries.

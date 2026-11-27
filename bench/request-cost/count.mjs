@@ -60,6 +60,8 @@ if (values.answers !== undefined && values.json) throw new Error("--json is of a
 const reps = whole("reps", values.reps ?? "3");
 const port = whole("port", values.port);
 const cpu = values.cpu;
+// The case's column: 14 wide, as it was before any case's name was longer, or the longest's and two.
+const width = Math.max(14, ...names.map((name) => name.length + 2));
 
 const scratch = mkdtempSync(join(tmpdir(), "request-cost-"));
 try {
@@ -72,7 +74,7 @@ try {
 
 async function count() {
   const row = (/** @type {(string | number)[]} */ [name, middle, least, most, seconds, others, ...counts]) =>
-    String(name).padEnd(14) + [middle, least, most].map((n) => String(n).padStart(10)).join("") + String(seconds).padStart(9) + String(others).padStart(15) + "  " + counts.join(" ");
+    String(name).padEnd(width) + [middle, least, most].map((n) => String(n).padStart(10)).join("") + String(seconds).padStart(9) + String(others).padStart(15) + "  " + counts.join(" ");
   if (!values.json) console.log(row(["case", "median", "least", "most", "seconds", "other threads", "counts"]));
   for (const name of names) {
     const windows = [];
@@ -93,20 +95,21 @@ function of(kind, name) {
 
 async function allocations() {
   const two = (/** @type {number} */ count) => each(count, depth).toFixed(2);
-  if (!values.json) console.log("case".padEnd(14) + "allocations".padStart(12) + "frees".padStart(10) + "  calls");
+  if (!values.json) console.log("case".padEnd(width) + "allocations".padStart(12) + "frees".padStart(10) + "  calls");
   for (const name of names) {
     const found = allocatorCalls((await counted(binary, name, { cpu, port, depth, scratch })).profile);
     // Every case allocates for each request: fewer means the profile is not of the requests.
     if (found.allocations < sent(COUNTED, depth)) throw new Error(`${name}: the profile holds ${found.allocations} allocations for ${sent(COUNTED, depth)} requests`);
     const calls = Object.entries(found.calls).sort().map(([call, count]) => `${call}=${two(count)}`).join(" ");
-    console.log(values.json ? JSON.stringify({ ...of("allocations", name), ...found }) : name.padEnd(14) + two(found.allocations).padStart(12) + two(found.frees).padStart(10) + "  " + calls);
+    console.log(values.json ? JSON.stringify({ ...of("allocations", name), ...found }) : name.padEnd(width) + two(found.allocations).padStart(12) + two(found.frees).padStart(10) + "  " + calls);
   }
 }
 
 async function answers(/** @type {string} */ directory) {
   mkdirSync(directory, { recursive: true });
   for (const name of names) {
-    const probe = await start(binary, /** @type {typeof cases[string]} */ (cases[name]).configuration, { cpu, port });
+    const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
+    const probe = await start(binary, configuration, { cpu, port, hosts });
     try {
       const connection = await Connection.open(port);
       writeFileSync(join(directory, `${name}.http`), await send(connection, name, 3));

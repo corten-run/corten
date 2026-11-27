@@ -64,7 +64,9 @@ test("worker create mode accepts only its pinned size, region and image; recover
     ["dedicated-blr1", "nyc1", false], ["dedicated-blr1", "blr1", false, "c-16"], ["dedicated-lon1", "lon1", false, "c-8", "other-image"],
     ["dedicated-nyc1", "nyc1", false],
     ["c16-generator-v1", "sfo2", true, "c-16"], ["c16-generator-v1", "sfo2", false],
-    ["c16-generator-v1", "sfo3", false, "c-16"], ["c16-generator-v1", "lon1", false, "c-16"], ["dedicated", "sfo3", false, "c-16"]]) {
+    ["c16-generator-v1", "sfo3", false, "c-16"], ["c16-generator-v1", "lon1", false, "c-16"], ["dedicated", "sfo3", false, "c-16"],
+    ["json-c32-generator-v1", "sfo2", true, "c-32"], ["json-c32-generator-v1", "sfo2", false, "c-16"],
+    ["json-c32-generator-v1", "sfo3", false, "c-32"], ["json-c16-generator-v1", "sfo2", false, "c-32"]]) {
     await t.test(`${createMode}: ${size}/${region}/${image}`, async (t) => {
       const forged = ["sfo3", "dedicated-nyc1"].includes(createMode);
       if (forged) assert.throws(() => provider.providerTransport({ repo: resolve("."), createMode }), /unknown provider create mode/);
@@ -79,6 +81,8 @@ test("worker create mode accepts only its pinned size, region and image; recover
         const listed = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)])).stdout);
         assert.equal(listed[0].region.slug, region);
         assert.equal(listed[0].size_slug, size);
+        const posts = h.state().calls.filter(({ method }) => method === "POST");
+        assert.deepEqual(posts.map(({ path }) => path), ["/v2/droplets"]);
       } else {
         await assert.rejects(h.run(create));
         assert.equal(h.state().consumes, 0);

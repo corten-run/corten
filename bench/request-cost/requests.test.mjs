@@ -51,6 +51,7 @@ test("each case is its request, byte for byte, to its configuration", () => {
   const expected = {
     get: ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
     post: ["api", `POST /baseline11?a=1&b=2 HTTP/1.1\r\n${host}Content-Type: text/plain\r\nContent-Length: 2\r\n\r\n20`],
+    "post-absolute": ["api", `POST http://localhost:8123/baseline11?a=1&b=2 HTTP/1.1\r\n${host}Origin: http://localhost:8123\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n20`],
     unstaged: ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
     pipeline: ["api", `GET /pipeline HTTP/1.1\r\n${host}\r\n`],
     text: ["pages", `GET /text HTTP/1.1\r\n${host}\r\n`],
@@ -58,11 +59,38 @@ test("each case is its request, byte for byte, to its configuration", () => {
     "get-browser": ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}${browser}\r\n`],
     "text-browser": ["pages", `GET /text HTTP/1.1\r\n${host}${browser}\r\n`],
     "page-browser": ["pages", `GET /page HTTP/1.1\r\n${host}${browser}\r\n`],
+    "get-any": ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`, "*"],
+    "unstaged-any": ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`, "*"],
+    "get-any-last": ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${browser}${host}\r\n`, "*"],
+    "unstaged-any-last": ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\n${browser}${host}\r\n`, "*"],
+    "unstaged-any-name": ["api", "GET /unstaged11?a=1&b=2 HTTP/1.1\r\nHost: shop-2.example-cdn.region-9.example.test:8123\r\n\r\n", "*"],
+    "unstaged-any-long": ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\nHost: ${"a".repeat(4095)}_:8123\r\n\r\n`, "*"],
+    "unstaged-any-encoded": ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\nHost: ${"a".repeat(4093)}%4a:8123\r\n\r\n`, "*"],
+    "unstaged-any-short": ["api", "GET /unstaged11?a=1&b=2 HTTP/1.1\r\nHost: a.test:8123\r\n\r\n", "*"],
+    "unstaged-subdomain": ["api", "GET /unstaged11?a=1&b=2 HTTP/1.1\r\nHost: seller-desk.localhost:8123\r\n\r\n"],
   };
   assert.deepEqual(
-    Object.fromEntries(Object.entries(cases).map(([name, { configuration, request }]) => [name, [configuration, request(8123).latin1Slice()]])),
+    Object.fromEntries(
+      Object.entries(cases).map(([name, { configuration, hosts, request }]) => [name, [configuration, request(8123).latin1Slice(), ...(hosts === undefined ? [] : [hosts])]]),
+    ),
     expected,
   );
+  // The names other than `localhost`: 40 bytes, 4,096 whose last is the only one not a letter,
+  // 4,096 whose last three are its only percent-encoded byte, 6, fewer than the 8 read in line,
+  // and one under `localhost` whose part before it is 11 bytes, between the 8 and 16 read in line.
+  const name = (/** @type {string} */ name) => /^Host: (.*):8123$/m.exec(cases[name]?.request(8123).latin1Slice() ?? "")?.[1] ?? "";
+  assert.equal(name("unstaged-any-name").length, 40);
+  assert.equal(name("unstaged-any-long").length, 4096);
+  assert.equal(name("unstaged-any-long").replace(/^a+/, ""), "_");
+  assert.equal(name("unstaged-any-encoded").length, 4096);
+  assert.equal(name("unstaged-any-encoded").replace(/^a+/, ""), "%4a");
+  assert.equal(name("unstaged-any-short"), "a.test");
+  assert.equal(name("unstaged-subdomain"), "seller-desk.localhost");
+  assert.equal(name("unstaged-subdomain").slice(0, -".localhost".length).length, 11);
+  // An app with Corten's default names, which answers to a name under `localhost`.
+  assert.equal(cases["unstaged-subdomain"]?.hosts, undefined);
+  // Host last of eight: seven browser lines before it.
+  assert.equal(cases["get-any-last"]?.request(8123).latin1Slice().split("\r\n").slice(1, -2).indexOf("Host: localhost:8123"), 7);
 });
 
 test("a list of cases is refused when it names one that is not a case", () => {
@@ -75,7 +103,26 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
   const row = (/** @type {number} */ n) => `<tr><td>${n}</td><td>A row of the page, about as long as a row of a listing is</td><td>${n * 7}</td></tr>`;
   const page = `<!DOCTYPE html><html lang="en"><head></head><body><main><h1>Items</h1><table>${row(118)}${row(119)}</table></main></body></html>`;
   const zstd = (/** @type {string} */ text) => zlib.zstdCompressSync(Buffer.from(text, "latin1")).latin1Slice();
-  for (const [name, body] of Object.entries({ get: "3", post: "23", unstaged: "3", pipeline: "ok", text: "ok", page, "get-browser": "3", "text-browser": "ok" })) {
+  for (const [name, body] of Object.entries({
+    get: "3",
+    post: "23",
+    "post-absolute": "23",
+    unstaged: "3",
+    pipeline: "ok",
+    text: "ok",
+    page,
+    "get-browser": "3",
+    "text-browser": "ok",
+    "get-any": "3",
+    "unstaged-any": "3",
+    "get-any-last": "3",
+    "unstaged-any-last": "3",
+    "unstaged-any-name": "3",
+    "unstaged-any-long": "3",
+    "unstaged-any-encoded": "3",
+    "unstaged-any-short": "3",
+    "unstaged-subdomain": "3",
+  })) {
     assert.equal(unexpected(name, answer(body)), null, name);
     assert.match(String(unexpected(name, answer(body, "", "404 Not Found"))), /^not a 200: HTTP\/1\.1 404 Not Found$/, name);
     assert.match(String(unexpected(name, answer(body, "", "2000 OK"))), /^not a 200/, name);

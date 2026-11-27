@@ -16,6 +16,10 @@ import { hostFilter } from "./lib/hosts.mjs";
 
 const profile = process.env.PROFILE === "matched";
 const catalogLean = process.env.PROFILE === "catalog-lean";
+const publicOrigin = process.env.MARKETPLACE_PUBLIC_ORIGIN;
+const publicUrl = publicOrigin ? URL.parse(publicOrigin) : undefined;
+if (publicOrigin && (!publicUrl || !["http:", "https:"].includes(publicUrl.protocol) || publicOrigin !== publicUrl.origin || publicUrl.port === "0"))
+  throw new Error("MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin");
 const app = express();
 app.disable("x-powered-by");
 if (catalogLean) app.disable("etag");
@@ -112,9 +116,12 @@ app.get("/api/items/:id", async (req, res) => {
 
 // Express has no CSRF protection of its own, so, as the Gin and Drogon apps do, a post another
 // site sends is refused: the browser says so in Sec-Fetch-Site, or its Origin is another host.
+const publicRequest = (req) => Boolean(publicUrl && req.get("Host") === publicUrl.host);
 const crossSite = (req) => {
   const origin = req.get("Origin");
-  return req.get("Sec-Fetch-Site") === "cross-site" || (origin !== undefined && origin !== `${req.protocol}://${req.get("Host")}`);
+  if (req.get("Sec-Fetch-Site") === "cross-site") return true;
+  if (publicRequest(req)) return origin !== publicOrigin || req.headersDistinct.origin?.length !== 1;
+  return origin !== undefined && origin !== `${req.protocol}://${req.get("Host")}`;
 };
 
 async function marketplace(req, res, next) {
@@ -139,7 +146,8 @@ async function marketplace(req, res, next) {
   res.render("marketplace", view, (error, html) => {
     if (req.timedout || signal.aborted || res.destroyed) return;
     if (error) return next(error);
-    if (alert.targetMinor !== null) appendAlert(req, res, { item_id: id, email: posted.email, target_minor: alert.targetMinor });
+    if (alert.targetMinor !== null) appendAlert(req, res, { item_id: id, email: posted.email, target_minor: alert.targetMinor },
+      req.secure || (publicUrl?.protocol === "https:" && publicRequest(req)));
     res.set("Cache-Control", "no-store");
     res.send(html);
   });
