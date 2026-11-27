@@ -1,7 +1,8 @@
 // layout.mjs: a placement's functions against its side's unpadded binary (the placement plan's
 // first point, CONTRIBUTING.md, Pull requests, item 2):
 //   node layout.mjs <unpadded binary> <placement> <pad bytes> [--second] [--order <file> --map <unpadded map>]
-//   node layout.mjs --alike <base placement> <head placement> <pad bytes>
+//   node layout.mjs --alike <base unpadded> <base placement> <base order> <base unpadded map>
+//                           <head unpadded> <head placement> <head order> <head unpadded map> <pad bytes> [--second]
 // Reads both binaries' defined function symbols (nm) and .text's start (readelf). The placement
 // passes when it holds exactly the unpadded binary's functions and the pad, the pad at the start
 // of .text, every function named once in each binary moved by exactly the pad's size, and every
@@ -18,22 +19,27 @@
 // when it holds exactly the unpadded binary's functions and the pad (both pads with --second), the
 // pad at the start of .text, the file names the pad first and then every function of the
 // unpadded .text once and nothing else, and its .text lays the unpadded functions out as LLD lays
-// them for that file: each input section of .text (from the unpadded link's map, by address) at
+// them for that file: each input section of .text (from the unpadded link's map: a function's by
+// its address, and at the end of one section and the start of the next, by the map's symbols
+// there) at
 // the place of the first of its functions the file names, sections of one place in their unpadded
 // order, so every definition, a name defined more than once included, at its section's place and
 // its place in the section; the functions of a section as far apart as they were; the first
 // section after the end of the whole pad, each after the end of the one before it, and the last
 // inside .text and before the second pad. The shift and the neighbours are not asked. The JSON
 // then carries the file's SHA-256.
-// With --alike, for a shuffled change: base's and head's placements at one index lay the
-// functions both have (each name defined once in each one's .text) in one order, which their
-// ordering files give them unless a symbol one side alone has gives a section both have another
-// place.
+// With --alike, for a shuffled change: base's and head's placements at one index, each passing
+// --order against its side's unpadded binary and map, lay the functions both have in one order,
+// which their ordering files give them unless a symbol one side alone has gives a section both
+// have another place. A name defined once in each one's .text is one function of both; a name
+// defined more than once in either is each definition by its input section (its object, or
+// archive and member, less directories, and its section's name), and one such that either side
+// has more than once, which nothing tells apart, refuses the change.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { mapText, readMap } from "./map.mjs";
+import { mapText, origin, readMap } from "./map.mjs";
 
 export const PADS = ["corten_layout_pad", "corten_layout_pad2"];
 
@@ -85,7 +91,7 @@ const some = (xs) => xs.slice(0, 3).join(", ");
  * A shuffled placement against its side's unpadded binary and the ordering file it was linked
  * with. ea, eb: entries() of the unpadded binary and of the placement; text: the unpadded
  * binary's textRange(); placed: the placement's textRange(); order: the ordering file's lines;
- * sections: the unpadded map's input sections of .text ({ at, size }). LLD gives each input
+ * sections: the unpadded map's input sections of .text ({ at, size, symbols }). LLD gives each input
  * section the place of the first name the file lists among its symbols, sections of one place in
  * the order they had, and keeps a section's functions together. So the placement's .text, after
  * the pad, holds every function of the unpadded .text, each definition once (a name defined more
@@ -109,22 +115,36 @@ export function ordered(ea, eb, text, placed, order, sections, pad, second = fal
   if (extra.length) why.push(`${extra.length} names in the ordering file that are no function of the unpadded .text: ${some(extra)}`);
   // Each function's input section, by its unpadded address; a section's place, its first listed name's.
   const secs = sections.filter((s) => s.size > 0).sort((x, y) => x.at - y.at), inText = (x) => x >= text.start && x < text.start + text.size;
-  const sectionOf = (x) => {
+  // An address that ends one section and starts the next (a symbol of no size at a section's end,
+  // say) is the section's whose map symbols there hold the name, or the one of the two with any
+  // symbol there; when both have one there and the name tells them apart in neither (the map
+  // writes a mangled name demangled), it is in no section the check can establish.
+  const there = (s, x) => (s.symbols ?? []).filter((y) => y.at === x).map((y) => y.name);
+  const sectionOf = (e) => {
+    const x = e.at;
     let lo = 0, hi = secs.length - 1, k = -1;
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (secs[mid].at <= x) { k = mid; lo = mid + 1; } else hi = mid - 1; }
     if (k < 0) return -1;
     const end = secs[k].at + secs[k].size;
-    return x < end || (x === end && secs[k + 1]?.at !== x) ? k : -1;
+    if (x >= end) return x === end ? k : -1;
+    if (secs[k].at !== x || k === 0 || secs[k - 1].at + secs[k - 1].size !== x) return k;
+    const before = there(secs[k - 1], x), after = there(secs[k], x);
+    if (!before.length) return k;
+    if (!after.length) return k - 1;
+    const inBefore = before.includes(e.raw), inAfter = after.includes(e.raw);
+    return inBefore !== inAfter ? (inBefore ? k - 1 : k) : -2;
   };
-  const units = secs.map((s, k) => ({ s, k, fns: [], p: Infinity })), loose = [];
+  const units = secs.map((s, k) => ({ s, k, fns: [], p: Infinity })), loose = [], between = [];
   for (const e of ea) {
     if (!inText(e.at)) continue;
-    const k = sectionOf(e.at);
+    const k = sectionOf(e);
+    if (k === -2) { between.push(e.raw); continue; }
     if (k < 0) { loose.push(e.raw); continue; }
     units[k].fns.push(e);
     if (pos.has(e.raw)) units[k].p = Math.min(units[k].p, pos.get(e.raw));
   }
   if (loose.length) why.push(`${loose.length} functions of the unpadded .text in no input section of its map: ${some(loose)}`);
+  if (between.length) why.push(`${between.length} functions of the unpadded .text at the end of one input section and the start of the next, which its map's symbols there do not tell apart: ${some(between)}`);
   const byRaw = (x, y) => (x.raw < y.raw ? -1 : x.raw > y.raw ? 1 : 0);
   const laid = units.filter((u) => u.fns.length).sort((x, y) => x.p - y.p || x.k - y.k);
   for (const u of laid) u.fns.sort((x, y) => x.at - y.at || byRaw(x, y));
@@ -132,6 +152,17 @@ export function ordered(ea, eb, text, placed, order, sections, pad, second = fal
   // The placement's functions in its .text, but the pads, by address: the file's order, definition by definition.
   const end = placed.start + placed.size;
   const got = eb.filter((e) => e.at >= placed.start && e.at < end && !PADS.includes(e.name)).sort((x, y) => x.at - y.at || byRaw(x, y));
+  // Definitions at one address have no order by address (one section's end and the next's start,
+  // say): such a run takes the order expected at its places when it holds those names.
+  for (let i = 0; i < got.length;) {
+    let j = i + 1;
+    while (j < got.length && got[j].at === got[i].at) j++;
+    if (j - i > 1 && j <= expected.length) {
+      const want = expected.slice(i, j).map((x) => x.e.raw), run = got.slice(i, j);
+      if ([...want].sort().join("\n") === run.map((g) => g.raw).sort().join("\n")) want.forEach((n, k) => { got[i + k] = run.splice(run.findIndex((g) => g.raw === n), 1)[0]; });
+    }
+    i = j;
+  }
   let matched = 0, first = -1;
   for (let k = 0; k < Math.max(expected.length, got.length); k++) {
     if (k < expected.length && k < got.length && expected[k].e.raw === got[k].raw) matched++;
@@ -163,29 +194,45 @@ export function ordered(ea, eb, text, placed, order, sections, pad, second = fal
     }
   }
   const repeated = [...unique(ea.filter((e) => inText(e.at)))].filter(([, at]) => at == null).length;
-  return { ok: why.length === 0, why, pad, second, shuffled: true, functions: expected.length, repeated, sections: laid.length, matched, together, follow, listed: listed.length, onlyA, onlyB };
+  // Each placed definition with the unpadded input section it was found to be of, for alike().
+  const defs = first < 0 ? got.map((g, k) => ({ raw: g.raw, name: g.name, at: g.at, section: expected[k].u.s })) : null;
+  return { ok: why.length === 0, why, pad, second, shuffled: true, functions: expected.length, repeated, sections: laid.length, matched, together, follow, listed: listed.length, onlyA, onlyB, defs };
 }
 
 /**
  * Two placements at one index of a shuffled run, base's and head's, linked with ordering files
- * drawn alike: the functions both have, each name (less a ThinLTO suffix) defined once in each
- * one's .text, lie in one order in both. Their files list those names in one order, but a section
- * takes the place of the first name it holds, so a symbol one side alone has in a section the
- * other has too can give that section, and the functions in it, another place. ea, eb: entries()
- * of the two placements; ta, tb: their textRange()s.
+ * drawn alike: the functions both have lie in one order in both. Their files list those names in
+ * one order, but a section takes the place of the first name it holds, so a symbol one side alone
+ * has in a section the other has too can give that section, and the functions in it, another
+ * place. Each side is { ea, eb, text, placed, order, sections }, the arguments ordered() takes
+ * for it, and each must pass ordered(), which finds every placed definition's input section. A
+ * name (less a ThinLTO suffix) defined once in each one's .text is one function of both; a name
+ * defined more than once in either is each definition by its input section (origin() of its
+ * file and the section's name), shared when both have that definition once; one either has more
+ * than once is told apart by nothing, and the order of what both have cannot be established.
  */
-export function alike(ea, eb, ta, tb, pad) {
-  const once = (es, t) => {
-    const n = new Map();
-    for (const e of es) if (e.at >= t.start && e.at < t.start + t.size && !PADS.includes(e.name)) n.set(e.name, n.has(e.name) ? null : e.at);
-    return n;
+export function alike(base, head, pad, second = false) {
+  const check = (x) => ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, pad, second);
+  const ra = check(base), rb = check(head);
+  if (!ra.ok || !rb.ok) throw new Error(`alike: ${!ra.ok ? "base's" : "head's"} placement does not pass its own shuffled check: ${(!ra.ok ? ra : rb).why.join("; ")}`);
+  const count = (defs) => { const n = new Map(); for (const d of defs) n.set(d.name, (n.get(d.name) ?? 0) + 1); return n; };
+  const na = count(ra.defs), nb = count(rb.defs);
+  const label = new Map(), key = (d) => {
+    if (na.get(d.name) === 1 && nb.get(d.name) === 1) return d.name;
+    const o = origin(d.section.file ?? ""), file = o.object ?? `${o.archive}(${o.member})`, k = `${d.name}\n${file}\n${d.section.section ?? ""}`;
+    label.set(k, `${d.name} in ${file}:(${d.section.section ?? ""})`);
+    return k;
   };
-  const a = once(ea, ta), b = once(eb, tb), shared = [...a.keys()].filter((n) => a.get(n) != null && b.get(n) != null);
-  const seq = (m) => [...shared].sort((x, y) => m.get(x) - m.get(y) || (x < y ? -1 : x > y ? 1 : 0));
-  const sa = seq(a), sb = seq(b), why = [];
+  const keyed = (defs) => { const m = new Map(); for (const d of defs) { const k = key(d); m.set(k, [...(m.get(k) ?? []), d.at]); } return m; };
+  const a = keyed(ra.defs), b = keyed(rb.defs), both = [...a.keys()].filter((k) => b.has(k));
+  const shared = both.filter((k) => a.get(k).length === 1 && b.get(k).length === 1), told = new Set(shared), untold = both.filter((k) => !told.has(k));
+  const seq = (m) => [...shared].sort((x, y) => m.get(x)[0] - m.get(y)[0] || (x < y ? -1 : x > y ? 1 : 0));
+  const sa = seq(a), sb = seq(b), why = [], show = (k) => label.get(k) ?? k;
+  if (untold.length) why.push(`${untold.length} functions both placements have are each defined more than once in input sections of one file and name, which nothing tells apart, so their order cannot be established: ${some(untold.map(show))}`);
   const first = sa.findIndex((n, k) => n !== sb[k]);
-  if (first >= 0) why.push(`the ${shared.length} functions both placements have do not lie in one order: place ${first + 1} holds ${sa[first]} in the first and ${sb[first]} in the second`);
-  return { ok: why.length === 0, why, pad, shuffled: true, shared: shared.length, same: first < 0 ? shared.length : first };
+  if (first >= 0) why.push(`the ${shared.length} functions both placements have do not lie in one order: place ${first + 1} holds ${show(sa[first])} in the first and ${show(sb[first])} in the second`);
+  const repeated = shared.filter((k) => label.has(k)).length;
+  return { ok: why.length === 0, why, pad, shuffled: true, shared: shared.length, repeated, untold: untold.length, same: first < 0 ? shared.length : first };
 }
 
 /** fa, fb: symbols() of the unpadded binary and of the placement; text: the placement's .text start. */
@@ -217,21 +264,25 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = process.argv.slice(2);
   const opt = (name) => { const i = args.indexOf(name); if (i < 0) return undefined; const v = args[i + 1]; args.splice(i, 2); return v; };
   const orderFile = opt("--order"), mapFile = opt("--map"), second = args.includes("--second"), both = args.includes("--alike");
-  const [a, b, padArg] = args.filter((x) => x !== "--second" && x !== "--alike"), pad = Number(padArg);
-  if (!a || !b || !Number.isInteger(pad) || (orderFile === undefined) !== (mapFile === undefined) || (both && (second || orderFile !== undefined))) { console.error("usage: node layout.mjs <unpadded binary> <placement> <pad bytes> [--second] [--order <file> --map <unpadded map>] | --alike <base placement> <head placement> <pad bytes>"); process.exit(2); }
+  const rest = args.filter((x) => x !== "--second" && x !== "--alike"), [a, b, padArg] = both ? [rest[0], rest[4], rest[8]] : rest, pad = Number(padArg);
+  const usage = "usage: node layout.mjs <unpadded binary> <placement> <pad bytes> [--second] [--order <file> --map <unpadded map>] | --alike <base unpadded> <base placement> <base order> <base map> <head unpadded> <head placement> <head order> <head map> <pad bytes> [--second]";
+  if (!a || !b || !Number.isInteger(pad) || (orderFile === undefined) !== (mapFile === undefined) || (both && (orderFile !== undefined || rest.length !== 9))) { console.error(usage); process.exit(2); }
   const nmText = (bin) => execFileSync("nm", ["--defined-only", bin], { encoding: "utf8", maxBuffer: 1 << 28 });
   const readelf = (bin) => execFileSync("readelf", ["-SW", bin], { encoding: "utf8" });
+  const textOf = (file) => { const t = readMap(mapText(readFileSync(file))).find((o) => o.name === ".text"); if (!t) { console.error(`layout.mjs: no .text output section in ${file}`); process.exit(2); } return t; };
+  const lines = (file) => readFileSync(file).toString("utf8").replace(/\n$/, "").split("\n");
   if (both) {
-    const r = alike(entries(nmText(a)), entries(nmText(b)), textRange(readelf(a)), textRange(readelf(b)), pad);
-    console.log(`functions both placements have, each defined once in each: ${r.shared}; in one order: ${r.same}`);
+    const side = ([unpadded, placement, order, map]) => ({ ea: entries(nmText(unpadded)), eb: entries(nmText(placement)), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: lines(order), sections: textOf(map).inputs });
+    let r;
+    try { r = alike(side(rest.slice(0, 4)), side(rest.slice(4, 8)), pad, second); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
+    console.log(`functions both placements have: ${r.shared}, ${r.repeated} of them of a name defined more than once, told apart by their input sections; in one order: ${r.same}; defined more than once in input sections of one file and name: ${r.untold}`);
     console.log("JSON " + JSON.stringify(r));
     for (const w of r.why) console.error(`layout.mjs: ${w}`);
     process.exit(r.ok ? 0 : 1);
   }
   if (orderFile !== undefined) {
-    const bytes = readFileSync(orderFile), t = readMap(mapText(readFileSync(mapFile))).find((o) => o.name === ".text");
-    if (!t) { console.error(`layout.mjs: no .text output section in ${mapFile}`); process.exit(2); }
-    const r = ordered(entries(nmText(a)), entries(nmText(b)), textRange(readelf(a)), textRange(readelf(b)), bytes.toString("utf8").replace(/\n$/, "").split("\n"), t.inputs, pad, second);
+    const bytes = readFileSync(orderFile), t = textOf(mapFile);
+    const { defs, ...r } = ordered(entries(nmText(a)), entries(nmText(b)), textRange(readelf(a)), textRange(readelf(b)), bytes.toString("utf8").replace(/\n$/, "").split("\n"), t.inputs, pad, second);
     console.log(`definitions of functions in the unpadded .text: ${r.functions}, in ${r.sections} input sections; names defined more than once there, checked by their sections: ${r.repeated}; names the ordering file lists after the pad: ${r.listed}; places in its order: ${r.matched} of ${r.functions}; functions as far from the rest of their input section as unpadded: ${r.together}; sections after the pad and the one before: ${r.follow}; only in the placement: ${r.onlyB.join(", ")}`);
     console.log("JSON " + JSON.stringify({ ...r, order: createHash("sha256").update(bytes).digest("hex"), onlyA: r.onlyA.length }));
     for (const w of r.why) console.error(`layout.mjs: ${w}`);

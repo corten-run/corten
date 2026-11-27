@@ -70,7 +70,8 @@ model=$(awk -F': *' '/^model name/ { print $2; exit }' /proc/cpuinfo)
 for c in $CPU_SERVER $(echo "$CPU_LOAD" | tr ',' ' ') $CPU_DRIVER; do taskset -c "$c" true 2>/dev/null || finish 1 "refused: no CPU $c to pin to"; done
 RES=$WORK/results
 mkdir -p "$RES"
-[ ! -f "$HOME/.cargo/env" ] || . "$HOME/.cargo/env"
+# The plan's SHUFFLE stands whatever the cargo env file sets: it is put back, and not exported, after it.
+[ ! -f "$HOME/.cargo/env" ] || { plan_shuffle=$SHUFFLE; . "$HOME/.cargo/env"; unset SHUFFLE; SHUFFLE=$plan_shuffle; }
 RUN_ID=$(cat /proc/sys/kernel/random/uuid)
 echo "$RUN_ID" >"$RES/run-id"
 [ "$DRY" = 0 ] || echo "DRY RUN: K=$K, R=$R, $TURN s turns; a test of the scripts, read for nothing" >"$RES/DRYRUN"

@@ -44,8 +44,10 @@
 # (relink.mjs --every-name), and 4 and 5's checks of the functions are layout.mjs --order with the
 # unpadded map, which asks for them in the file's order in place of each moved by the pad with
 # its neighbours (5's map check takes --shuffled, its sections in any order). Each head placement
-# is then checked against base's at its index (layout.mjs --alike, bin/layout/head-p<n>-alike.txt):
-# the functions both have lie in one order in both, or head is refused (7).
+# is then checked against base's at its index (layout.mjs --alike, bin/layout/head-p<n>-alike.txt,
+# from both sides' unpadded binaries, maps and ordering files): the functions both have lie in one
+# order in both, a name defined more than once by each definition's input section, or head is
+# refused (7).
 # A refusal (3, 5 or 7) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
 # does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
 # 5 and 7 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
@@ -60,7 +62,8 @@ fail() { echo "build: $*" >&2; exit 1; }
 refused() { mkdir -p "$B"; echo "REFUSED: $*" | tee "$B/refused.txt" >&2; exit 3; }
 case "$WORK" in /*/*) ;; *) fail "the work directory $WORK is not a directory of its own" ;; esac
 [ "$DRY" = 0 ] || echo "DRY RUN: K=$K; a test of the scripts, read for nothing"
-[ ! -f "$HOME/.cargo/env" ] || . "$HOME/.cargo/env"
+# The plan's SHUFFLE stands whatever the cargo env file sets: it is put back, and not exported, after it.
+[ ! -f "$HOME/.cargo/env" ] || { plan_shuffle=$SHUFFLE; . "$HOME/.cargo/env"; unset SHUFFLE; SHUFFLE=$plan_shuffle; }
 export RUSTUP_TOOLCHAIN="$TOOLCHAIN"
 rustc -V
 for d in bin maps pads orders capture work probe wrap target-base target-head; do rm -rf "${WORK:?}/$d"; done
@@ -165,7 +168,9 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
         gzip -9 "$M/$pl.map"
     fi
     if [ "$SHUFFLE" = 1 ] && [ "$1" = head ]; then
-        if ! node "$KIT/layout.mjs" --alike "$B/base-p$2" "$B/$pl" "$2" >"$B/layout/$pl-alike.txt" 2>"$B/alike-$pl.txt"; then
+        pl_second=; [ "$SECOND" = 0 ] || pl_second=--second
+        # shellcheck disable=SC2086
+        if ! node "$KIT/layout.mjs" --alike "$B/base" "$B/base-p$2" "$WORK/orders/base-p$2.txt" "$M/base.map" "$B/head" "$B/$pl" "$pl_order" "$M/head.map" "$2" $pl_second >"$B/layout/$pl-alike.txt" 2>"$B/alike-$pl.txt"; then
             grep -q '^JSON {"ok":false' "$B/layout/$pl-alike.txt" || fail "$pl could not be checked against base-p$2: $(cat "$B/alike-$pl.txt")"
             refused "head has no reading against base across shuffled placements: base-p$2 and $pl, linked in one index's order, lay the functions both have in different orders ($(sed 's/^layout.mjs: //' "$B/alike-$pl.txt" | paste -sd';' -))"
         fi

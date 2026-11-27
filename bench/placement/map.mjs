@@ -126,8 +126,10 @@ export function data(unpadded, placed, pad) {
  * its start; and .data is where the rule says.
  * shuffled: the input sections between the pads are the unpadded link's, each of its size and
  * alignment, in the order the placement's ordering file gave them (layout.mjs --order checks
- * that order), each section's symbols compared with those of the unpadded link's section of its
- * name; the counts of what moved by exactly the pad are not taken.
+ * that order), each section's symbols compared with those of an unpadded section of its name,
+ * size and alignment that has them, as far from its start (two sections the map names alike are
+ * told apart so; two alike in that too are interchangeable here); the counts of what moved by
+ * exactly the pad are not taken.
  */
 export function check(unpadded, placed, pad, second, shuffled = false) {
   const A = text(unpadded), B = text(placed), why = [];
@@ -156,11 +158,24 @@ export function check(unpadded, placed, pad, second, shuffled = false) {
   if (looseB) why.push(`${looseB} input sections of the placement's .text do not begin at the first multiple of their alignment at or after the end of the one before`);
   let symbols = 0, off = 0, exact = 0, sectionsExact = 0;
   const before = A.inputs.findIndex((s) => s.align > STEP), firstAligned = before < 0 ? A.inputs.length : before;
-  // Each placement section with the unpadded link's of its place, or, shuffled, of its name (the k-th of a name with the k-th).
-  const byId = new Map();
-  if (shuffled) A.inputs.forEach((a, i) => byId.set(a.id, [...(byId.get(a.id) ?? []), i]));
+  // Each placement section with the unpadded link's of its place, or, shuffled, with one of the
+  // unpadded link's of its name, size, alignment and symbols, each as far from its start: two
+  // sections a map names alike (one file's, of one section name) are told apart by their symbols,
+  // whatever order the file laid them in. Sections that match in all of that are interchangeable
+  // to this check. A placement section no unpadded one matches so is compared, symbol by symbol,
+  // with an unpadded one left over of its name, size and alignment, and fails.
+  const pairs = rest.map((b, j) => j);
+  if (same && shuffled) {
+    const sig = (s) => JSON.stringify([s.id, s.size, s.align, s.symbols.map((y) => [y.name, y.at - s.at])]), k3 = (s) => `${s.id}\0${s.size}\0${s.align}`;
+    const free = new Map(), used = new Set();
+    A.inputs.forEach((a, i) => free.set(sig(a), [...(free.get(sig(a)) ?? []), i]));
+    rest.forEach((b, j) => { const i = free.get(sig(b))?.shift(); pairs[j] = i ?? -1; if (i !== undefined) used.add(i); });
+    const left = new Map();
+    A.inputs.forEach((a, i) => { if (!used.has(i)) left.set(k3(a), [...(left.get(k3(a)) ?? []), i]); });
+    rest.forEach((b, j) => { if (pairs[j] < 0) pairs[j] = left.get(k3(b)).shift(); });
+  }
   if (same) for (let j = 0; j < rest.length; j++) {
-    const i = shuffled ? byId.get(rest[j].id).shift() : j, a = A.inputs[i], b = rest[j];
+    const i = pairs[j], a = A.inputs[i], b = rest[j];
     symbols += a.symbols.length;
     if (!shuffled && i < firstAligned && b.at - a.at === pad) sectionsExact++;
     if (a.symbols.length !== b.symbols.length) { off += Math.max(a.symbols.length, b.symbols.length); continue; }

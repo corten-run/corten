@@ -429,6 +429,42 @@ test("build.sh and run.sh shuffle only when the plan says so, whatever SHUFFLE t
   }
 });
 
+test("build.sh and run.sh keep the plan's SHUFFLE when the cargo env file they source sets another", { skip: process.platform !== "linux" && "runs the scripts under sh" }, () => {
+  const work = mkdtempSync(join(tmp, "shuffle-cargo-")), home = join(work, "home");
+  mkdirSync(join(work, "plan")); mkdirSync(join(home, ".cargo"), { recursive: true });
+  const cargo = (text) => writeFileSync(join(home, ".cargo", "env"), text);
+  // build.sh up to the line after it sources the cargo env file, then what SHUFFLE is and whether it is exported.
+  const text = readFileSync(join(here, "build.sh"), "utf8"), next = '\nexport RUSTUP_TOOLCHAIN="$TOOLCHAIN"\n', cut = text.indexOf(next);
+  assert.ok(cut > 0 && text.slice(0, cut).includes(".cargo/env"), "build.sh no longer sources the cargo env file before it sets RUSTUP_TOOLCHAIN");
+  const start = join(work, "start-build.sh");
+  writeFileSync(start, `${text.slice(0, cut)}\necho "SHUFFLE=${"${SHUFFLE:-0}"} exported=$(env | grep -c '^SHUFFLE=')"\n`);
+  const held = (resolved) => {
+    writeFileSync(join(work, "plan", "resolved.sh"), `WORK='${work}'\nDRY=0\n${resolved}`);
+    const r = spawnSync("sh", [start, work], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: home } });
+    assert.equal(r.status, 0, r.stderr);
+    return /^SHUFFLE=(\S*) exported=(\d+)$/m.exec(r.stdout)?.slice(1).join(" ");
+  };
+  cargo('export SHUFFLE=1\nexport PATH="$HOME/.cargo/bin:$PATH"\n');
+  assert.equal(held(""), "0 0", "build.sh takes the cargo env file's SHUFFLE over an unshuffled plan's");
+  cargo("export SHUFFLE=0\n");
+  assert.equal(held("SHUFFLE='1'\n"), "1 0", "build.sh takes the cargo env file's SHUFFLE over a shuffled plan's");
+  cargo('export PATH="$HOME/.cargo/bin:$PATH"\n');
+  assert.equal(held(""), "0 0");
+  assert.equal(held("SHUFFLE='1'\n"), "1 0");
+  // run.sh sources it after checks a test cannot meet: its line that sources it, run with the plan's value held.
+  const line = readFileSync(join(here, "run.sh"), "utf8").split("\n").filter((l) => l.includes(".cargo/env") && !l.startsWith("#"));
+  assert.equal(line.length, 1, "run.sh does not source the cargo env file on one line");
+  const run = (plan, file) => {
+    cargo(file);
+    const r = spawnSync("sh", ["-c", `set -eu; SHUFFLE=${plan}; ${line[0]}\necho "SHUFFLE=$SHUFFLE exported=$(env | grep -c '^SHUFFLE=' || true)"`], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: home } });
+    assert.equal(r.status, 0, r.stderr);
+    return /^SHUFFLE=(\S*) exported=(\d+)$/m.exec(r.stdout)?.slice(1).join(" ");
+  };
+  assert.equal(run(0, "export SHUFFLE=1\n"), "0 0", "run.sh takes the cargo env file's SHUFFLE over an unshuffled plan's");
+  assert.equal(run(1, "export SHUFFLE=0\n"), "1 0", "run.sh takes the cargo env file's SHUFFLE over a shuffled plan's");
+  assert.equal(run(1, ""), "1 0");
+});
+
 test("a run without the field reads as before and refuses a shuffled placement's check", () => {
   const res = results(), r = report(res);
   assert.equal(r.exit, 0);
