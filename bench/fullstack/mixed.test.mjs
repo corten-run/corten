@@ -204,6 +204,8 @@ const instance = (/** @type {string} */ items, /** @type {boolean} */ held, /** 
     release: (/** @type {number} */ id) => send({ op: "release", id }, `releasing timer ${id}`),
     end: async () => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      // A process the server started may hold the IPC channel after this one exits; let it go.
+      if (child.connected) child.disconnect();
       try {
         await within(exited, "the item API's process did not exit after SIGKILL", undefined);
       } finally {
@@ -241,10 +243,12 @@ const get = (/** @type {number} */ port, /** @type {string} */ id, /** @type {Ab
 // held instance every timer it sets through the global or node:timers setTimeout is held and tied to
 // the request whose handling set it, and each send of an answer is recorded with the held timer
 // whose callback made it, so which answer waits, and on what, is read from the server, and what has
-// arrived is read from the client, with no time a busy machine can cross. "At once" here means
-// received whole while the late item's timer is still held: an answer deferred by promises,
-// setImmediate or another wait that is not a held setTimeout counts. Every case has its own instance.
-test("the item API answers a late item as the item from its own SLOW_MS timer alone, and the others whole while that timer is held", { timeout: 30_000 }, async (t) => {
+// arrived is read from the client. The test asserts order, not latency: no answer is held to a time,
+// and the only times are the 5 s bounds on each wait. Only setTimeout is held, so a wait made another
+// way (node:timers/promises, setImmediate) is not seen: "at once" means received whole while the late
+// item's timer is still held, and the late answer is sent from within its timer's callback, which may
+// itself wait some other way first. Every case has its own instance.
+test("the item API answers a late item as the item from within its own SLOW_MS timer, and the others whole while that timer is held", { timeout: 30_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "mixed-api-"));
   try {
     const items = join(dir, "items.json");
@@ -253,7 +257,7 @@ test("the item API answers a late item as the item from its own SLOW_MS timer al
     const item = { status: 200, type: "application/json", length: String(body.length), body };
     /** @typedef {{ timers: { id: number, ms: number, by: string | null, cleared: boolean, released: boolean }[], sends: Record<string, { name: string, timer: number | null }[]> }} Held */
     const set = (/** @type {Held} */ held) => held.timers.map((one) => `${one.ms} ms for ${one.by ?? "no request"}${one.cleared ? ", cleared" : ""}${one.released ? ", released" : ""}`);
-    /** Every send of the late answer made from timer `id`'s callback and nothing else. */
+    /** Every send of the late answer made from within timer `id`'s callback, or what it started. */
     const sentFrom = (/** @type {Held} */ held, /** @type {number} */ id) => {
       const sends = held.sends.item_slow_3 ?? [];
       assert.notDeepEqual(sends, [], "the late answer sent");
@@ -270,7 +274,7 @@ test("the item API answers a late item as the item from its own SLOW_MS timer al
       }
     };
     await t.test(
-      "a late item alone sets one SLOW_MS timer, the only one, and arrives whole from it once released",
+      "a late item alone sets one SLOW_MS timer, the only one, and arrives whole, sent from within it, once released",
       held(async (api, port, t) => {
         const late = get(port, "item_slow_3", t.signal);
         let now = await api.until("item_slow_3");
