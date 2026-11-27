@@ -6,6 +6,7 @@
 // on Linux and are skipped elsewhere.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -117,6 +118,8 @@ for (const failing of /** @type {const} */ (["base", "head"])) {
     // The merge base and the merge's second parent, not the base's branch as it now is.
     assert.deepEqual([left("base/commit"), left("head/commit")], [`${made.base}\n`, `${made.head}\n`]);
     assert.deepEqual([left(`${failing}/unbuilt`), left(`${other}/unbuilt`)], ["the build failed, error: could not compile the probe\n", null]);
+    // A build that built leaves its probe's checksum, and one that failed none.
+    assert.deepEqual([left(`${failing}/sha256`), left(`${other}/sha256`)], [null, `${createHash("sha256").update("#!/bin/sh\n").digest("hex")}\n`]);
     assert.deepEqual(readdirSync(join(builds, "bin")), [made[other]]);
     assert.match(built.stdout, new RegExp(`^::warning::the probe did not build against ${failing} ${made[failing]}$`, "m"));
     // A build that was stopped can have left a binary: it is still not run.
@@ -131,7 +134,12 @@ for (const failing of /** @type {const} */ (["base", "head"])) {
 
 test("a run the kit refuses is taken again, once, with why kept, and a run that gave its output is not taken again", { skip }, (t) => {
   const { builds, base, head, job, called, left } = fixture(t);
-  assert.equal(job({}, "build", builds).status, 0);
+  const built = job({}, "build", builds);
+  assert.equal(built.status, 0);
+  // Two builds whose probes are the same bytes leave the same checksum, which the log gives.
+  const sum = `${createHash("sha256").update("#!/bin/sh\n").digest("hex")}\n`;
+  assert.deepEqual([left("base/sha256"), left("head/sha256")], [sum, sum]);
+  for (const side of ["base", "head"]) assert.match(built.stdout, new RegExp(`^the probe built against ${side}: sha256 ${sum.trim()}$`, "m"));
   const refused = `${head} --json --cases get`;
   const read = job({ STOP_AT: later(), STAND_IN_DOES: JSON.stringify({ [refused]: ["refuses"] }) }, "read", builds, "3");
   assert.equal(read.status, 0, read.stderr);
@@ -147,8 +155,8 @@ test("a run the kit refuses is taken again, once, with why kept, and a run that 
   // The second attempt's output, the first's reason and nothing else of either.
   assert.equal(left("head/count-get.json"), `${JSON.stringify({ call: refused })}\n`);
   assert.equal(left("head/count-get.json.refused"), "Error: not a count: the stand-in refuses\n");
-  assert.deepEqual(readdirSync(join(builds, "head")).sort(), ["answers", "build.log", "commit", "count-get.json", "count-get.json.refused", "idle-silent-1.json"]);
-  assert.deepEqual(readdirSync(join(builds, "base")).sort(), ["answers", "build.log", "commit", "count-get.json", "idle-silent-1.json"]);
+  assert.deepEqual(readdirSync(join(builds, "head")).sort(), ["answers", "build.log", "commit", "count-get.json", "count-get.json.refused", "idle-silent-1.json", "sha256"]);
+  assert.deepEqual(readdirSync(join(builds, "base")).sort(), ["answers", "build.log", "commit", "count-get.json", "idle-silent-1.json", "sha256"]);
 });
 
 test("a run stopped when the time is spent leaves none of what it had printed, and no run starts after it", { skip }, (t) => {

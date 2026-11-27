@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
-import { RUNS, compare, declared, figure, over, readings } from "./compare.mjs";
+import { RUNS, STOPPED, compare, declared, figure, over, readings } from "./compare.mjs";
 import { median } from "./figures.mjs";
 import { cases } from "./requests.mjs";
 
@@ -541,6 +541,87 @@ test("builds that answer differently are said to and fail nothing; a case either
     assert.deepEqual([status, holds], [description === measuring ? 0 : 1, false], description);
     for (const clause of ["`post` has no answer on head (`not the body of post: \"ok\"`)", "`text` has no answer on base and head (`no capture`)", "`page` has no answer on base (`no capture`)", `\`page-browser\` has no answer on head ${not}`, `\`get\` has no answer on base ${not}`, `\`pipeline\` has no answer on base ${not}`]) assert.ok(verdict(markdown).includes(clause), `${clause}\n${markdown}`);
     assert.match(markdown, /^No answer to compare in `get`, `post`, `pipeline`, `text`, `page`, `page-browser`\.$/m);
+  }
+});
+
+const SUM = "e59d3e11".padEnd(64, "0");
+const OTHER = "0e1f2a3b".padEnd(64, "9");
+/** Writes each build's `sha256` as job.sh does, or leaves none where it is null. @param {{ base: string, head: string }} at @param {string | null} base @param {string | null} head */
+function sums(at, base, head) {
+  for (const [side, text] of /** @type {const} */ ([["base", base], ["head", head]])) {
+    if (text === null) rmSync(join(at[side], "sha256"), { force: true });
+    else writeFileSync(join(at[side], "sha256"), text);
+  }
+}
+
+test("base and head that are one binary pass under any declaration, whatever their figures, and say nothing was compared", (t) => {
+  const inside = builds(t);
+  const missing = builds(t, (_, build) => {
+    build.count.page = [30_000, 30_000, 30_000];
+    build.allocations.page = [20_000, 20_000];
+    build.idle.silent = [11_000, 11_000, 11_000];
+    build.count.text = null;
+  });
+  for (const at of [inside, missing]) sums(at, `${SUM}\n`, `${SUM}\n`);
+  const one = "**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 `" + SUM + "`), so no figure below can be the change's: they are one binary read twice, the runner's, and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ";
+  for (const [description, read] of /** @type {[string, string][]} */ ([[counting, readCounted], [measuring, readMeasured], ["", "Read from the description: no declaration line."]])) {
+    const passes = compare(inside.base, inside.head, { description });
+    assert.deepEqual([passes.status, passes.holds], [0, true], description);
+    assert.equal(verdict(passes.markdown), `${one}pass. ${read}`);
+    // What would miss as two builds is still read, as an A/A of the runner, and fails nothing.
+    const would = compare(missing.base, missing.head, { description });
+    assert.deepEqual([would.status, would.holds], [0, false], description);
+    assert.ok(verdict(would.markdown).startsWith(`${one}not pass: \`text\`'s instructions has no figure on head (\`the run left no output\`); \`page\` runs 9,994 more instructions a request than base's 20,006,`), would.markdown);
+    assert.ok(verdict(would.markdown).endsWith(`more than the 16,384 allowed (the larger of base's span and four 4,096-byte pages). ${read}`), would.markdown);
+    assert.match(would.markdown, /^\| `page` \| 20,006 \| 30,000 \| \+9,994 /m);
+  }
+});
+
+test("two checksums, or one missing or not a checksum on either build, are compared as two binaries, exactly as with none", (t) => {
+  const high = builds(t, (_, build) => {
+    build.count.get = [21_000, 21_000, 21_000];
+  });
+  const inside = builds(t);
+  /** The markdown with no checksum on either build. */
+  const plain = Object.fromEntries([counting, measuring, ""].flatMap((description) => [[`high ${description}`, compare(high.base, high.head, { description })], [`inside ${description}`, compare(inside.base, inside.head, { description })]]));
+  for (const [base, head] of /** @type {[string | null, string | null][]} */ ([
+    [`${SUM}\n`, `${OTHER}\n`],
+    [`${SUM}\n`, null],
+    [null, `${SUM}\n`],
+    [`${SUM.toUpperCase()}\n`, `${SUM.toUpperCase()}\n`],
+    [SUM, SUM],
+    [`${SUM.slice(1)}\n`, `${SUM.slice(1)}\n`],
+    [`${SUM}  /builds/bin/probe\n`, `${SUM}  /builds/bin/probe\n`],
+    [`${SUM}\n\n`, `${SUM}\n\n`],
+    ["\n", "\n"],
+    ["", ""],
+  ])) {
+    for (const [name, at] of /** @type {const} */ ([["high", high], ["inside", inside]])) {
+      sums(at, base, head);
+      for (const description of [counting, measuring, ""]) {
+        const found = compare(at.base, at.head, { description });
+        assert.deepEqual(found, plain[`${name} ${description}`], `${name} ${JSON.stringify([base, head, description])}`);
+      }
+    }
+  }
+  // A build that did not build has no checksum, whatever its directory holds beside `unbuilt`.
+  sums(high, `${SUM}\n`, `${SUM}\n`);
+  writeFileSync(join(high.base, "unbuilt"), "the build failed, error: could not compile the probe\n");
+  assert.ok(verdict(compare(high.base, high.head, { description: counting }).markdown).startsWith("**Does not pass as counted:** the probe did not build against base"));
+  rmSync(join(high.base, "unbuilt"));
+  writeFileSync(join(high.head, "unbuilt"), "the build failed, error: could not compile the probe\n");
+  assert.equal(compare(high.base, high.head, { description: measuring }).status, 1);
+});
+
+test("a head build stopped at its time compared nothing: the job fails under any declaration, and the change is not named as why", (t) => {
+  assert.ok(STOPPED.test("the build did not end in 420 s"), "job.sh's words for a build stopped at its time");
+  assert.ok(!STOPPED.test("the build failed, error: could not compile the probe"));
+  const at = builds(t);
+  writeFileSync(join(at.head, "unbuilt"), "the build did not end in 420 s\n");
+  for (const [description, read] of /** @type {[string, string][]} */ ([[counting, readCounted], [measuring, readMeasured], ["", "Read from the description: no declaration line."]])) {
+    const { markdown, status } = compare(at.base, at.head, { description });
+    assert.equal(status, 1, description);
+    assert.equal(verdict(markdown), `**Nothing compared:** the probe's build against head did not end in its time (\`the build did not end in 420 s\`), which says nothing of the change. ${read} The job fails whatever the description says, and may be run again: a run that compared nothing is not a count taken again (README.md, The hosted job).`);
   }
 });
 

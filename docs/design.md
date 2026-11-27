@@ -11813,7 +11813,25 @@ rules something out.
     the change, and no longer keeps its pull request from being counted. A decided miss keeps
     its pull request measured: item 2 says a placement run declared after such a miss does not
     clear it, and a count must not clear what that cannot. The maintainer may decide otherwise
-    on one pull request, in the maintainer's own words, as for any reading.
+    on one pull request, in the maintainer's own words, as for any reading. Where the required
+    check is red, that decision shows as a bypass of the ruleset with the maintainer's reason
+    written on the pull request, so the check keeps meaning one thing (the fourth ruling below).
+
+    The required check's rulings. On 2026-11-27 the maintainer answered four questions about
+    the required check, each by choosing one of the answers offered; the description of
+    [#2245 Say that the hosted request-cost check is required on main, and what it attests](https://github.com/corten-run/corten/pull/2245)
+    gives each question as it was put, with its choices. How a pull request goes on that the
+    job counts, that changes only documents and that fails on the runner between two builds of
+    one binary: "Pass when one binary (Recommended)", so where base's and head's probes have
+    one checksum the job compares nothing and passes, and two binaries are compared as before.
+    When a job that ends with no verdict may be run again: "When nothing was compared
+    (Recommended)". Which run decides when each push counts again: "The head's run
+    (Recommended)". How the maintainer deciding otherwise on one pull request shows on a red
+    required check: "Ruleset bypass (Recommended)". The kit's page says what each does in the
+    job ([The hosted job](../bench/request-cost/README.md#the-hosted-job)). The first takes
+    away nothing a count could see: one binary run twice by one kit has no difference that is
+    the change's. It leaves as it was a change that is not to the request path and changes the
+    binary, which a count misses as any change does, and which item 2.1 then sends to measured.
 
     Not chosen: cycles asked of every change, the rule as it stood, at a pilot and a gated run
     across placements for an effect one build cannot show; a count for every change, which passes
@@ -11902,8 +11920,9 @@ rules something out.
     a change shown to hold memory a connection keeps passes the idle rule under the four
     pages, so the floor hides a real cost; the hosted job fails a change on idle memory alone
     at four pages, with no memory a connection keeps shown, so four pages are still under
-    what a run reads of where things were put; a run shows what the pages of the readings the
-    floor rests on are, either way;
+    what a run reads of where things were put (since the first of the required check's
+    rulings, of two binaries alone: one binary fails nothing); a run shows what the pages of
+    the readings the floor rests on are, either way;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
@@ -11928,9 +11947,14 @@ rules something out.
     a quarter of the budget apart in a case, which fails no job and means its count no longer
     resolves the budget there (two binaries of the same crates that differ so are where the
     code was placed, which a count cannot tell from a change); the hosted job reads idle
-    memory to rise between two builds of the same crates, so it fails a change for what the
-    runner did (three runs a build drawn from one distribution read a rise in about one
-    comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
+    memory to rise between two builds of the same crates, which since the first of the required
+    check's rulings fails no job where they are one binary, the verdict saying what the rule
+    would have read, and so shows the runner reading more than the floor allows, which a change
+    of two binaries is held to (the first run of
+    [#2245 Say that the hosted request-cost check is required on main, and what it attests](https://github.com/corten-run/corten/pull/2245),
+    of one binary, read before any byte 16,384 bytes over base's with 16,384 allowed, at the
+    floor and not over it, so it did not meet this; three runs a build drawn from one
+    distribution read a rise in about one comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
     growths in 4,096-byte pages and base's span alone, in about one in nineteen by those
     growths with one page allowed, and in about one in 260 with the four pages now allowed,
     on the same draws, at a spread of 1.5 bytes a
@@ -11996,7 +12020,12 @@ rules something out.
     failing that one only when the probe does not build against head, reads
     the description from the event its run was started by, and is started by a pull request
     opened, pushed to or reopened and not by an edit, with a token that reads and no secret, so
-    a fork's pull request runs it as any other.
+    a fork's pull request runs it as any other, once a first-time contributor's run is approved
+    as every workflow's is; 2026-11-27, for the required check's rulings, the log of hosted run
+    46060985339 on `969ac34e4`, whose two probes printed one checksum and whose reading before
+    any byte was 16,384 bytes over base's with 16,384 allowed, and `job.sh` and `build.sh` read
+    at `969ac34e4` for what a checksum covers: the probe's binary alone, built from each side's
+    crates in one directory, the scripts that run it being the checkout's for both sides.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

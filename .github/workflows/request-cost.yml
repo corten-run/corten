@@ -68,13 +68,12 @@ jobs:
       # and job.sh, is the checkout's for both builds. The builds' directory is outside the
       # checkout and any git repository, as build.sh requires, and one for both: where a crate is
       # built is part of the binary. A build that fails, or does not end in seven minutes, leaves
-      # why for the table, which is written either way.
+      # why for the table, which is written either way; one that builds leaves its probe's
+      # checksum, and two builds that are one binary are compared in nothing (the kit's page).
       - name: Build the probe against the merge base, then against the head, in one directory
         if: steps.scope.outputs.run == 'true'
         shell: bash
-        run: |
-          bash bench/request-cost/job.sh build "$RUNNER_TEMP/request-cost"
-          sha256sum "$RUNNER_TEMP/request-cost"/bin/* || true
+        run: bash bench/request-cost/job.sh build "$RUNNER_TEMP/request-cost"
       # Each build's answers, then each run of the kit that compare.mjs names, on base and then on
       # head, on one CPU, as job.sh says: a run is stopped at 120 seconds, none starts once STOP_AT
       # has come, and one that gave no figure is taken again, once.
@@ -102,6 +101,6 @@ jobs:
           {
             cat "$RUNNER_TEMP/table.md"
             echo
-            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$builds/seconds" | sed 's/,/, /g'). The head is counted against the commit where it left the base's branch, not as merged: what the base gained since is in neither build. The description was read as it stood when this run started: a line added to it since is read by the next run a push starts, not by a rerun of this one."
+            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$builds/seconds" | sed 's/,/, /g'). The head is counted against the commit where it left the base's branch, not as merged: what the base gained since is in neither build. The description was read as it stood when this run started: a line added to it since is read by the next run a push or a reopening of the pull request starts, not by a rerun of this one."
           } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$status"

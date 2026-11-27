@@ -6,9 +6,11 @@
 #   In a checkout of a pull request's merge: builds the probe against the merge base of the
 #   merge's parents and then against its second parent, the head, both in <directory> (outside
 #   the checkout and any git repository, as build.sh requires). Leaves each build's commit at
-#   <directory>/<base|head>/commit and what the build printed at build.log beside it. A build
-#   that fails, or does not end in 420 seconds, leaves why at <directory>/<side>/unbuilt and
-#   fails nothing here. Exit status 1, with nothing built, when there is no merge base.
+#   <directory>/<base|head>/commit and what the build printed at build.log beside it, and for a
+#   build that built, its probe's SHA-256 at sha256, which compare.mjs reads to tell one binary
+#   from two. A build that fails, or does not end in 420 seconds, leaves why at
+#   <directory>/<side>/unbuilt (for the second, compare.mjs's STOPPED) and fails nothing here.
+#   Exit status 1, with nothing built, when there is no merge base.
 # bash job.sh read <directory> <cpu>
 #   Each build's answers, then each run `compare.mjs --readings` names, on base and then on
 #   head, the probe held to <cpu>. A build with `unbuilt` is not run at all, whatever it left.
@@ -48,7 +50,12 @@ build)
     elif [ "$status" != 0 ]; then
       echo "the build failed, $(tail -n 1 "$builds/$side/build.log")" > "$builds/$side/unbuilt"
     fi
-    if [ -e "$builds/$side/unbuilt" ]; then echo "::warning::the probe did not build against $side $commit"; fi
+    if [ -e "$builds/$side/unbuilt" ]; then
+      echo "::warning::the probe did not build against $side $commit"
+    elif [ -f "$builds/bin/$commit" ]; then
+      sha256sum "$builds/bin/$commit" | cut -c 1-64 > "$builds/$side/sha256"
+      echo "the probe built against $side: sha256 $(cat "$builds/$side/sha256")"
+    fi
     echo "build $side $((SECONDS - began))" >> "$builds/seconds"
   done
   ;;

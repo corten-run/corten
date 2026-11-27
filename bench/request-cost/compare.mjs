@@ -15,7 +15,14 @@
 // build said, when the probe did not build: a build with that file, empty or not, has no figure
 // and no answer, whatever else its directory holds. A figure is read only from a run's whole
 // output, of the case, depth, requests, connections and addresses asked for (`figure`): anything
-// else is no figure.
+// else is no figure. A build that was built may hold `sha256`, its probe's SHA-256 as job.sh
+// writes it, 64 lowercase hex digits and a line feed; anything else there is no checksum.
+//
+// One binary: when both builds were built and their `sha256` are one checksum, base and head
+// are the same probe, byte for byte, so nothing is compared. The verdict says so, gives what the
+// rule would read of the figures as an A/A of the runner, and fails nothing, whatever the
+// description declares (the maintainer's ruling of 2026-11-27, README.md, The hosted job).
+// Without both checksums, or with two, the builds are compared as below.
 //
 // The rule: no case's instructions a request rise by more than +0.5% of base's, by the medians
 // the kit gives; no case's allocations rise, by the calls themselves; and no idle reading rises,
@@ -33,8 +40,10 @@
 // (`declared`); with no such line, or more than one, it declares nothing. Exit status
 // 1 when the rule does not hold and the description does not say `measured`, and when the probe
 // did not build against head: a change declared measured is reported and never failed on its
-// figures, and one that declares nothing fails only when the rule does not hold. Exit status 2
-// for arguments that are not these.
+// figures, and one that declares nothing fails only when the rule does not hold. A head build
+// that did not end in its time, as job.sh words it (`STOPPED`), compared nothing and says so:
+// the job fails, and the change is not named as the reason. Exit status 0 for one binary. Exit
+// status 2 for arguments that are not these.
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +62,20 @@ const IDLE = [
   { name: "silent", what: "before any byte", options: ["--silent"], of: { case: "pipeline", requests: 0 } },
 ];
 const SIDES = /** @type {const} */ (["base", "head"]);
+/** What job.sh leaves in `unbuilt` for a build stopped at its time. */
+export const STOPPED = /^the build did not end in \d+ s$/;
+
+/**
+ * A built build's probe's SHA-256, as job.sh writes it, or undefined: a file that is not 64
+ * lowercase hex digits and a line feed is no checksum, so it is never taken for a match.
+ * @param {string} directory
+ */
+function checksum(directory) {
+  const at = join(directory, "sha256");
+  if (!existsSync(at)) return undefined;
+  const text = readFileSync(at, "utf8");
+  return /^[0-9a-f]{64}\n$/.test(text) ? text.slice(0, 64) : undefined;
+}
 
 /**
  * The runs the rule reads, in the order to take them: every case's instructions, the four at a
@@ -320,9 +343,17 @@ export function compare(base, head, { description = "", names = { base: "base", 
     status = 1;
     verdict = `**Does not pass as counted:** ${why}. ${read} By ${rule} such a change is measured: say \`Request path: measured\` on ${line}, and give what the measured way asks.`;
   }
-  if (unbuilt.head !== undefined) {
+  if (unbuilt.head !== undefined && STOPPED.test(unbuilt.head)) {
+    status = 1;
+    verdict = `**Nothing compared:** the probe's build against head did not end in its time (${code(unbuilt.head)}), which says nothing of the change. ${read} The job fails whatever the description says, and may be run again: a run that compared nothing is not a count taken again (README.md, The hosted job).`;
+  } else if (unbuilt.head !== undefined) {
     status = 1;
     verdict += " The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.";
+  }
+  const sums = { base: unbuilt.base === undefined ? checksum(base) : undefined, head: unbuilt.head === undefined ? checksum(head) : undefined };
+  if (sums.base !== undefined && sums.base === sums.head) {
+    status = 0;
+    verdict = `**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 ${code(sums.base)}), so no figure below can be the change's: they are one binary read twice, the runner's, and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ${holds ? "pass" : `not pass: ${why}`}. ${read}`;
   }
 
   const markdown = [

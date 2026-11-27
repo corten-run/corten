@@ -345,7 +345,8 @@ On one runner it does what [Running it](#running-it) says, the first three by
    is counted against the commit where it left the base's branch, not as merged: what the
    base gained since is in neither build. A build that fails or does not end in 7 minutes
    leaves what it said; that build is then not run at all, whatever it left, and the table is
-   written without its figures.
+   written without its figures. A build that builds leaves its probe's SHA-256, which the log
+   prints (`the probe built against base: sha256 ...`).
 2. Writes both builds' answers (`count.mjs --answers`).
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
    `--json`, on base and then on head, a case a run: each case's instructions, three counts
@@ -411,6 +412,27 @@ line, or how many there are and at which lines. Builds that answer differently a
 above the table and fail nothing: a change may be meant to change an answer, and the review
 weighs a count of two different jobs.
 
+**One binary.** When both builds built and their probes have one SHA-256, base and head are the
+same binary, byte for byte, and the kit that runs them is the checkout's for both, so nothing
+the job reads can differ by the change. The verdict is then
+`One binary: nothing compared.`, with the checksum, and the job passes whatever the
+description declares. The readings are still taken and printed, and the verdict says what the
+rule would have read of them as two builds: they are an A/A of the runner, the evidence
+[design Choice 76](../../docs/design.md#choice-counted-or-measured) asks for of the idle floor,
+and decide nothing. That is the maintainer's ruling of 2026-11-27 for a pull request the job
+counts that changes only documents, such as this page, which could otherwise fail on the
+runner alone (about one job in fifty on idle memory, by the model below) with no rule to turn it
+green. Builds that are two binaries are compared as above, whatever the change is: a change
+that is not to rendering, the runtime or the request path but changes the probe's binary
+(a comment can: built as `build.sh` builds it, with Corten's crates as at `4fd6fd348`, the
+probe was another binary when a comment line was added at the top of
+`crates/corten/src/app.rs`, moving every line below it, and the same binary when the line went
+at the file's end, one build each; that the line numbers a panic's location carries are why is
+likely and was not checked) and misses is measured, by item 2.1 as it stands. On a host of
+one's own, `compare.mjs` reads a build's `sha256` file the same way, 64 lowercase hex digits and a line
+feed (`sha256sum <probe> | cut -c 1-64 > <directory>/sha256`); without both, or with a file
+that is not that, it compares the two builds.
+
 The description is the one the event carried when the run started. A line added afterwards is
 read by the next run a push or a reopening of the pull request starts, not by a rerun, and an
 edit starts no run, since it would count the same commits again and so draw them again. So a
@@ -419,13 +441,25 @@ summary, until such a run: a maintainer reads the summary and the description as
 and the check's color only for the commit and description it ran with. The check is required
 on `main`, so that pull request merges only once such a run has read the line;
 under `measured` the figures decide nothing, so that run is not a count taken again for its
-result.
+result. Each push counts again, so two heads can read differently: the run on the commit being
+merged decides, and a push made only to draw a new count is a count taken again for its
+result, which the review catches (the maintainer's ruling of 2026-11-27).
+
+A run that compared nothing decided nothing, so running it again is not taking a count again
+(the maintainer's ruling of 2026-11-27): a run whose summary has no table, which is what a
+failed setup step, no merge base, a scope that said neither, the job's 30 minutes or a
+cancelled run leave; a run whose verdict is `Nothing compared:` because the probe's build
+against head did not end in its time; and a reading with no figure because a time limit
+stopped it, which its line under Runs that gave no figure says (`did not end in 120 s`, or
+`not attempted, the job's time for readings was spent`). A run the kit refused, and a build
+that failed, compared what they could and are read as they are.
 
 A green check is evidence for a reviewer to read, not an attestation: the counts are of the
 pull request's own tree, by its own workflow, scope, kit and comparison. A pull request that
 changes any of those has that change reviewed for what it does to the verdict. Being required
 makes the check no more than that: it is green for a pull request it did not count, for one
-declared `measured` whatever its counts, and for one that declares no way when the rule holds
+whose builds are one binary, for one declared `measured` whatever its counts, and for one that
+declares no way when the rule holds
 ([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), Pull requests, item 2.1, Counted).
 
 The same comparison of two builds counted on a host of one's own, each run's `--json` output in
@@ -508,9 +542,8 @@ once in ten with one page, not once in seven; in the 27 hosted readings the larg
 16,384 bytes, was on the reading before any byte. None of the five runs read such a rise, whose
 figures were compared, not their growths, which those runs did not print. A job that fails on
 idle memory alone is to be read with that in mind; by the rule its runs are still not taken
-again for their result, and since the check is required its pull request merges once it
-declares `measured` and a run started after that reads the line, as above (CONTRIBUTING's item
-2.1 says what such a change then gives, and what one that is not to the request path says).
+again for their result. Between builds that are one binary it fails nothing (One binary,
+above).
 
 ## The idle floor
 
@@ -590,11 +623,11 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one to four pages over base's agreeing three passing, five pages failing, a span of base's over four pages governing and more than it failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
-| `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one to four pages over base's agreeing three passing, five pages failing, a span of base's over four pages governing and more than it failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, a head build stopped at its time, answers missing, empty, cut short or with more after them, which lines declare, what each declaration does with the verdict, one binary passing under each declaration whatever its figures, and two checksums, one missing or one that is not a checksum compared as two binaries |
+| `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, each built probe's checksum, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
-with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 49 of the 76 tests run.
+with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 52 of the 79 tests run.
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).

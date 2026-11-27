@@ -565,12 +565,8 @@ establish a general ranking.
       verdict. The check is required on `main` (Checks), and being required makes it no more
       than that evidence: the way, its line and what the measured way then gives are still the
       review's to accept. [The hosted job](bench/request-cost/README.md#the-hosted-job) says what
-      the job passes and fails, and which run reads a line added later. A change the job counts
-      that is not to rendering, the runtime or the request path (the kit's page, a comment in a
-      crate) declares no way, and if its count misses, on idle memory alone between builds of
-      the same crates as much as on anything else, it declares `Request path: measured` too and
-      its description says why item 2 asks it no measurement, which the review accepts. On a
-      host of one's own, build base and head with
+      the job passes and fails, which run reads a line added later and decides, and when a run
+      may be run again. On a host of one's own, build base and head with
       [`bench/request-cost`](bench/request-cost/README.md) and take each count under
       [Running it](bench/request-cost/README.md#running-it) on both, as that page says: one
       directory, one checkout of the kit, the answers compared first. The change passes when no
