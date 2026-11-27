@@ -2300,7 +2300,9 @@ replace before its address goes in (`precommitHandler`), or begins a navigation 
 leaves a navigation on its way that may yet put the address in: until it ends, a press of a
 marked form is not sent, as one pressed while a visit is on its way, and an answer already on its
 way (to a press the held answer's own draw made) draws nothing, as one does that would draw while a
-visit is on its way, so nothing is drawn under that address. It ends when the browser says the
+visit is on its way, so nothing is drawn under that address. The browser runs that listener, and
+its `precommitHandler`, inside the runtime's `replaceState` call, so a press of a marked form made
+there is not sent either, whatever the call ends in. It ends when the browser says the
 navigation finished, was aborted or gave way to another (`navigation.transition` no longer shows
 it), not when its address goes in, so a listener whose handler never settles keeps every press of
 a marked form from being sent until another navigation takes its place. The runtime neither aborts that

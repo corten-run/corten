@@ -3378,11 +3378,13 @@ const presses = new Map();
 
 /**
  * The navigation a page's `navigate` listener holds the runtime's own replace in before its address
- * goes in (`precommitHandler`), or one it began in that replace's place: while the browser shows it
- * on its way ({@link holding}), a marked press is for the page it may yet change, and is taken as
- * one made while a visit is on its way ({@link pressed}), never sent, and a marked answer already
- * on its way draws nothing ({@link standing}), so nothing is drawn under the address it may put in.
- * @type {NavigationTransition | null | undefined}
+ * goes in (`precommitHandler`), or one it began in that replace's place, and `true` while the
+ * runtime's `replaceState` call runs, which runs the page's listeners and their `precommitHandler`
+ * before it returns: while it holds ({@link holding}), a marked press is for the page it may yet
+ * change, and is taken as one made while a visit is on its way ({@link pressed}), never sent, and a
+ * marked answer already on its way draws nothing ({@link standing}), so nothing is drawn under the
+ * address it may put in.
+ * @type {NavigationTransition | boolean | null | undefined}
  */
 let held;
 
@@ -3394,13 +3396,14 @@ let held;
 let heldFor;
 
 /**
- * Whether the browser still shows the navigation that holds the runtime's replace ({@link held}),
- * for any press but the one whose answer it holds ({@link heldFor}): until that navigation
+ * Whether the runtime's `replaceState` call is still running, or the browser still shows the
+ * navigation that holds the runtime's replace ({@link held}), for any press but the one whose
+ * answer it holds ({@link heldFor}): until that navigation
  * finishes, is aborted or another takes its place, not merely until it commits, so a page's handler
  * that never settles holds it for good.
  * @param {Press} [press]
  */
-const holding = (press) => !!held && held === navigation?.transition && press !== heldFor;
+const holding = (press) => !!held && (held === true || held === navigation?.transition) && press !== heldFor;
 
 /**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
@@ -3755,6 +3758,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           const before = exact();
           const seen = changes;
           const key = where();
+          // Held from here until the call returns: a marked press a listener makes inside it (a
+          // `precommitHandler`, which the browser runs before the call returns) is not sent, as
+          // one made while a held replace is on its way, whatever the call ends in.
+          heldFor = pending.here;
+          held = true;
           try {
             history.replaceState(kept, "", to);
           } catch {
@@ -3767,10 +3775,8 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // A listener that holds it (`precommitHandler`), or began a navigation in its place,
           // leaves a navigation on its way, which may yet put this address in: until it ends, no
           // marked press is sent ({@link held}), so no answer is drawn under it.
-          if (location.href !== to) {
-            if (navigation?.transition && navigation.transition !== transition) (held = navigation.transition), (heldFor = pending.here);
-            return;
-          }
+          held = location.href !== to && navigation?.transition !== transition && navigation?.transition;
+          if (location.href !== to) return;
           // The entry the answer was drawn on, at its new address, by this replace.
           entrySeen = where();
           // What it left, for a press this draw made: only when the Navigation API saw one change

@@ -11699,7 +11699,12 @@ rules something out.
     put it in, over whatever is drawn before then. Until that navigation ends, a press of a marked
     form is taken as one made while a visit of the runtime's is on its way (below): never sent; and
     an answer already on its way (to a press the held answer's own draw made, before the hold) draws
-    nothing, as one that would draw while a visit is on its way does not. So nothing is drawn under
+    nothing, as one that would draw while a visit is on its way does not. The browser runs the
+    listener, and its `precommitHandler`, inside the `replaceState` call, before the runtime can
+    read the hold back: so the runtime holds from just before the call until it returns, then goes
+    on holding only while the browser shows that navigation, and a press of a marked form made
+    inside the call (by the listener or its `precommitHandler`) is never sent, whatever the call
+    ends in. So nothing is drawn under
     an address that may still change, and the screen keeps the answer whose address that is. The
     limit is when it ends: the runtime goes by `navigation.transition`, which shows the navigation
     until it finishes, is aborted or gives way to another, not merely until its address commits (the
@@ -11714,8 +11719,8 @@ rules something out.
     The guarantee is narrow on purpose: the address moves only when the runtime can tell, in the
     task the answer draws, that nothing it did not start is under way: the screen is still the
     entry and page the press was made on, no newer press of the form and no visit of its own came
-    between, no replace of its own was held by a page's listener as the press was made or is held
-    as the answer draws, nothing
+    between, no replace of its own was running or held by a page's listener as the press was made
+    or is held as the answer draws, nothing
     replaced the entry since the press (a script's `replaceState`, a navigation
     that replaced it, another marked answer's own replace, each of which keeps the entry's key)
     but the replace of the answer whose draw made the press,
@@ -12090,13 +12095,17 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 2,925 bytes larger raw (46,502 to 49,427), 1,181
-    with gzip (16,718 to 17,899) and 1,051 with brotli (15,106 to 16,157), paid once a release by
-    every user (98, 33 and 27 larger than the build before this one, which looked for a held replace
-    only as a marked press was made, so the answer to a press sent before the hold (one the held
-    answer's own draw made) drew while it was held, and the held replace, once let go, put the older
-    answer's address over that answer's panel; and copied `history.state` before it looked for what
-    would leave the address, so an answer whose address was already the entry's paid for a copy). A
+    What it costs: the runtime every page loads is 2,939 bytes larger raw (46,502 to 49,441), 1,195
+    with gzip (16,718 to 17,913) and 1,058 with brotli (15,106 to 16,164), paid once a release by
+    every user (14, 14 and 7 larger than the build before this one, which saw a held replace only
+    once the `replaceState` call had returned, so a press a page's `precommitHandler` made inside
+    the call was sent, and its answer, coming once the held navigation had finished, drew under the
+    held address; that build was 98, 33 and 27 larger than the one before it, which looked for a
+    held replace only as a marked press was made, so the answer to a press sent before the hold (one
+    the held answer's own draw made) drew while it was held, and the held replace, once let go, put
+    the older answer's address over that answer's panel; and copied `history.state` before it
+    looked for what would leave the address, so an answer whose address was already the entry's paid
+    for a copy). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -12183,8 +12192,9 @@ rules something out.
     starts (a submit's fails with a network error), and a navigation begun in
     `navigatesuccess` as another ends shows none while it waits for its page, measured once in
     each engine; a `navigate` listener can hold a `replaceState` before its address goes in
-    (`precommitHandler`), the call returning with the address unchanged and `transition` showing
-    it, which commits the address once let go, and stops showing it once it finishes, once its
+    (`precommitHandler`), running that handler before the call returns and the call returning
+    with the address unchanged and `transition` showing it, which commits the address once let go
+    (and goes on showing it while a `handler` it was intercepted with runs after the commit), and stops showing it once it finishes, once its
     `precommitHandler` rejects (aborting it) or once a move to an `#id` takes its place, in the
     smoke's checks in Chromium and Firefox (WebKit 27.2 has no `precommitHandler`); `replaceState`
     and `structuredClone` each run an
@@ -12228,6 +12238,15 @@ rules something out.
 
     Last checked: 2026-11-27, the runtime's size with this change against main's runtime, unchanged
     since `8b4e863b1`, and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-27, a marked press a `navigate` listener's `precommitHandler` makes inside the
+    runtime's `replaceState` call, its read answered once the held replace has finished, a marked
+    press once a held replace has put its address in while the `handler` it was intercepted with
+    still runs, and a marked answer at the entry's own address that carries a mark the page does
+    not, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, of
+    which the build before this one fails the first in Chromium and Firefox, its answer drawn under
+    the held address; WebKit has no `precommitHandler` and skips the first two; a build that lifts
+    the hold at the commit fails the second, and one that draws no answer at the entry's own address
+    the third);
     2026-11-27, a marked answer to a press a drawn element made before a `navigate` listener held
     the drawing answer's replace, coming while it is held, a marked 422 whose own replace is held,
     which still puts focus on its invalid field, the next marked press once a held replace
