@@ -485,7 +485,9 @@ navigation's `<main>`
 shows, with the failure shown at that draw, both within five seconds of the release: the read as
 the stand-in heard it, by the smoke's clock against its moment before it let go, and the draw by the
 page's clock against the moment the page had the released stylesheet, which it notes as that
-stylesheet loads. It does not make a press once a step before it failed, and lets go of the hold, removes
+stylesheet loads. The page must also have started that read, and drawn its answer, no earlier than
+that moment by the same clock (the read's `smoke-start` and the draw's record), so a read made or
+drawn while the stylesheet still held the poll does not pass. It does not make a press once a step before it failed, and lets go of the hold, removes
 its routes and closes its page however it ends, setting and removing its route each bounded to
 five seconds. The
 cut-body cases take a failure as the body's only when the page's own wrapper of that write's
@@ -498,11 +500,12 @@ to five seconds. The body cut (or given in full) and its failure must then both 
 seconds of the body's release, by the times the page records as it lets the body go, as the body
 is cut (or given) and as that failure is first shown with nothing busy. With a second write the
 release time the page returned as the check let the body go bounds the first look too, so the time
-the check took to hear of the release is not added to them. Until those five seconds
-are over each look at the page has only what is left of them, then the check looks once more, that
-look having only what is left of the five seconds after them, so it waits at most five seconds past
-them, and a late look neither
-passes an outcome that came after them nor fails one that came in time. The page's first failure
+the check took to hear of the release is not added to them. The check looks until the page's clock
+is past those five seconds, then once more, and the times the page recorded decide, so a late look
+neither passes an outcome that came after them nor fails one that came in time. The wait as a whole
+has ten seconds by the smoke's own monotonic clock, from the moment the check heard of the release it
+let go (without a second write, from the start of the wait): each look has what is left of them, at
+most five seconds, none starts once they are over, and a failure no look saw by then is none. The page's first failure
 must be the one expected, said after the wrapper cut (or gave) the body, on the form that sent the
 held write: each failure the page says
 is recorded with the wrapper's state at that moment and its target, compared with the form noted
@@ -706,8 +709,10 @@ rests on what is read after them or on what the page or the route recorded: a na
 `Saving...`, which the page notes by its own clock (above), a removal's `Saving...`, which the page
 notes with the time it drew it by its monotonic clock (`performance.now()`, which a step of the wall
 clock does not move) and which must come after, and within five seconds of, the press as the page
-notes it on that clock (the button's `click`, heard by a listener armed before the press, not the
-time it was armed), however late the arming or the click returns, and the held slow part's busy, done and
+notes it on that clock (the first `click` on the removed alert's own Remove button, told by its
+form's alert id and heard by a listener armed before the press and removed as the case ends, not the
+time it was armed nor a click elsewhere), however late the arming or the click returns, with the
+list after the removal the list before it without that alert, in order, and the held slow part's busy, done and
 failed marks, read once each wait has come or run out. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read

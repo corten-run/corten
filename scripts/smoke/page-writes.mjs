@@ -1050,13 +1050,19 @@ export async function pageWrites(page, browser) {
    * (`performance.now()` there). A release the check already has (`released`, the page's time it
    * returned as it let go) bounds the first look too; without one, while the page has not said it let
    * go, `by` is 5 s from the page's time at the first look. Each look reads the records and the
-   * page's time in one task (bounded to 5 s; one not answered ends the wait with nothing), and the
-   * check looks until the failure is noted or the page's own clock is at or past `by`, so the
-   * recorded times decide: a check that looks late neither passes an outcome that came after `by`
-   * nor fails one that came before it.
-   * @param {import("@playwright/test").Page} own @param {number} [released]
+   * page's time in one task, and the check looks until the failure is noted or the page's own clock
+   * is at or past `by`, so the recorded times decide: a check that looks late neither passes an
+   * outcome that came after `by` nor fails one that came before it. The wait as a whole has 10 s by
+   * the smoke's own monotonic clock (`performance.now()` here), from `heard`, the moment the check
+   * heard of the release it let go, or else from the start of the wait: the 5 s for the outcome and
+   * 5 s more for the look that finds the page's clock past them. Each look has what is left of those
+   * 10 s, at most 5 s, and none starts once they are over; a look not answered in its time ends the
+   * wait with nothing, and one cut short by the 10 s with what the last answered look saw (a failure
+   * it did not see is no failure).
+   * @param {import("@playwright/test").Page} own @param {number} [released] @param {number} [heard]
    */
-  const bodyOutcome = async (own, released) => {
+  const bodyOutcome = async (own, released, heard) => {
+    const until = (heard ?? performance.now()) + 10_000;
     const look = () =>
       own.evaluate(() => {
         const state = /** @type {any} */ (window);
@@ -1069,13 +1075,18 @@ export async function pageWrites(page, browser) {
         };
       });
     let start = released;
+    /** What the last answered look saw, with the bound it gave. */
+    let last = { releasedAt: /** @type {number | null} */ (null), bodyAt: /** @type {number | null} */ (null), failedAt: /** @type {number | null} */ (null), failedMark: /** @type {string | null} */ (null), by: /** @type {number | null} */ (null) };
     for (;;) {
-      const seenNow = await within(5000, "the page did not say what became of the body in time", look()).catch(() => null);
+      const left = until - performance.now();
+      if (left <= 0) return last;
+      const seenNow = await within(Math.min(5000, left), "the page did not say what became of the body in time", look()).catch(() => null);
       if (seenNow === null) return { releasedAt: null, bodyAt: null, failedAt: null, failedMark: null, by: null };
       const { now, ...records } = seenNow;
       start ??= now;
       const by = (records.releasedAt ?? start) + 5000;
-      if (records.failedAt !== null || now >= by) return { ...records, by };
+      last = { ...records, by };
+      if (records.failedAt !== null || now >= by) return last;
       await pause(Math.min(50, Math.max(0, by - now)));
     }
   };
@@ -1259,7 +1270,7 @@ export async function pageWrites(page, browser) {
       // release, by the times the page recorded for the three (`bodyOutcome`), counted from the
       // release the check let go, when it did: the page's first failure must be the expected one,
       // said once the body was cut (or given), not before, and on the form that sent the held write.
-      const outcome = await bodyOutcome(own, releasedAt?.page);
+      const outcome = await bodyOutcome(own, releasedAt?.page, releasedAt?.time);
       const failed =
         outcome.by !== null && outcome.bodyAt !== null && outcome.bodyAt <= outcome.by && outcome.failedAt !== null && outcome.failedAt <= outcome.by;
       const { afterHeaders, errors } = await readWithin(
@@ -1466,9 +1477,13 @@ export async function pageWrites(page, browser) {
       sentFailing: /** @type {Pressed | null} */ (null),
       failed: false,
       retry: /** @type {string | undefined} */ (undefined),
+      /** When the page started that next read, by its clock (`seen.startedAt`), or null. */
+      retryStartedAt: /** @type {number | null} */ (null),
       /** When the page had the released stylesheet, by its clock. */
       styleAt: /** @type {number | null} */ (null),
       drawnNext: /** @type {{ time: number, failed: string | null } | null} */ (null),
+      /** Whether that read started, and its answer was drawn, after the page had the stylesheet. */
+      afterStyle: false,
       drewNext: false,
       kept: false,
       /** Whether the held stylesheet's answer was sent and confirmed (`exchange`), or why not. */
@@ -1523,16 +1538,23 @@ export async function pageWrites(page, browser) {
         // the stand-in heard it, by the smoke's clock, against the moment before it let go; the draw
         // as the page recorded it, by the page's clock, against the moment the page had the released
         // stylesheet (its `load`, noted by the page as it came, `__heldStyleAt`), which cannot come
-        // before the release. A whole draw of the held answer would have replaced the header and lost
-        // its failure mark.
+        // before the release. The read must be one the page started once it had the stylesheet, and
+        // its draw come after that too, by the same clock (the read's `smoke-start`, the draw's
+        // record): a retry made, or drawn, while the stylesheet still held the poll is not one the
+        // held poll's end let go. The page's clock may be coarsened to a millisecond, and the load is
+        // noted as the document captures it, before the runtime hears of it, so a time equal to it is
+        // after it. A whole draw of the held answer would have replaced the header and lost its
+        // failure mark.
         const from = sinceNow(seen);
         release();
         const nextAt = await readAsked(seen, from);
         got.retry = nextAt === null ? undefined : seen.asked[nextAt].split(" ")[2];
+        got.retryStartedAt = nextAt === null || !Number.isFinite(seen.startedAt[nextAt]) ? null : seen.startedAt[nextAt];
         // The page's note of the stylesheet's load, read once the read it leads to has come (bounded
         // plumbing): the load comes before the held poll's draw, and so before that read.
         got.styleAt = nextAt === null ? null : ((await pollAsync(5000, () => own.evaluate(() => /** @type {number | false} */ ((/** @type {any} */ (window)).__heldStyleAt ?? false)))) ?? null);
         got.drawnNext = nextAt === null || got.styleAt === null ? null : await drawnBy(own, nextAt, got.styleAt + 5000);
+        got.afterStyle = got.styleAt !== null && got.retryStartedAt !== null && got.drawnNext !== null && got.retryStartedAt >= got.styleAt && got.drawnNext.time >= got.styleAt;
         got.drewNext = got.drawnNext?.failed === "";
         got.kept = await readWithin(
           "whether the failure was still shown",
@@ -1549,7 +1571,7 @@ export async function pageWrites(page, browser) {
     }
     check(
       waitingPollName,
-      !!got.sent?.ok && got.drew && got.waiting && !!got.sentFailing?.ok && got.failed && got.retry === "nav" && got.drewNext && got.kept && got.styled === true,
+      !!got.sent?.ok && got.drew && got.waiting && !!got.sentFailing?.ok && got.failed && got.retry === "nav" && got.afterStyle && got.drewNext && got.kept && got.styled === true,
       JSON.stringify({ ...got, asked: seen.asked }),
     );
   }

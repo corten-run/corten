@@ -1710,9 +1710,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // carries no number: its document notes its own on the count as it starts, with its kind of
       // load, and it must be a reload numbered after the replacement, at the replaced address, as only
       // a reload asked for after the replacement loads that address (one asked for before loads the
-      // address the entry had then). With the Navigation API the page reads in place, so that draw
-      // must be in the document the case loaded (a mark the replacement's task leaves on it), with no
-      // other document started (the notes).
+      // address the entry had then). Which of the two must have drawn it depends on the browser, as the
+      // runtime's read again does: with the Navigation API the page reads in place, so that draw must
+      // be a fetch's, in the document the case loaded (a mark the replacement's task leaves on it), with
+      // no other document started (the notes); without it the runtime reads the page again by reloading
+      // it, so that draw must be a load's, the marked reload of the replaced address, and `Saved.` a
+      // fetch drew in place does not pass for it.
       {
         const faultsFrom = wholeAnswerFaults.length;
         const target = await readWithin("the pending write's page", pending());
@@ -1853,7 +1856,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           started.url === replacedTo.href &&
           (by?.load ? started.kind === "document" && started.load === "reload" : started.kind === "fetch");
         const ownRead = drawn !== null && Number(drawn.mark) >= readFrom && by !== undefined && by.address === replacedAddress && !by.navigation && by.saved === true && startedAfter;
-        const inPlace = !swaps || (ownRead && !by?.load && drawn.same);
+        // The read the runtime makes: a fetch in place with the Navigation API, a reload without it.
+        const asRuntime = swaps ? ownRead && !by?.load && drawn.same : ownRead && !!by?.load;
         const replaced = await readWithin("the status line after the wait for Saved.", saved());
         const drawnBy =
           drawn === null
@@ -1862,12 +1866,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               ? ` (Saved. drawn with mark ${drawn.mark}, not an answer of the case's to a read of ${replacedAddress} that said Saved. and that the page started after the replacement: ${
                   by === undefined ? "no such read" : started === null ? `its ${by.load ? "document" : "request"} carried no note of the case's` : `its ${started.kind} was noted ${started.at} (${started.url}${started.load ? `, a ${started.load}` : ""}), the replacement ${replacedAt ?? "not at all"}`
                 })`
-              : inPlace
+              : asRuntime
                 ? ""
-                : ` (Saved. drawn ${drawn.same ? "by a load" : "in another document"}, where the Navigation API reads in place)`;
+                : swaps
+                  ? ` (Saved. drawn ${drawn.same ? "by a load" : "in another document"}, where the Navigation API reads in place)`
+                  : " (Saved. drawn by a fetch in place, where without the Navigation API the page reads itself again by reloading)";
         check(
           "a page reads itself again at the address a script replaced",
-          !!loadAnswer?.saving && replacedIn && replacedAt !== null && ownRead && inPlace && oneDocument && replaced === "Saved." && exact && wholeAnswerFaults.length === faultsFrom,
+          !!loadAnswer?.saving && replacedIn && replacedAt !== null && ownRead && asRuntime && oneDocument && replaced === "Saved." && exact && wholeAnswerFaults.length === faultsFrom,
           `${faultsSince(faultsFrom)}${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${replaced}${drawnBy}${replacedIn && replacedAt !== null ? "" : " (the replacement was not noted in the load's document)"}${replacement === null || replacement.url === replacedTo.href ? "" : ` (replaced with ${replacement.url}, not ${replacedTo.href})`}${oneDocument ? "" : ` (documents ${documents.map((d) => `${d.at} ${d.url}`).join(", ") || "none"}, replaced at ${replacedAt ?? "none"})`} after the replacement: ${again.join(", ") || "no read"}${exact || after.length === 0 ? "" : `, wanted every one ${replacement?.url ?? replacedTo.href}`}`,
         );
       }
@@ -2306,21 +2312,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * page makes after this, not the line as it is now), the moment it is drawn, so a wait started
      * after the press does not miss a `Saving...` the write's read has already replaced with
      * `Saved.`; `notedSaving` reads the note, the time the page drew it by its own monotonic clock
-     * (`performance.now()` there). Armed before the press that draws it; the press itself is noted by
-     * the page by the same clock as it happens (`__smokePressed`, the first `click` after arming, heard
-     * by a capturing listener before any of the page's own), so a check counts from the press, not
-     * from the arming, whose answer can come back late.
+     * (`performance.now()` there). Armed before the press that draws it.
      */
     const noteSaving = () =>
       page.evaluate(() => {
         const w = /** @type {any} */ (window);
         w.__smokeSavingSeen?.disconnect();
         w.__smokeSaving = false;
-        w.__smokePressed = null;
-        if (!w.__smokePressedListener) {
-          w.__smokePressedListener = () => (w.__smokePressed ??= performance.now());
-          addEventListener("click", w.__smokePressedListener, { capture: true });
-        }
         const seen = new MutationObserver(() => {
           if (document.getElementById("alert-status")?.textContent !== "Saving...") return;
           w.__smokeSaving = performance.now();
@@ -2437,35 +2435,86 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // The list read again with the status line shows the alert once it is in; a remove is a write
     // of its own, read again until the list no longer has it. The list is the browser's, kept under
     // its visitor cookie, which this browser does not send over http.
-    const listed = () => readWithin("the alerts listed", page.$$eval("#alert-list li span", (spans) => spans.map((s) => s.textContent)));
+    /** Each alert listed, in order: its id (the remove form's `alert` field) and what it says. */
+    const alertsListed = () =>
+      readWithin(
+        "the alerts listed",
+        page.$$eval("#alert-list li", (items) =>
+          items.map((li) => ({ id: /** @type {HTMLInputElement | null} */ (li.querySelector('form input[name="alert"]'))?.value ?? null, label: li.querySelector("span")?.textContent ?? null })),
+        ),
+      );
     if (signsIn) {
       // The writes above saved ACME at $175.00; this one, at $150.00, is the only such alert.
-      const shown = await listed();
+      const listedFirst = await alertsListed();
+      const shown = listedFirst.map((a) => a.label);
       check("a saved alert is listed once it lands", shown.filter((s) => s === "ACME above $150.00").length === 1, shown.join(", "));
-      // `Saving...` noted by the page as it is drawn (`noteSaving`, armed before the press), within
-      // 5 s of the press. Judged by the time the page noted `Saving...` as it drew it, against the
-      // time the page noted the press's `click` as it came, both by the page's monotonic clock
-      // (`performance.now()` there, which a step of the wall clock does not move): the draw must come
-      // after the press and within 5 s of it. Looked for by that clock until 5 s from the press, each
-      // look reading the note and the page's time in one task (`lookUntil`), so neither an arming or
-      // a press whose answer comes back late nor a check that looks late fails a draw noted in time,
-      // and none noted after the 5 s passes.
-      await readWithin("the page's note of Saving...", noteSaving());
-      const removedAt = performance.now();
-      await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
-      const pressedIn = await readWithin("the page's note of the press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokePressed))).catch(() => null);
-      const savingAt =
-        typeof pressedIn !== "number"
-          ? undefined
-          : await lookUntil(page, pressedIn + 5000, () => ({ now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
+      // The last alert listed is removed by its own Remove button. `Saving...` noted by the page as it
+      // is drawn (`noteSaving`, armed before the press), within 5 s of the press. Judged by the time
+      // the page noted `Saving...` as it drew it, against the time the page noted the press as it
+      // came, both by the page's monotonic clock (`performance.now()` there, which a step of the wall
+      // clock does not move): the draw must come after the press and within 5 s of it. The press is
+      // the first `click` on that alert's Remove button (its form's `alert` field is the alert's id),
+      // heard by a capturing listener armed before it, ahead of any of the page's own; a click
+      // anywhere else is not it. Looked for by that clock until 5 s from the press, each look reading
+      // the note and the page's time in one task (`lookUntil`), so neither an arming or a press whose
+      // answer comes back late nor a check that looks late fails a draw noted in time, and none noted
+      // after the 5 s passes. The listener is removed (bounded) however the case ends. The alert
+      // pressed must be the one that leaves: the list after is the list before without it, in order.
+      const removed = listedFirst.at(-1)?.id ?? null;
+      /** @type {number | null} */
+      let pressedIn = null;
+      /** @type {number | false | undefined} */
+      let savingAt;
+      let removedSoon = false;
+      try {
+        await readWithin("the page's note of Saving...", noteSaving());
+        await readWithin(
+          "the page's note of the press of the alert's Remove button",
+          page.evaluate((id) => {
+            const w = /** @type {any} */ (window);
+            if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
+            w.__smokePressed = null;
+            w.__smokePressedListener = (/** @type {Event} */ event) => {
+              if (w.__smokePressed !== null || !(event.target instanceof Element)) return;
+              const button = /** @type {HTMLButtonElement | null} */ (event.target.closest("#alert-list li form button"));
+              if (id !== null && /** @type {HTMLInputElement | null} */ (button?.form?.querySelector('input[name="alert"]'))?.value === id) w.__smokePressed = performance.now();
+            };
+            addEventListener("click", w.__smokePressedListener, { capture: true });
+          }, removed),
+        );
+        const removedAt = performance.now();
+        await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
+        pressedIn = await readWithin("the page's note of the press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokePressed))).catch(() => null);
+        savingAt =
+          typeof pressedIn !== "number"
+            ? undefined
+            : await lookUntil(page, pressedIn + 5000, () => ({ now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
+        removedSoon = await savedSoon(removedAt);
+      } finally {
+        await within(
+          5000,
+          "the press listener of the removal case was not removed within 5 s",
+          page.evaluate(() => {
+            const w = /** @type {any} */ (window);
+            if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
+            delete w.__smokePressedListener;
+          }),
+        );
+      }
       const removing = typeof pressedIn === "number" && typeof savingAt === "number" && savingAt >= pressedIn && savingAt <= pressedIn + 5000;
-      const removedSoon = await savedSoon(removedAt);
-      const left = await listed();
+      const leftAlerts = await alertsListed();
+      const left = leftAlerts.map((a) => a.label);
+      const expected = listedFirst.filter((a) => a.id !== removed);
+      const theOneLeft =
+        removed !== null &&
+        expected.length === listedFirst.length - 1 &&
+        leftAlerts.length === expected.length &&
+        leftAlerts.every((a, i) => a.id === expected[i].id && a.label === expected[i].label);
       const removedTo = await readWithin("the status line after the wait for Saved.", saved());
       check(
         "a removed alert leaves the list once the removal lands",
-        removing && removedSoon && left.length === shown.length - 1 && removedTo === "Saved.",
-        `${shown.length} -> ${left.length}, ${removedTo}${removing ? "" : typeof pressedIn !== "number" ? " (the page noted no press)" : ` (Saving... not seen within 5 s of the press${typeof savingAt === "number" ? `: noted ${Math.abs(Math.round(savingAt - pressedIn))} ms ${savingAt < pressedIn ? "before" : "after"} it` : ""})`}${removedSoon ? "" : " (Saved. not seen within 6 s)"}`,
+        removing && removedSoon && theOneLeft && removedTo === "Saved.",
+        `${shown.length} -> ${left.length}, ${removedTo}${removing ? "" : typeof pressedIn !== "number" ? ` (the page noted no press of alert ${removed ?? "none"}'s Remove button)` : ` (Saving... not seen within 5 s of the press${typeof savingAt === "number" ? `: noted ${Math.abs(Math.round(savingAt - pressedIn))} ms ${savingAt < pressedIn ? "before" : "after"} it` : ""})`}${removedSoon ? "" : " (Saved. not seen within 6 s)"}${theOneLeft ? "" : ` (pressed alert ${removed ?? "none"}; listed before ${listedFirst.map((a) => a.id).join(", ") || "none"}, after ${leftAlerts.map((a) => a.id).join(", ") || "none"})`}`,
       );
     } else {
       for (const name of ["a saved alert is listed once it lands", "a removed alert leaves the list once the removal lands"]) skip(name, "the browser does not send Secure cookies over http");
