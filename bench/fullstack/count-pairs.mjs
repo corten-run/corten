@@ -48,6 +48,7 @@ import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { k6Image } from "../load-tool.mjs";
+import { HALT_EXIT, loadTotals } from "./count-perf.mjs";
 import { median, pct, upperRank } from "../placement/stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -156,7 +157,8 @@ export function invalid(inv) {
   if (Array.isArray(inv.lost) && inv.lost.length) why.push(`while it ran: ${inv.lost.join("; ")}`);
   if (inv.before !== inv.want || inv.after !== inv.want) why.push("the image counted was not the side's");
   if (inv.rc === 0 && (inv.launched?.image !== inv.want || !/^[0-9a-f]{64}$/.test(String(inv.launched?.container)))) why.push("the container counted was not started from the side's image");
-  if (inv.rc !== 0) why.push(inv.signal ? `count.mjs was stopped by ${inv.signal}` : `count.mjs exited ${inv.rc ?? "-"}`);
+  if (inv.rc === HALT_EXIT) why.push(`count.mjs exited ${HALT_EXIT}: a perf it started was not seen to end, so no further count runs on that host`);
+  else if (inv.rc !== 0) why.push(inv.signal ? `count.mjs was stopped by ${inv.signal}` : `count.mjs exited ${inv.rc ?? "-"}`);
   const row = inv.row;
   if (row == null) return [...why, "no row"];
   if (!Array.isArray(row)) return [...why, `count.mjs recorded failed: ${row.failed}`];
@@ -181,13 +183,15 @@ export function invalid(inv) {
     // A sum past 2^53 - 1 is rounded, so the bound would not be read from the counts exactly.
     else if (Number.isSafeInteger(r.userCyclesPerRequest) && Number.isSafeInteger(r.kernelCyclesPerRequest) && !Number.isSafeInteger(cycles(r))) why.push("user plus kernel cycles a request is above 2^53 - 1, so not an exact count");
   }
-  for (const [summary, load] of [[inv.summary, ""], [inv.kernelSummary, " in the kernel instructions' load"]]) {
+  // Each load's sealed k6 summary must give the same totals as its part of the row.
+  for (const [summary, load, part] of [[inv.summary, "", r], [inv.kernelSummary, " in the kernel instructions' load", r.kernelPass]]) {
     const checks = summary?.metrics?.checks;
-    if (!checks) why.push(`no k6 summary of the counted load${load}`);
-    else {
-      if (checks.fails !== 0) why.push(`${checks.fails} failed status checks${load}`);
-      if (checks.passes !== REQUESTS) why.push(`${checks.passes} passed status checks${load}, not ${REQUESTS}`);
-    }
+    if (!checks) { why.push(`no k6 summary of the counted load${load}`); continue; }
+    if (checks.fails !== 0) why.push(`${checks.fails} failed status checks${load}`);
+    if (checks.passes !== REQUESTS) why.push(`${checks.passes} passed status checks${load}, not ${REQUESTS}`);
+    const t = loadTotals(summary);
+    if (t.requests === null || t.requests !== part?.requests) why.push(`its k6 summary gives ${t.requests ?? "no"} requests${load} where the row has ${part?.requests}`);
+    if (t.failed === null || t.failed !== part?.failed) why.push(`its k6 summary gives ${t.failed ?? "no"} failed requests${load} where the row has ${part?.failed}`);
   }
   return why;
 }
@@ -650,6 +654,9 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
   };
   const stopIf = (/** @type {string[]} */ why, /** @type {string} */ where) => { if (why.length) throw new Error(`${why.join("; ")} (${where}); stopped with no report`); };
   const records = readRecords(file);
+  // A perf count.mjs could not see end may still run on this host (count-perf.mjs): nothing more is counted on it.
+  const halt = (/** @type {string} */ name) => new Error(`count.mjs exited ${HALT_EXIT} in ${name}: a perf it started was not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`);
+  for (const [name, r] of records) if (r.rc === HALT_EXIT) throw halt(name);
   for (const inv of plan) {
     if (records.has(inv.name)) continue;
     if (o.stop?.()) throw new Error(`stopped before ${inv.name}; run the command again to go on`);
@@ -680,6 +687,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     stopIf(gone, `in ${inv.name}`);
     log(`${inv.name} rc ${end.rc ?? "-"} ${((Number(end.ended) - start.started) / 1000).toFixed(1)} s`);
     if (end.signal) throw new Error(`count.mjs was stopped by ${end.signal} in ${inv.name}; run the command again to go on`);
+    if (end.rc === HALT_EXIT) throw halt(inv.name);
     // A signal sent to this process alone is handled between invocations.
     await new Promise((resolve) => setImmediate(resolve));
   }

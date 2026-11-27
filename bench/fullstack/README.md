@@ -1478,7 +1478,9 @@ three runs:
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
    median of 3. User and kernel instructions come from two passes, each its own load of 5,000
-   requests: the first counts user instructions, user and kernel cycles and user L1i misses
+   requests: two independent loads drawn from the same request mix (`ssr-load.js` picks each
+   request's item at random), the kernel instructions' load later on the same app. The first
+   counts user instructions, user and kernel cycles and user L1i misses
    (`cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u`, the set `bench/placement` counts),
    the second `instructions:k` alone, since one `perf` session that counts `instructions:u` and
    `instructions:k` together stops a Xeon Platinum 8358 guest as a whole, with `-C` or `-p`
@@ -1487,7 +1489,9 @@ three runs:
    requests and failures as `kernelPass`; kernel instructions are not from the load the cycles
    are, so their sum with user instructions is two loads' (counts before this change were one
    load's). When user instructions are unusable in the first pass and its load had no failures,
-   it is repeated with `instructions:u` alone; the second pass is not repeated. On a bench host the counters are on the app's pinned cores only (`-C` with
+   it is repeated with `instructions:u` alone; the second pass is not repeated. A count is kept
+   only when each load's k6 summary gives its requests, failed requests and a status check a
+   request, both loads made 5,000 requests, and the second had no failure. On a bench host the counters are on the app's pinned cores only (`-C` with
    `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count should be the same,
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
    counting began, and the counters on the load generator's cores, switched at its every context
@@ -1502,14 +1506,19 @@ three runs:
    It first writes the running kernel (and any package waiting for a reboot) and the CPU model to
    `count-kernel.txt` and has `perf` count an idle second on the count's CPUs with each event set
    a count gives it, one at a time (`instructions:u`, `instructions:k`, then the first pass's
-   whole set), each killed after 30 s and given up as no answer 5 s after that rather than waited
-   out. It stops with the reason when `perf` does not fit that kernel, cannot count a set's
+   whole set), each in a process group of its own that is killed after 30 s (never once its
+   leader has exited, when the group's number may be another's) and given up as no answer 5 s
+   after that rather than waited out; a probe whose `perf` exits while something it started
+   holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with the reason when `perf` does not fit that kernel, cannot count a set's
    required event, or does not answer; the first pass's whole set failing by itself is noted, not
    refused, since the count then repeats that load with `instructions:u` alone. Each set is written
    to `count-kernel.txt` before it runs, so a host that stops during one leaves its name. A host
    that stops cannot refuse: `droplet.mjs` notices one that does not answer (`--stall`). A count's
    `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails
-   the count as no answer. `droplet.mjs` turns off the droplet's automatic
+   the count as no answer. A `perf`, probe or count, whose end is not seen may still count or be
+   stuck in the kernel, so the count is not retried and no further load runs: `count.mjs` exits 4,
+   and `count-pairs.mjs` stops its run there and refuses to go on with it, so the rest is counted
+   on a fresh host under a new prefix. `droplet.mjs` turns off the droplet's automatic
    package updates before provisioning, so a reboot comes back on the kernel `perf` was installed
    for.
 6. Browser (`browser.mjs`): every app running at once on the app core, items from the item API,
@@ -2097,7 +2106,8 @@ only when its tag succeeded and named the side's image before and after it, the 
 and its one row has 5,000 requests in each of its two loads (`requests` and `kernelPass`), none
 failed, each of its five counts a whole number with
 perf's running percentage at 100% (user plus kernel cycles at most 2^53 - 1, so their sum is
-exact; both are from the first load), all of k6's checks passed in both loads, and the four files it is read
+exact; both are from the first load), all of k6's checks passed in both loads, each load's k6
+summary gives the requests and failed requests its part of the row records, and the four files it is read
 from are the bytes sealed when it ended: one replaced, removed or never written leaves it not
 valid. The side's image is the ID `run.json` pins for the side of the invocation's slot in the
 schedule; a replay reads each record against that, not against the image the record names.

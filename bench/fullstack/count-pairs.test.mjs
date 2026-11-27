@@ -22,6 +22,9 @@ const notDecided = { verdict: "not decided: the count's A/A does not resolve the
 const aaFailed = "failed: the count's A/A has no bound, so the count does not pass until the maintainer decides";
 const changeFailed = "failed: the change's pairs have no bound, so the count does not pass until the maintainer decides";
 
+/** A load's k6 summary as count.mjs seals it: its requests, failed requests and status checks. */
+const sealedSummary = (requests = 5000, failed = 0, checks = { passes: 5000, fails: 0 }) => ({ metrics: { http_reqs: { count: requests }, http_req_failed: { passes: failed }, checks } });
+
 /**
  * A stand-in host: Docker images by name and ID, the tag count.mjs reads, the daemon and the
  * containers made on it, perf and the kernel, and count.mjs, which writes its round's records as
@@ -82,8 +85,8 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
     const n = state.counted.length;
     const r = goodRow({ userCyclesPerRequest: Math.round((image === "sha256:head" ? 106000 : 100000) * (1 + 0.001 * ((n % 5) - 2))), kernelCyclesPerRequest: 0, ...row(round, image, target) });
     writeFileSync(join(dir, "instructions.json"), JSON.stringify({ [`corten/${target}`]: [r] }));
-    writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
-    writeFileSync(join(dir, `count-corten-${target}-0-kernel.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
+    writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify(sealedSummary(r.requests, r.failed)));
+    writeFileSync(join(dir, `count-corten-${target}-0-kernel.json`), JSON.stringify(sealedSummary(r.kernelPass?.requests, r.kernelPass?.failed)));
     writeFileSync(join(dir, "count-images.json"), JSON.stringify({ [`corten/${target}`]: { container: hex(1000 + n), image: launch(round) ?? image } }));
     return { status: rc(round) };
   };
@@ -126,26 +129,35 @@ test("a run is four invocations a pair and target, the A/A the change with the b
 });
 
 test("an invocation is valid only with a clean tag, exit 0, 5,000 requests in each of its two loads, none failed, every count a number at 100%, both loads' k6 checks and the side's image", () => {
-  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
+  const summary = sealedSummary();
   const ok = { row: [goodRow()], summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid(ok), []);
   assert.deepEqual(invalid({ ...ok, after: "sha256:b" }), ["the image counted was not the side's"]);
   assert.deepEqual(invalid({ ...ok, rc: 1 }), ["count.mjs exited 1"]);
+  assert.deepEqual(invalid({ ...ok, rc: 4 }), ["count.mjs exited 4: a perf it started was not seen to end, so no further count runs on that host"]);
   assert.deepEqual(invalid({ ...ok, rc: null, signal: "SIGINT" }), ["count.mjs was stopped by SIGINT"]);
   assert.deepEqual(invalid({ ...ok, tagRc: 1 }), ["docker tag exited 1, so count.mjs was not run"]);
   assert.deepEqual(invalid({ ...ok, fresh: false }), ["its output path existed before it ran, so count.mjs was not run"]);
-  assert.deepEqual(invalid({ ...ok, row: [goodRow({ failed: 2, userCyclesPerRequest: null })] }), ["2 failed requests", "userCyclesPerRequest is null, not a number"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ failed: 2, userCyclesPerRequest: null })] }), ["2 failed requests", "userCyclesPerRequest is null, not a number", "its k6 summary gives 0 failed requests where the row has 2"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: "100000" })] }), ["userCyclesPerRequest is \"100000\", not a number"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPerRequest: Infinity })] }), ["kernelPerRequest is Infinity, not a number"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ perfRunningPct: { ...running, "cycles:k": 88 } })] }), ["perf ran cycles:k 88% of its enabled time, not 100%"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ perfRunningPct: undefined })] }), Object.values(COUNTS).map((e) => `perf's running percentage for ${e} is not recorded`));
   assert.deepEqual(invalid({ ...ok, row: { failed: "never answered" } }), ["count.mjs recorded failed: never answered"]);
-  assert.deepEqual(invalid({ ...ok, summary: { metrics: { checks: { passes: 4999, fails: 1 } } } }), ["1 failed status checks", "4999 passed status checks, not 5000"]);
+  assert.deepEqual(invalid({ ...ok, summary: sealedSummary(5000, 0, { passes: 4999, fails: 1 }) }), ["1 failed status checks", "4999 passed status checks, not 5000"]);
   // Kernel instructions come from a second load (#2151): it must be whole too, by its row and its summary.
-  assert.deepEqual(invalid({ ...ok, kernelSummary: { metrics: { checks: { passes: 4999, fails: 1 } } } }), ["1 failed status checks in the kernel instructions' load", "4999 passed status checks in the kernel instructions' load, not 5000"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: sealedSummary(5000, 0, { passes: 4999, fails: 1 }) }), ["1 failed status checks in the kernel instructions' load", "4999 passed status checks in the kernel instructions' load, not 5000"]);
+  // A sealed summary that disagrees with a clean row, in either load: its requests or its failures.
+  assert.deepEqual(invalid({ ...ok, summary: sealedSummary(4999) }), ["its k6 summary gives 4999 requests where the row has 5000"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: sealedSummary(4999) }), ["its k6 summary gives 4999 requests in the kernel instructions' load where the row has 5000"]);
+  assert.deepEqual(invalid({ ...ok, summary: sealedSummary(5000, 3) }), ["its k6 summary gives 3 failed requests where the row has 0"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: sealedSummary(5000, 2) }), ["its k6 summary gives 2 failed requests in the kernel instructions' load where the row has 0"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: { metrics: { checks: { passes: 5000, fails: 0 } } } }), ["its k6 summary gives no requests in the kernel instructions' load where the row has 5000", "its k6 summary gives no failed requests in the kernel instructions' load where the row has 0"]);
+  // A kernel load of 4,999 requests with failures, its row and summary agreeing: not valid.
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: { requests: 4999, failed: 2 } })], kernelSummary: sealedSummary(4999, 2, { passes: 4997, fails: 2 }) }), ["4999 requests in the kernel instructions' load, not 5000", "2 failed requests in the kernel instructions' load", "2 failed status checks in the kernel instructions' load", "4997 passed status checks in the kernel instructions' load, not 5000"]);
   assert.deepEqual(invalid({ ...ok, kernelSummary: undefined }), ["no k6 summary of the counted load in the kernel instructions' load"]);
-  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: { requests: 4990, failed: 3 } })] }), ["4990 requests in the kernel instructions' load, not 5000", "3 failed requests in the kernel instructions' load"]);
-  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: undefined })] }), ["undefined requests in the kernel instructions' load, not 5000", "undefined failed requests in the kernel instructions' load"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: { requests: 4990, failed: 3 } })] }), ["4990 requests in the kernel instructions' load, not 5000", "3 failed requests in the kernel instructions' load", "its k6 summary gives 5000 requests in the kernel instructions' load where the row has 4990", "its k6 summary gives 0 failed requests in the kernel instructions' load where the row has 3"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: undefined })] }), ["undefined requests in the kernel instructions' load, not 5000", "undefined failed requests in the kernel instructions' load", "its k6 summary gives 5000 requests in the kernel instructions' load where the row has undefined", "its k6 summary gives 0 failed requests in the kernel instructions' load where the row has undefined"]);
   assert.deepEqual(invalid({ ...ok, interrupted: true }), ["started and never ended; not run again"]);
 });
 
@@ -283,6 +295,24 @@ test("a failed command or a record not to be trusted yields no bound: exit 1 wit
     } finally {
       s.done();
     }
+  }
+});
+
+test("a count.mjs that could not see its perf end (exit 4) stops the run: no further invocation on that host, now or when the command is run again", async () => {
+  const s = scratch();
+  try {
+    const stuck = "t1-json-ab-002-base";
+    const h = host(s.results, { rc: (round) => (round === stuck ? 4 : 0) });
+    await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base: a perf it started was not seen to end, so no further count runs on this host; stopped with no report/);
+    const ran = h.state.counted.map(([round]) => round);
+    assert.equal(ran.at(-1), stuck);
+    const tags = h.state.tags.length;
+    // Run again: refused before any tag or count.
+    await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/);
+    assert.deepEqual(h.state.counted.map(([round]) => round), ran);
+    assert.equal(h.state.tags.length, tags);
+  } finally {
+    s.done();
   }
 });
 
@@ -676,7 +706,7 @@ test("the band's ends are read exactly from the cycle counts: a bound at an end 
   const split = compare(Array.from({ length: 5 }, (_, i) => ({ pair: i + 1, base: 6000 + 4000, head: 5802 + 4000 })));
   assert.equal(reading(split, aa).verdict, "inside the default band: not decided");
   // A count that is not a whole number is not valid.
-  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
+  const summary = sealedSummary();
   const ok = { summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelCyclesPerRequest: 60000.5 })] }), ["kernelCyclesPerRequest is 60000.5, not a whole count"]);
 });
@@ -741,7 +771,7 @@ test("a replay reads each invocation against the image run.json pins for its slo
 });
 
 test("user plus kernel cycles past 2^53 - 1 are not an exact count, so a sum that would round to the band's end is not valid rather than read inside it", async () => {
-  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
+  const summary = sealedSummary();
   const ok = { summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: 5216500000000000, kernelCyclesPerRequest: 5216500000000001 })] }), ["user plus kernel cycles a request is above 2^53 - 1, so not an exact count"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: Number.MAX_SAFE_INTEGER - 1, kernelCyclesPerRequest: 1 })] }), []);
@@ -804,6 +834,8 @@ const fakePerf = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const a = process.argv.slice(2);
 // The probe (perf stat -e <set> -- sleep 1, no cgroup) answers on --log-fd 1 for each event it names.
+// With FAKE_PROBE_HOLD naming its set, it leaves a self-bounded child holding its output as it exits.
+if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1]) require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 9000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
 if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "probe.jsonl"), JSON.stringify(a) + "\\n"); process.stdout.write(a[a.indexOf("-e") + 1].split(",").map((e) => \`1000,,\${e},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); }
 fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
 const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
@@ -913,6 +945,26 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
     const alone = await count("alone-by-id", "none", "none", { BENCH_NETWORK: byId, FAKE_NET_NAME: "rustbench" });
     assert.equal(alone.code, 0);
     assert.ok(Array.isArray(alone.row) && alone.row[0].requests === 5000, JSON.stringify(alone.row));
+    // A probe whose perf exits while a process it started holds its output: its end is not seen, so
+    // count.mjs exits 4 with nothing counted and no later probe run, a grace after the exit.
+    {
+      const dir = join(root, "probe-held");
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PROBE_HOLD: "instructions:k", HOME: process.env.HOME ?? root };
+      const started = Date.now();
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), "probe-held", "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      assert.equal(code, 4, said);
+      assert.ok(Date.now() - started < 8500, `settled after ${Date.now() - started} ms, not when the held output closed`);
+      assert.match(said, /cleanup unconfirmed.*nothing more is counted on this host/);
+      const probes = readFileSync(join(dir, "probe.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      assert.deepEqual(probes.map((args) => args[args.indexOf("-e") + 1]), ["instructions:u", "instructions:k"]);
+      assert.ok(!existsSync(join(dir, "perf.jsonl")), "no count after an unconfirmed probe");
+      assert.ok(!existsSync(join(kit, "results", "probe-held", "instructions.json")));
+      assert.match(readFileSync(join(kit, "results", "probe-held", "count-kernel.txt"), "utf8"), /refused: .*cleanup unconfirmed[\s\S]*stopped: the probe's perf was not seen to end/);
+    }
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(root, { recursive: true, force: true });

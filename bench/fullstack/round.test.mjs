@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
-import { countRow, measurePerfCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded } from "./count-perf.mjs";
+import { countRow, measurePerfCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
 import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
@@ -222,6 +222,17 @@ test("count.mjs counts user and kernel instructions in two perf sessions, never 
     assert.throws(() => perfCountArgs(["-C", "1"], "app.scope", both), /instructions:u and instructions:k in one session/);
     assert.throws(() => perfProbeArgs(["-C", "1"], both), /instructions:u and instructions:k in one session/);
   }
+  // The list is checked as perf reads it once joined: an entry that holds a comma is two events.
+  for (const joined of [["instructions:u,instructions:k"], ["cycles:u,cycles:k", "instructions:u,instructions:k"], ["instructions:k, instructions:u"]]) {
+    assert.throws(() => perfCountArgs(["-C", "1"], "app.scope", joined), /instructions:u and instructions:k in one session/, joined.join("|"));
+    assert.throws(() => perfProbeArgs(["-C", "1"], joined), /instructions:u and instructions:k in one session/, joined.join("|"));
+  }
+  // Anything but the three sets a count gives perf, exactly as it gives them, is refused.
+  for (const other of [["instructions:u "], [" instructions:k"], ["instructions:u", "cycles:k"], ["cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u"], [...passEvents("main")].reverse(), [], ["instructions:u", "instructions:u"], "instructions:u", [1]]) {
+    assert.throws(() => perfCountArgs(["-C", "1"], "app.scope", /** @type {any} */ (other)), /not one of the event sets a count gives it|not a list of event names/, JSON.stringify(other));
+    assert.throws(() => perfProbeArgs(["-C", "1"], /** @type {any} */ (other)), /not one of the event sets a count gives it|not a list of event names/, JSON.stringify(other));
+  }
+  for (const set of PROBE_SETS) assert.doesNotThrow(() => perfProbeArgs(["-C", "1"], set));
   assert.throws(() => passEvents("both"), /unknown perf pass/);
   assert.deepEqual(perfProbeArgs(["-C", "1"], ["instructions:k"]), ["stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e", "instructions:k", "--", "sleep", "1"]);
 });
@@ -267,7 +278,7 @@ function countSummary(count, failed = 0, checksFailed = 0) {
   return { metrics: {
     http_reqs: { count },
     http_req_failed: { passes: failed },
-    checks: { fails: checksFailed },
+    checks: { passes: count - checksFailed, fails: checksFailed },
   } };
 }
 
@@ -360,9 +371,54 @@ test("count.mjs does not retry the kernel pass: an unusable kernel instructions 
     }, assert.fail), error);
     assert.deepEqual(attempts, [["main", false], ["kernel", false]]);
   }
-  // Failures in a kernel pass that counted are kept on its row, for the reader to refuse.
-  const row = await measurePerfCounts((p) => (p === "main" ? { text: mainText(), summary: countSummary(10) } : { text: kernelInstructions, summary: countSummary(10, 2) }), assert.fail);
-  assert.deepEqual(row.kernelPass, { requests: 10, failed: 2 });
+});
+
+test("a count is returned only when both loads are whole: as many requests as the count makes, none failed in the kernel load, a status check a request, every total given", async () => {
+  const run = (/** @type {any} */ main, /** @type {any} */ kernel, expected = { requests: 10 }) => measurePerfCounts((p) => (p === "main" ? { text: mainText(), summary: main } : { text: kernelInstructions, summary: kernel }), assert.fail, expected);
+  // Both whole: the row.
+  assert.equal((await run(countSummary(10), countSummary(10))).kernelPerRequest, 123);
+  for (const [main, kernel, why] of [
+    // 4,999 requests in the kernel load, with or without failures, where the first load made 5,000.
+    [countSummary(5000), countSummary(4999), /kernel instructions' load is not whole: 4999 requests, not 5000/],
+    [countSummary(5000), countSummary(4999, 3, 3), /kernel instructions' load is not whole: 4999 requests, not 5000/],
+    // Failures in a whole kernel load: its count is not kept.
+    [countSummary(5000), countSummary(5000, 2, 0), /kernel instructions' load had 2 HTTP request failures and 0 failed status checks across 5000 requests, so its count is not kept/],
+    [countSummary(5000), countSummary(5000, 0, 1), /kernel instructions' load had 0 HTTP request failures and 1 failed status checks/],
+    // The first load short of the count's requests.
+    [countSummary(4999), countSummary(5000), /first load is not whole: 4999 requests, not 5000/],
+    // A total missing or not a whole number, or checks that do not add up to the requests.
+    [countSummary(5000), { metrics: { http_reqs: { count: 5000 }, checks: { passes: 5000, fails: 0 } } }, /kernel instructions' load is not whole: its k6 summary gives no failed/],
+    [{ metrics: { http_reqs: { count: 5000 }, http_req_failed: { passes: 0 }, checks: { fails: 0 } } }, countSummary(5000), /first load is not whole: its k6 summary gives no checksPassed/],
+    [countSummary(5000), { metrics: { http_reqs: { count: 5000 }, http_req_failed: { passes: "0" }, checks: { passes: 5000, fails: 0 } } }, /kernel instructions' load is not whole: its k6 summary gives no failed/],
+    [countSummary(5000), { metrics: { http_reqs: { count: 5000 }, http_req_failed: { passes: 0 }, checks: { passes: 4000, fails: 0 } } }, /kernel instructions' load is not whole: 4000 passed and 0 failed status checks across 5000 requests/],
+  ]) await assert.rejects(run(main, kernel, { requests: 5000 }), why);
+  // Without an expected count, the kernel load must still match the first load's requests.
+  await assert.rejects(run(countSummary(10), countSummary(9), {}), /kernel instructions' load is not whole: 9 requests, not 10/);
+});
+
+test("a perf not seen to end stops the count at once: no retry, no next pass, and an UnconfirmedPerf the caller stops the host for", async () => {
+  const noAnswer = { text: "", error: "perf did not count the full load: no answer", unconfirmed: true, summary: countSummary(10) };
+  for (const [stuck, calls, retried] of [
+    [(p, i) => p === "main" && !i, [["main", false]], false],
+    // In the repeat of the first load, after a fault the retry is for.
+    [(p, i) => p === "main" && i, [["main", false], ["main", true]], true],
+    [(p) => p === "kernel", [["main", false], ["kernel", false]], false],
+  ]) {
+    const attempts = [];
+    const warnings = [];
+    await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+      attempts.push([p, instructionsOnly]);
+      if (stuck(p, instructionsOnly)) return noAnswer;
+      // The first try of the first load has unusable user instructions, so a repeat would follow.
+      if (p === "main" && !instructionsOnly && retried) return { text: mainText().replace("60000,100.00", "60000,12.50"), summary: countSummary(10) };
+      return p === "main" ? { text: instructionsOnly ? userInstructions : mainText(), summary: countSummary(10) } : { text: kernelInstructions, summary: countSummary(10) };
+    }, (m) => warnings.push(m)), (e) => e instanceof UnconfirmedPerf && /no answer; no further count runs on this host/.test(e.message));
+    assert.deepEqual(attempts, calls);
+  }
+  // A collect that throws it (count.mjs's, whose perf did not exit even when killed) stops the count the same way.
+  const thrown = [];
+  await assert.rejects(measurePerfCounts((p, i) => { thrown.push([p, i]); throw new UnconfirmedPerf("perf did not count the full load: no answer"); }, assert.fail), UnconfirmedPerf);
+  assert.deepEqual(thrown, [["main", false]]);
 });
 
 test("count.mjs falls back to user instructions when an optional event makes perf abort before any rows", async () => {
@@ -406,23 +462,76 @@ test("the probe refuses a set perf cannot count or does not answer for, and note
 test("a bounded run kills a command past its bound and gives up one that does not exit, instead of waiting it out", async () => {
   const node = (code, options) => runBounded(process.execPath, ["-e", code], options);
   const ok = await node("process.stdout.write('1000,,instructions:u,1,100.00,,')");
-  assert.deepEqual([ok.status, ok.answered, ok.error, ok.stdout], [0, true, undefined, "1000,,instructions:u,1,100.00,,"]);
+  assert.deepEqual([ok.status, ok.answered, ok.cleanup, ok.error, ok.stdout], [0, true, "confirmed", undefined, "1000,,instructions:u,1,100.00,,"]);
   const slow = await node("setTimeout(() => {}, 60000)", { timeoutMs: 200, graceMs: 5000 });
   assert.equal(slow.answered, true);
+  assert.equal(slow.cleanup, "confirmed");
   assert.match(slow.error, /did not finish within 0\.2 s/);
   // A process that a kill does not end (here: one whose kill is never delivered) is given up after
   // the grace, with no answer, and the run settles.
   const started = Date.now();
-  const stuck = await runBounded("stuck", [], { timeoutMs: 100, graceMs: 100, start: () => {
+  const signalled = [];
+  const stuck = await runBounded("stuck", [], { timeoutMs: 100, graceMs: 100, group: true, signalGroup: (pid, signal) => signalled.push([pid, signal]), start: () => {
     const child = /** @type {any} */ (new EventEmitter());
-    Object.assign(child, { kill: () => true, unref: () => {}, stdout: null, stderr: null });
+    Object.assign(child, { pid: 4242, kill: () => true, unref: () => {}, stdout: null, stderr: null });
     return child;
   } });
   assert.equal(stuck.answered, false);
+  assert.equal(stuck.cleanup, "unconfirmed");
   assert.match(stuck.error, /no answer: it did not finish within 0\.1 s and had not exited 0\.1 s after it was killed/);
+  // Its group was killed while its leader was not reaped.
+  assert.deepEqual(signalled, [[4242, "SIGKILL"]]);
   assert.ok(Date.now() - started < 5000);
+  // Unconfirmed cleanup refuses the probe, main's whole set included.
+  assert.match(probeVerdict(passEvents("main"), stuck).refuse, /no answer/);
   const missing = await runBounded("no-such-perf-command-i2151", []);
   assert.ok(missing.error, "a command that cannot start is an error, not a count");
+  assert.equal(missing.cleanup, "confirmed");
+});
+
+test("a bounded run never signals a group whose leader was reaped, and gives up output a process it started holds open as cleanup unconfirmed", async () => {
+  // The leader exits (reaped) at once while something it started holds its output: no group signal
+  // at the bound, nor ever, and the run settles a grace after the exit, cleanup unconfirmed.
+  const signalled = [];
+  const started = Date.now();
+  const held = await runBounded("leader", [], { timeoutMs: 150, graceMs: 300, group: true, signalGroup: (pid, signal) => signalled.push([pid, signal]), start: () => {
+    const child = /** @type {any} */ (new EventEmitter());
+    Object.assign(child, { pid: 4343, kill: () => assert.fail("no kill after the leader exited"), unref: () => {}, stdout: null, stderr: null });
+    setTimeout(() => child.emit("exit", 0, null), 10);
+    return child;
+  } });
+  assert.deepEqual(signalled, []);
+  assert.deepEqual([held.status, held.answered, held.cleanup], [0, true, "unconfirmed"]);
+  assert.match(held.error, /cleanup unconfirmed: its output stayed open 0\.3 s after it exited 0, so a process it started may still run/);
+  assert.ok(Date.now() - started < 2000);
+  assert.match(probeVerdict(["instructions:u"], held).refuse, /cleanup unconfirmed/);
+  // A real exit's code, read once the leader is reaped, also stops the bound's signal (exitCode set, no exit event yet).
+  const quiet = [];
+  await runBounded("reaped", [], { timeoutMs: 50, graceMs: 50, group: true, signalGroup: (pid, signal) => quiet.push([pid, signal]), start: () => {
+    const child = /** @type {any} */ (new EventEmitter());
+    Object.assign(child, { pid: 4444, exitCode: 0, signalCode: null, kill: () => assert.fail("no kill"), unref: () => {}, stdout: null, stderr: null });
+    return child;
+  } });
+  assert.deepEqual(quiet, []);
+});
+
+test("on POSIX a bounded run kills the probe's whole group at its bound, and does not wait out a descendant that holds its output after the leader exits", { skip: process.platform === "win32" && "process groups are POSIX" }, async () => {
+  // A leader and the child it started, both in its group, both sleeping past the bound: both are killed.
+  const killed = await runBounded(process.execPath, ["-e", "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: ['ignore', 'inherit', 'inherit'] }); console.log(c.pid); setTimeout(() => {}, 60000);"], { timeoutMs: 1000, graceMs: 3000 });
+  assert.equal(killed.cleanup, "confirmed", killed.error);
+  assert.equal(killed.signal, "SIGKILL");
+  const descendant = Number(killed.stdout.trim());
+  assert.ok(descendant > 0, killed.stdout);
+  // Gone, or a zombie its new parent has not reaped yet (in a container whose init does not reap).
+  const gone = () => { try { process.kill(descendant, 0); } catch { return true; } return /^\S+ \(.*\) Z/.test(readFileSync(`/proc/${descendant}/stat`, "utf8")); };
+  assert.ok(gone(), `the leader's child ${descendant} still runs`);
+  // A leader that exits 0 at once while a self-bounded child holds its stdout: given up a grace after
+  // the exit, not when the child ends, and the group is not signalled after the leader was reaped.
+  const started = Date.now();
+  const left = await runBounded(process.execPath, ["-e", "require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { stdio: ['ignore', 'inherit', 'inherit'] }).unref(); process.exit(0);"], { timeoutMs: 500, graceMs: 1000 });
+  assert.deepEqual([left.status, left.answered, left.cleanup], [0, true, "unconfirmed"]);
+  assert.match(left.error, /cleanup unconfirmed/);
+  assert.ok(Date.now() - started < 3500, `settled after ${Date.now() - started} ms`);
 });
 test("the counter rejects an unknown target before starting the benchmark", () => {
   const result = spawnSync(process.execPath, ["count.mjs", "target-test", "1", "corten", "page,typo"], {

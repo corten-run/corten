@@ -5,7 +5,9 @@
 // Xeon Platinum 8358 guest (#2151). All counts require a reported 100% running percentage.
 // Unusable optional counts are null with a diagnostic; if user instructions are unusable with
 // optional events enabled, the first load is repeated with them alone unless it had failures.
-// Before any load each event set is probed on the count's CPUs within a bound (PROBE_SETS).
+// Before any load each event set is probed on the count's CPUs within a bound (PROBE_SETS). A perf,
+// probe or count, whose end is not seen stops the step with exit HALT_EXIT and counts nothing more
+// on the host: it may still be counting, or stuck in the kernel.
 // Alternate one-repeat runs of the builds on a quiet host to compare cycles, which are noisier
 // than instructions.
 // Needs Linux with hardware counters (`perf`, root, cgroup v2): a bench host, not Docker Desktop.
@@ -17,7 +19,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
-import { GRACE_MS, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded } from "./count-perf.mjs";
+import { GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, UnconfirmedPerf } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
@@ -112,7 +114,8 @@ async function counted(id, name, work, events) {
   let stopped = false;
   let hung = false;
   // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup. One
-  // that does not exit once asked, nor once killed, is given up as no answer rather than waited out.
+  // that does not exit once asked, nor once killed, is given up as no answer rather than waited
+  // out, and is unconfirmed: it may still count, so the count stops and nothing more is counted.
   try {
     if (ready) {
       console.log(new Date().toISOString(), "counting", name);
@@ -129,11 +132,11 @@ async function counted(id, name, work, events) {
         perf.stderr.destroy();
       }
     }
+    // However the work ended (a failed load included), a perf not seen to end stops the count and the host's counting.
+    if (hung) throw new UnconfirmedPerf(`perf did not count the full load: no answer, it had not exited ${PROBE_MS / 1000} s after it was asked to stop nor ${GRACE_MS / 1000} s after it was killed; no further count runs on this host`);
   }
   const { code, signal } = exit ?? { code: null, signal: null };
-  const error = hung
-    ? `perf did not count the full load: no answer, it had not exited ${PROBE_MS / 1000} s after it was asked to stop nor ${GRACE_MS / 1000} s after it was killed`
-    : !stopped || (code !== 0 && signal !== "SIGINT")
+  const error = !stopped || (code !== 0 && signal !== "SIGINT")
     ? `perf did not count the full load: ${spawnError ?? (said.trim() || signal || `exit ${code}`)}`
     : null;
   return { text, error, ranLoad: ready };
@@ -157,9 +160,15 @@ for (const names of PROBE_SETS) {
   const line = `${new Date().toISOString()} probing perf stat ${countCpus.join(" ")} -e ${names.join(",")}`;
   appendFileSync(kernelFile, `${line}\n`);
   console.log(line);
-  const { refuse, note } = probeVerdict(names, await runBounded("perf", perfProbeArgs(countCpus, names), { env: { ...process.env, LC_ALL: "C" } }));
+  const probe = await runBounded("perf", perfProbeArgs(countCpus, names), { env: { ...process.env, LC_ALL: "C" } });
+  const { refuse, note } = probeVerdict(names, probe);
   appendFileSync(kernelFile, `${new Date().toISOString()} ${refuse ? `refused: ${refuse}` : note ? `not counted: ${note}` : "counted"}\n`);
   if (note) console.warn(`probe: ${note}`);
+  if (probe.cleanup !== "confirmed") {
+    appendFileSync(kernelFile, `${new Date().toISOString()} stopped: the probe's perf was not seen to end, so nothing more is counted on this host\n`);
+    console.error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}; the probe's perf was not seen to end, so nothing more is counted on this host`);
+    process.exit(HALT_EXIT);
+  }
   if (refuse) throw new Error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}`);
 }
 
@@ -224,6 +233,7 @@ for (const name of appsArg.split(",")) {
             return { ...perf, summary: perf.ranLoad ? JSON.parse(readFileSync(summaryFile, "utf8")) : undefined };
           },
           (message) => console.warn(name, target + suffix, message),
+          { requests: ITERATIONS },
         );
         runs.push(row);
         console.log(name, target + suffix, JSON.stringify(row));
@@ -234,6 +244,13 @@ for (const name of appsArg.split(",")) {
       const why = (e instanceof Error ? e.message : String(e)).trim().split("\n")[0] || "the count failed with no message";
       console.log(name, target + suffix, "failed:", why);
       results[`${name}/${target}${suffix}`] = { failed: why };
+      // A perf not seen to end may still count, or be stuck in the kernel: no further load or count on this host.
+      if (e instanceof UnconfirmedPerf) {
+        docker("rm", "-f", container);
+        writeFileSync(file, JSON.stringify(results, null, 1));
+        console.error(`${name} ${target}${suffix}: ${why}`);
+        process.exit(HALT_EXIT);
+      }
     }
     docker("rm", "-f", container);
     // Written after each app, so a restart partway through the step keeps the apps already counted.

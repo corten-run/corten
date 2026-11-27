@@ -2,9 +2,10 @@ import { spawn } from "node:child_process";
 
 // The perf passes of one count. A Xeon Platinum 8358 guest stalls in its PMU code and stops as a
 // whole when one perf session counts `instructions:u` and `instructions:k` together, with `-C` or
-// `-p` (#2151), so no session here holds both: each count is two loads of the same requests, the
-// first counting user instructions, both cycles and user L1i misses (the set bench/placement counts),
-// the second kernel instructions alone. Both sets ran without a stall on such a host (measured on
+// `-p` (#2151), so no session here holds both: each count is two independent loads drawn from the
+// same request mix (ssr-load.js picks each request at random), the first counting user instructions,
+// both cycles and user L1i misses (the set bench/placement counts), the second, later on the same
+// app, kernel instructions alone. Both sets ran without a stall on such a host (measured on
 // fresh hosts; the main pass's retry set, `instructions:u` alone, is a subset of its whole set and
 // was not run alone there).
 /** Each pass's counts a request and the perf event each is read from, in the order perf is given them. */
@@ -35,23 +36,33 @@ export function passEvents(/** @type {"main" | "kernel"} */ pass, instructionsOn
   return instructionsOnly ? [REQUIRED[pass]] : Object.values(PASSES[pass]);
 }
 
-/** Refuses an event list that would count user and kernel instructions in one perf session (#2151). */
-function oneSession(/** @type {string[]} */ names) {
-  if (names.includes("instructions:u") && names.includes("instructions:k")) {
+/**
+ * Refuses an event list that is not one of the sets a count gives perf, read as perf reads it once
+ * joined: one that would count user and kernel instructions in one session (#2151) by that, and any
+ * other list (an entry holding a comma or whitespace, another event, another order) as not a set.
+ */
+function supportedSet(/** @type {string[]} */ names) {
+  if (!Array.isArray(names) || !names.every((e) => typeof e === "string")) throw new Error(`perf would be given ${JSON.stringify(names)}, not a list of event names`);
+  const emitted = names.join(",").split(",").map((e) => e.trim());
+  if (emitted.includes("instructions:u") && emitted.includes("instructions:k")) {
     throw new Error(`perf would count instructions:u and instructions:k in one session (${names.join(",")}), which stops a Xeon Platinum 8358 guest (#2151)`);
+  }
+  const sets = [passEvents("main", true), passEvents("kernel"), passEvents("main")];
+  if (!sets.some((set) => set.length === names.length && set.every((e, i) => names[i] === e))) {
+    throw new Error(`perf would be given ${JSON.stringify(names)}, not one of the event sets a count gives it (${sets.map((s) => s.join(",")).join("; ")})`);
   }
   return names;
 }
 
 export function perfCountArgs(/** @type {string[]} */ cpus, /** @type {string} */ cgroup, /** @type {string[]} */ names) {
-  oneSession(names);
+  supportedSet(names);
   // perf maps the cgroups to events in order; each event needs its own entry.
   return ["stat", ...cpus, "-x", ",", "--log-fd", "1", "-e", names.join(","), "-G", names.map(() => cgroup).join(",")];
 }
 
 /** The probe of one event set before the first count: the same CPUs and events, over an idle second, no cgroup. */
 export function perfProbeArgs(/** @type {string[]} */ cpus, /** @type {string[]} */ names) {
-  oneSession(names);
+  supportedSet(names);
   return ["stat", ...cpus, "-x", ",", "--log-fd", "1", "-e", names.join(","), "--", "sleep", "1"];
 }
 
@@ -81,39 +92,75 @@ export function probeError(names, r) {
 export const PROBE_MS = 30_000, GRACE_MS = 5_000;
 
 /**
- * Runs a command to its end within a bound, and settles even where it never exits: past `timeoutMs`
- * it is killed, and `graceMs` after that it is given up (no answer) rather than waited out, so a
- * process stuck in the kernel cannot hold the count. Never throws; the result says what happened.
+ * Runs a command to its end within a bound, and settles even where it never exits. On POSIX it runs
+ * in a process group of its own; past `timeoutMs` that group is killed, but only while its leader is
+ * not yet reaped (once it is, the group's number may be another's, so it is never signalled after).
+ * `graceMs` after the kill, or after the leader exits with its output still held open by a process
+ * it started, the run is given up rather than waited out, so a process stuck in the kernel cannot
+ * hold the count. Never throws; the result says what happened: `answered` whether the leader's exit
+ * was seen, `cleanup` whether it and every holder of its output were seen to end ("confirmed") or
+ * not ("unconfirmed": something it started may still run, and no further count should run here).
  * @param {string} command
  * @param {string[]} args
- * @param {{ timeoutMs?: number, graceMs?: number, env?: Record<string, string | undefined>, start?: typeof spawn }} [options]
- * @returns {Promise<{ status: number | null, signal: string | null, stdout: string, stderr: string, error?: string, answered: boolean }>}
+ * @param {{ timeoutMs?: number, graceMs?: number, env?: Record<string, string | undefined>, start?: typeof spawn,
+ *   group?: boolean, signalGroup?: (pid: number, signal: NodeJS.Signals) => void }} [options]
+ * @returns {Promise<{ status: number | null, signal: string | null, stdout: string, stderr: string, error?: string, answered: boolean, cleanup: "confirmed" | "unconfirmed" }>}
  */
-export function runBounded(command, args, { timeoutMs = PROBE_MS, graceMs = GRACE_MS, env, start = spawn } = {}) {
+export function runBounded(command, args, { timeoutMs = PROBE_MS, graceMs = GRACE_MS, env, start = spawn, group = process.platform !== "win32", signalGroup = (pid, signal) => process.kill(-pid, signal) } = {}) {
   return new Promise((resolve) => {
     let stdout = "", stderr = "", settled = false, timedOut = false;
-    /** @type {any} */
-    let kill, giveUp;
+    /** @type {{ status: number | null, signal: string | null } | null} */
+    let exit = null;
+    /** @type {string | undefined} */
+    let killError;
+    /** @type {ReturnType<typeof setTimeout>[]} */
+    const timers = [];
+    const later = (/** @type {number} */ ms, /** @type {() => void} */ f) => void timers.push(setTimeout(f, ms));
     const done = (/** @type {any} */ r) => {
       if (settled) return;
       settled = true;
-      clearTimeout(kill);
-      clearTimeout(giveUp);
-      resolve({ status: null, signal: null, stdout, stderr, answered: true, ...r });
+      for (const timer of timers) clearTimeout(timer);
+      resolve({ status: exit?.status ?? null, signal: exit?.signal ?? null, stdout, stderr, answered: exit !== null, cleanup: "confirmed", ...r });
     };
+    /** @type {any} */
     let child;
-    try { child = start(command, args, { env, stdio: ["ignore", "pipe", "pipe"] }); } catch (e) { return done({ error: /** @type {Error} */ (e).message }); }
-    child.stdout?.on("data", (d) => (stdout += d));
-    child.stderr?.on("data", (d) => (stderr += d));
-    child.on("error", (e) => done({ error: e.message }));
-    child.on("close", (status, signal) => done({ status, signal, ...(timedOut ? { error: `did not finish within ${timeoutMs / 1000} s` } : {}) }));
-    kill = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
-    giveUp = setTimeout(() => {
-      child.unref();
+    try { child = start(command, args, { env, stdio: ["ignore", "pipe", "pipe"], detached: group }); } catch (e) { return done({ error: /** @type {Error} */ (e).message }); }
+    const giveUp = () => {
+      if (settled) return;
+      child.unref?.();
       child.stdout?.destroy();
       child.stderr?.destroy();
-      done({ answered: false, error: `no answer: it did not finish within ${timeoutMs / 1000} s and had not exited ${graceMs / 1000} s after it was killed` });
-    }, timeoutMs + graceMs);
+      const killed = killError ? ` (the kill failed: ${killError})` : "";
+      done({ cleanup: "unconfirmed", error: exit === null
+        ? `no answer: it did not finish within ${timeoutMs / 1000} s and had not exited ${graceMs / 1000} s after it was killed${killed}`
+        : `cleanup unconfirmed: its output stayed open ${graceMs / 1000} s after it exited ${exit.status ?? exit.signal ?? "-"}, so a process it started may still run` });
+    };
+    child.stdout?.on("data", (/** @type {Buffer} */ d) => (stdout += d));
+    child.stderr?.on("data", (/** @type {Buffer} */ d) => (stderr += d));
+    // A spawn that started nothing has no process to end; an error after it started (a failed kill) is kept for the report.
+    child.on("error", (/** @type {Error} */ e) => { if (child.pid === undefined && exit === null) done({ error: e.message }); else killError ??= e.message; });
+    child.on("exit", (/** @type {number | null} */ status, /** @type {string | null} */ signal) => {
+      exit = { status, signal };
+      later(graceMs, giveUp);
+    });
+    child.on("close", (/** @type {number | null} */ status, /** @type {string | null} */ signal) => {
+      exit ??= { status, signal };
+      done(timedOut ? { error: `did not finish within ${timeoutMs / 1000} s` } : {});
+    });
+    later(timeoutMs, () => {
+      // A reaped leader's group number may be another group's by now: never signal it.
+      if (exit !== null) return;
+      if (child.exitCode != null || child.signalCode != null) {
+        exit = { status: child.exitCode ?? null, signal: child.signalCode ?? null };
+        return void later(graceMs, giveUp);
+      }
+      timedOut = true;
+      try {
+        if (group) signalGroup(child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch (e) { killError = /** @type {Error} */ (e).message; }
+      later(graceMs, giveUp);
+    });
   });
 }
 
@@ -154,23 +201,62 @@ function countError(entry) {
   return entry.runningPct === 100 ? null : `perf ran ${entry.runningPct}% of enabled time (need 100%)`;
 }
 
+/** The exit status of count.mjs when a perf it started was not seen to end: no further count runs on that host. */
+export const HALT_EXIT = 4;
+
+/** A perf whose end was not seen (no answer, or its output held open after it exited): the count stops, and so does the host's schedule. */
+export class UnconfirmedPerf extends Error {}
+
+const whole = (/** @type {unknown} */ x) => Number.isSafeInteger(x) && /** @type {number} */ (x) >= 0;
+
+/**
+ * A load's totals from its k6 summary: requests, failed requests and passed and failed status
+ * checks, each null where the summary does not give it as a whole number.
+ */
+export function loadTotals(/** @type {any} */ summary) {
+  const m = summary?.metrics;
+  const of = (/** @type {unknown} */ x) => (whole(x) ? /** @type {number} */ (x) : null);
+  return { requests: of(m?.http_reqs?.count), failed: of(m?.http_req_failed?.passes), checksPassed: of(m?.checks?.passes), checksFailed: of(m?.checks?.fails) };
+}
+
+/** Why a load's totals are not whole, or null: each given, and one status check for each request (`requests` the number it must have made, when given). */
+function totalsError(/** @type {ReturnType<typeof loadTotals>} */ t, /** @type {number | undefined} */ requests) {
+  const missing = Object.entries(t).filter(([, v]) => v === null).map(([k]) => k);
+  if (missing.length) return `its k6 summary gives no ${missing.join(", ")}`;
+  if (requests !== undefined && t.requests !== requests) return `${t.requests} requests, not ${requests}`;
+  if (/** @type {number} */ (t.checksPassed) + /** @type {number} */ (t.checksFailed) !== t.requests) return `${t.checksPassed} passed and ${t.checksFailed} failed status checks across ${t.requests} requests`;
+  return null;
+}
+
 /**
  * Both passes of one count. `collect(pass, instructionsOnly)` runs one load under perf with
- * `passEvents(pass, instructionsOnly)` and gives perf's output, its error and the load's k6 summary.
- * The main pass is retried once with user instructions alone when they are unusable and its load
- * had no failures; the kernel pass counts one event already, so it is not retried.
+ * `passEvents(pass, instructionsOnly)` and gives perf's output, its error, whether perf's end was
+ * not seen (`unconfirmed`) and the load's k6 summary. A perf whose end was not seen stops the count
+ * at once (UnconfirmedPerf): no retry and no next pass. The main pass is retried once with user
+ * instructions alone when they are unusable and its load had no failures; the kernel pass counts
+ * one event already, so it is not retried. Each load's request and status-check totals must be
+ * whole (`expected.requests` requests each, when given); the kernel pass's load must also match the
+ * main pass's request count and have no failures, since its count is not kept otherwise.
+ * @param {(pass: "main" | "kernel", instructionsOnly: boolean) => any} collect
+ * @param {(message: string) => void} warn
+ * @param {{ requests?: number }} [expected]
  */
-export async function measurePerfCounts(collect, warn) {
-  const attempt = async (/** @type {"main" | "kernel"} */ pass, instructionsOnly) => {
+export async function measurePerfCounts(collect, warn, expected = {}) {
+  const attempt = async (/** @type {"main" | "kernel"} */ pass, /** @type {boolean} */ instructionsOnly) => {
     const names = passEvents(pass, instructionsOnly);
-    const { text, error, summary } = await collect(pass, instructionsOnly);
+    const { text = "", error, summary, unconfirmed } = await collect(pass, instructionsOnly);
+    const load = pass === "kernel" ? "kernel instructions' load" : instructionsOnly ? "first load's repeat" : "first load";
+    if (unconfirmed) throw new UnconfirmedPerf(`${load}: ${error || "perf was not seen to end"}; no further count runs on this host`);
     // Only the pass's own events are read from its output.
     const counts = new Map([...parsePerfCounts(text)].filter(([event]) => names.includes(event)));
     const reason = countError(counts.get(REQUIRED[pass]));
-    const requests = summary?.metrics.http_reqs?.count ?? 0;
-    const failed = summary?.metrics.http_req_failed?.passes ?? 0;
-    const checksFailed = summary?.metrics.checks?.fails ?? 0;
-    return { counts, requests, failed, checksFailed, error: error || (reason ? `${REQUIRED[pass]}: ${reason}` : null) || (requests ? null : "k6 made no requests") };
+    const totals = loadTotals(summary);
+    const requests = totals.requests ?? 0, failed = totals.failed ?? 0, checksFailed = totals.checksFailed ?? 0;
+    return { load, totals, counts, requests, failed, checksFailed, error: error || (reason ? `${REQUIRED[pass]}: ${reason}` : null) || (requests ? null : "k6 made no requests") };
+  };
+  const requireWhole = (/** @type {Awaited<ReturnType<typeof attempt>>} */ run, /** @type {number | undefined} */ requests) => {
+    const why = totalsError(run.totals, requests);
+    if (why) throw new Error(`the ${run.load} is not whole: ${why}`);
   };
   // A retry can replace unusable counters, not failures observed under load.
   const noRetry = (/** @type {Awaited<ReturnType<typeof attempt>>} */ run, /** @type {string} */ load) => {
@@ -186,11 +272,14 @@ export async function measurePerfCounts(collect, warn) {
     main = await attempt("main", true);
     if (main.error) throw new Error(`instructions-only perf failed: ${main.error}`);
   }
+  requireWhole(main, expected.requests);
   const kernel = await attempt("kernel", false);
   if (kernel.error) {
     noRetry(kernel, "kernel instructions' load");
     throw new Error(`kernel instructions' perf failed: ${kernel.error}`);
   }
+  requireWhole(kernel, main.requests);
+  if (kernel.failed || kernel.checksFailed) throw new Error(`the kernel instructions' load had ${kernel.failed} HTTP request failures and ${kernel.checksFailed} failed status checks across ${kernel.requests} requests, so its count is not kept`);
   return countRow(main, kernel);
 }
 
