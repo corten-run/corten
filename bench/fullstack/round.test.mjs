@@ -2293,9 +2293,14 @@ test("on POSIX a bounded run kills the probe's whole group at its bound, and doe
   // Gone, or a zombie its new parent has not reaped yet. The run settles when the last copy of its
   // output closes, which a dying process does before it becomes a zombie, so the child is given 2 s
   // to get there: far less than the minute it would sleep if the group kill had missed it.
-  const until = Date.now() + 2000;
-  while (!processGone(descendant) && Date.now() < until) await new Promise((done) => setTimeout(done, 10));
-  assert.ok(processGone(descendant), `the leader's child ${descendant} still runs 2 s after the run settled`);
+  // The first reading of it gone stands: a number reused after that is another process.
+  const until = performance.now() + 2000;
+  let gone = processGone(descendant);
+  while (!gone && performance.now() < until) {
+    await new Promise((done) => setTimeout(done, 10));
+    gone = processGone(descendant);
+  }
+  assert.ok(gone, `the leader's child ${descendant} still runs 2 s after the run settled`);
   // A leader that exits 0 at once while a self-bounded child holds its stdout: given up a grace after
   // the exit, not when the child ends, and the group is not signalled after the leader was reaped.
   const started = Date.now();
