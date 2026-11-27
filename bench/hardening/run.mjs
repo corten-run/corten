@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, append
 import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
-import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest,
+import { appSourcePath, appSourceRows, budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest,
   boundedRequestsVersion, deploymentQualificationVersion, connectionFloodResistance } from "./plan.mjs";
 import { artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, verifyHardeningCpuRoles, verifyHardeningCpuScope, digest, usesDelayUpstream, upstreamSourcePath, probeSourcePath, phaseInputs,
   savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage, proxyConfig, edgePublicOrigin } from "./evidence.mjs";
@@ -123,17 +123,13 @@ export async function run(args) {
   const fixtureDir = join(folder, "fixtures"); mkdirSync(fixtureDir); writeFixture(join(fixtureDir, "marketplace.json"), JSON.stringify(records(), null, 2) + "\n");
   const fixture = ["-v", `${fixtureDir}:/fixtures:ro`];
   const checkout = async () => ({ commit: await command("git", ["rev-parse", "HEAD"]), dirty: await command("git", ["status", "--porcelain", "--untracked-files=all"]) });
-  async function sourceHash(app) {
-    const paths = app === "corten" ? ["bench/marketplace/corten", "crates", "Cargo.toml", "Cargo.lock"] : [`bench/fullstack/apps/${app}`];
-    return digest(JSON.stringify(inputFiles.filter((f) => paths.some((p) => f.path === p || f.path.startsWith(p + "/")))
-      .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map((f) => [f.path, f.sha256])));
-  }
+  const sourceHash = (app) => digest(JSON.stringify(appSourceRows(app, inputFiles)));
   async function appImage(app) {
     if (images.has(app)) return images.get(app);
-    const source = await sourceHash(app), tag = `${runId}-${app}`;
+    const source = sourceHash(app), tag = `${runId}-${app}`;
     let image;
     if (options.build) {
-      const expected = inputFiles.filter((f) => app === "corten" || f.path.startsWith(`bench/fullstack/apps/${app}/`));
+      const expected = inputFiles.filter((f) => app === "corten" || appSourcePath(app, f.path));
       const context = app === "corten" ? rootContext : await nativeBuildContext({ command }, folder, summary.commit, app,
         expected.map(({ path, sha256 }) => ({ path, sha256 })));
       const build = await trackedImageBuild(summary, tag, save, () => buildNativeImage(docker, {
@@ -145,7 +141,7 @@ export async function run(args) {
     assert.equal(image.Config.Labels?.["run.corten.marketplace.dirty"], "false", "dirty source image cannot establish provenance");
     assert.equal(image.Config.Labels?.["run.corten.marketplace.profile"], featureProfile);
     assert.equal(image.Config.Labels?.["run.corten.hardening.source"], source, "native source digest missing/mismatch; rebuild");
-    assert.equal(await sourceHash(app), source, "native source moved during build");
+    assert.equal(sourceHash(app), source, "native source moved during build");
     images.set(app, { image, source }); return images.get(app);
   }
   async function sidecar(name, namespace, args, out, file, timeout, memory = budget.resources.qualification.memory) {

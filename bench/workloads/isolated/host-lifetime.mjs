@@ -17,6 +17,7 @@ const serial = (v) => `${JSON.stringify(v)}\n`;
 const fields = ["cgroup.procs", "cgroup.events", "cpu.stat", "cpu.max", "cpuset.cpus.effective", "memory.current", "memory.peak", "memory.max", "memory.events"];
 const root = "/sys/fs/cgroup";
 const sampleIntervalMs = 100, maximumSampleGapMs = 1000;
+const browserStorageYieldMs = 50;
 const observationOperations = new WeakMap();
 const executableSuccessors = new WeakMap();
 function observing(operation, action) {
@@ -199,6 +200,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
 const retryPause = new Int32Array(new SharedArrayBuffer(4));
 const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
   "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
+const retriedEmptyCensuses = new WeakSet();
 function snapshot(path, executables, pending, lastSampleAt = null, timing, previousProcesses) {
   // Spend only the time left in the existing continuity window. A monotonic
   // deadline also bounds retries when the wall clock moves backwards.
@@ -216,6 +218,7 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
             p.executableRef === successor.parent.ref && sameProcess(p, successor.parent.identity, successor.cgroup)));
         });
         if (race && performance.now() > deadline) throw race;
+        if (race && observed.processes.length === 0) retriedEmptyCensuses.add(observed);
         return observed;
       };
       return pending ? pending.transaction(attempt) : attempt();
@@ -427,6 +430,16 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     participantGroup(path, id);
     stage = "kernel-census";
     const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    // The entry PID can exit after the opening stat. Empty PID walks alone
+    // cannot settle the exit, nor can an empty retry after a failed census.
+    if (observed.processes.length === 0 && !retriedEmptyCensuses.has(observed)
+      && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+      && observed.groups.every(({ files }) => files["cgroup.events"]?.split("\n")
+        .filter((line) => /^populated(?:[ \t]|$)/.test(line)).join("\n") === "populated 0")
+      && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+      const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+      if (stopped) throw new ClosingDockerExit(stopped);
+    }
     assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
     stage = "process-identity-close";
     const closing = processIdentity(readFileSync(`${at}/stat`, "utf8"));
@@ -517,8 +530,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   let context, writer, pending = null, closed = false, timer;
   const startupSignals = [...new Set([signal, startupSignal].filter(Boolean))];
   function releaseStartup() { for (const value of startupSignals) value.removeEventListener("abort", dispose); }
+  function stopSampling() { if (browser) clearTimeout(timer); else clearInterval(timer); }
   function dispose() {
-    closed = true; clearInterval(timer); releaseStartup(); pending?.close(); writer?.abort();
+    closed = true; stopSampling(); releaseStartup(); pending?.close(); writer?.abort();
   }
   for (const value of startupSignals) value.addEventListener("abort", dispose, { once: true });
   try {
@@ -633,16 +647,28 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
         checkStartup(); assert.equal(closed, false);
-        timer = setInterval(() => {
+        const tick = () => {
           const timing = executableCensus ? { entryGapMs: Date.now() - lastSampleAt } : null;
           try {
             sample(timing);
           } catch (error) {
             observerError = "host-observation-gap"; failure("interval", error, timing);
-            if (writer.error) clearInterval(timer);
+            if (writer.error) stopSampling();
             notifyFault();
           }
-        }, sampleIntervalMs);
+        };
+        if (browser) {
+          // Repeating timers can keep synchronous Docker censuses back-to-back,
+          // leaving the asynchronous writer behind even on a healthy filesystem.
+          const capture = () => {
+            if (closed) return;
+            const startedAt = performance.now();
+            tick();
+            if (!closed && !writer.error) timer = setTimeout(capture,
+              Math.max(browserStorageYieldMs, Math.ceil(sampleIntervalMs - (performance.now() - startedAt))));
+          };
+          timer = setTimeout(capture, sampleIntervalMs);
+        } else timer = setInterval(tick, sampleIntervalMs);
         await writer.drain();
         checkStartup(); assert.equal(closed, false); releaseStartup();
       } catch (error) { dispose(); throw error; }
@@ -654,7 +680,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
     async finish(result, retainTerminalClock = false, onSettled) {
-      assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
+      assert.equal(closed, false); closed = true; stopSampling(); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
       catch (error) { observerError = "host-observation-gap"; failure("finish", error); }

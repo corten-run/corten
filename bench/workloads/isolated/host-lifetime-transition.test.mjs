@@ -12,8 +12,9 @@ const scope = (container) => `/system.slice/docker-${container}.scope`;
 const zero = "0001-01-01T00:00:00Z";
 
 async function exitTransition(t, { change = () => {}, path = "stat", code = "ENOENT",
-  finishDelay = 0, wakeOffset = 0, inspectMs = 0, closing = false } = {}) {
-  let faults = 0, phase = 0, missingAt, pinsAfterExit;
+  finishDelay = 0, wakeOffset = 0, inspectMs = 0, closing = false, census, censusRace = false,
+  censusEvents = "populated 0\nfrozen 0\n" } = {}) {
+  let faults = 0, phase = 0, missingAt, pinsAfterExit, censuses = 0;
   const procReads = [], inspections = [], waits = [];
   const f = await fixture(t, [], true, () => { faults++; });
   Atomics.wait.mock.mockImplementation((_array, _index, _value, ms) => {
@@ -40,16 +41,25 @@ async function exitTransition(t, { change = () => {}, path = "stat", code = "ENO
   };
   f.override = (name) => {
     const root = "/sys/fs/cgroup" + scope(id);
-    if (name === root + "/cgroup.procs") return "5000\n";
+    if (name === root + "/cgroup.procs") {
+      if (phase === 1 && censusRace && censuses++ === 0) return "5001\n";
+      return phase === 1 && census !== undefined ? census : "5000\n";
+    }
+    if (name === root + "/cgroup.events" && phase === 1 && census !== undefined) {
+      if (censusEvents === null) throw missing("ENOENT");
+      return censusEvents;
+    }
     if (name === root + "/cpu.max") return "100000 100000\n";
     if (name === root + "/memory.max") return "100\n";
-    if (!name.startsWith("/proc/5000/")) return;
+    const pid = /^\/proc\/(500[01])\//.exec(name)?.[1];
+    if (pid === undefined) return;
     if (phase === 1) {
       procReads.push(name);
-      if (!closing && name === "/proc/5000/" + path) throw missing(code);
+      if (censusRace && name === "/proc/5001/stat") throw missing("ENOENT");
+      if (!closing && census === undefined && name === "/proc/5000/" + path) throw missing(code);
     }
     if (name.endsWith("/cgroup")) return "0::" + scope(id) + "\n";
-    if (name.endsWith("/stat")) return stat(5000);
+    if (name.endsWith("/stat")) return stat(Number(pid));
   };
   f.clock += 100; await f.tick();
   const live = f.samples().at(-1);
@@ -68,6 +78,42 @@ async function exitTransition(t, { change = () => {}, path = "stat", code = "ENO
   const replay = await f.finish();
   return { f, faults, inspections, waits, procReads, live, exit, removing, absent, stopped, replay, pinsAfterExit };
 }
+
+test("r104 exit: a stable empty census can be closed by the same Docker generation", async (t) => {
+  const { f, faults, inspections, waits, live, exit, stopped, replay } =
+    await exitTransition(t, { census: "", finishDelay: 60, inspectMs: 2 });
+  assert.ok(live.docker.participants[0].kernel);
+  assert.deepEqual(inspections, [[0, "running"], [2, "running"], [70, "removing"]]);
+  assert.deepEqual(waits, [66]);
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [], participants: [{
+    startedAt: exit.at, endedAt: exit.at + 72, container: {
+      id, imageId: image, restartCount: 0, state: stopped.State,
+    }, kernel: null,
+  }] });
+  assert.equal(faults, 0);
+  assert.equal(f.terminal.firstDockerGap, undefined);
+  assert.equal(replay.status, "verified");
+});
+
+for (const [label, options, n] of [
+  ["cgroup.events still reports populated 1", { censusEvents: "populated 1\nfrozen 0\n" }, 1],
+  ["cgroup.events is missing", { censusEvents: null }, 1],
+  ["cgroup.events has conflicting populated rows", { censusEvents: "populated 0\npopulated 1\n" }, 1],
+  ["another process is in the census", { census: "5001\n" }, 1],
+  ["a failed nonempty census retries to empty", { censusRace: true }, 1],
+  ["the closing inspect reports a different generation", { finishDelay: 0, change: (c) => { c.RestartCount++; } }, 2],
+  ["the confirmation would start at its deadline", { inspectMs: 75 }, 1],
+]) test(`r104 exit: preserves the census gap when ${label}`, async (t) => {
+  const { f, faults, inspections, exit, procReads, waits } = await exitTransition(t, { census: "", ...options });
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [id], participants: [] });
+  assert.deepEqual(f.terminal.firstDockerGap, { stage: "kernel-census", code: "ERR_ASSERTION" });
+  assert.equal(faults, 1);
+  assert.equal(inspections.length, n);
+  if (options.censusRace) {
+    assert.ok(procReads.includes("/proc/5001/stat"));
+    assert.deepEqual(waits, [1]);
+  }
+});
 
 test("closing inspect can prove an exit of the same Docker generation without retaining its partial kernel census", async (t) => {
   const { f, faults, live, exit, stopped, inspections, waits, pinsAfterExit } = await exitTransition(t, { closing: true });

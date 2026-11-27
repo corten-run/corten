@@ -2340,3 +2340,166 @@ async fn an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_
     // The middleware ran for most answers, so most were compared with each line inserted.
     assert!(marked * 2 > compared && compared > 20_000, "{marked} of {compared} answers had the one more line");
 }
+
+/// What [`crate::cache::tag`] makes of an answer: its status, its lines in the order they are
+/// sent and its body. `given` is what its scope's lines say of a tag when it was given them in
+/// one pass, so `None` has every line of it searched.
+async fn tag_sent(res: Response, has: &[http::HeaderValue], given: Option<crate::cache::BesideATag>) -> LinesSent {
+    let (parts, body) = crate::cache::tag(res, has, given.as_ref()).await.into_parts();
+    (parts.status, lines_of(&parts.headers), body.collect().await.unwrap().to_bytes().to_vec())
+}
+
+/// The tag among an answer's lines.
+fn tag_of(sent: &LinesSent) -> Option<http::HeaderValue> {
+    let (_, tag) = sent.1.iter().find(|(name, _)| name == "etag")?;
+    Some(http::HeaderValue::from_bytes(tag).unwrap())
+}
+
+/// An answer given its scope's lines in one pass is tagged without a search of its lines
+/// ([`crate::cache::tag`]), and is tagged as it would be with one: under each policy, with each
+/// scope's lines, which the test makes itself by the calls `Scopes::new` makes them by (the
+/// app's, which are also those of Corten's own routes, an area's, an API's and those of an API
+/// in the area), every answer [`lines_answer`]
+/// makes that the pass takes is the same answer, byte for byte, its `ETag` among its lines,
+/// whether its lines are searched or not, and the same as that answer given each line by the
+/// stages and searched; so is its `304` to a request that names its tag, and its answer to one
+/// that names another. The app tags only a page scope's answers; an API's and its own routes'
+/// lines are held to the same here.
+#[tokio::test]
+async fn an_answer_given_its_scope_s_lines_in_one_pass_is_tagged_as_one_whose_lines_are_searched() {
+    use crate::cache::Seen;
+    use crate::security::{Applied, NonceSlot, Sources};
+    let (mut tagged, mut untagged) = (0, 0);
+    for (name, policy, _) in lines_policies() {
+        let area = lines_area_policy(Sources::default());
+        let applied = Applied::new(policy, "", &[("/walled", &area)]);
+        let (walled, _) = applied.csp_for("/walled/text");
+        let scopes = [
+            ("the app's pages and Corten's own routes", &*applied.csp, true),
+            ("an area", &*walled, true),
+            ("an API", &*applied.csp, false),
+            ("an API in the area", &*walled, false),
+        ];
+        for (scope, csp, page) in scopes {
+            let lines = applied.lines(csp, page);
+            // No scope has a line that leaves an answer untagged or is part of its tag, so each
+            // one's answers are tagged without the search. A line that changes that sends them to
+            // the search (the test below), which this then says, where only a count would.
+            let beside = crate::cache::BesideATag::of(&lines);
+            assert!(beside.holds(), "{name}, {scope}");
+            for kind in LINES_KINDS {
+                for caller in [false, true] {
+                    let slot = page.then(|| NonceSlot::new(7, false));
+                    // The answer as the pass leaves it, or none when the pass leaves it alone.
+                    let one = || {
+                        let mut res = lines_answer(kind);
+                        applied.ready(&mut res, &lines, slot.as_ref(), csp, caller).then_some(res)
+                    };
+                    // The same answer with each line inserted by the stages.
+                    let each = || {
+                        let mut res = lines_answer(kind);
+                        applied.headers(&mut res, slot.as_ref(), csp, false);
+                        if page {
+                            applied.document(&mut res, csp, false);
+                        }
+                        let seen = Seen { credentials: false, caller, partial: false, nonce: false, dev: false };
+                        crate::cache::settle(&mut res, seen, "/a/path");
+                        res
+                    };
+                    let Some(first) = one() else { continue };
+                    let said = format!("{name}, {scope}: {kind}, a caller read {caller}");
+                    let short = tag_sent(first, &[], Some(beside)).await;
+                    assert_eq!(short, tag_sent(one().unwrap(), &[], None).await, "{said}");
+                    assert_eq!(short, tag_sent(each(), &[], None).await, "{said}: against the stages'");
+                    let Some(tag) = tag_of(&short) else {
+                        untagged += 1;
+                        continue;
+                    };
+                    tagged += 1;
+                    let other = http::HeaderValue::from_static(r#"W/"0000000000000000", "another""#);
+                    for (has, status) in [(tag, StatusCode::NOT_MODIFIED), (other, StatusCode::OK)] {
+                        let has = [has];
+                        let short = tag_sent(one().unwrap(), &has, Some(beside)).await;
+                        assert_eq!(short.0, status, "{said}: asked with {has:?}");
+                        assert_eq!(short, tag_sent(one().unwrap(), &has, None).await, "{said}: asked with {has:?}");
+                        assert_eq!(short, tag_sent(each(), &has, None).await, "{said}: asked with {has:?}, against the stages'");
+                    }
+                }
+            }
+        }
+    }
+    assert!(tagged > 500 && untagged > 500, "{tagged} answers tagged, {untagged} left without a tag");
+}
+
+/// What keeps the tag of an answer given its scope's lines in one pass true to those lines:
+/// whether they are beside a tag is read from the lines themselves when the router is built
+/// ([`crate::cache::BesideATag::of`], by the two tests `cache::tag` makes of an answer's lines).
+/// A scope whose lines came to hold one that leaves an answer untagged (a tag, an encoding or a
+/// range of its own, a `Cache-Control` that says `no-store` or `immutable`) or one that is part
+/// of a tag (a `corten-` line, a `Content-Type`) says so, and its answers are searched: each is
+/// the answer the search gives, where the same answer tagged as a scope's whose lines are beside
+/// a tag would be another.
+#[tokio::test]
+async fn a_scope_line_that_leaves_an_answer_untagged_or_is_part_of_its_tag_has_its_answers_searched() {
+    use crate::cache::BesideATag;
+    use crate::security::{Applied, NonceSlot, Policy};
+    type Change = fn(&mut http::HeaderMap, http::HeaderName, http::HeaderValue);
+    let (add, set): (Change, Change) = (
+        |lines, name, value| {
+            lines.append(name, value);
+        },
+        |lines, name, value| {
+            lines.insert(name, value);
+        },
+    );
+    let applied = Applied::new(Policy::new(), "", &[]);
+    let csp = &*applied.csp;
+    let slot = NonceSlot::new(7, false);
+    let plain = applied.lines(csp, true);
+    let beside = BesideATag::of(&plain);
+    assert!(beside.holds());
+    // The answer of `kind` as the pass leaves it with `lines`.
+    let one = |kind: &str, lines: &http::HeaderMap| {
+        let mut res = lines_answer(kind);
+        assert!(applied.ready(&mut res, lines, Some(&slot), csp, false), "{kind}: given its lines in one pass");
+        res
+    };
+    // The scope's lines themselves: all an answer that brought none has.
+    let fixed = one("nothing", &plain).headers().clone();
+    let cases: [(&str, Change, &'static str, &'static str); 11] = [
+        ("a corten- line", add, "corten-notice", "m=Saved"),
+        ("another corten- line", add, "corten-build", "7"),
+        ("a type", add, "content-type", "text/plain; charset=utf-8"),
+        ("a tag", add, "etag", "\"fixed\""),
+        ("an encoding", add, "content-encoding", "identity"),
+        ("a range", add, "content-range", "bytes 0-1/2"),
+        ("a second Cache-Control line that says no-store", add, "cache-control", "no-store"),
+        ("a Cache-Control that says no-store", set, "cache-control", "private, no-store"),
+        ("a Cache-Control that says it in capitals", set, "cache-control", "no-cache, No-Store"),
+        ("a Cache-Control that says immutable", set, "cache-control", "public, max-age=31536000, immutable"),
+        ("a second Cache-Control line that says immutable", add, "cache-control", "Immutable"),
+    ];
+    for (case, change, name, value) in cases {
+        let mut lines = fixed.clone();
+        change(&mut lines, http::HeaderName::from_static(name), http::HeaderValue::from_static(value));
+        let says = BesideATag::of(&lines);
+        assert!(!says.holds(), "{case}");
+        for kind in ["text", "long", "json", "png", "nothing"] {
+            for has in [&[][..], &[http::HeaderValue::from_static("*")][..]] {
+                let said = format!("{case}: {kind}, asked with {has:?}");
+                let searched = tag_sent(one(kind, &lines), has, None).await;
+                assert_eq!(tag_sent(one(kind, &lines), has, Some(says)).await, searched, "{said}");
+                // Tagged as an answer whose scope's lines are beside a tag, which these are not,
+                // an answer with a type of its own is another: the line decides something.
+                if kind != "nothing" {
+                    assert_ne!(tag_sent(one(kind, &lines), has, Some(beside)).await, searched, "{said}: not searched");
+                }
+            }
+        }
+    }
+    // A line that does neither leaves the scope's lines beside a tag.
+    let mut more = fixed.clone();
+    more.append("x-served-by", http::HeaderValue::from_static("a"));
+    more.append("cache-control", http::HeaderValue::from_static("no-transform"));
+    assert!(BesideATag::of(&more).holds());
+}
