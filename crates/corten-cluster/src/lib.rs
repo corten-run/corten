@@ -103,13 +103,29 @@ impl std::error::Error for InvalidFeedKey {}
 /// `error.is::<IdempotencyKeyReused>()`.
 ///
 /// ```
-/// # async fn run(pool: sqlx::PgPool) -> Result<(), corten_cluster::Error> {
-/// if let Err(error) = corten_cluster::begin(&pool, "sellers.42", Some("7f9c0d3e")).await {
-///     if error.is::<corten_cluster::IdempotencyKeyReused>() {
-///         // Another feed's write already used "7f9c0d3e": answer a 422.
-///     }
+/// use corten_cluster::{Begin, IdempotencyKeyReused, Write, Written};
+///
+/// /// How a write to seller 42 under the client's `key` starts.
+/// enum Started {
+///     /// Make the change on `write.conn()`, then `write.commit(..)`.
+///     New(Write),
+///     /// This key's write committed before: answer with what it wrote.
+///     Replayed(Written),
+///     /// Another feed's write already used this key; nothing was written. Answer a 422.
+///     Refused,
 /// }
-/// # Ok(()) }
+///
+/// async fn start(pool: &sqlx::PgPool, key: &str) -> Result<Started, corten_cluster::Error> {
+///     let begun = match corten_cluster::begin(pool, "sellers.42", Some(key)).await {
+///         Err(error) if error.is::<IdempotencyKeyReused>() => return Ok(Started::Refused),
+///         // Any other error (Postgres out of reach) is the app's failure, not the client's.
+///         begun => begun?,
+///     };
+///     Ok(match begun {
+///         Begin::New(write) => Started::New(write),
+///         Begin::Done(written) => Started::Replayed(written),
+///     })
+/// }
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IdempotencyKeyReused;
