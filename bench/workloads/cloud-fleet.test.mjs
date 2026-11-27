@@ -497,7 +497,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn",
   "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "archive-edited-at-dispatch", "evidence-edited-at-dispatch",
   "receipt-edited-at-engine", "engine-unchanged", "lock-replaced-at-read",
-  "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence"]) test({
+  "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence",
+  "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -530,6 +531,10 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-preflight": "a saved digest edited during the DELETE's account preflight refuses before the intent would overwrite it, and sends no DELETE",
   "archive-edited-at-preflight": "a byte appended to results.tgz during the DELETE's account preflight refuses with no intent, and once restored a restart deletes once on a fresh proof",
   "lock-replaced-at-absence": "an operation lock replaced during the absence read after the DELETE writes no destroyedAt, and a later collect confirms absence with no second DELETE",
+  "state-edited-at-read": "a reservation changed during the retirement's exact host read refuses with no digest, receipt, intent or DELETE and keeps the change",
+  "state-edited-at-verification": "a reservation changed while the evidence is verified for the intent refuses with no intent or DELETE and keeps the change",
+  "proof-expired-at-verification": "a drain proof that expires while the evidence is verified for the intent saves no intent and sends no DELETE, and a restart deletes once on a fresh proof",
+  "state-edited-at-intent-stage": "a reservation changed while the intent's own stage is written refuses before its rename, removes that stage and sends no DELETE",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -546,7 +551,13 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   const token = fleet.jobs[1].token;
   kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource, drainSource: setupDrainSource }) + "\n");
   let failed, queries = 0, offset = 0, stall, stalled = false, deleteExpiry, editAtPreflight = false, edited, replacedAtRead;
-  let changedAtPreflight, replacedAtAbsence;
+  let changedAtPreflight, replacedAtAbsence, changedAtRead, preflightSeen = false, changedAtVerification;
+  // Another writer's change to the reservation: one more recorded extraction attempt.
+  const editState = () => {
+    const path = join(h.local, "state.json"), before = readFileSync(path), s = JSON.parse(before);
+    s.extractionAttempts = [...s.extractionAttempts ?? [], "evidence-Concurrent0"];
+    writeFileSync(path, `${JSON.stringify(s, null, 2)}\n`); return { before, after: readFileSync(path) };
+  };
   const receipt = join(h.local, "failed-setup-host.json"), lockReplacement = `${JSON.stringify({ pid: 1, at: "2026-01-01T00:00:00.000Z" })}\n`;
   const editReceipt = () => {
     const bytes = readFileSync(receipt), record = JSON.parse(bytes); record.startedAtMs -= 1000;
@@ -559,6 +570,10 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       const preflight = binary === "doctl" && args[0] === "account" && existsSync(receipt);
       if (stall && !stalled && preflight) { stalled = true; offset += stall; }
       if (editAtPreflight && !edited && preflight) editReceipt();
+      if (preflight) preflightSeen = true;
+      // The first exact host read after the drain query is the retirement's own ownership read.
+      if (mode === "state-edited-at-read" && !changedAtRead && queries === 1 && binary === "doctl"
+        && args[0] === "compute" && args[1] === "droplet" && args[2] === "get" && !existsSync(receipt)) changedAtRead = editState();
       if (preflight && !changedAtPreflight && mode === "state-edited-at-preflight") {
         // Only the recorded digest changes; the receipt and everything it names stay.
         const path = join(h.local, "state.json"), s = h.saved();
@@ -877,6 +892,79 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(await h.task({ run }).collect(), 1);
     const s = h.saved();
     assert.ok(s.destroyedAt); assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+    return;
+  }
+  if (mode === "state-edited-at-read") {
+    await assert.rejects(h.task({ run }).collect(), /saved reservation changed before the deletion intent; preserve host/);
+    const saved = h.saved();
+    assert.ok(changedAtRead); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // The change stays as it was made: no digest, receipt or intent was saved over it.
+    assert.ok(readFileSync(join(h.local, "state.json")).equals(changedAtRead.after));
+    assert.equal(saved.pendingRetirement, undefined); assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined);
+    assert.equal(existsSync(receipt), false); assert.ok(!readdirSync(h.local).some((name) => name.startsWith("failed-setup-host")));
+    assert.ok(!readdirSync(h.local).some((name) => /^state\.json\..*tmp$/.test(name)));
+    return;
+  }
+  if (mode === "state-edited-at-intent-stage") {
+    // After the DELETE's account preflight, the first exclusive open of state.json.tmp is the
+    // intent save's own stage, written after the custody check that follows its verification.
+    let stage;
+    hookFs(t, {
+      openSync: (original) => (path, flags, ...rest) => {
+        const fd = original(path, flags, ...rest);
+        if (preflightSeen && !changedAtVerification && flags === "wx" && basename(String(path)) === "state.json.tmp") {
+          stage = String(path); changedAtVerification = editState();
+        }
+        return fd;
+      },
+    });
+    await assert.rejects(h.task({ run }).collect(), /saved reservation changed before the deletion intent; preserve host/);
+    const saved = h.saved(), current = readFileSync(receipt);
+    assert.ok(changedAtVerification && stage); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // The change stays as it was made, and the refused stage is gone, so it blocks no later save.
+    assert.ok(readFileSync(join(h.local, "state.json")).equals(changedAtVerification.after));
+    assert.equal(existsSync(stage), false);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(current) });
+    return;
+  }
+  if (mode === "state-edited-at-verification" || mode === "proof-expired-at-verification") {
+    // After the DELETE's account preflight, the first open of results.tgz is the intent's own
+    // verification, which follows the custody check made just after that preflight.
+    const real = Date.now; t.mock.method(Date, "now", () => real() + offset);
+    hookFs(t, {
+      openSync: (original) => (path, ...rest) => {
+        if (preflightSeen && !changedAtVerification && basename(String(path)) === "results.tgz") {
+          if (mode === "state-edited-at-verification") changedAtVerification = editState();
+          else { changedAtVerification = true; offset += 61000; }
+        }
+        return original(path, ...rest);
+      },
+    });
+    if (mode === "state-edited-at-verification") {
+      await assert.rejects(h.task({ run }).collect(), /saved reservation changed before the deletion intent; preserve host/);
+      const saved = h.saved(), current = readFileSync(receipt);
+      assert.ok(changedAtVerification); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+      // The change stays as it was made: no intent was saved over it.
+      assert.ok(readFileSync(join(h.local, "state.json")).equals(changedAtVerification.after));
+      assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+      assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(current) });
+      return;
+    }
+    await assert.rejects(h.task({ run }).collect(), /retirement proof expired before deletion/);
+    const saved = h.saved(), old = readFileSync(receipt);
+    assert.ok(changedAtVerification); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // The expired proof leaves only its receipt and digest.
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(old) }); assert.equal(existsSync(lock), false);
+    // A restart keeps that receipt for archival and deletes once on its own fresh proof.
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved(), record = JSON.parse(readFileSync(receipt));
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.ok(readFileSync(join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`)).equals(old));
+    assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
+    assert.equal(deleteExpiry, record.startedAtMs + 60000);
     assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }

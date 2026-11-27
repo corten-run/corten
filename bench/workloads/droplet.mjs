@@ -1018,11 +1018,40 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(current >= finishedAtMs && (bounded ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
         "retirement proof expired before deletion");
     };
-    // The provider read awaits, so the lock is checked again after it and before each
-    // publication below: a lock replaced during the read refuses with nothing saved.
-    await own(); check(); held.own();
-    // The saved reservation as this process last left it; the intent is saved only over these bytes.
-    let lastSaved = regular(statePath, 1024 * 1024);
+    // The saved reservation as this process last loaded or saved it, read before the first
+    // await and required to hold exactly the state this process has: every retirement write
+    // is made only over these bytes, so a change made during the host read, an evidence
+    // verification or a provider read refuses and is kept as made, never overwritten. Each
+    // save below replaces them with the bytes it wrote.
+    const changedReservation = "saved reservation changed before the deletion intent; preserve host";
+    let trusted = regular(statePath, 1024 * 1024), intentSaved = false;
+    try { assert.equal(stateBytes(JSON.parse(trusted)), stateBytes(state)); }
+    catch { throw new assert.AssertionError({ message: changedReservation }); }
+    // The custody every write and the DELETE rest on, checked after each await or slow step
+    // and immediately before each write: the lock this operation holds, the saved
+    // reservation byte for byte and, until the intent, a bounded proof's deadline. After the
+    // intent the deadline goes with the DELETE itself, and the absence read that follows it
+    // must not be refused for a deadline its DELETE already met.
+    const requireCustody = () => {
+      held.own();
+      assert.ok(regular(statePath, 1024 * 1024).equals(trusted), intentSaved
+        ? "saved retirement reservation changed; preserve host" : changedReservation);
+      if (bounded && !intentSaved) requireFreshProof();
+    };
+    // A state save writes and syncs its stage before the rename that replaces state.json, so
+    // custody is checked again between the two: a change made while the stage was written
+    // refuses before the rename, and the stage this call created is removed unread.
+    const saveState = (kind) => {
+      check();
+      writeState(state, (stage, target) => {
+        try { requireCustody(); } catch (error) { unlinkSync(stage); throw error; }
+        renameSync(stage, target);
+      }, kind);
+    };
+    // The provider read awaits, so custody is checked again after it and before each
+    // publication below: a lock or reservation changed during the read refuses with
+    // nothing saved.
+    await own(); check(); requireCustody();
     if (pinned) requireUnusedBootstrapCustody();
     requireFreshProof();
     const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
@@ -1036,7 +1065,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
     // Such a receipt and its history copy are published whole (durableNew), so a write
     // interrupted before publication leaves only an untrusted stage, removed here unread.
-    if (recorded) discardPublicationStage(path);
+    if (recorded) { requireCustody(); discardPublicationStage(path); }
     if (existsSync(path)) {
       // A crash between receipt and state writes is recoverable. Preserve the
       // exact old record, but only this operation's fresh probe authorizes intent.
@@ -1047,13 +1076,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(state.pendingRetirement.kind === kind && state.pendingRetirement.evidenceSha256 === hash,
           "interrupted retirement receipt differs from its recorded digest; preserve host");
       }
+      // Verifying a setup receipt hashes the archive and its extraction, a slow step, so
+      // custody is checked again after it and before each of the writes that follow.
       verifyRetirementRecord(prior, kind, true);
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
-      if (recorded) discardPublicationStage(retained);
+      if (recorded) { requireCustody(); discardPublicationStage(retained); }
       if (existsSync(retained)) assert.equal(digest(regular(retained, limit)), hash, "interrupted retirement history differs");
-      else { held.own(); (recorded ? durableNew : durable)(retained, prior); }
+      else { requireCustody(); (recorded ? durableNew : durable)(retained, prior); }
       assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
-      held.own(); unlinkSync(path); syncDirectory(local);
+      requireCustody(); unlinkSync(path); syncDirectory(local);
     }
     // Supersedes any earlier digest; the retirement state below clears it. The digest is
     // saved before the receipt is published, so a published receipt always has one. Like
@@ -1061,35 +1092,33 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // here leaves an unread stage rather than a state.json.tmp that blocks the next collect.
     const written = digest(bytes);
     if (recorded) {
-      check(); held.own(); state.pendingRetirement = { kind, evidenceSha256: written }; writeState(state, renameSync, "pending-retirement");
-      lastSaved = Buffer.from(stateBytes(state));
+      check(); requireCustody(); state.pendingRetirement = { kind, evidenceSha256: written }; saveState("pending-retirement");
+      trusted = Buffer.from(stateBytes(state));
     }
-    held.own(); (recorded ? durableNew : durable)(path, bytes);
-    if (bounded) requireFreshProof();
+    requireCustody(); (recorded ? durableNew : durable)(path, bytes);
     // The bytes this process wrote, not the file, are the authority: the published receipt
     // must still be them before the intent and again just before the DELETE is sent.
     const requirePublished = () => assert.equal(digest(regular(path, limit)), written,
       "published retirement receipt differs from the bytes written; preserve host");
-    requirePublished();
+    requireCustody(); requirePublished();
     // For a setup retirement, this verification also pins the archive and its extraction.
     const pins = [];
-    let savedState;
     const publishIntent = () => {
-      requirePublished(); held.own();
-      // The saved reservation must still be the one this process last left: a drain proof's
-      // intent follows the DELETE's account preflight, which awaits, and the intent save
-      // would otherwise overwrite a change made during it and then guard against itself.
-      assert.ok(regular(statePath, 1024 * 1024).equals(lastSaved),
-        "saved reservation changed before the deletion intent; preserve host");
+      // A drain proof's intent follows the DELETE's account preflight, which awaits, so
+      // custody is checked first; the intent save would otherwise overwrite a change made
+      // during that read and then guard against itself.
+      requirePublished(); requireCustody();
       // The retirement is verified, and its archive and extraction pinned, before the intent
       // is saved, so evidence that changed leaves the receipt and its digest with no intent,
-      // which the next collect recovers on a fresh proof.
+      // which the next collect recovers on a fresh proof. That verification hashes the
+      // archive and the extracted tree, so the receipt, the lock, the reservation and a
+      // bounded proof's deadline are all checked again after it, immediately before the save.
       const prior = state, intended = { ...prior, status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() };
       delete intended.pendingRetirement;
       state = intended;
-      try { verifyRetirement(pins); } catch (error) { state = prior; throw error; }
-      save();
-      savedState = Buffer.from(stateBytes(state));
+      try { verifyRetirement(pins); requirePublished(); requireCustody(); } catch (error) { state = prior; throw error; }
+      saveState();
+      trusted = Buffer.from(stateBytes(state)); intentSaved = true;
     };
     // Everything the DELETE relies on, as this process left it: the receipt, the saved
     // reservation that names its digest, the archived control custody the proof was built
@@ -1099,7 +1128,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const custody = recorded ? evidence.observation.control.custody : undefined;
     const requireRetirementCustody = () => {
       requirePublished();
-      assert.ok(regular(statePath, 1024 * 1024).equals(savedState), "saved retirement reservation changed; preserve host");
+      assert.ok(intentSaved, "deletion intent required before the DELETE; preserve host");
       if (custody) {
         try {
           const directory = join(local, state.evidence, "control"); physical(directory);
@@ -1111,7 +1140,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         } catch (cause) { throw new Error("archived control custody changed; preserve host", { cause }); }
       }
       for (const pin of pins) pin();
-      held.own();
+      requireCustody();
     };
     const deletion = ["compute", "droplet", "delete", state.id, "--force"];
     if (drained) {
@@ -1129,9 +1158,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     await confirmDeleted();
     // The absence read awaits too: destroyedAt is published only while this operation still
     // holds its lock and the saved reservation is still the intent it wrote.
-    held.own();
-    assert.ok(regular(statePath, 1024 * 1024).equals(savedState), "saved retirement reservation changed; preserve host");
-    state.destroyedAt = new Date().toISOString(); save(); return 1;
+    requireCustody();
+    state.destroyedAt = new Date().toISOString(); saveState(); return 1;
   };
   const retireUnused = async () => {
     assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");

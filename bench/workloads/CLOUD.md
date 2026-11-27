@@ -1394,14 +1394,18 @@ stay as they were, and it never qualifies the group.
 
 The drain proof observes host state that can change, so its DELETE carries the
 same deadline as the pinned unused proof: 60 seconds from the local start of the
-host query, checked before the receipt is written, again after it, after the
-DELETE's account preflight and in the provider request. A drain proof's intent
+host query, checked after the retirement's exact host read, before and after the
+receipt is written, again after the intent's evidence verification immediately
+before the intent is saved, after the DELETE's account preflight and in the
+provider request. A drain proof's intent
 is saved only after that preflight and the deadline check that follows it, as the
 exit-one retirement's is, so a proof that expires during the preflight (or a
 preflight that fails) leaves its receipt and recorded digest with no intent, and
-the next collect recovers them on a fresh proof as below. The pinned unused and
+the next collect recovers them on a fresh proof as below; so does a drain proof
+that expires during the intent's evidence verification. The pinned unused and
 v1 and v2 setup retirements save their intent before the DELETE's preflight, as
-before; a v1 or v2 setup retirement keeps its existing check of 60 seconds from
+before (a pinned unused proof that expires during that verification likewise
+saves no intent); a v1 or v2 setup retirement keeps its existing check of 60 seconds from
 the proof's end, made before the intent. Expiry before the intent does not
 consume the intent; expiry after the intent forbids another DELETE, so a later
 collect only verifies the saved receipt and checks exact absence. For a drain
@@ -1465,31 +1469,53 @@ The v1, unused and pinned unused receipts keep their exclusive direct writes.
 
 The bytes this process wrote, not the file, are the authority for the DELETE.
 After publication the receipt is read back and must match that digest before
-the intent is saved. Immediately before the intent the saved reservation must
-also still be, byte for byte, the one this process last left (for a v2 or v3
-receipt, the state that records its digest). For a drain proof that check follows
-the DELETE's account preflight, so a change made during that read, even to the
-recorded digest alone, refuses with `saved reservation changed before the
-deletion intent; preserve host` and is kept as made, rather than overwritten by
-the intent; no intent is saved and no DELETE is sent. The retirement is then
-verified, and its archive and extraction pinned (below), before the intent is
-saved, so evidence that changed by then refuses with no intent and leaves the
-receipt and its digest for the next collect, which recovers them on a fresh
-proof once the evidence matches again. After the intent, every retirement kind
+the intent is saved, and again just before the intent save.
+
+Every write a retirement makes rests on one custody check: the lock this
+operation holds (the file this process created, by identity and bytes), the saved
+reservation (`state.json`, byte for byte) as this process last loaded or saved
+it and, until the intent, a pinned unused or drain proof's deadline. That lock is
+`operation.lock` for an ordinary collect and `stream-recovery.lock` for an
+invalid-monitor recovery collect, which never takes the original
+`operation.lock` it finds; a retirement under any other lock refuses. The
+reservation bytes are read before the retirement's first await and must hold
+exactly the state this process has loaded or saved; they are replaced only by the
+retirement's own saves (a v2 or v3 receipt's digest, then the intent), so a
+change made by anything else is refused and kept as made, never overwritten. The check runs after every await
+or slow step and immediately before every write: after the exact host read (a
+provider read), before a stale publication stage is removed, after an
+interrupted receipt is verified (which hashes the archive and its extraction) and
+before each of its stage removal, history copy and unlink, before the digest,
+before and after the receipt is written, at the start of the intent (for a drain
+proof, after the DELETE's account preflight), again after the intent's own
+verification immediately before it is saved, and after the absence read before
+`destroyedAt`. Each state save (the digest, the intent and `destroyedAt`)
+checks it once more after writing and syncing its stage, immediately before the
+rename that replaces `state.json`; a refusal there removes that complete stage,
+which this save created, so it blocks no later save (a torn write's stage still
+stays, as above). Before the intent a mismatch refuses with `saved reservation
+changed before the deletion intent; preserve host`, `retirement proof expired
+before deletion`, `operation.lock changed; preserve custody` or
+`stream-recovery.lock changed; preserve custody`, writes nothing after it and
+sends no DELETE: changed during the host read, no digest, receipt or intent is
+saved; changed during the account preflight or the intent's verification, the
+receipt and its digest stay with no intent. A drain proof that expires during
+that verification likewise leaves the receipt and its digest, which the next
+collect recovers on a fresh proof. The retirement is verified, and its archive
+and extraction pinned (below), before the intent is saved, so evidence that
+changed by then refuses with no intent and leaves the receipt and its digest for
+the next collect, which recovers them on a fresh proof once the evidence matches
+again. After the intent the deadline goes with the DELETE itself rather than with
+this check, so the absence read that follows a DELETE sent in time is not refused
+for it.
+
+After the intent, every retirement kind
 (unused, pinned unused and failed-setup v1, v2 and v3) checks, as this process left them, the
 receipt, the saved reservation (`state.json`, byte for byte, so including its
 retirement digest), for a v2 or v3 receipt the archived control custody its proof
 was built from (the inventory and bytes of the evidence's `control/` folder,
 including every watcher failure), for every failed-setup receipt the other inputs
-its replay verifier hashes, and the lock this operation holds (the file this process
-created, by identity and bytes). That lock is `operation.lock` for an ordinary collect
-and `stream-recovery.lock` for an invalid-monitor recovery collect, which never takes
-the original `operation.lock` it finds; a retirement under any other lock refuses.
-The same lock is also checked when the retirement begins, again after its exact
-host read (a provider read, so an await), and immediately before each write of its
-digest, receipt, history copy and intent, so a lock missing or replaced at any of
-those points refuses before the next write; replaced during that read, nothing is
-saved and no DELETE is sent. Those other inputs are `results.tgz` and the
+its replay verifier hashes, and the lock this operation holds. Those other inputs are `results.tgz` and the
 whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
 and `control/`). They are pinned without rereading them: the verification just
 before the intent hashes each, recording `results.tgz`'s file identity (device,
