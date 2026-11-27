@@ -977,7 +977,7 @@ impl Asked {
             uri: req.uri().clone(),
             mode,
             fetched,
-            accept_language: req.headers().get(header::ACCEPT_LANGUAGE).cloned(),
+            accept_language: if shared.error_page_language { req.headers().get(header::ACCEPT_LANGUAGE).cloned() } else { None },
             nonce: nonce.cloned(),
             signal: signal.clone(),
             credentials: std::mem::take(&mut page.credentials),
@@ -1043,6 +1043,12 @@ impl Asked {
 /// Everything a request needs from the app: the error page, where scripts live.
 pub(crate) struct Shared {
     pub error_page: Box<ErrorPage>,
+    /// The error page can read the language the request asked for, so [`Asked`] keeps its
+    /// `Accept-Language`: true but for an app made with Corten's own error page, no
+    /// [`crate::App::messages`] and no [`crate::App::layout_read`] (`App::router`). That page
+    /// reads the language only through the app's locales ([`Req::lang`], `Content-Language`), and
+    /// a layout read starts with the error page's request.
+    pub error_page_language: bool,
     pub assets: Option<Arc<Assets>>,
     pub scripts_dir: String,
     /// The import map's JSON: the runtime, the app's typed events and views.
@@ -1114,6 +1120,7 @@ impl Shared {
         head_extra.hash(&mut hasher);
         Shared {
             error_page,
+            error_page_language: true,
             finishing: Arc::default(),
             assets,
             scripts_dir,
