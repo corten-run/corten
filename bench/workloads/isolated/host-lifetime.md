@@ -256,8 +256,12 @@ appending a sample that references it. Samples are never written ahead of their
 record dependencies, even when the kernel flushes un-fsynced appends on its own.
 There is no helper process, worker, custom message protocol or production I/O hook.
 
-The sampler retains its actual capture timestamps, 100 ms interval and independent
-one-second replay limit. It can capture ahead of storage without retimestamping
+The sampler retains its actual capture timestamps, 100 ms target interval and
+independent one-second replay limit. The Fullstack Browser sampler waits at
+least 50 ms after each periodic Docker census before the next one, letting the
+writer run when a synchronous census takes most or all of the interval. The
+one-second observation limit, including capture, is unchanged. The sampler can
+capture ahead of storage without retimestamping
 rows at completion. The combined 256 MiB record/sample limit includes admitted but
 unfinished bytes. Additional queue limits are 8 MiB, 300 frames (30 seconds at
 100 ms) and 4,096 initial records. The writer may append up to 16 already-queued
