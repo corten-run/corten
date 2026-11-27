@@ -1,4 +1,47 @@
-import { base, engine, skip, check } from "./helpers.mjs";
+import { base, engine, skip, check, within, pollFor } from "./helpers.mjs";
+
+/**
+ * Follows the waiting part's link to the page with the picks read in, and says which step did not
+ * happen, or "" when every one did: the click (with Playwright's own error), the navigation it
+ * starts to `?picks=true`, or the picks drawn in that page with no read of them left in it. Each
+ * step has 10 s of its own, a bound a loaded runner's click and load fit in, where a 3 s click
+ * whose error was dropped failed with nothing but the old address (#2246).
+ * @param {import("@playwright/test").Page} page
+ */
+export async function followPicks(page) {
+  const from = page.url();
+  /** The navigation's requests for the page with the picks read in: a whole load's or a swap's. */
+  let asked = 0;
+  /** @param {import("@playwright/test").Request} r */
+  const onRequest = (r) => new URL(r.url()).search === "?picks=true" && asked++;
+  page.on("request", onRequest);
+  try {
+    try {
+      await within(12_000, "page.click: not settled within 12 s", page.click("#picks a", { timeout: 10_000 }));
+    } catch (error) {
+      const why = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+      return `the click on the link failed (${why}), ${asked} requests for the page sent, at ${page.url()}`;
+    }
+    if (!(await pollFor(10_000, async () => new URL(page.url()).search === "?picks=true"))) {
+      return `the click did not navigate to the page with the picks read in within 10 s (${asked} requests for it sent, still at ${page.url()}, from ${from})`;
+    }
+    const drawn = () =>
+      page
+        .evaluate(() => ({ items: document.querySelectorAll("ul#picks li").length, readNow: !!document.querySelector("template[data-corten-read-now]") }))
+        .catch(() => null);
+    const read = async () => {
+      const seen = await drawn();
+      return !!seen && seen.items === 2 && !seen.readNow;
+    };
+    if (!(await pollFor(10_000, read))) {
+      const last = await within(2000, "", drawn()).catch(() => null);
+      return `the page it navigated to did not have the picks read in within 10 s (${JSON.stringify(last)} at ${page.url()})`;
+    }
+    return "";
+  } finally {
+    page.off("request", onRequest);
+  }
+}
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -81,16 +124,10 @@ export async function partReads(page, browser, swaps, noSwaps) {
     await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
     const failed = await placeholder();
     check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
-    // Followed only when shown, so a link that is not fails the checks, not the run.
-    if (failed.link) {
-      await held.click("#picks a", { timeout: 3000 }).catch(() => {});
-      await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
-    }
-    check(
-      "the page it links to has the slow part read in, with JavaScript too",
-      new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$("template[data-corten-read-now]")) === null,
-      held.url(),
-    );
+    // Followed only when shown, so a link that is not fails the checks, not the run; the check says
+    // which step did not happen.
+    const followed = failed.link ? await followPicks(held) : "the link was not shown, so not followed";
+    check("the page it links to has the slow part read in, with JavaScript too", followed === "", followed || held.url());
     await held.unrouteAll({ behavior: "ignoreErrors" });
     await held.context().close();
   }
