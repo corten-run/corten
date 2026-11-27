@@ -711,7 +711,7 @@ impl Also {
         for (_, end, written) in ends.iter_mut() {
             paths.push_str(group);
             paths.push_str(r#"+" data-nav-also=""#);
-            if crate::ascii::any(paths[start..*end].as_bytes(), crate::ascii::html) {
+            if crate::ascii::any(&paths.as_bytes()[start..*end], crate::ascii::html) {
                 let these = paths[start..*end].to_owned();
                 crate::view::escape_into(&these, paths);
             } else {
