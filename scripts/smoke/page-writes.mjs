@@ -1721,7 +1721,10 @@ export async function pageWrites(page, browser) {
       const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
       const finishedBy = pressedAt + 5000;
-      const heard = (await pollFor(Math.max(0, finishedBy - performance.now()), async () => seen.finished[1] ?? false)) || null;
+      // Judged by the time the check heard the finish (`heard.mono`), looked at once more when the
+      // 5 s are over (`pollFor` with a probe that answers at once), so a finish heard in time counts
+      // however late the click returned.
+      const heard = (await pollFor(finishedBy - performance.now(), () => seen.finished[1] ?? false)) || null;
       const finished = heard !== null && heard.mono <= finishedBy ? heard : null;
       if (finished !== null && askedAt === null) await cameWithin(leftOf(finished.mono, 5000), waiting);
       const stalled = finished !== null && askedAt !== null && askedAt <= finished.mono + 5000;

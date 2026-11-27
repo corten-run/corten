@@ -246,12 +246,39 @@ const steps = (ms, what) => {
 /**
  * `probe`'s first answer other than `undefined` or `false` within `ms` (see `steps`), or null if
  * none came in time (a late one included) or a probe threw.
- * @template T @param {number} ms @param {() => Promise<T | undefined | false>} probe @returns {Promise<T | null>}
+ *
+ * A probe that answers at once, with no promise (one that reads what a listener, route or note
+ * already recorded, with no call to the browser), is looked at once more when the `ms` are over,
+ * and once even when `ms` is 0 or less, so a record made in time is not lost because the check
+ * came to look late: its caller judges it by the time it records, never by whether the poll still
+ * had time. A probe that answers with a promise (a read of the page) is not looked at again: an
+ * answer that comes after the `ms` is no answer.
+ * @template T @param {number} ms @param {() => T | undefined | false | Promise<T | undefined | false>} probe @returns {Promise<T | null>}
  */
-const pollFor = (ms, probe) =>
-  steps(ms, `nothing within ${ms} ms`)
-    .poll(probe)
+const pollFor = async (ms, probe) => {
+  /** Whether the probe answered at once (null until it has been called). @type {boolean | null} */
+  let atOnce = null;
+  const got = await steps(ms, `nothing within ${ms} ms`)
+    .poll(() => {
+      const answer = probe();
+      atOnce ??= !(answer instanceof Promise);
+      return Promise.resolve(answer);
+    })
     .catch(() => null);
+  if (got !== null || atOnce === false) return got;
+  /** @type {unknown} */
+  let last;
+  try {
+    last = probe();
+  } catch {
+    return null;
+  }
+  if (last instanceof Promise) {
+    last.catch(() => {});
+    return null;
+  }
+  return last === undefined || last === false ? null : /** @type {T} */ (last);
+};
 
 /**
  * Runs each of a case's cleanup steps in turn, the later ones even when one before them rejects,

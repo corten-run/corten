@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, leftOf, opened, closeContext, exchange } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, opened, closeContext, exchange } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -42,6 +42,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** How the route answers a read; `closing` once the case ends, when it lets each go at once. @type {"hold" | "abort" | "closing"} */
     let answer = "hold";
     let reads = 0;
+    /** When the route saw each of those reads, by the smoke's clock (`performance.now()`), in order. @type {number[]} */
+    const readAt = [];
     /**
      * The page the empty patch case loads, made fresh in the same context, so the read it waits for
      * is its one document's: a read the held page's earlier documents send late is not seen there.
@@ -101,6 +103,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
         held.route(`${base}/`, (route) => {
           if (route.request().headers().corten !== "action") return within(5000, "", route.continue()).catch(() => {});
           reads++;
+          readAt.push(performance.now());
           if (answer === "closing") return within(5000, "", route.abort()).catch(() => {});
           if (answer === "hold") return new Promise((resolve) => holds.push(() => within(5000, "a held part read's abort did not settle within 5 s", route.abort().catch(() => {})).finally(resolve)));
           return within(5000, "", route.abort("internetdisconnected")).catch(() => {});
@@ -120,14 +123,19 @@ export async function partReads(page, browser, swaps, noSwaps) {
         );
       /**
        * Whether the route has seen `count` part reads within 5 s of `from`, a `performance.now()`
-       * time taken just before the load or press that sends the read (`leftOf`), so the time the
-       * driver took to return from it is not added. The part is busy once its fetch starts, which in
-       * Firefox can be before the route sees it. Looked for by the route's own count, with no call to
-       * the browser, so a call that never settles cannot keep the case from its `finally`; a read the
-       * route sees after the 5 s does not count.
+       * time taken just before the load or press that sends the read, so the time the driver took to
+       * return from it is not added. The part is busy once its fetch starts, which in Firefox can be
+       * before the route sees it. Judged by the time the route saw the `count`th read (`readAt`),
+       * looked for with no call to the browser until the 5 s are over and then once more, so a call
+       * that never settles cannot keep the case from its `finally`, a read the route saw in time
+       * counts however late the load or press returned, and a read it saw after the 5 s does not.
        * @param {number} count @param {number} from
        */
-      const routeSaw = async (count, from) => (await pollFor(leftOf(from, 5000), async () => reads >= count)) === true;
+      const routeSaw = async (count, from) => {
+        const by = from + 5000;
+        const at = await pollFor(by - performance.now(), () => readAt[count - 1] ?? false);
+        return at !== null && at <= by;
+      };
       const loadedFrom = performance.now();
       await actWithin("the held part's page load", held.goto(`${base}/`));
       await within(5000, "the part was not busy within 5 s", held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 })).catch(() => {});
