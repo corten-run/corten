@@ -13,7 +13,7 @@ import { createContradiction, createErroredCustody, createErroredReceipt, create
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readCreateQuarantine, readFleet, readGroup,
   postedContradiction, readExternalFailedHost, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckExternalFailedHost, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
-  verifyCollectedGroup, verifyFleet, verifySetupRetry } from "./fleet-verify.mjs";
+  replacementQuarantine, verifyCollectedGroup, verifyFleet, verifySetupRetry } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
 const groups = selection(), names = groups.groups.map(({ group }) => group);
@@ -400,12 +400,18 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     const fleet = readFleet(slot, files[0].slice(6, -5), { priorSelection: true });
     assert.equal(fleet.manifest.single?.group, group, "independent reservation required");
     assert.equal(fleet.manifest.single.indexSha256, indexSha256, "continuation index changed");
+    const replacement = replacementQuarantine(quarantinedCreates, group, fleet.manifest.single.replacesQuarantineSha256);
+    if (replacement) assert.ok(round && replacement.accountId === fleet.manifest.provider.accountId, "replacement requires the original continuation and provider account");
     if (round) {
       assert.equal(fleet.manifest.round, round, "attempt directory round differs");
       const previous = slots.get(group);
       const replacesUnlaunched = unlaunched.has(previous?.root) && previous.manifest.commit !== fleet.manifest.commit;
+      const earlier = attempts.get(group).at(-1);
+      const replacesLatest = replacement && replacement.root === previous?.root
+        && ["quarantined-create", "quarantined-create-witnessed"].includes(earlier?.outcome);
       assert.ok(previous && Number(previous.manifest.round.slice(1)) < Number(round.slice(1))
-        && (retryable(attempts.get(group).at(-1)) || replacesUnlaunched), "earlier group attempt is not settled; never retry");
+        && (retryable(earlier) || replacesUnlaunched || replacesLatest), "earlier group attempt is not settled; never retry");
+      assert.ok(replacement || quarantinedCreates.every((row) => row.group !== group), "the group's create quarantine must be pinned");
       requireSetupRetryCommit(attempts.get(group), fleet.manifest.commit);
     }
     slots.set(group, fleet);

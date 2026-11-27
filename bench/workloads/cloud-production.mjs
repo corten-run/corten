@@ -19,7 +19,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
-  recheckExternalFailedHost, recheckSetupAttempt, recheckSetupRetirement } from "./fleet-verify.mjs";
+  recheckExternalFailedHost, recheckSetupAttempt, recheckSetupRetirement, replacementQuarantine } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -343,8 +343,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   const continuation = manifest?.single ? admission?.subject.continuation : undefined;
   const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
   const quarantined = continuation?.quarantinedCreates ?? [];
-  assert.ok(quarantined.every((row) => row.group !== options.group && row.accountId === manifest.provider.accountId),
-    "create quarantine permits only other groups in the saved account");
+  const replacement = !preview && replacementQuarantine(quarantined, options.group, manifest?.single?.replacesQuarantineSha256);
+  assert.ok(quarantined.every((row) => row.accountId === manifest.provider.accountId
+    && (row.group !== options.group || row === replacement && Number(row.round.slice(1)) < Number(options.round.slice(1)))),
+    "create quarantine permits only other groups or its exact replacement in the saved account");
   const exitOneRetirements = continuation?.exitOneRetirements ?? [];
   const setupRetirements = continuation?.setupRetirements ?? [];
   const historicalIds = new Set([...unconfirmed, ...exitOneRetirements, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
