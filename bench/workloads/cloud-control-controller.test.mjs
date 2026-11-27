@@ -1,7 +1,8 @@
 // Real controller with fake argv transport/provider responses. No host operations.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import fs, { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { basename, join } from "node:path";
 import test from "node:test";
 import { archive, harness, metadata } from "./cloud-fixtures.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -500,6 +501,53 @@ test("slow archive hash and account reads precede the short fence; only an unsen
   delayFence = false; await assert.rejects(task().collect(), /not dispatched/);
   assert.equal(h.saved().deletionIntentAt, undefined); assert.equal(h.deletes, 0);
   assert.equal(await task().collect(), 1); assert.equal(h.deletes, 1);
+});
+
+test("a torn withdrawal of an unsent DELETE's intent leaves its own stage and keeps the intent, so recovery is absence only", async t => {
+  const h = harness(t, { active: true }); await h.launch().launch();
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+  Object.assign(h.flags, { active: false, expired: true });
+  // The DELETE is positively unsent; the next exclusive state stage, the withdrawal's, is torn.
+  let attempts = 0, tearNext = false, torn = false;
+  const fds = new Set();
+  t.mock.method(fs, "openSync", ((original) => (file, flags, ...rest) => {
+    const fd = original(file, flags, ...rest);
+    if (tearNext && !torn && flags === "wx" && /^state\.json\..*tmp$/.test(basename(String(file)))) { torn = true; fds.add(fd); }
+    return fd;
+  })(fs.openSync));
+  t.mock.method(fs, "writeFileSync", ((original) => (target, data, ...rest) => {
+    if (!fds.has(target)) return original(target, data, ...rest);
+    fds.delete(target); fs.writeSync(target, Buffer.from(data).subarray(0, 80));
+    throw new Error("injected torn write");
+  })(fs.writeFileSync));
+  syncBuiltinESMExports();
+  t.after(() => { fs.openSync.mock?.restore(); fs.writeFileSync.mock?.restore(); syncBuiltinESMExports(); });
+  const task = () => h.task({ run(...args) {
+    const [binary, argv] = args;
+    if (binary === "doctl" && argv[2] === "delete" && ++attempts === 1) {
+      tearNext = true; return { status: 1, stdout: "", stderr: "", deleteNotDispatched: true };
+    }
+    return h.run(...args);
+  } });
+  await assert.rejects(task().collect(), /injected torn write/);
+  fs.openSync.mock.restore(); fs.writeFileSync.mock.restore(); syncBuiltinESMExports();
+  const intent = h.saved();
+  assert.ok(torn); assert.equal(attempts, 1); assert.equal(h.deletes, 0); assert.ok(intent.deletionIntentAt);
+  // The withdrawal never wrote the fixed-name stage every later ordinary save would refuse on.
+  assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+  const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+  assert.equal(stages.length, 1); assert.match(stages[0], /^state\.json\.delete-unsent-[a-f0-9]{32}\.tmp$/);
+  const tornBytes = readFileSync(join(h.local, stages[0]));
+  assert.equal(tornBytes.length, 80);
+  // The kept intent allows only exact absence: no DELETE while the host remains, and none once it is gone.
+  await assert.rejects(task().collect());
+  assert.equal(attempts, 1); assert.equal(h.deletes, 0); assert.equal(h.saved().destroyedAt, undefined);
+  h.hosts([]);
+  assert.equal(await task().collect(), 1); assert.equal(attempts, 1); assert.equal(h.deletes, 0);
+  const s = h.saved();
+  assert.ok(s.destroyedAt); assert.equal(s.deletionIntentAt, intent.deletionIntentAt);
+  assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
 });
 
 test("a closed supervised reservation refuses legacy or differently registered inspections", async (t) => {

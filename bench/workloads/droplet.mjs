@@ -278,8 +278,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (prepareDelete && expiry !== undefined && r.status === 1 && r.deleteNotDispatched === true) {
         // The worker positively acknowledged that its request was never sent.
         // A missing result, timeout, HTTP error or lost acknowledgement cannot clear intent.
+        // The withdrawal goes through its own fresh exclusive stage, like the intent it removes.
         if (prepareDelete.onUnsent) prepareDelete.onUnsent();
-        else { boundary(); delete state.deletionIntentAt; writeState(state); }
+        else { boundary(); delete state.deletionIntentAt; writeState(state, renameSync, "delete-unsent"); }
         assert.fail("DELETE not dispatched; fresh collection approval required");
       }
       check();
@@ -1164,7 +1165,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     let beforeIntent;
     // A drain proof's DELETE is sent with allowFail, so the provider worker, the in-process
     // engine or the production checkpoint can positively acknowledge that it never sent the
-    // request (its deadline or cancellation refused before dispatch). Only then is the intent
+    // request (its deadline or cancellation refused before dispatch; the acknowledgement does
+    // not say which, so the refusal names neither). Only then is the intent
     // withdrawn: the state this process saved before it (the receipt's recorded digest, with
     // no intent) is restored under the same custody, through its own fresh stage, so the next
     // collect keeps this receipt for archival and retires on a fresh drain proof of the same
@@ -1176,7 +1178,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       state = beforeIntent;
       try { saveState("delete-unsent", true); } catch (error) { state = intended; throw error; }
       trusted = Buffer.from(stateBytes(state)); intentSaved = false;
-      throw new Error("drain proof expired before its DELETE was sent; the next collect retires on a fresh proof");
+      throw new Error("DELETE was not dispatched; the next collect retires on a fresh proof");
     };
     // Everything the DELETE relies on, as this process left it, through the same custody
     // check: the pinned evidence first, then the receipt, the lock and the saved reservation
@@ -1496,7 +1498,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         durable(join(local, "failed-native-unsent-" + pendingDeleteSha256 + ".json"), bytes);
         durable(join(local, "failed-native-unsent-reservation-" + pendingDeleteSha256 + ".json"), original);
         state.status = "running"; delete state.retirement; delete state.deletionIntentAt;
-        writeState(state);
+        writeState(state, renameSync, "delete-unsent");
         checkHandoffDelete(false);
         unlinkSync(receiptPath); unlinkSync(originalPath); syncDirectory(local);
         pin(custody.assertCustody);

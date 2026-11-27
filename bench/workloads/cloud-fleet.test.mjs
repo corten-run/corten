@@ -503,7 +503,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence",
   "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage",
   "receipt-edited-at-dispatch-evidence", "receipt-edited-at-intent-stage", "state-edited-at-receipt-stage", "proof-expired-at-receipt-stage",
-  "delete-unsent-after-intent", "delete-expired-after-dispatch", "intent-save-torn", "destroyed-save-torn"]) test({
+  "delete-unsent-after-intent", "delete-cancelled-after-intent", "delete-expired-after-dispatch", "intent-save-torn", "destroyed-save-torn"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -547,6 +547,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-receipt-stage": "a saved digest edited while the receipt's stage is written refuses before its link, removes that stage and publishes no receipt",
   "proof-expired-at-receipt-stage": "a drain proof that expires while the receipt's stage is written publishes no receipt, and a restart deletes once on a fresh proof",
   "delete-unsent-after-intent": "a drain proof that expires after the intent, before the provider sends the DELETE, withdraws the intent on that acknowledgement, and a restart deletes once on a fresh proof",
+  "delete-cancelled-after-intent": "a controller cancelled after the intent, so the production checkpoint never sends the DELETE, still withdraws the intent, and a restart deletes once on a fresh proof",
   "delete-expired-after-dispatch": "a drain proof that expires after the DELETE request started keeps the intent when the provider answers with an error, and a restart only confirms absence",
   "intent-save-torn": "a torn deletion intent save leaves its own stage and no intent, and the next collect deletes once on a fresh proof",
   "destroyed-save-torn": "a torn destroyedAt save after the one DELETE leaves its own stage, and the next collect records absence with no second DELETE",
@@ -1174,7 +1175,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
       return;
     }
-    await assert.rejects(h.task({ run: production }).collect(), /drain proof expired before its DELETE was sent; the next collect retires on a fresh proof/);
+    await assert.rejects(h.task({ run: production }).collect(), /DELETE was not dispatched; the next collect retires on a fresh proof$/);
     const saved = h.saved(), old = readFileSync(receipt), oldRecord = JSON.parse(old);
     assert.ok(jumped && intentAtJump); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
     // The positively unsent DELETE withdraws the intent: the receipt and its recorded digest stay.
@@ -1190,6 +1191,41 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
     assert.notEqual(record.startedAtMs, oldRecord.startedAtMs);
     assert.equal(record.observation.control.requests.length, s.control.ledger.length);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+    return;
+  }
+  if (mode === "delete-cancelled-after-intent") {
+    // The real production dispatch: the controller is cancelled once the intent's own stage is
+    // renamed over state.json, so the production checkpoint refuses before the provider and
+    // reports the DELETE unsent. The withdrawal only records how the DELETE ended, so it still
+    // runs under cancellation; nothing reaches the provider.
+    let intentAtCancel, providerDeletes = 0;
+    hookFs(t, {
+      renameSync: (original) => (from, to) => {
+        original(from, to);
+        if (intentAtCancel === undefined && intentStage.test(basename(String(from))) && basename(String(to)) === "state.json") {
+          intentAtCancel = h.saved().deletionIntentAt; h.flags.cancelled = true;
+        }
+      },
+    });
+    const production = productionDispatch({ processRun: run, interrupted: () => h.flags.cancelled,
+      provider: () => (argv, ...rest) => { if (argv[2] === "delete") providerDeletes++; return run("doctl", argv, ...rest); } });
+    await assert.rejects(h.task({ run: production }).collect(), /DELETE was not dispatched; the next collect retires on a fresh proof$/);
+    const saved = h.saved(), old = readFileSync(receipt);
+    assert.ok(intentAtCancel); assert.equal(queries, 1); assert.equal(providerDeletes, 0);
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // The intent is withdrawn: the receipt and its recorded digest stay, with no intent.
+    assert.equal(saved.status, "starting"); assert.equal(saved.retirement, undefined);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.destroyedAt, undefined);
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(old) }); assert.equal(existsSync(lock), false);
+    assert.ok(!readdirSync(h.local).some((name) => /^state\.json\..*tmp$/.test(name)));
+    // A restart, no longer cancelled, keeps that receipt for archival and deletes once on its own fresh proof.
+    h.flags.cancelled = false; restoreFs(t);
+    assert.equal(await h.task({ run: production }).collect(), 1);
+    const s = h.saved();
+    assert.equal(queries, 2); assert.equal(providerDeletes, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.ok(readFileSync(join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`)).equals(old));
+    assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
     assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }

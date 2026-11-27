@@ -1448,19 +1448,21 @@ saves no intent); a v1 or v2 setup retirement keeps its existing check of 60 sec
 the proof's end, made before the intent. Expiry before the intent does not
 consume the intent; expiry after the intent forbids another DELETE whenever that
 DELETE may have been sent, so a later collect only verifies the saved receipt and
-checks exact absence. For a drain proof that leaves only the interval between the
-intent and the request (the dispatch guards, the production checkpoint and worker
-IPC, and the provider's own deadline check), which has no provider read. A drain
-proof's DELETE is sent with `allowFail`, so a refusal in that interval that
+checks exact absence. For a drain proof, the only window after the intent is the
+interval before the request (the dispatch guards, the production checkpoint and
+worker IPC, and the provider's own deadline check), which has no provider read. A
+drain proof's DELETE is sent with `allowFail`, so a refusal in that interval that
 positively reports the request unsent (the production checkpoint cancelled before
 the action reached the provider, or the provider engine's own deadline check
 before its request, which the worker carries back over IPC) withdraws the intent:
 the controller restores the state it saved just before it (the receipt's recorded
 digest, with no intent or retirement) through its own fresh exclusive stage
 (`state.json.delete-unsent-<random>.tmp`), under the same custody check as the
-intent, and refuses with `drain proof expired before its DELETE was sent; the
-next collect retires on a fresh proof`. The next collect keeps that receipt as an
-interrupted one (below) and retires on a fresh drain proof of the same session.
+intent, and refuses with `DELETE was not dispatched; the next collect retires on
+a fresh proof`. The not-dispatched answer does not say whether expiry or
+cancellation refused, so the message names neither. The next collect keeps that
+receipt as an interrupted one (below) and retires on a fresh drain proof of the
+same session.
 The restore only records how the DELETE ended, so it runs even after
 cancellation; a custody mismatch at the restore refuses and keeps the intent. Any
 other outcome after the intent keeps the intent, with recovery by exact absence
@@ -1506,21 +1508,40 @@ digest is saved through its own fresh exclusive staging file
 (`state.json.pending-retirement-<random>.tmp`), as `createErrored` is, so a
 save torn there leaves that stage and no digest, and the next collect retires
 on a fresh proof. The stage is never read or removed; it stays for the operator
-to archive. Every deletion intent and `destroyedAt` the controller saves, for
-each retirement kind and for an ordinary deletion, goes through its own fresh
-exclusive stage the same way (`state.json.deletion-intent-<random>.tmp` and
-`state.json.destroyed-<random>.tmp`), so a torn save of either leaves only that
-unread stage and the previous `state.json`, never a fixed-name
-`state.json.tmp` that would refuse every later collect with `EEXIST`. A torn
-intent leaves the state before it, which the next collect recovers as an intent
-that was never saved (for a v2 or v3 receipt, through its recorded digest: the
-receipt is kept and a fresh proof retires). A torn `destroyedAt` leaves the
-intent after the one DELETE, so the next collect only checks exact absence and
-records `destroyedAt`, with no second DELETE. Other ordinary saves keep the
-fixed-name `state.json.tmp` stage, and one left by a torn ordinary save still
-refuses the next ordinary save with `EEXIST` until the operator archives it:
-fleet verification's external-failure check and the handoff publication check
-treat that name as an unsettled publication, so it is not bypassed. A v2 or
+to archive.
+
+Every deletion intent and `destroyedAt` the controller saves goes through its
+own fresh exclusive stage the same way (`state.json.deletion-intent-<random>.tmp`
+and `state.json.destroyed-<random>.tmp`), and so does every withdrawal of a
+positively unsent DELETE's intent (`state.json.delete-unsent-<random>.tmp`). A
+torn save of any of them leaves only that unread stage and the previous
+`state.json`, never the fixed-name `state.json.tmp`. What the next collect does
+with it depends on the retirement kind:
+
+1. The unused, failed-setup (v1, v2 and v3) and failed-native (without a handoff)
+   retirements, and an ordinary deletion, recover. A torn intent leaves the state
+   before it, which the next collect recovers as an intent that was never saved
+   (for a v2 or v3 receipt, through its recorded digest: the receipt is kept and a
+   fresh proof retires). A torn `destroyedAt` leaves the intent after the one
+   DELETE, so the next collect only checks exact absence and records
+   `destroyedAt`, with no second DELETE. A torn withdrawal keeps the intent, so
+   recovery is exact absence alone and no DELETE is sent.
+2. The handoff and exit-one retirements refuse. Their state save rechecks handoff
+   custody and keeps the operation lock when it fails, and their publication check
+   refuses every `state.json.*.tmp` name as an unsettled publication.
+3. The pinned unused retirement refuses. Its custody check admits only a closed
+   list of names in the state root, so a leftover stage refuses with
+   `unexpected local bootstrap custody; preserve host`.
+
+Those refusals fail closed with no DELETE, as before, until the operator archives
+the stage (operator cleanup below). Other ordinary saves keep the fixed-name
+`state.json.tmp` stage, and one left by a torn ordinary save still refuses the
+next ordinary save with `EEXIST` until the operator archives it: fleet
+verification's external-failure check treats that exact name as an unsettled
+publication, and the handoff publication check treats every `state.json.*.tmp`
+name that way, so it is not bypassed.
+
+A v2 or
 v3 receipt and its history copy are published whole: each is written and synced
 as `<name>.stage` in the same directory, then hard-linked to its final name,
 which fails rather than replace an existing file, and the directory is synced
