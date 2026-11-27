@@ -31,10 +31,34 @@ async function requireCancelledAfter(closed, abortedAt) {
   assert.ok(at <= abortedAt + cleanupMs, "upstream drained after the Mixed cleanup bound");
 }
 
+function requireLiveUpstream(response, socket) {
+  assert.ok(!response.destroyed && !response.writableEnded && !socket.destroyed,
+    "upstream was already closing before the client abort");
+}
+
 test("cancellation proof refuses a pre-abort upstream close", async () => {
   const closed = Promise.resolve({ outcome: "cancelled", at: 1 });
   await closed;
   await assert.rejects(requireCancelledAfter(closed, 2), /closed before the client abort/);
+});
+
+test("cancellation proof refuses an upstream socket destroyed before the close callback", { timeout: 10000 }, async () => {
+  const incoming = Promise.withResolvers();
+  const server = createServer((req, response) => incoming.resolve({ response, socket: req.socket }));
+  await listen(server);
+  const caller = get(`http://127.0.0.1:${server.address().port}`, { agent: false });
+  caller.on("error", () => {});
+  try {
+    const { response, socket } = await bounded(incoming.promise);
+    const closed = Promise.withResolvers();
+    let observed = false;
+    response.once("close", () => { observed = true; closed.resolve(); });
+    requireLiveUpstream(response, socket);
+    socket.destroy();
+    assert.equal(observed, false, "close callback must not have run yet");
+    assert.throws(() => requireLiveUpstream(response, socket), /already closing/);
+    await bounded(closed.promise);
+  } finally { caller.destroy(); await close(server); }
 });
 
 async function withCandidate(args, run) {
@@ -94,7 +118,7 @@ test("Spring Mixed image passes the existing bounded production precheck", { tim
   }
 });
 
-test("Spring Mixed form POST writes one session alert and refuses an Origin-only cross-site POST", { timeout: 60000 }, async () => {
+test("Spring Mixed form POST isolates two sessions and refuses only the foreign Origin", { timeout: 60000 }, async () => {
   const server = marketplaceServer(records());
   try {
     await listen(server);
@@ -107,22 +131,32 @@ test("Spring Mixed form POST writes one session alert and refuses an Origin-only
         assert.equal(res.status, 200);
         return res.json();
       };
-      const email = "native-alert@example.test";
-      const accepted = await post({ origin: base }, email);
-      assert.equal(accepted.status, 200);
-      assert.match(accepted.headers.get("content-type") ?? "", /^text\/html\b/);
-      await accepted.arrayBuffer();
-      const cookies = accepted.headers.getSetCookie().filter((value) => /^SESSION=[^;]+/.test(value));
-      assert.equal(cookies.length, 1, "expected one session cookie");
-      const headers = { cookie: cookies[0].split(";", 1)[0] };
-      const expected = [{ item_id: "item_1", email, target_minor: 1250 }];
-      assert.deepEqual(await readback(headers), expected);
+      const openSession = async (email) => {
+        const accepted = await post({ origin: base }, email);
+        assert.equal(accepted.status, 200);
+        assert.match(accepted.headers.get("content-type") ?? "", /^text\/html\b/);
+        await accepted.arrayBuffer();
+        const cookies = accepted.headers.getSetCookie().filter((value) => /^SESSION=[^;]+/.test(value));
+        assert.equal(cookies.length, 1, "expected one session cookie");
+        return { cookie: cookies[0].split(";", 1)[0] };
+      };
+      const firstEmail = "first@example.test", secondEmail = "second@example.test", followup = "followup@example.test";
+      const first = await openSession(firstEmail), second = await openSession(secondEmail);
+      assert.ok(first.cookie !== second.cookie, "expected distinct sessions");
+      const alert = (email) => ({ item_id: "item_1", email, target_minor: 1250 });
+      assert.deepEqual(await readback(first), [alert(firstEmail)]);
+      assert.deepEqual(await readback(second), [alert(secondEmail)]);
       assert.deepEqual(await readback({}), [], "anonymous readback must not see the alert");
 
-      const refused = await post({ ...headers, origin: "https://foreign.example.test" }, "foreign-alert@example.test");
+      const refused = await post({ ...first, origin: "https://foreign.example.test" }, followup);
       assert.equal(refused.status, 403);
       await refused.arrayBuffer();
-      assert.deepEqual(await readback(headers), expected);
+      assert.deepEqual(await readback(first), [alert(firstEmail)]);
+      const allowed = await post({ ...first, origin: base }, followup);
+      assert.equal(allowed.status, 200);
+      await allowed.arrayBuffer();
+      assert.deepEqual(await readback(first), [alert(firstEmail), alert(followup)]);
+      assert.deepEqual(await readback(second), [alert(secondEmail)]);
     });
   } finally { await close(server); }
 });
@@ -137,12 +171,13 @@ test("Spring Mixed image cancels real marketplace reads at headers and during th
     if (!hold) { res.writeHead(200, headers).end(body); return; }
     const active = hold; active.requests++;
     const split = active.partial ? 32 : 0;
+    const socket = req.socket;
     res.once("close", () => {
       active.close = { outcome: res.writableFinished ? "finished" : "cancelled", at: performance.now() };
       active.closed.resolve(active.close);
     });
     if (active.partial) res.writeHead(200, headers).write(body.subarray(0, split));
-    active.entered.resolve({ trace: req.headers.traceparent, finish() {
+    active.entered.resolve({ trace: req.headers.traceparent, requireLive: () => requireLiveUpstream(res, socket), finish() {
       if (!active.partial) res.writeHead(200, headers);
       res.end(body.subarray(split));
     } });
@@ -171,6 +206,7 @@ test("Spring Mixed image cancels real marketplace reads at headers and during th
             await delay(abort ? 100 : cleanupMs + 150);
             assert.equal(responded, false, "rendering must still wait for the upstream");
             assert.ok(!active.close, "upstream closed while the client was still connected");
+            upstream.requireLive();
             if (abort) {
               const abortedAt = performance.now();
               caller.destroy();
