@@ -561,7 +561,25 @@ test("a shuffled placement: sections the file gives one key are one group, laid 
   const tied = [...dups, SEC("/o/b.o", ".text.b", T + 0xc0, 0x40, [["b", 0]])], late = tied.map((s) => (s.file === "/o/y.o" ? adding(s, [["late", 0x10]]) : s));
   const base = sideOf(tied, named("a", "dup", "b"));
   assert.deepEqual(alike(base, sideOf(late, named("a", "dup", "b", "late")), 320).why, []);
-  has(alike(base, sideOf(late, named("a", "late", "dup", "b")), 320).why, "place 2 holds dup in x.o:(.text.dup) and dup in y.o:(.text.dup) (2 sections of one key) in the first and dup in y.o:(.text.dup) in the second");
+  has(alike(base, sideOf(late, named("a", "late", "dup", "b")), 320).why, "place 2 holds dup in x.o:(.text.dup) and dup in y.o:(.text.dup) (2 sections of one place) in the first and dup in y.o:(.text.dup) in the second");
+});
+
+test("a shuffled change: copies whose names differ by a ThinLTO suffix alone are one place in the draw, laid in any order among themselves", () => {
+  // x.o's and y.o's local f, each a section of its own, written f.llvm.<n>: order.mjs keys both
+  // as f and orders them by the suffix alone, a number a rebuild of the same code changes (a
+  // real Rust probe's base and head do so), so base lays x's copy first and head y's. Each is
+  // where its file puts it, and every definition is where the draw puts it.
+  const copies = (nx, ny) => [SEC("/o/a.o", ".text.a", T, 0x40, [["a", 0]]), SEC("/o/x.o", ".text.f", T + 0x40, 0x40, [[`f.llvm.${nx}`, 0, 14, "x.o"]]), SEC("/o/y.o", ".text.f", T + 0x80, 0x40, [[`f.llvm.${ny}`, 0, 14, "y.o"]]), SEC("/o/b.o", ".text.b", T + 0xc0, 0x40, [["b", 0]])];
+  const base = sideOf(copies(1, 2), named("a", "f.llvm.1", "f.llvm.2", "b")), head = sideOf(copies(9, 3), named("a", "f.llvm.3", "f.llvm.9", "b"));
+  assert.deepEqual([own(base).why, own(head).why], [[], []]);
+  assert.deepEqual([base, head].map((x) => own(x).defs.filter((d) => d.name === "f").map((d) => d.file)), [["x.o", "y.o"], ["y.o", "x.o"]]);
+  const r = alike(base, head, 320);
+  assert.deepEqual(r.why, []);
+  assert.deepEqual([r.shared, r.repeated, r.places, r.same], [4, 2, 3, 3]);
+  // Another name drawn between them is a place of its own: head's alias in y.o's section, named
+  // before f, gives that section a place before x.o's, and the change is refused.
+  const aliased = copies(9, 3).map((s) => (s.file === "/o/y.o" ? adding(s, [["alias", 0x10]]) : s));
+  has(alike(base, sideOf(aliased, named("a", "alias", "f.llvm.3", "f.llvm.9", "b")), 320).why, "place 2 holds f in x.o:(.text.f) and f in y.o:(.text.f) (2 sections of one place) in the first and f in y.o:(.text.f) in the second");
 });
 
 test("a shuffled placement: a function in an input section of no size is of that section, where the next section begins too", () => {
@@ -702,7 +720,7 @@ test("a shuffled change: copies ICF folded to one place are compared by which de
   const apart = [folded[0], SEC("/o/x.o", ".text.dup", T + 0x40, 0x40, [["dup", 0, 14, "x.o"]]), SEC("/o/y.o", ".text.dup", T + 0x80, 0x40, [["dup", 0, 14, "y.o"]])];
   const r = alike(x, sideOf(apart, named("dup", "middle")), 320);
   assert.equal(r.ok, false);
-  has(r.why, "do not lie in one order, each place holding the same of them: place 1 holds dup in x.o:(.text.dup) and dup in x.o:(.text.dup) (compiled in y.o) in the first and dup in x.o:(.text.dup) and dup in y.o:(.text.dup) (2 sections of one key) in the second");
+  has(r.why, "do not lie in one order, each place holding the same of them: place 1 holds dup in x.o:(.text.dup) and dup in x.o:(.text.dup) (compiled in y.o) in the first and dup in x.o:(.text.dup) and dup in y.o:(.text.dup) (2 sections of one place) in the second");
   // Two copies of one object folded to one place are counted, and compared by their count.
   const twice = [folded[0], SEC("/o/x.o", ".text.dup", T + 0x40, 0x40, [["dup", 0, 14, "x.o"], ["dup", 0, 14, "x.o"]])];
   const t2 = alike(sideOf(twice, named("dup", "middle")), sideOf(twice, named("dup", "middle")), 320);
@@ -1028,6 +1046,28 @@ test("a shuffled change, linked by LLD: ICF folding other copies together on eac
   const swapped = alikeOf("ib", "ib-p", "ih", "ih-p");
   assert.equal(swapped.status, 1, swapped.stdout);
   assert.match(swapped.stderr, /the 5 functions both placements have do not lie in one order, each place holding the same of them: place 2 holds/);
+});
+
+test("a shuffled change, linked by LLD: copies whose names differ by a ThinLTO suffix alone, drawn in either order, are one place", LLD, (t) => {
+  const { obj, ld, pad, m, shuffled, alikeOf } = fifth(t);
+  // x's and y's local f.llvm.<n>, as rustc's ThinLTO names a promoted local: base's x is f.llvm.1
+  // and y f.llvm.2, head's x f.llvm.9 and y f.llvm.3, so the draw lays x first in base and y first
+  // in head (one key, ordered by the name as written), and LLD lays them so.
+  const copy = (side, n, sym, byte) => obj(`${side}/${n}`, [".text.f", sym, 0x40, byte], `${n}.c`);
+  const sb = [copy("ob", "x", "f.llvm.1", 0x90), copy("ob", "y", "f.llvm.2", 0x91)], sh = [copy("oh", "x", "f.llvm.9", 0x90), copy("oh", "y", "f.llvm.3", 0x91)];
+  ld("sb", [m, ...sb]); ld("sb-p", [pad, m, ...sb], named("middle", "f.llvm.1", "f.llvm.2"));
+  ld("sh", [m, ...sh]); ld("sh-p", [pad, m, ...sh], named("middle", "f.llvm.3", "f.llvm.9"));
+  for (const [u, p] of [["sb", "sb-p"], ["sh", "sh-p"]]) assert.equal(shuffled(u, p).status, 0, shuffled(u, p).stderr);
+  const r = alikeOf("sb", "sb-p", "sh", "sh-p");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /"shared":3,"repeated":2,"tied":0,"untold":0,"unmatched":0,"places":2,"same":2/);
+  // A name drawn between the two in head gives y's section a place of its own, and head is refused.
+  const yb = obj("oh/ya", [".text.f", "f.llvm.3", 0x40, 0x91], "y.c"), alias = obj("oh/alias", [".text.alias", "alias", 0x40, 0x92], "alias.c");
+  ld("sa", [m, sh[0], yb, alias]); ld("sa-p", [pad, m, sh[0], yb, alias], named("middle", "f.llvm.3", "alias", "f.llvm.9"));
+  assert.equal(shuffled("sa", "sa-p").status, 0, shuffled("sa", "sa-p").stderr);
+  const split = alikeOf("sb", "sb-p", "sa", "sa-p");
+  assert.equal(split.status, 1, split.stdout);
+  assert.match(split.stderr, /do not lie in one order, each place holding the same of them: place 2 holds f in x\.o:\(\.text\.f\) \(compiled in x\.c\) and f in y\.o:\(\.text\.f\) \(compiled in y\.c\) \(2 sections of one place\) in the first and f in ya\.o:\(\.text\.f\) \(compiled in y\.c\) in the second/);
 });
 
 test("owner(): a definition's input section by the map, a section of no size and the end of one included", () => {

@@ -49,11 +49,13 @@
 // (stable(): its file symbol's and its input section's object, less directories, link-capture's
 // ordinal and Cargo's and rustc's hashes), then its section's name and size, and the same as
 // written; copies at one place of one object are ICF's folded copies, counted. Sections of one key
-// are one place, in any order among themselves. A name nothing tells apart, copies with no
-// one-to-one match between the sides, copies folded to one place that no object's file symbol
-// tells apart, and places holding different definitions (ICF folding A with B in one and A with D
-// in the other) refuse the change, so no definition both have is left out of the comparison or
-// compared by where it landed instead of what it is.
+// are one place, in any order among themselves, and so are sections whose keys are one name less a
+// ThinLTO suffix (order.mjs keys them alike and orders them by the suffix alone, whether a copy has
+// one and its number, which a rebuild of the same code can change). A name nothing tells apart,
+// copies with no one-to-one match between the sides, copies folded to one place that no object's
+// file symbol tells apart, and places holding different definitions (ICF folding A with B in one
+// and A with D in the other) refuse the change, so no definition both have is left out of the
+// comparison or compared by where it landed instead of what it is.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -225,6 +227,15 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
   const groupOf = [], expected = groups.flatMap((g, i) => g.members.map(() => i)), functions = oa.out.length;
   groups.forEach((g, i) => { for (const k of g.members) groupOf[k] = i; });
   const tied = groups.filter((g) => g.members.length > 1);
+  // The draw's places, for alike(): groups whose keys are one name less a ThinLTO suffix are one.
+  // order.mjs keys such names alike and orders them by the suffix alone (whether a copy has one,
+  // and its number), which a rebuild of the same code can change, so the draw gives them no order
+  // against each other.
+  let draws = 0;
+  groups.forEach((g, i) => {
+    g.name = g.p === Infinity ? null : listed[g.p].replace(/\.llvm\.\d+$/, "");
+    g.draw = i > 0 && g.name !== null && groups[i - 1].name === g.name ? groups[i - 1].draw : draws++;
+  });
   // The placement's sections besides the pads, each paired with the unpadded section it is.
   const isPad = (s) => s.section === PAD || s.section === SECOND_PAD, B = placedSections, mids = [], mid = new Map();
   B.forEach((s, j) => { if (!isPad(s)) { mid.set(j, mids.length); mids.push(s); } });
@@ -279,9 +290,9 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
   }
   const repeated = [...unique(oa.out.map((d) => d.e))].filter(([, at]) => at == null).length;
   // Each placed definition with the input section the placement's map has it in, that section's
-  // place there, the group of one key the file puts there and the definition's object by its file
-  // symbol, for alike().
-  const defs = pairs ? got.map((d) => ({ raw: d.e.raw, name: d.e.name, at: d.e.at, file: d.e.file ?? null, section: B[d.k], slot: mid.get(d.k), group: expected[mid.get(d.k)], off: d.off })) : null;
+  // place there, the group of one key the file puts there, that group's place in the draw and the
+  // definition's object by its file symbol, for alike().
+  const defs = pairs ? got.map((d) => ({ raw: d.e.raw, name: d.e.name, at: d.e.at, file: d.e.file ?? null, section: B[d.k], slot: mid.get(d.k), group: expected[mid.get(d.k)], draw: groups[expected[mid.get(d.k)]].draw, off: d.off })) : null;
   return { ok: why.length === 0, why, pad, second, shuffled: true, functions, repeated, sections: A.length, groups: groups.length, tied: tied.reduce((t, g) => t + g.members.length, 0), matched, placedSections: placedSectionsAt, together, follow, listed: listed.length, onlyA, onlyB, defs };
 }
 
@@ -305,13 +316,16 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
  * match where the other has one without a match too is taken. A name none tells apart, one whose
  * definitions have no one-to-one match, and copies both have folded to one place a different
  * number of times refuse the change, so no definition both have is left out. Then each
- * placement's places, in its map's order: a group of input sections its ordering file gives one
- * key (ordered()), its sections in any order among
+ * placement's places in the draw, in its map's order: a group of input sections its ordering file
+ * gives one key (ordered()), or the groups whose keys are one name less a ThinLTO suffix, which
+ * order.mjs keys alike and orders by the suffix alone (whether a copy has one, and its number,
+ * which a rebuild of the same code can change, so the draw gives them no order against each
+ * other), its sections in any order among
  * themselves, each section's definitions in their order there: alike when the two lists are the
  * same, so every definition both have lies in one order, where the files order it, and shares its
  * section and address with the same others (ICF folding A with B on one side and A with D on the
- * other is no reading). Sections one side ties under one key and the other orders under two are
- * two places in one and one in the other, and refuse.
+ * other is no reading). Sections one side ties in one place and the other orders in two are two
+ * places in one and one in the other, and refuse.
  */
 export function alike(base, head, pad, second = false) {
   const check = (x) => ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, pad, second);
@@ -374,26 +388,28 @@ export function alike(base, head, pad, second = false) {
   }
   if (untold.length) why.push(`${untold.length} functions both placements have are each defined more than once at places nothing tells apart (their objects, input sections, names and sizes, as written and less hashes), or folded to one place with no file symbol to tell the copies apart, so their order cannot be established: ${some(untold)}`);
   if (unmatched.length) why.push(`${unmatched.length} functions both placements have are defined more than once, and their definitions cannot be matched one to one across the two, so their order cannot be established: ${some(unmatched)}`);
-  // Each placement's definitions both have, by where its ordering file puts them: its groups of one
-  // key in its map's order (ordered()), each group's input sections in any order among themselves,
-  // as LLD lays them, and in each section the definitions in their order there, those at one
-  // address together. Alike when the groups hold the same sections, each holding the same
-  // definitions in one order: so the order the drawn files give is compared, and which definitions
-  // share a section or an address (ICF's folding), but not an order LLD never promised.
+  // Each placement's definitions both have, by where its ordering file puts them: its places in
+  // the draw in its map's order (ordered(): a group of one key, or the groups of keys that are one
+  // name less a ThinLTO suffix), each place's input sections in any order among themselves, as LLD
+  // lays them and order.mjs draws them, and in each section the definitions in their order there,
+  // those at one address together. Alike when the places hold the same sections, each holding the
+  // same definitions in one order: so the order the drawn files give is compared, and which
+  // definitions share a section or an address (ICF's folding), but not an order neither LLD nor the
+  // draw promised.
   const places = (side) => {
     const groups = new Map();
     for (const it of items) {
-      const d = it[side], g = groups.get(d.group) ?? groups.set(d.group, { group: d.group, slots: new Map(), labels: [] }).get(d.group);
+      const d = it[side], g = groups.get(d.draw) ?? groups.set(d.draw, { draw: d.draw, slots: new Map(), labels: [] }).get(d.draw);
       const s = g.slots.get(d.slot) ?? g.slots.set(d.slot, new Map()).get(d.slot), at = s.get(d.off) ?? s.set(d.off, []).get(d.off);
       for (let i = 0; i < it.n; i++) { at.push(it.id); g.labels.push(it.labels[side]); }
     }
     const section = (s) => JSON.stringify([...s].sort((x, y) => x[0] - y[0]).map(([, ids]) => [...ids].sort()));
-    return [...groups.values()].sort((x, y) => x.group - y.group).map((g) => ({ key: [...g.slots.values()].map(section).sort().join("\n"), show: [...g.labels].sort().join(" and "), size: g.slots.size }));
+    return [...groups.values()].sort((x, y) => x.draw - y.draw).map((g) => ({ key: [...g.slots.values()].map(section).sort().join("\n"), show: [...g.labels].sort().join(" and "), size: g.slots.size }));
   };
   const pa = places("a"), pb = places("b"), n = Math.max(pa.length, pb.length);
   let first = -1;
   for (let k = 0; k < n && first < 0; k++) if (pa[k]?.key !== pb[k]?.key) first = k;
-  const shown = (x) => (x ? `${x.show}${x.size > 1 ? ` (${x.size} sections of one key)` : ""}` : "nothing");
+  const shown = (x) => (x ? `${x.show}${x.size > 1 ? ` (${x.size} sections of one place)` : ""}` : "nothing");
   if (first >= 0) why.push(`the ${items.length} functions both placements have do not lie in one order, each place holding the same of them: place ${first + 1} holds ${shown(pa[first])} in the first and ${shown(pb[first])} in the second`);
   return { ok: why.length === 0, why, pad, shuffled: true, shared: items.length, repeated: items.filter((x) => !x.plain).length, tied: items.filter((x) => x.n > 1).length, untold: untold.length, unmatched: unmatched.length, places: pa.length, same: first < 0 ? pa.length : first };
 }
