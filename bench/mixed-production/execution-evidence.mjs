@@ -99,7 +99,7 @@ export function executionParticipant(info, image, deployment = null) {
   for (const entry of info.Config?.Env ?? []) {
     const at = entry.indexOf("="); assert.ok(at > 0);
     const key = entry.slice(0, at), value = entry.slice(at + 1);
-    if (deployment && key === "DJANGO_SETTINGS_MODULE") {
+    if (deployment?.settings && key === "DJANGO_SETTINGS_MODULE") {
       env.push([key, value === deployment.settings ? value : { sha256: hash(value) }]);
       continue;
     }
@@ -380,11 +380,11 @@ export function replayExecution({ manifest, read, summary }) {
       }
       for (const key of ["StartedAt", "FinishedAt"]) assert.ok(typeof p.state[key] === "string" && Number.isFinite(Date.parse(p.state[key])));
       assert.ok(Array.isArray(p.env) && p.env.every((entry) => Array.isArray(entry) && entry.length === 2
-        && (["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"].includes(entry[0]) || deployment && entry[0] === "DJANGO_SETTINGS_MODULE"))
+        && (["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"].includes(entry[0]) || deployment?.settings && entry[0] === "DJANGO_SETTINGS_MODULE"))
         && new Set(p.env.map(([key]) => key)).size === p.env.length);
       if (context.role === "app") {
         const env = new Map(p.env); same(env.get("MARKETPLACE_SOURCE"), context.source); same(env.get("PROFILE"), summary.options.profile === "matched" ? "matched" : "");
-        if (deployment) same(env.get("DJANGO_SETTINGS_MODULE"), deployment.settings);
+        if (deployment?.settings) same(env.get("DJANGO_SETTINGS_MODULE"), deployment.settings);
       }
       assert.ok(Array.isArray(p.mounts));
       for (const mount of p.mounts) {

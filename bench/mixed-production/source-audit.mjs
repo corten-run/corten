@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, realpathSync } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { verifyNativeReceipt } from "../json-api/contract.mjs";
 import { sha256 } from "./capture.mjs";
 
@@ -13,15 +14,41 @@ export const djangoAsgi = Object.freeze({
   settings: "itempage.mixed_asgi_settings",
 });
 
+export const springWebflux = Object.freeze({
+  recipe: "mixed-production-asgi-webflux",
+  deployment: "spring-webflux",
+  buildProfile: "matched-webflux",
+  dockerfile: "Dockerfile.mixed",
+  entrypoint: Object.freeze(["java", "-jar", "marketplace-mixed.jar"]),
+  command: null,
+});
+
+export function mixedDeploymentArgs(recipe) {
+  return [
+    ...([djangoAsgi.recipe, springWebflux.recipe].includes(recipe) ? ["--django-deployment", djangoAsgi.deployment] : []),
+    ...(recipe === springWebflux.recipe ? ["--spring-deployment", springWebflux.deployment] : []),
+  ];
+}
+
 export function validateDeploymentOption(options) {
-  if (!Object.hasOwn(options, "djangoDeployment")) return;
-  assert.ok(options.djangoDeployment === djangoAsgi.deployment && options.profile === "matched"
-    && options.build === true && !options.images && (!options.apps || options.apps.includes("django")),
-  "Django ASGI requires a fresh matched build including Django");
+  for (const [app, deployment, option] of [["django", djangoAsgi, "djangoDeployment"], ["spring", springWebflux, "springDeployment"]]) {
+    if (!Object.hasOwn(options, option)) continue;
+    assert.ok(options[option] === deployment.deployment && options.profile === "matched"
+      && options.build === true && !options.images && (!options.apps || options.apps.includes(app)),
+    `Native deployment requires a fresh matched build including ${app}`);
+  }
 }
 
 export function nativeDeployment(options, app) {
-  return app === "django" && options.djangoDeployment === djangoAsgi.deployment ? djangoAsgi : null;
+  if (app === "django" && options.djangoDeployment === djangoAsgi.deployment) return djangoAsgi;
+  if (app === "spring" && options.springDeployment === springWebflux.deployment) return springWebflux;
+  return null;
+}
+
+export function verifyDeploymentCommand(config, deployment) {
+  assert.ok(isDeepStrictEqual(config?.Entrypoint ?? null, deployment.entrypoint), "unexpected native image entrypoint");
+  assert.ok(isDeepStrictEqual(config?.Cmd ?? null, deployment.command), "unexpected native image command");
+  if (deployment.settings) assert.ok(config?.Env?.includes(`DJANGO_SETTINGS_MODULE=${deployment.settings}`), "unexpected Django ASGI image settings");
 }
 
 export function deploymentIdentity(options, app) {

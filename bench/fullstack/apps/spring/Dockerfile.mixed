@@ -13,6 +13,6 @@ RUN timeout --verbose --kill-after=10s 3m mvn -B package -DskipTests
 
 FROM eclipse-temurin:27-jre@sha256:8f8cfda6393f63a029dbe83ceda4c19a31d268184662e96d9641f57afdaf870b
 WORKDIR /app
-COPY --from=build /src/target/app.jar ./
+COPY --from=build /src/target/app.jar ./marketplace-mixed.jar
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-jar", "marketplace-mixed.jar"]

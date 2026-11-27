@@ -207,13 +207,14 @@ Caller abort while synchronous MVC is blocked still has no pre-response disconne
 notification: the upstream may remain pending until the independent ten-second
 deadline. The required 500 ms caller-cancellation observation still fails.
 
-## Mixed-only WebFlux candidate
+## Mixed-only WebFlux deployment
 
 `Dockerfile.mixed` builds a separate WebFlux/Netty application for the localized
 marketplace routes, record JSON and alert forms/readback. The upstream exchange and
-body read belong to the request subscription. All existing Spring deployment
-recipes still use `Dockerfile` and MVC/Tomcat; the candidate is not selected by
-the official runner yet.
+body read belong to the request subscription. The dedicated Mixed recipe selects it
+with `--build --profile matched --spring-deployment spring-webflux` and keeps
+Django on ASGI. The build, source audit and saved execution distinguish this
+image from MVC/Tomcat. Other recipes still use `Dockerfile` and MVC/Tomcat.
 
 From this directory, build the candidate with `docker build -f Dockerfile.mixed .`.
 Run `node --test mixed-http.test.mjs` with `SPRING_MIXED_IMAGE` set to its full

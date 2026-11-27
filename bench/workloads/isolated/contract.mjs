@@ -16,7 +16,7 @@ import { placementCpus, placementEnv } from "../../json-api/placement.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { nightly } from "../../marketplace/droplet-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
-import { djangoAsgi } from "../../mixed-production/source-audit.mjs";
+import { djangoAsgi, mixedDeploymentArgs, springWebflux } from "../../mixed-production/source-audit.mjs";
 import { browserContainers, browserCpus, parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
 import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
@@ -113,6 +113,7 @@ export const recipes = freeze({
   "mixed-measure": ["mixed-production"],
   "mixed-production-measure": ["mixed-production"],
   [djangoAsgi.recipe]: ["mixed-production"],
+  [springWebflux.recipe]: ["mixed-production"],
   "native-feed-measure": ["live-delivery", "recoverable-live"],
   ...(clientComparisonRecipe ? { [clientComparisonRecipe]: ["client-heavy"] } : {}),
 });
@@ -164,7 +165,7 @@ function reviewDeclaration(review, subjectSha256) {
   return { state: "declared-not-authenticated", declaration: clone(review) };
 }
 
-const mixedMeasurement = (recipe) => ["mixed-measure", "mixed-production-measure", djangoAsgi.recipe].includes(recipe);
+const mixedMeasurement = (recipe) => ["mixed-measure", "mixed-production-measure", djangoAsgi.recipe, springWebflux.recipe].includes(recipe);
 
 // Pure native command and option derivation, not source or execution admission.
 export function nativeExecution(group, round, recipe, reviewId) {
@@ -187,10 +188,13 @@ export function nativeExecution(group, round, recipe, reviewId) {
       const profile = recipe === "mixed-measure" ? "defaults" : "matched";
       args.push("--measure");
       if (profile === "matched") args.push("--profile", profile);
-      if (recipe === djangoAsgi.recipe) args.push("--django-deployment", djangoAsgi.deployment);
-      changes.push({ measure: true, profile, ...(recipe === djangoAsgi.recipe && { djangoDeployment: djangoAsgi.deployment }) });
+      args.push(...mixedDeploymentArgs(recipe));
     }
     effective = mixedOptions(args);
+    if (effective.measure) {
+      const { measure, profile, djangoDeployment, springDeployment } = effective;
+      changes.push({ measure, profile, ...(djangoDeployment && { djangoDeployment }), ...(springDeployment && { springDeployment }) });
+    }
     defaults.apps = [...selectedApps(group)]; effective.apps = [...selectedApps(group)];
   } else if (group === "fullstack-browser") {
     defaults = { targets: null, out: null, apps: selectedApps(group), cases: null, build: false };

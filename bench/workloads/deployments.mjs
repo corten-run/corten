@@ -7,6 +7,7 @@ import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
 import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
 import { cpuSettings as marketplaceCpus, parseArgs as marketplaceOptions } from "../marketplace/run-contract.mjs";
+import { springWebflux } from "../mixed-production/source-audit.mjs";
 import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "./registry.mjs";
 
 export const deploymentSchema = "benchmark-deployments/v1";
@@ -241,6 +242,16 @@ function candidates(group, app, baseline) {
       builds: { app: { context, dockerfile: `${context}/Dockerfile`, args: { PROFILE: "matched-asgi" } } },
       sourceRefs: [...baseline.configuration.sourceRefs, ...["requirements-matched-asgi.txt", "start_mixed_asgi.py", "itempage/mixed_asgi.py",
         "itempage/mixed_asgi_settings.py", "itempage/mixed_asgi_urls.py", "itempage/mixed_asgi_views.py"].map((path) => `${context}/${path}`)] };
+  }
+  if (app === "spring" && group === "mixed-production") {
+    const context = appRoot(app), dockerfile = `${context}/${springWebflux.dockerfile}`;
+    candidate(springWebflux.deployment, { scope: "dedicated Mixed Production only", buildProfile: springWebflux.buildProfile,
+      productionParity: "requires full native Mixed qualification before timing" }, [dockerfile], "source-present");
+    choices.at(-1).configuration = { ...baseline.configuration, framework: "Spring Boot WebFlux + Thymeleaf", server: "Reactor Netty",
+      workers: "one JVM; Reactor Netty event loops", command: [...springWebflux.entrypoint], middleware: "WebFlux request and upstream cancellation; native session middleware",
+      builds: { app: { context, dockerfile, args: {} } }, sourceRefs: [dockerfile, ...["mixed/pom.xml",
+        "mixed/src/main/resources/application.properties", "mixed/src/main/java/bench/mixed/MarketplaceApplication.java",
+        "mixed/src/main/java/bench/mixed/MarketplaceController.java", "mixed/src/main/java/bench/mixed/MarketplaceSource.java"].map((path) => `${context}/${path}`)] };
   }
   if (app === "fastapi") {
     candidate("fastapi-uvicorn-asyncio", { server: "Uvicorn", loop: "asyncio; explicit selection rather than auto", compiler: "CPython" }, [optionSources.uvicorn]);
