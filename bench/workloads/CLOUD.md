@@ -1459,8 +1459,16 @@ unused and failed-setup v1, v2 and v3) checks, as this process left them, the
 receipt, the saved reservation (`state.json`, byte for byte, so including its
 retirement digest), for a v2 or v3 receipt the archived control custody its proof
 was built from (the inventory and bytes of the evidence's `control/` folder,
-including every watcher failure) and this process's own `operation.lock` (the
-file it created, by identity and bytes). The check runs after the DELETE's account
+including every watcher failure), for every failed-setup receipt the other inputs
+its replay verifier hashes, and this process's own `operation.lock` (the file it
+created, by identity and bytes). Those other inputs are `results.tgz` and the
+whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
+and `control/`). They are pinned without rereading them: the verification after
+the intent hashes each, recording `results.tgz`'s file identity (device, inode,
+size, mode, link count, birth, modification and change times) around its hash and
+every tree entry's identity in the same walk, and the dispatch check compares only
+those identities. Nothing else in the state root is pinned; the replay verifier
+reads nothing else. The check runs after the DELETE's account
 preflight, before the controller hands the DELETE to its transport, and again in
 the dispatch guard the transport calls after its last local await before the
 request: the production transport's cancellation checkpoint, and, for an
@@ -1470,9 +1478,11 @@ never by reporting the request unsent. The production provider worker is a
 separate process and a function cannot cross its IPC, so in production the last
 fence is the controller's, immediately before the action is sent to the worker; the
 worker's own checkpoint and the IPC transit are not covered, and nothing covers
-the interval between the request leaving and the provider acting on it. A change
-there refuses with `saved retirement reservation changed; preserve host`,
-`archived control custody changed; preserve host` or `operation.lock changed;
+the interval between the request leaving and the provider acting on it; a change
+made only in that uncovered interval is not detected. A mismatch found by one of
+these checks refuses with `saved retirement reservation changed; preserve host`,
+`archived control custody changed; preserve host`, `setup archive changed;
+preserve host`, `setup evidence changed; preserve host` or `operation.lock changed;
 preserve custody` and sends no DELETE. A receipt edited before the intent refuses with
 `published retirement receipt differs from the bytes written; preserve host`,
 saving no intent; its recorded digest stays, so a later collect refuses it as an
@@ -2189,11 +2199,13 @@ grouped attempts. `groups-rN/` is the exclusive durable reservation; even failed
 preflight consumes it. An unresolved reservation blocks another round in that root.
 The root launch lock and round operation lock are exclusive files with process
 identity, synced before work. No PID liveness guess, stale-lock removal or takeover
-is automatic. A controller removes a lock it took only while that path is still
-the file it created, with its bytes: if the lock was replaced during the
+is automatic. The round's `operation.lock` and its `stream-recovery.lock`, the
+child locks the controller takes around a round operation, are removed only while
+that path is still the file the controller created, with its bytes: if one was replaced during the
 operation, teardown keeps the replacement and refuses with `<lock> was replaced
 during this operation; the replacement is kept; preserve custody`, with any
-earlier refusal as its cause. A killed process may leave both locks. Inspect the exact process and
+earlier refusal as its cause. The root launch lock is still removed by path at
+the end of a launch. A killed process may leave both locks. Inspect the exact process and
 all state/evidence before any operator recovery; never relaunch the reserved round.
 
 State writes use exclusive temporary files, file fsync, atomic rename and directory

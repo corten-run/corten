@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import fs, { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import fs, { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
@@ -489,7 +489,8 @@ const receiptName = /^failed-setup-host\.json(?:\.stage)?$/, historyName = /^fai
 for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time", "receipt-expired", "receipt-expired-kept", "receipt-expired-rebound", "receipt-expired-edited", "receipt-expired-unrecorded",
   "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished",
   "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn",
-  "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "receipt-edited-at-engine", "engine-unchanged"]) test({
+  "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "archive-edited-at-dispatch", "evidence-edited-at-dispatch",
+  "receipt-edited-at-engine", "engine-unchanged"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -514,6 +515,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-dispatch": "a saved retirement digest edited during the production dispatch checkpoint refuses and sends no DELETE",
   "custody-edited-at-dispatch": "an archived watcher record edited during the production dispatch checkpoint refuses and sends no DELETE",
   "lock-replaced-at-dispatch": "an operation lock replaced during the production dispatch checkpoint refuses, sends no DELETE and keeps the replacement",
+  "archive-edited-at-dispatch": "a byte appended to results.tgz during the production dispatch checkpoint refuses and sends no DELETE",
+  "evidence-edited-at-dispatch": "an extracted file outside control/ edited during the production dispatch checkpoint refuses and sends no DELETE",
   "receipt-edited-at-engine": "a receipt edited at the in-process provider engine's checkpoint refuses there and sends no DELETE",
   "engine-unchanged": "an unchanged receipt passes the provider engine's guard and sends exactly one DELETE",
 }[mode], async (t) => {
@@ -643,7 +646,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
     return;
   }
-  if (["state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch"].includes(mode)) {
+  if (["state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "archive-edited-at-dispatch", "evidence-edited-at-dispatch"].includes(mode)) {
     // Each edit lands inside the production dispatch checkpoint, after the controller's last
     // check before run(), on something other than the receipt the DELETE relies on.
     const statePath = join(h.local, "state.json"), replacement = `${JSON.stringify({ pid: 1, at: "2026-01-01T00:00:00.000Z" })}\n`;
@@ -656,6 +659,12 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       } else if (mode === "custody-edited-at-dispatch") {
         const record = join(h.local, s.evidence, "control", `watch-failure-${failed.id}.json`);
         changed = readFileSync(record); writeFileSync(record, Buffer.concat([changed, Buffer.from(" ")]));
+      } else if (mode === "archive-edited-at-dispatch") {
+        const tgz = join(h.local, "results.tgz");
+        changed = readFileSync(tgz); appendFileSync(tgz, Buffer.from([0]));
+      } else if (mode === "evidence-edited-at-dispatch") {
+        const log = join(h.local, s.evidence, "run.log");
+        changed = readFileSync(log); appendFileSync(log, "x");
       } else {
         changed = readFileSync(lock); unlinkSync(lock); writeFileSync(lock, replacement);
       }
@@ -667,6 +676,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       "state-edited-at-dispatch": /saved retirement reservation changed; preserve host/,
       "custody-edited-at-dispatch": /archived control custody changed; preserve host/,
       "lock-replaced-at-dispatch": /operation\.lock was replaced during this operation; the replacement is kept; preserve custody/,
+      "archive-edited-at-dispatch": /setup archive changed; preserve host/,
+      "evidence-edited-at-dispatch": /setup evidence changed; preserve host/,
     }[mode]);
     assert.ok(changed); assert.ok(deleting); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
     assert.equal(h.saved().destroyedAt, undefined);

@@ -8,7 +8,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { archiveLimit, archiveMembers, digest, discardPublicationStage, durable, durableCopy, durableNew, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
+import { archiveLimit, archiveMembers, digest, discardPublicationStage, durable, durableCopy, durableNew, evidenceFileIdentity, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
 import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
@@ -911,20 +911,33 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return report;
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
-  const setupExit = () => {
-    verifyArchive(); const extracted = join(local, state.evidence); physical(extracted);
-    assert.equal(treeHash(extracted), state.evidenceSha256, "failed setup archive extraction changed");
+  // With `pins`, also adds a cheap recheck of what this verified, for the DELETE's dispatch
+  // guard: the archive's file identity, recorded around its hash, and the extracted tree's
+  // metadata, recorded by the same walk that hashes it. Neither rereads the payload.
+  const setupExit = (pins) => {
+    const archiveIdentity = evidenceFileIdentity(archive);
+    verifyArchive();
+    assert.ok(evidenceFileIdentity(archive) === archiveIdentity, "archive changed; preserve host");
+    const extracted = join(local, state.evidence); physical(extracted);
+    const treeUnchanged = pinEvidenceTree(extracted, state.evidenceSha256, "failed setup archive extraction changed");
     const campaign = join(extracted, "campaign");
     if (existsSync(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), [], "native data cannot use setup retirement"); }
     const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
     full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit required");
-    const exit = Number(marker.trim()); assert.ok(exit <= 255); return exit;
+    const exit = Number(marker.trim()); assert.ok(exit <= 255);
+    pins?.push(() => {
+      try { assert.ok(evidenceFileIdentity(archive) === archiveIdentity); }
+      catch (cause) { throw new Error("setup archive changed; preserve host", { cause }); }
+      try { treeUnchanged(); }
+      catch (cause) { throw new Error("setup evidence changed; preserve host", { cause }); }
+    });
+    return exit;
   };
   const retirementFile = (kind) => kind === "setup-failed" ? "failed-setup-host.json" : "unused-host.json";
   // `interrupted` verifies a receipt left without its intent for archival only: a retry
   // has since appended controls, so it is checked against the ledger prefix it was
   // written for. Only a receipt for the final control can authorize a DELETE.
-  const verifyRetirementRecord = (bytes, kind, interrupted = false) => {
+  const verifyRetirementRecord = (bytes, kind, interrupted = false, pins) => {
     const setup = kind === "setup-failed";
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
     if (!setup) return verifyUnusedEvidence(record, state);
@@ -935,15 +948,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       bound = { ...state, control: { ...state.control, ledger: state.control.ledger.slice(0, length) } };
     }
     // The preserved archive selects the schema: v3 only beside an archived watcher failure.
-    const exit = setupExit(), failures = bound.control && bound.preBootstrapTerminal ? setupWatcherFailures(bound, local) : [];
+    const exit = setupExit(pins), failures = bound.control && bound.preBootstrapTerminal ? setupWatcherFailures(bound, local) : [];
     const expected = setupEvidence(raw, bound, terminalSetupScript(bound, exit, bound.control ? record.observation.control.requests.length - 1 : undefined, failures), exit, record.startedAtMs, record.finishedAtMs, local);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
-  const verifyRetirement = () => {
+  const verifyRetirement = (pins) => {
     if (state.retirement.kind === "native-failed") return verifyFailedNativeRetirement(local, state);
     const bytes = regular(join(local, retirementFile(state.retirement.kind)), state.control && state.retirement.kind === "setup-failed" ? 8 * 1024 * 1024 : 4096);
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
-    verifyRetirementRecord(bytes, state.retirement.kind);
+    verifyRetirementRecord(bytes, state.retirement.kind, false, pins);
   };
   const requireUnusedBootstrapCustody = () => {
     const interrupted = interruptedFirstUpload(state, local), uploads = interrupted || settledBootstrap(state, local);
@@ -1045,11 +1058,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     requirePublished();
     delete state.pendingRetirement;
     Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() }); save();
-    verifyRetirement();
+    // For a setup retirement, this verification also pins the archive and its extraction.
+    const pins = [];
+    verifyRetirement(pins);
     // Everything the DELETE relies on, as this process left it: the receipt, the saved
     // reservation that names its digest, the archived control custody the proof was built
-    // from (including any watcher failure) and this process's own operation lock. The
-    // transport calls this again after its last local await before the request.
+    // from (including any watcher failure), for a setup retirement the archive and the
+    // extracted tree its replay verifier hashes, and this process's own operation lock.
+    // The transport calls this again after its last local await before the request.
     const savedState = Buffer.from(stateBytes(state));
     const custody = recorded ? evidence.observation.control.custody : undefined;
     const ownLock = assertOperationLock;
@@ -1067,6 +1083,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
         } catch (cause) { throw new Error("archived control custody changed; preserve host", { cause }); }
       }
+      for (const pin of pins) pin();
       ownLock();
     };
     requireRetirementCustody();
