@@ -1102,6 +1102,24 @@ tells it apart, 21 to 27 instructions here. The first three rows are also what s
 pass is taken. What is sent is the same either way, so no test of answers fails when it is not:
 a change to the last stage counts these rows again.
 
+An answer given its scope's lines this way brought its `Content-Type` at most, and none of the
+scope's lines is part of an `ETag` or leaves an answer without one, so its
+[`ETag`](#the-pages-the-app-keeps) is made without looking through its lines: the hash takes
+its body and its type, as it did. Any other answer's lines are searched as before, and the tag
+is the same bytes either way. Counted over a socket with
+[`bench/request-cost`](../../bench/request-cost/README.md) (instructions a request, the median
+of three counts, `e87ad02da` before and `10bfc8a21` after):
+
+| Request | Before | After |
+|---|---|---|
+| a short text from a page route, a browser's request headers (`text-browser`): tagged, lines given in one pass | 25,840 | 25,275 |
+| the same without them (`text`): not tagged | 17,193 | 17,194 |
+| a short text from a route under an API (`get`): not tagged | 18,352 | 18,353 |
+| a 12 KB page compressed for a browser (`page-browser`): tagged, lines searched | 211,828 | 211,836 |
+
+The cost is one or two instructions on an answer that is not tagged, for the last stage to carry
+whether the pass was taken to where the tag is made, and eight on a tagged page.
+
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
