@@ -2531,6 +2531,7 @@ const USUAL_NAMES: &[(&str, &str)] = &[
     ("sec-ch-ua-mobile", "Sec-Ch-Ua-Mobile"),
     ("sec-ch-ua-platform", "Sec-Ch-Ua-Platform"),
     ("priority", "Priority"),
+    ("purpose", "Purpose"),
     ("corten", "Corten"),
 ];
 
@@ -2582,8 +2583,7 @@ fn a_header_name_is_the_one_http_makes_of_it_however_it_is_spelled() {
         "Sec-CH-UA",
         "Sec-CH-UA-Platform",
         "sec-ch-ua-model",
-        "purpose",
-        "Purpose",
+        "purposes",
         "hosts",
         "Hos",
         "corten-page",

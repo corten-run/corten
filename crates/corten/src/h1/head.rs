@@ -206,6 +206,7 @@ fn field_name(name: &[u8]) -> Result<HeaderName, Refusal> {
         b"sec-ch-ua-mobile" | b"Sec-Ch-Ua-Mobile" => const { HeaderName::from_static("sec-ch-ua-mobile") },
         b"sec-ch-ua-platform" | b"Sec-Ch-Ua-Platform" => const { HeaderName::from_static("sec-ch-ua-platform") },
         b"priority" | b"Priority" => const { HeaderName::from_static("priority") },
+        b"purpose" | b"Purpose" => const { HeaderName::from_static("purpose") },
         b"corten" | b"Corten" => const { HeaderName::from_static("corten") },
         _ => return HeaderName::from_bytes(name).map_err(|_| Refusal::Bad),
     };

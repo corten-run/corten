@@ -675,6 +675,8 @@ const BROWSER_LINES: &[&str] = &[
     "Sec-Ch-Ua-Platform: \"Linux\"",
     "priority: u=0, i",
     "Priority: u=0, i",
+    "purpose: prefetch",
+    "Purpose: prefetch",
     "corten: nav",
     "Corten: nav",
     "ACCEPT: */*",
