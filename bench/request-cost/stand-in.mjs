@@ -29,6 +29,8 @@
 //   STAND_IN_DEAF_AFTER=<n>      after its nth run the control exits 0 and asks for nothing
 //   STAND_IN_NO_OWN=1            started with PROBE_OWN_HTTP1, it refuses as a probe built without
 //                                the switch does, and serves nothing
+//   STAND_IN_REFUSES_OFF=1       refuse even if the switch was not asked for
+//   STAND_IN_REFUSAL, STAND_IN_EXIT: replace the refusal line or its status
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname, join } from "node:path";

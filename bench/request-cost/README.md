@@ -552,7 +552,8 @@ for them.
 | `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
-with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 50 of the 80 tests run.
+with `sh` or `bash` and `git`, and those tests are skipped elsewhere. The markup position check
+runs on any platform.
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).

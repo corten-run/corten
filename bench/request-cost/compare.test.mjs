@@ -620,7 +620,6 @@ test("a base without the switch cannot hide a missing or invalid head reading or
 test("a refusal among figures and answers is not a capability and cannot hide a head rise", (t) => {
   const { base, head } = builds(t, (_, build) => {
     build.count["get-own"] = [30_000, 30_000, 30_000];
-    build.count["post-own"] = [30_000, 30_000, 30_000];
   });
   // The reviewer's lone refusal, with the valid answer and all other readings still present.
   writeFileSync(join(base, "count-get-own.json"), `${JSON.stringify({ ...expect["count-get-own.json"], unsupported: WITHOUT })}\n`);
@@ -628,9 +627,11 @@ test("a refusal among figures and answers is not a capability and cannot hide a 
     const result = compare(base, head, { description });
     assertMiss(result, description);
     assert.match(verdict(result.markdown), /`get-own`'s instructions has no figure on base/);
-    assert.match(verdict(result.markdown), /`post-own` runs .* over the budget/);
     assert.doesNotMatch(result.markdown, /not compared/);
   }
+  // Another row still has two figures and must be decided by the usual budget.
+  writeFileSync(join(head, "count-post-own.json"), printed("count-post-own.json", [30_000, 30_000, 30_000]));
+  assert.match(verdict(compare(base, head).markdown), /`post-own` runs .* over the budget/);
 });
 
 test("only the build record and every exact refusal together establish the absent capability", (t) => {
