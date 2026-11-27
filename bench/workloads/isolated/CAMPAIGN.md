@@ -281,7 +281,9 @@ child: fixed native replay must independently prove their IDs, roles, limits and
 An unobserved escape or resource/identity gap cannot be cleared by a manifest or requested
 budget. Parent live source/unit/host ownership remains the trust boundary of these records.
 
-Core samples recursive cgroup files and live PID/start/executable identities at 100 ms.
+Core targets a 100 ms interval for recursive cgroup and live PID/start/executable
+reads. Fullstack Browser leaves at least 50 ms between the end of each periodic
+Docker census and the start of the next; a gap over one second still fails.
 It retains raw initial process observations content-addressed under processes/, references
 the independently re-read identities in each sample, and records raw CPU accounting,
 memory current/peak/events and effective controls. No environment or arbitrary command-line

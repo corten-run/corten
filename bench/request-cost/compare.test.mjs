@@ -235,7 +235,8 @@ test("a change inside the budget passes as counted, and the table gives every ru
   assert.ok(markdown.includes("| `get`, 16 at a time | 15,000 | 15,000 | 0 | 0.000% | 15000 15001 15000 "), markdown);
   assert.ok(markdown.includes("| `page-browser` | 16.00 | 16.00 | 0 in 1,000 | 0.00% | 16,000 and 16,000 frees | 16,000 and 16,000 frees |  |"), markdown);
   // Each run's growth in bytes, its rounded figure a connection after it, and what base allows.
-  assert.ok(markdown.includes("| after one request | 42,106,880 | 42,106,880 | 0 | 0.00% | 8,192 | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) |  |"), markdown);
+  assert.ok(markdown.includes("| after one request | 42,106,880 | 42,106,880 | 0 | 0.00% | 16,384 | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) |  |"), markdown);
+  assert.ok(markdown.split("\n").some((line) => line.endsWith("a rise is allowed up to the larger of base's three span and four pages.")), markdown);
   // A row a case and a row a reading, and no section for runs with no figure when all gave one.
   assert.equal(markdown.split("\n").filter((line) => line.startsWith("| `") || /^\| (after|before) /.test(line)).length, CASES + 4 + CASES + 3);
   // Each idle run is given whole, with its before, after, growth and page size, which decide.
@@ -280,42 +281,66 @@ test("an allocation more does not pass, however few they are among the requests 
   assert.equal(compare(other.base, other.head, { description: counting }).status, 0);
 });
 
-test("idle memory is decided by growths in bytes: one page over base's agreeing three passes, two pages fail, and more than base's span fails", (t) => {
+test("idle memory is decided by growths in bytes: four pages over base's agreeing three pass, five pages fail, and more than a span of base's over four pages fails", (t) => {
   // Base's three agree, 15,335 pages, 62,812,160 bytes over 5,000 connections (12,562 a
-  // connection), and head's are one page more (62,816,256, 12,563): the rounded figures rise
-  // by one, and a page is allowed.
+  // connection), and head's are four pages more (62,828,544, 12,566): 16,384 bytes, which are
+  // allowed.
   const agreeing = (/** @type {ReturnType<typeof figures>} */ build, /** @type {number} */ pages) => (build.idle.browser = [pages, pages, pages]);
-  const one = builds(t, (base, head) => [agreeing(base, 15_335), agreeing(head, 15_336)]);
-  const page = compare(one.base, one.head, { description: counting });
+  const four = builds(t, (base, head) => [agreeing(base, 15_335), agreeing(head, 15_339)]);
+  const page = compare(four.base, four.head, { description: counting });
   assert.deepEqual([page.status, page.holds], [0, true], page.markdown);
   assert.match(verdict(page.markdown), /^\*\*Passes as counted\.\*\*/);
-  assert.ok(page.markdown.includes("| after three of a browser's requests | 62,812,160 | 62,816,256 | +4,096 | +0.01% | 4,096 | 62,812,160 (12,562) 62,812,160 (12,562) 62,812,160 (12,562) | 62,816,256 (12,563) 62,816,256 (12,563) 62,816,256 (12,563) |  |"), page.markdown);
-  // Two pages more, whose figures also round to one byte a connection more (12,562 to 12,563),
-  // is a rise.
-  const two = builds(t, (base, head) => [agreeing(base, 15_334), agreeing(head, 15_336)]);
-  const pages = compare(two.base, two.head, { description: counting });
+  assert.ok(page.markdown.includes("| after three of a browser's requests | 62,812,160 | 62,828,544 | +16,384 | +0.03% | 16,384 | 62,812,160 (12,562) 62,812,160 (12,562) 62,812,160 (12,562) | 62,828,544 (12,566) 62,828,544 (12,566) 62,828,544 (12,566) |  |"), page.markdown);
+  // One, two and three pages more (4,096, 8,192 and 12,288 bytes) are under the four allowed.
+  for (const [pages, row] of /** @type {const} */ ([[1, "| 62,812,160 | 62,816,256 | +4,096 | +0.01% | 16,384 |"], [2, "| 62,812,160 | 62,820,352 | +8,192 | +0.01% | 16,384 |"], [3, "| 62,812,160 | 62,824,448 | +12,288 | +0.02% | 16,384 |"]])) {
+    const under = builds(t, (base, head) => [agreeing(base, 15_335), agreeing(head, 15_335 + pages)]);
+    const found = compare(under.base, under.head, { description: counting });
+    assert.deepEqual([found.status, found.holds], [0, true], found.markdown);
+    assert.ok(found.markdown.includes(`| after three of a browser's requests ${row}`), found.markdown);
+  }
+  // Five pages more, whose figures round as the four pages' did (12,562 to 12,566), are a rise:
+  // 20,480 bytes.
+  const five = builds(t, (base, head) => [agreeing(base, 15_334), agreeing(head, 15_339)]);
+  const pages = compare(five.base, five.head, { description: counting });
   assert.deepEqual([pages.status, pages.holds], [1, false]);
-  assert.match(verdict(pages.markdown), /^\*\*Does not pass as counted:\*\* idle memory after three of a browser's requests rises: the median of head's growths, 62,816,256 bytes over 5,000 connections, is above base's 62,808,064 by 8,192, more than the 4,096 allowed \(the larger of base's span and a 4,096-byte page\)\. /);
-  assert.ok(pages.markdown.includes("| after three of a browser's requests | 62,808,064 | 62,816,256 | +8,192 | +0.01% | 4,096 | 62,808,064 (12,562) 62,808,064 (12,562) 62,808,064 (12,562) | 62,816,256 (12,563) 62,816,256 (12,563) 62,816,256 (12,563) | rose |"), pages.markdown);
-  // Base's runs after one request span 2 pages (8,192 bytes) about a median of 10,280 pages:
-  // head's median 3 pages above is a rise, 2 above is not, whatever head's highest run.
-  const more = builds(t, (_, build) => {
-    build.idle.request = [10_283, 10_290, 10_270];
+  assert.match(verdict(pages.markdown), /^\*\*Does not pass as counted:\*\* idle memory after three of a browser's requests rises: the median of head's growths, 62,828,544 bytes over 5,000 connections, is above base's 62,808,064 by 20,480, more than the 16,384 allowed \(the larger of base's span and four 4,096-byte pages\)\. /);
+  assert.ok(pages.markdown.includes("| after three of a browser's requests | 62,808,064 | 62,828,544 | +20,480 | +0.03% | 16,384 | 62,808,064 (12,562) 62,808,064 (12,562) 62,808,064 (12,562) | 62,828,544 (12,566) 62,828,544 (12,566) 62,828,544 (12,566) | rose |"), pages.markdown);
+  // A span of base's over four pages still governs. Base's runs after one request span 6 pages
+  // (24,576 bytes) about a median of 10,280 pages: head's median 7 pages above is a rise, 6
+  // above is not, whatever head's highest run.
+  const wide = (/** @type {ReturnType<typeof figures>} */ build) => (build.idle.request = [10_277, 10_283, 10_280]);
+  const more = builds(t, (base, head) => {
+    wide(base);
+    head.idle.request = [10_287, 10_290, 10_270];
   });
   const rises = compare(more.base, more.head, { description: counting });
   assert.equal(rises.status, 1);
-  assert.match(verdict(rises.markdown), /^\*\*Does not pass as counted:\*\* idle memory after one request rises: the median of head's growths, 42,119,168 bytes over 5,000 connections, is above base's 42,106,880 by 12,288, more than the 8,192 allowed \(the larger of base's span and a 4,096-byte page\)\. /);
-  const less = builds(t, (_, build) => {
-    build.idle.request = [10_282, 10_400, 10_270];
-    build.idle.silent = [2_000, 2_000, 2_000];
+  assert.match(verdict(rises.markdown), /^\*\*Does not pass as counted:\*\* idle memory after one request rises: the median of head's growths, 42,135,552 bytes over 5,000 connections, is above base's 42,106,880 by 28,672, more than the 24,576 allowed \(the larger of base's span and four 4,096-byte pages\)\. /);
+  const less = builds(t, (base, head) => {
+    wide(base);
+    head.idle.request = [10_286, 10_400, 10_270];
+    head.idle.silent = [2_000, 2_000, 2_000];
   });
   const stays = compare(less.base, less.head, { description: counting });
   assert.equal(stays.status, 0, stays.markdown);
-  assert.ok(stays.markdown.includes("| after one request | 42,106,880 | 42,115,072 | +8,192 | +0.02% | 8,192 | "), stays.markdown);
+  assert.ok(stays.markdown.includes("| after one request | 42,106,880 | 42,131,456 | +24,576 | +0.06% | 24,576 | "), stays.markdown);
+  // Base's runs span 2 pages, under the four: the four are allowed, so 4 above passes and 5 does not.
+  const narrow = builds(t, (_, head) => {
+    head.idle.request = [10_284, 10_400, 10_270];
+  });
+  const under = compare(narrow.base, narrow.head, { description: counting });
+  assert.equal(under.status, 0, under.markdown);
+  assert.ok(under.markdown.includes("| after one request | 42,106,880 | 42,123,264 | +16,384 | +0.04% | 16,384 | "), under.markdown);
+  const over = builds(t, (_, head) => {
+    head.idle.request = [10_285, 10_400, 10_270];
+  });
+  const past = compare(over.base, over.head, { description: counting });
+  assert.equal(past.status, 1);
+  assert.match(verdict(past.markdown), /is above base's 42,106,880 by 20,480, more than the 16,384 allowed \(the larger of base's span and four 4,096-byte pages\)\. /);
 });
 
 test("an idle reading over fewer connections than its page has bytes, or of two page sizes, is not decided and never passes", (t) => {
-  // 65,536-byte pages over the hosted job's 5,000 connections: one page is 13 bytes a
+  // 65,536-byte pages over the hosted job's 5,000 connections: four pages are 52 bytes a
   // connection, a step the gate does not let pass unseen, so no reading is decided.
   const large = builds(t, (base, head) => {
     base.page = 65_536;
@@ -326,7 +351,7 @@ test("an idle reading over fewer connections than its page has bytes, or of two 
     assert.deepEqual([status, holds], [description === measuring ? 0 : 1, false], description);
     assert.doesNotMatch(verdict(markdown), /Passes|Would pass|would pass\./, description);
     for (const what of ["after one request", "after three of a browser's requests", "before any byte"]) {
-      assert.ok(verdict(markdown).includes(`idle memory ${what} is not decided (\`not a gate reading: one 65536-byte page over 5000 connections is more than a byte a connection; open at least 65536\`)`), `${what}\n${markdown}`);
+      assert.ok(verdict(markdown).includes(`idle memory ${what} is not decided (\`not a gate reading: four 65536-byte pages over 5000 connections are more than four bytes a connection; open at least 65536\`)`), `${what}\n${markdown}`);
     }
     assert.equal(markdown.match(/\| not decided \|$/gm)?.length, 3, markdown);
   }
@@ -459,7 +484,7 @@ test("a change declared measured is reported and never failed on its figures", (
   });
   const { markdown, status, holds } = compare(base, head, { description: measuring });
   assert.deepEqual([status, holds], [0, false]);
-  assert.equal(verdict(markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: \`page\` runs 9,994 more instructions a request than base's 20,006, over the budget of 100 (+0.5%); \`page\` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: the median of head's growths, 45,056,000 bytes over 5,000 connections, is above base's 13,209,600 by 31,846,400, more than the 12,288 allowed (the larger of base's span and a 4,096-byte page). ${readMeasured}`);
+  assert.equal(verdict(markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: \`page\` runs 9,994 more instructions a request than base's 20,006, over the budget of 100 (+0.5%); \`page\` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: the median of head's growths, 45,056,000 bytes over 5,000 connections, is above base's 13,209,600 by 31,846,400, more than the 16,384 allowed (the larger of base's span and four 4,096-byte pages). ${readMeasured}`);
   const inside = builds(t);
   assert.equal(verdict(compare(inside.base, inside.head, { description: measuring }).markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would pass. ${readMeasured}`);
   // The one line is the declaration where it stands, an example's fence as well: the verdict says where it was read.

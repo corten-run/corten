@@ -673,6 +673,49 @@ const terminalClock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSeco
 const withClock = ({ terminal }) => { terminal.terminalClock = terminalClock; };
 
 const clockCampaignRound = "r21", clockCampaignId = `${clockCampaignRound}-0000000000000001`;
+test("Browser observer leaves time for storage after a slow capture and cancels the next capture on finish", {
+  timeout: 5000,
+}, async (t) => {
+  const group = "fullstack-browser", round = campaignRounds(clockCampaignRound)[group], recipe = productionRecipes[group];
+  const execution = nativeExecution(group, round, recipe, "a".repeat(64));
+  const binding = { request: { group, round, commit: "a".repeat(40), recipe }, resources: { browserCpus },
+    selection: { apps: selectedApps(group) }, validation: { artifactRoot: nativeArtifactRoot(group, round) }, execution };
+  const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+  let time = 0, inventoryMs = 0;
+  const scheduled = new Map();
+  t.mock.method(performance, "now", () => time);
+  t.mock.method(globalThis, "setTimeout", (callback, ms, ...args) => {
+    if (ms > 100) return set(callback, ms, ...args);
+    const handle = {};
+    scheduled.set(handle, { callback, ms });
+    return handle;
+  });
+  t.mock.method(globalThis, "clearTimeout", (handle) => {
+    if (!scheduled.delete(handle)) clear(handle);
+  });
+  const f = await samplingControl(t, undefined, { binding, invocation: execution.invocation, phase: "timing",
+    onInventory() { time += inventoryMs; } });
+  function tick(expected, work) {
+    assert.equal(scheduled.size, 1);
+    const [handle, { callback, ms }] = scheduled.entries().next().value;
+    assert.equal(ms, expected); scheduled.delete(handle); time += ms; inventoryMs = work;
+    callback();
+  }
+  const written = new Promise((resolve) => {
+    f.afterOperation = (name, path) => { if (name === "write" && path.endsWith("samples.jsonl")) resolve(); };
+  });
+  tick(100, 149);
+  await written;
+  f.afterOperation = undefined;
+  assert.equal(f.samples().length, 3, "the write completed before the next capture, without a drain");
+  tick(50, 10);
+  tick(90, 0);
+  assert.equal(scheduled.size, 1);
+  assert.equal((await f.finish(f.result, true, true)).status, "verified");
+  assert.equal(f.samples().length, 6);
+  assert.equal(scheduled.size, 0);
+});
+
 const clockPhases = [...groupNames.map((group) => [group, "timing"]), ["json-api", "prepare"]];
 for (const [group, phase] of clockPhases) test(`terminal clock writer: ${group}/${phase} emits the clock its lifetime reader verifies`, async (t) => {
   const round = campaignRounds(clockCampaignRound)[group], commit = "a".repeat(40);
