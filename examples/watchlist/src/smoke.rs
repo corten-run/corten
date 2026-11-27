@@ -598,10 +598,21 @@ async fn replace_shared_ref_part(req: Req, Params(at): Params<url::ReplaceShared
 
 #[cfg(test)]
 mod tests {
-    use corten::Mode;
+    use std::time::Duration;
+
+    use corten::{
+        Local, Mode,
+        http::{HeaderName, header},
+        testing::{Answer, Call},
+    };
 
     use super::url;
-    use crate::market::Market;
+    use crate::{
+        alerts::{AlertInput, AlertStore},
+        app::url::{Alerts, Home},
+        market::Market,
+        testing::VISITOR,
+    };
 
     /// The smoke's patches answer a browser without JavaScript with a page or a redirect, never the
     /// bare fragment (which a debug build refuses with a 500): the styled note's form goes back to
@@ -622,5 +633,140 @@ mod tests {
             assert!(!to.headers().contains_key("corten-patch"), "a page: {}", to.text());
             assert!(to.text().contains(" open>") && to.text().contains(open), "drawn open: {}", to.text());
         }
+    }
+
+    /// The browser smoke marks requests with `smoke-*` headers for its own routes to read
+    /// (`smoke-note`, `smoke-control`, `smoke-start`, `smoke-styled`), and a mark may reach the
+    /// app, which ignores them: every kind of request the smoke marks is answered the same, its
+    /// status, each of its headers (`Vary` and `Cache-Control` among them) and its body, with those
+    /// marks and one the smoke does not use (`smoke-canary`) as without. So a mark that gets past a
+    /// case's route cannot change what the case sees.
+    #[tokio::test]
+    async fn the_smokes_request_marks_change_no_answer() {
+        let plain = answers(&[]).await;
+        let marks = [
+            ("smoke-note", "3"),
+            ("smoke-control", "bare"),
+            ("smoke-start", "12.5"),
+            ("smoke-styled", "1"),
+            ("smoke-canary", "1"),
+        ];
+        let marked = answers(&marks).await;
+        assert_eq!(plain.len(), marked.len());
+        for (plain, marked) in plain.iter().zip(&marked) {
+            let what = plain.what;
+            assert_eq!(
+                (plain.status, &plain.headers),
+                (marked.status, &marked.headers),
+                "{what}: status and headers, without and with the marks"
+            );
+            let from =
+                plain.body.iter().zip(&marked.body).position(|(a, b)| a != b).unwrap_or(plain.body.len().min(marked.body.len()));
+            let near =
+                |body: &[u8]| String::from_utf8_lossy(&body[from.saturating_sub(40)..body.len().min(from + 40)]).into_owned();
+            assert!(
+                plain.body == marked.body,
+                "{what}: the body with the marks differs from byte {from}: {:?} without, {:?} with",
+                near(&plain.body),
+                near(&marked.body)
+            );
+        }
+    }
+
+    /// One answer as the test compares it: the request, the status, the headers in the order sent
+    /// and the body.
+    struct Seen {
+        what: &'static str,
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    }
+
+    impl Seen {
+        fn of(what: &'static str, answer: &Answer) -> Seen {
+            Seen {
+                what,
+                status: answer.status().as_u16(),
+                headers: answer
+                    .headers()
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_str().unwrap().to_string()))
+                    .collect(),
+                body: answer.bytes().to_vec(),
+            }
+        }
+    }
+
+    /// What a case's route fetches a request it answers with (`accept-encoding: identity`), so the
+    /// test reads the body as it is.
+    const ROUTED: &str = "identity";
+    /// What a browser accepts on a request it sends itself (Firefox's), which the app tags and
+    /// compresses.
+    const BROWSER: &str = "gzip, deflate, br, zstd";
+
+    /// `call` with each of `marks` as a header, `coding` as its `Accept-Encoding`, and the visitor's
+    /// cookie, so no answer names a new browser.
+    fn marked<'c, K>(call: Call<'c, K>, marks: &[(&'static str, &str)], coding: &str) -> Call<'c, K> {
+        let call = call.cookie("visitor", VISITOR).header(header::ACCEPT_ENCODING, coding);
+        marks.iter().fold(call, |call, (name, value)| call.header(HeaderName::from_static(name), value))
+    }
+
+    /// The requests the smoke's cases mark, in order, on an app of their own, each sent with
+    /// `marks`: the watchlist loaded; an alert written as the runtime sends it; the alerts page read
+    /// whole at its receipt, as a load and as a navigation, which the page-refresh cases mark
+    /// (`smoke-note`); the status line and list read in action mode; the smoke's write and its page
+    /// by a navigation, which the write cases mark (`smoke-start`, `smoke-styled`); a screen's data
+    /// and its revalidation (`If-None-Match`); and the layout's stylesheet under `/assets/`.
+    /// The ones a case's route answers are fetched as it fetches them ([`ROUTED`]), the others as a
+    /// browser asks ([`BROWSER`]).
+    async fn answers(marks: &[(&'static str, &str)]) -> Vec<Seen> {
+        // Writes that take an hour to land, so every read here comes before the write lands.
+        let app = crate::app::app_with(Market::new(), AlertStore::new(Duration::from_secs(3600)))
+            .area(|area| url::area(area).components(super::COMPONENTS))
+            .test();
+        let mut seen = Vec::new();
+        let home = marked(app.get(&Home::default()), marks, ROUTED).await;
+        seen.push(Seen::of("GET /", &home));
+        let write = marked(app.post(&Alerts { saved: None }), marks, ROUTED)
+            .field(AlertInput::FIELDS.id, "ACME")
+            .field(AlertInput::FIELDS.above, "150")
+            .mode(Mode::Action)
+            .await;
+        assert!(write.text().contains(r#"data-from="/alerts?saved=1""#), "{}", write.text());
+        seen.push(Seen::of("POST /alerts (action)", &write));
+        let receipt = Alerts { saved: Some(1) };
+        for (what, mode) in [
+            ("GET /alerts?saved=1 (load)", Mode::Document),
+            ("GET /alerts?saved=1 (navigation)", Mode::Navigation),
+            ("GET /alerts?saved=1 (action)", Mode::Action),
+        ] {
+            seen.push(Seen::of(what, &marked(app.get(&receipt), marks, ROUTED).mode(mode).await));
+        }
+        seen.push(Seen::of(
+            "POST /smoke/written (action)",
+            &marked(app.post(&url::Written), marks, ROUTED).mode(Mode::Action).await,
+        ));
+        seen.push(Seen::of(
+            "GET /smoke/written (navigation)",
+            &marked(app.get(&url::Written), marks, ROUTED).mode(Mode::Navigation).await,
+        ));
+        let reading = url::Reading { missing: None, moved: None };
+        let data = marked(app.get(&reading), marks, BROWSER).mode(Mode::Data).await;
+        let tag = data.headers()[header::ETAG].to_str().unwrap().to_string();
+        seen.push(Seen::of("GET /smoke/reading (data)", &data));
+        let kept = marked(app.get(&reading), marks, BROWSER).mode(Mode::Data).header(header::IF_NONE_MATCH, &tag).await;
+        assert_eq!(kept.status(), 304);
+        seen.push(Seen::of("GET /smoke/reading (data, If-None-Match)", &kept));
+        let style = home
+            .text()
+            .split(r#"href="/assets/"#)
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("the layout links a stylesheet");
+        let style = Local::parse(&format!("/assets/{style}")).unwrap();
+        let asset = marked(app.get(&style), marks, BROWSER).await;
+        assert_eq!(asset.status(), 200);
+        seen.push(Seen::of("GET /assets/ (stylesheet)", &asset));
+        seen
     }
 }
