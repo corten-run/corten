@@ -11,8 +11,10 @@
 //! ten (a byte flipped, dropped or added, a line doubled, dropped or moved, the stream cut), cut
 //! into several writes one time in three, and its client's side closed behind it one time in
 //! twelve. Three streams in ten go over a pipe that holds little (64 bytes to 20 KB each way), so
-//! the server's writes are taken in parts and wait for the client, and one route's handler waits
-//! before it answers, so requests arrive while one is being answered. No request of a stream sent
+//! the server's writes are taken in parts and wait for the client, one route's handler waits
+//! before it answers, so requests arrive while one is being answered, and one route's body waits
+//! between its pieces, so a piece can be ready as more of the stream, or its end, arrives. No
+//! request of a stream sent
 //! over such a pipe has a body ([`stream`] says why: hyper 1.12.0 itself goes wrong there, on
 //! both servers). The streams before those
 //! are fixed: each of a few requests cut in two writes at every byte, and ended at every byte.
@@ -139,11 +141,25 @@ fn app() -> App {
         tokio::time::sleep(Duration::from_millis(3)).await;
         "waited"
     };
+    // A body that waits between its pieces, a millisecond or two, which is how far apart a
+    // client's writes and its end are: so a piece can be ready in the turn that brings more of
+    // what the client sent, or its end, and the connection's task is woken for both at once.
+    let drip = || async {
+        let pieces: [(u64, &'static [u8]); 4] = [(0, b"first"), (1, b"second"), (2, &X), (1, b"last")];
+        let pieces = futures_util::StreamExt::then(futures_util::stream::iter(pieces), |(wait, piece)| async move {
+            if wait > 0 {
+                tokio::time::sleep(Duration::from_millis(wait)).await;
+            }
+            Ok::<_, std::io::Error>(Bytes::from_static(piece))
+        });
+        Body::from_stream(pieces)
+    };
     let table = Table::new()
         .route("/", get(|| async { "hi" }))
         .route("/json", get(|| async { ([(header::CONTENT_TYPE, "application/json")], r#"{"ok":true}"#) }))
         .route("/empty", get(|| async {}))
         .route("/stream", get(stream))
+        .route("/drip", get(drip))
         .route("/none", get(|| async { StatusCode::NO_CONTENT }))
         .route("/close", get(|| async { ([(header::CONNECTION, "close")], "bye") }))
         .route("/wait", get(wait))
@@ -499,6 +515,7 @@ const METHODS: &[&str] = &[
 const TARGETS: &[&str] = &[
     "/",
     "/wait",
+    "/drip",
     "/json",
     "/empty",
     "/stream",
@@ -764,7 +781,7 @@ fn framing(dice: &mut Dice, wild: bool, bodied: bool) -> (Vec<String>, String) {
 /// follows HTTP sends, made of the first entries of each list. `bodied`: it may have a body.
 fn request(dice: &mut Dice, wild: bool, bodied: bool) -> Vec<u8> {
     let of = |dice: &mut Dice, all: &[&'static str], plain: usize| pick(dice, if wild { all } else { &all[..plain] });
-    let mut lines = vec![format!("{} {} {}", of(dice, METHODS, 11), of(dice, TARGETS, 12), of(dice, VERSIONS, 8))];
+    let mut lines = vec![format!("{} {} {}", of(dice, METHODS, 11), of(dice, TARGETS, 13), of(dice, VERSIONS, 8))];
     let (frames, body) = framing(dice, wild, bodied);
     let mut headers: Vec<String> = Vec::new();
     let asks = [of(dice, HOSTS, 8), of(dice, CONNECTIONS, 6), of(dice, ASKS, ASKS.len())];
@@ -1408,5 +1425,161 @@ async fn a_request_that_comes_with_its_clients_end_is_answered_by_neither() {
             got.push(undated(&all));
         }
         assert_eq!(got[1], got[0], "{name}");
+    }
+}
+
+/// A piece of an answer's body that is ready when its connection's task is next polled is not
+/// written to a client that has closed its side by then, on either connection: hyper reads
+/// before it writes each time its task is woken with an answer unfinished, and Corten's
+/// connection looks for the client's end before it asks a body for more, once its task has
+/// waited since the answer's head was written. Here the piece and the client's end come at the
+/// same moment, over a pipe wide enough that no write waits: an answer's last piece (which
+/// Corten's connection wrote before it looked there, 21,166 bytes where hyper sent 673), and a
+/// piece with one more to come behind it. A moment sooner the piece has not come, and the
+/// answer is cut before it by both; a moment later it has gone, from both.
+#[tokio::test(start_paused = true)]
+async fn a_bodys_piece_that_is_ready_with_its_clients_end_is_not_sent() {
+    static PIECE: [u8; 20 * 1024] = [b'p'; 20 * 1024];
+    let app = || {
+        let later = || async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, std::io::Error>(Bytes::from_static(&PIECE))
+        };
+        let first = || futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"first"))]);
+        // `first`, and a piece 50 ms later.
+        let two = move || async move { Body::from_stream(futures_util::StreamExt::chain(first(), futures_util::stream::once(later()))) };
+        // And one more, 50 ms after that.
+        let three = move || async move {
+            let second = futures_util::StreamExt::chain(first(), futures_util::stream::once(later()));
+            Body::from_stream(futures_util::StreamExt::chain(second, futures_util::stream::once(later())))
+        };
+        App::new(Routes::from(Table::new().route("/two", get(two)).route("/three", get(three))))
+    };
+    let (hyper, own) = (serve_app(app(), false, 32 * 1024), serve_app(app(), true, 32 * 1024));
+    // How many bytes a client receives that closes its side `wait` ms after it sent its request
+    // and reads to the end.
+    type Connect = tokio::sync::mpsc::UnboundedSender<DuplexStream>;
+    let receive = |connect: &Connect, path: &str, wait: u64| {
+        let (mut client, server) = tokio::io::duplex(WIDE);
+        connect.send(server).expect("the server is listening");
+        let request = format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        async move {
+            client.write_all(request.as_bytes()).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+            client.shutdown().await.unwrap();
+            let mut all = Vec::new();
+            client.read_to_end(&mut all).await.unwrap();
+            all.len()
+        }
+    };
+    // When the client closes its side, and how many of the body's 20 KiB pieces it has by then.
+    let cases = [
+        ("/two", 49, 0),
+        ("/two", 50, 0),
+        ("/two", 51, 1),
+        ("/three", 50, 0),
+        ("/three", 51, 1),
+        ("/three", 99, 1),
+        ("/three", 100, 1),
+        ("/three", 101, 2),
+    ];
+    for (path, wait, pieces) in cases {
+        let (theirs, ours) = (receive(&hyper, path, wait).await, receive(&own, path, wait).await);
+        assert_eq!(ours, theirs, "{path}, the client's end at {wait} ms: bytes sent, and hyper's");
+        assert_eq!(theirs / PIECE.len(), pieces, "{path}, the client's end at {wait} ms: {theirs} bytes from hyper");
+    }
+}
+
+/// Shutdown that begins while an answer waits for its client to read it does not make the
+/// connection finish that answer for a client that then closes its side, on either connection:
+/// hyper goes on looking for the client's end while it drains, and Corten's connection, which
+/// sends what is unsent before it closes, looks while that waits. An answer short enough that
+/// its connection has gone on to wait for the next request, and one that has not. A client that
+/// stays and reads has all of it from both; one that closes its side, after shutdown began or
+/// before, has what the pipe held.
+#[tokio::test(start_paused = true)]
+async fn an_answer_that_waits_when_shutdown_begins_is_cut_when_its_client_closes_its_side() {
+    let app = || {
+        let table = Table::new().route("/short", get(|| async { vec![b's'; 3_000] })).route("/long", get(|| async { vec![b'l'; 10 * 1024] }));
+        App::new(Routes::from(table))
+    };
+    let moment = || tokio::time::sleep(Duration::from_millis(5));
+    let sequences = [("the client stays", false, false), ("shutdown, then the client's end", true, false), ("the client's end, then shutdown", true, true)];
+    for (path, pipe, whole) in [("/short", 1_024, 3_000), ("/long", 4_096, 10 * 1024)] {
+        for (name, leaves, first) in sequences {
+            let mut got = Vec::new();
+            for own in [false, true] {
+                let (connect, accepted) = tokio::sync::mpsc::unbounded_channel();
+                let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+                let served = app().own_http1(own).max_request_head(32 * 1024);
+                let server = tokio::spawn(crate::app::run(vec![Piped(accepted)], crate::app::plain, served, async {
+                    let _ = stopped.await;
+                }));
+                let (mut client, io) = tokio::io::duplex(pipe);
+                connect.send(io).expect("the server is listening");
+                client.write_all(format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n").as_bytes()).await.unwrap();
+                moment().await;
+                if leaves && first {
+                    client.shutdown().await.unwrap();
+                    moment().await;
+                }
+                stop.send(()).unwrap();
+                moment().await;
+                if leaves && !first {
+                    client.shutdown().await.unwrap();
+                    moment().await;
+                }
+                let mut all = Vec::new();
+                client.read_to_end(&mut all).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+                got.push(all.len());
+            }
+            assert_eq!(got[1], got[0], "{path}, {name}: bytes sent, and hyper's");
+            if leaves {
+                assert_eq!(got[0], pipe, "{path}, {name}: hyper's connection sent what the pipe held");
+            } else {
+                assert!(got[0] > whole, "{path}, {name}: {} bytes from hyper's connection", got[0]);
+            }
+        }
+    }
+}
+
+/// The answers before one that is given up are the client's, and wait for it to read them, on
+/// both connections alike. A client pipelines requests whose first answer is longer than the
+/// pipe holds, closes its side and reads nothing for a second. Corten's connection has made the
+/// answers by then, finds the client's end where its write waits, takes back the last (none of
+/// it has gone) and sends the ones before it; hyper's has begun none but the first, whose flush
+/// waits with the requests behind it unread, and it does not look for the client's end past
+/// them. So neither drops the connection when the client's end comes: when the client reads at
+/// last it has every answer but the last, whole, from both. (How long either waits is the send
+/// timeout's to say, as for any write that waits:
+/// `tests::h1::a_client_that_pipelines_and_reads_nothing_is_closed_at_the_send_timeout`.)
+#[tokio::test(start_paused = true)]
+async fn the_answers_before_one_given_up_wait_for_their_client_on_both_connections() {
+    const PIPE: usize = 4_096;
+    const MID: usize = 30 * 1024;
+    let app = || {
+        let table = Table::new().route("/", get(|| async { "hi" })).route("/mid", get(|| async { vec![b'm'; MID] }));
+        App::new(Routes::from(table))
+    };
+    let (hyper, own) = (serve_app(app(), false, 32 * 1024), serve_app(app(), true, 32 * 1024));
+    for paths in [vec!["/mid", "/mid"], vec!["/mid", "/"], vec!["/mid", "/", "/"]] {
+        let sent: String = paths.iter().map(|path| format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n")).collect();
+        let mut got = Vec::new();
+        for (which, connect) in [("hyper's", &hyper), ("own", &own)] {
+            let (mut client, server) = tokio::io::duplex(PIPE);
+            connect.send(server).expect("the server is listening");
+            client.write_all(sent.as_bytes()).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            client.shutdown().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let mut all = Vec::new();
+            client.read_to_end(&mut all).await.unwrap();
+            let statuses = answers(&all).iter().map(|answer| answer.status).collect::<Vec<_>>();
+            assert_eq!(statuses, vec![200; paths.len() - 1], "{which}, {paths:?}: {} bytes", all.len());
+            assert!(all.len() > MID, "{which}, {paths:?}: {} bytes, where the pipe holds {PIPE}", all.len());
+            got.push(undated(&all));
+        }
+        assert_eq!(got[1], got[0], "{paths:?}");
     }
 }

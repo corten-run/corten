@@ -1528,6 +1528,74 @@ async fn a_head_that_does_not_end_is_read_in_a_buffer_no_larger_than_the_limit()
     own.stop().await;
 }
 
+/// A head exactly as long as the app's limit, read in reads that each fill what they are
+/// offered, leaves the read buffer full, and all of it is the request's. The look for the
+/// client's end that follows has no room then, and is given a buffer of a read's worth at the
+/// most, not one of twice the head: so the read buffer is never larger than the limit, at the
+/// limit an app has unless it sets one and at one above the most a read is ever offered. A head
+/// a byte shorter leaves the look its byte of room, and no buffer is made for it.
+#[tokio::test(start_paused = true)]
+async fn the_look_behind_a_head_as_long_as_the_limit_is_given_a_reads_room() {
+    use crate::h1::{HELD, KEPT_READ, LOOKED};
+    use std::task::Poll;
+    /// Gives a read all it has room for, and waits at the end of what its client sent (the
+    /// client stays, and sends no more). Takes every write whole.
+    struct Full {
+        sent: Vec<u8>,
+        read: usize,
+        answered: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+    impl tokio::io::AsyncRead for Full {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            if this.read == this.sent.len() {
+                return Poll::Pending;
+            }
+            let give = (this.sent.len() - this.read).min(buf.remaining());
+            buf.put_slice(&this.sent[this.read..this.read + give]);
+            this.read += give;
+            Poll::Ready(Ok(()))
+        }
+    }
+    impl tokio::io::AsyncWrite for Full {
+        fn poll_write(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            self.answered.lock().unwrap().extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+    for limit in [crate::app::REQUEST_HEAD, 512 * 1024] {
+        for shorter in [0, 1] {
+            let rest = format!("GET / HTTP/1.1\r\n{HOST}x-long: \r\n\r\n").len();
+            let head = format!("GET / HTTP/1.1\r\n{HOST}x-long: {}\r\n\r\n", "v".repeat(limit - shorter - rest));
+            assert_eq!(head.len(), limit - shorter);
+            let answered = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let io = Full { sent: head.into_bytes(), read: 0, answered: answered.clone() };
+            let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
+            HELD.set(0);
+            LOOKED.set(0);
+            let serving = crate::h1::serve(io, Hi(handled.clone()), limit, &ending);
+            // The connection waits for its client's next request, which does not come.
+            assert!(tokio::time::timeout(Duration::from_secs(1), serving).await.is_err());
+            let answered = String::from_utf8_lossy(&answered.lock().unwrap()).into_owned();
+            let name = format!("a limit of {limit}, a head of {}", limit - shorter);
+            assert!(handled.load(SeqCst) == 1 && statuses(&answered) == [200], "{name}: {answered}");
+            assert!(HELD.get() <= limit, "{name}: the read buffer had room for {}", HELD.get());
+            assert!(LOOKED.get() <= KEPT_READ, "{name}: a buffer of {} was made for the look", LOOKED.get());
+            assert_eq!(LOOKED.get() > 0, shorter == 0, "{name}: whether a buffer was made for the look");
+        }
+    }
+}
+
 /// The future a connection is served in is held by every connection from when it is accepted, so
 /// its size is a connection's idle memory. A bound, so that a local held across a wait by
 /// mistake shows here.

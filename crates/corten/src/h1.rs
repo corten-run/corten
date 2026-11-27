@@ -138,6 +138,8 @@ const TURN: u32 = 16;
 std::thread_local! {
     /// The most room an [`Inbox`] of this thread's connections has held, for a test of the bound.
     pub(crate) static HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The most room a read buffer of this thread had that was made for a look, which had none.
+    pub(crate) static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The largest future [`serve`] has made on this thread, in bytes.
     pub(crate) static SERVE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many times a connection of this thread began to wait for a request with nothing unread
@@ -315,7 +317,10 @@ impl Inbox {
     pub(crate) fn poll_look<I: AsyncRead + Unpin>(&mut self, io: &mut I, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         let offered = self.buf.capacity() - self.buf.len();
         if offered == 0 {
-            return self.poll_fill(io, cx, usize::MAX);
+            let read = self.poll_fill(io, cx, usize::MAX);
+            #[cfg(test)]
+            LOOKED.set(LOOKED.get().max(self.buf.capacity()));
+            return read;
         }
         let count = {
             let mut read = pin!(tokio::io::AsyncReadExt::read_buf(io, &mut self.buf));
