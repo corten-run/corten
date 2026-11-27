@@ -863,6 +863,11 @@ where
     Box::new(move |failure: Failure, parts: Parts| Box::pin(page.clone().answer(failure, parts, state.clone())))
 }
 
+/// [`default_error_page`] as an [`ErrorPage`], for an app that gives none (`Shared::error_page`).
+pub(crate) fn own_error_page(failure: Failure, parts: Parts) -> Pin<Box<dyn Future<Output = Response> + Send>> {
+    Box::pin(default_error_page.answer(failure, parts, ()))
+}
+
 /// The app's error page for `failure`, sent with its status.
 pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) -> Response {
     let status = failure.status();
@@ -875,7 +880,8 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
     if let Some(here) = parts.extensions.get::<crate::layout::StartHere>().cloned() {
         here.at_error_page(&mut parts, waits);
     }
-    let mut res = (shared.error_page)(failure, parts).await;
+    let page: &ErrorPage = shared.error_page.as_deref().unwrap_or(&own_error_page);
+    let mut res = page(failure, parts).await;
     if res.status().is_success() {
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {
@@ -973,7 +979,11 @@ impl Asked {
             uri: req.uri().clone(),
             mode,
             fetched,
-            accept_language: if shared.error_page_language { req.headers().get(header::ACCEPT_LANGUAGE).cloned() } else { None },
+            accept_language: if shared.error_page_reads_language() {
+                req.headers().get(header::ACCEPT_LANGUAGE).cloned()
+            } else {
+                None
+            },
             nonce: nonce.cloned(),
             signal: signal.clone(),
             credentials: std::mem::take(&mut page.credentials),
@@ -1038,13 +1048,8 @@ impl Asked {
 
 /// Everything a request needs from the app: the error page, where scripts live.
 pub(crate) struct Shared {
-    pub error_page: Box<ErrorPage>,
-    /// The error page can read the language the request asked for, so [`Asked`] keeps its
-    /// `Accept-Language`: true but for an app made with Corten's own error page, no
-    /// [`crate::App::messages`] and no [`crate::App::layout_read`] (`App::router`). That page
-    /// reads the language only through the app's locales ([`Req::lang`], `Content-Language`), and
-    /// a layout read starts with the error page's request.
-    pub error_page_language: bool,
+    /// The app's error page, or `None` for Corten's own ([`own_error_page`]).
+    pub error_page: Option<Box<ErrorPage>>,
     pub assets: Option<Arc<Assets>>,
     pub scripts_dir: String,
     /// The import map's JSON: the runtime, the app's typed events and views.
@@ -1102,7 +1107,7 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub(crate) fn new(error_page: Box<ErrorPage>, assets: Option<Arc<Assets>>, head_extra: String) -> Self {
+    pub(crate) fn new(error_page: Option<Box<ErrorPage>>, assets: Option<Arc<Assets>>, head_extra: String) -> Self {
         let scripts_dir = assets.as_ref().map_or_else(|| "/assets/scripts/".to_string(), |a| a.scripts_dir().to_string());
         let import_map = crate::import_map(
             assets.as_ref().and_then(|a| a.events()).as_deref(),
@@ -1116,7 +1121,6 @@ impl Shared {
         head_extra.hash(&mut hasher);
         Shared {
             error_page,
-            error_page_language: true,
             finishing: Arc::default(),
             assets,
             scripts_dir,
@@ -1142,11 +1146,19 @@ impl Shared {
             kept: None,
         }
     }
+
+    /// The error page can read the language the request asked for, so [`Asked`] keeps its
+    /// `Accept-Language`: all but Corten's own page in an app without [`crate::App::messages`]
+    /// and [`crate::App::layout_read`]. That page reads the language only through the app's
+    /// locales ([`Req::lang`], `Content-Language`), and a layout read starts with the error
+    /// page's request.
+    pub(crate) fn error_page_reads_language(&self) -> bool {
+        self.error_page.is_some() || self.locales.is_some() || !self.layout_reads.is_empty()
+    }
 }
 
 /// Used by handlers that run without an [`crate::App`] (unit tests of a bare router).
-static DEFAULT: LazyLock<Arc<Shared>> =
-    LazyLock::new(|| Arc::new(Shared::new(error_page_fn(default_error_page, ()), None, String::new())));
+static DEFAULT: LazyLock<Arc<Shared>> = LazyLock::new(|| Arc::new(Shared::new(None, None, String::new())));
 
 /// A patch builder borrowed from a request checked by [`Req::action`].
 /// It consumes itself to answer once, just as [`FormPatch`] draws once. It has no public
