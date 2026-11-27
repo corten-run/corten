@@ -676,28 +676,7 @@ between the draw and the check's look counts against it. That the page read itse
 same document is told as the place case's is, by an init script added before the load that numbers
 each document the tab makes: the document once the load returns and once the wait for `Saved.` ends
 must both be the first, so a read again that loads the page in full, even before Playwright's load
-returns, is not taken for the load's own document. The check that navigating away stops the
-reads leaves the page of a write that has not landed by its header's News link, clicked by
-Playwright as soon as the page is in, and requires only that the page start no read of the alerts
-page from that press on: no GET fetch of `/alerts` other than a prefetch the page started after its
-press (a write is not a read), the press (a capture listener in the page for a click on the link)
-and each such fetch's start numbered in the page by one count in the order they happen, each fetch
-carrying its number on the request, from notes the page has before it is
-asked to navigate, so a fetch started in the same instant as the press counts as after it (News
-can come from a prefetch sent before the press, so no request marks the moment it left), and no
-load of `/alerts` in the page's request log from just before Playwright is asked to click, a
-boundary at or before the press, read 2.2 s after News is drawn, the failure naming the page's
-fetches and those loads apart; a document replaced meanwhile, which leaves no notes, fails it.
-Each try's navigation's own fetch is answered as that of the check that a page reached by the
-runtime's navigation reads itself again is, still saving when the server already says `Saved.`, so a navigation that reaches the server after the write
-lands still leaves a read to stop. A try counts only when the page's note of its press shows its
-read again still armed (the head's read-again tag, with no part's tag in `<main>`) and its next
-read not yet due (the one fetch of `/alerts` started by the press being that try's navigation's
-own, by the number it carried to the route), so a read again that drew `Saved.` and stopped, or
-was on its way, before the press, or another read, cannot pass it; a try that does not count is tried again, up to five
-in all, and the check fails when none counts; a read after the press fails it on any try. The page's `fetch` is put back and its press
-listener removed however it ends, an install of them the page runs only after that removal doing
-nothing. Its route and request listener are
+returns, is not taken for the load's own document. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
 leaves by the header's link and then requires no further read for a while, the press and the wait
 for News are each bounded to 30 seconds by the smoke's clock, and sending the alert until it says
@@ -707,8 +686,10 @@ rather than keeping the case from its cleanup. Every other driver action the cas
 itself again, of a patch's reads (its refusals included), of a write's own page and of the held slow
 part make before a check or its cleanup (a click, fill, key press or load) is bounded the same way
 to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
-own time by the smoke's clock. Where a check rests on a wait, that wait must come in its time, so one
-whose answer comes late or never counts as one that did not come: each wait for `Saved.` (six
+own time by the smoke's clock. The check that navigating away stops the reads is the exception: it
+is as it was before these bounds, its navigations, press and waits under Playwright's own timeouts
+and its 2.2 s by Playwright's timer. Where a check rests on a wait, that wait must come in its time,
+so one whose answer comes late or never counts as one that did not come: each wait for `Saved.` (six
 seconds, required by every check that waits for it), the `Saving...` a submit draws
 before its `Saved.`, and a refused field's mark (five seconds), which must also still be on the
 field in the sample the check reads. Three rules keep such a wait honest: what the

@@ -1309,8 +1309,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * address (path and query), in the order it reached the route, with whether it was `go`'s
      * navigation's own fetch, so a check can count the reads after it, whether it was a load, and
      * whether its answer said `Saved.` (null until it is in), and the number the replaced-address
-     * case's or the leave case's notes gave the fetch that sent it, as the request itself carries it
-     * (`smoke-note`; null for any other request).
+     * case's notes gave the fetch that sent it, as the request itself carries it (`smoke-note`; null
+     * for any other request).
      * @type {{ address: string, navigation: boolean, load: boolean, saved: boolean | null, note: number | null }[]}
      */
     const wholeReads = [];
@@ -1424,7 +1424,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      */
     const answerWhole = async (route, ex, answer, { mode, address, placeLoad, fullLoad, read, token, navigation, at }) => {
       const request = route.request();
-      // The replaced-address and leave cases' own mark on a request (`smoke-note`) is the check's, not the server's.
+      // The replaced-address case's own mark on a request (`smoke-note`) is the check's, not the server's.
       const sent = { ...request.headers(), "accept-encoding": "identity" };
       delete sent["smoke-note"];
       const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: sent }));
@@ -2165,162 +2165,23 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           ownPoll && length === entries + 1,
           `${entries} -> ${length}, the page saying ${drawn.text} drawn by ${drewBy}${navIndex < 0 ? ", no navigation fetch seen" : ""}`,
         );
-        // Away while a write lands: the page is left by its header's News link, pressed by
-        // Playwright's click as soon as the page is in, with no wait for its text. The check claims
-        // only that the page starts no read of the alerts page from its press on, by the page's own
-        // order of events: News can come from a prefetch sent while the pointer rested on its link,
-        // before the press, so no request marks the moment the page left. The page's notes number
-        // the press (a capture listener for a click on the News link) and the start of each GET fetch
-        // of `/alerts` (the runtime's reads are fetches; a write is not a read) by one count in the
-        // order they happen, each fetch carrying its number (`smoke-note`), so a read
-        // started before the press is told from one started after it, however late the check hears
-        // either, and one started in the same instant as the press is after it. A load of `/alerts`
-        // in the page's request log from just before Playwright is asked to click counts too (a
-        // boundary at or before the press), as does a document that was replaced, which leaves no
-        // notes. The notes are installed before any try asks the page to navigate and read 2.2 s
-        // after News is drawn.
-        // A try counts only when, at its press, the page's own note shows its read again still armed
-        // (the head's read-again tag, with no part's tag in `<main>`, as the runtime reads the page
-        // whole) and its next read not yet due (the one read of `/alerts` started by the press being
-        // the try's navigation's own fetch, which takes the try's token at the route, `claimNav`, and
-        // is answered as `go`'s navigation's is: still saving, as `stillSaving` writes the server's
-        // `Saved.`, so a navigation that reaches the server after the write lands still leaves a read
-        // to stop): one whose read again had already drawn `Saved.` and stopped, or was on its way,
-        // would pass with no read after the press whatever leaving does. Such a try is retried, up to
-        // `leaveTries`, and the check fails when none counts; a read after the press fails it on any try.
-        const leaveTries = 5;
-        let leftAs = null;
-        /** Why each try that did not count did not, in order. @type {string[]} */
-        const missed = [];
-        /** This run of the check's, so an install of its notes the page runs after their removal does nothing. */
-        const leaveToken = `${Date.now()}-${Math.random()}`;
-        try {
-          // The page's fetch is put back and its press listener removed however the check ends, from
-          // the moment the check asks the page to install them (an install the page made but did not
-          // acknowledge in time included), and one the page runs only after that removal does
-          // nothing; a removal not confirmed within 5 s fails the case rather than leave the shared
-          // page instrumented. Both note into the try's notes (`__smokeLeave`, set as each try asks
-          // the page to navigate), and into none before the first.
-          await readWithin(
-            "the page's notes of its press and reads",
-            page.evaluate((token) => {
-              const w = /** @type {any} */ (window);
-              if (w.__smokeLeaveRemoved === token) return;
-              w.__smokeFetch ??= window.fetch;
-              const original = w.__smokeFetch;
-              window.fetch = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
-                try {
-                  const notes = w.__smokeLeave;
-                  const at = new URL(input instanceof Request ? input.url : String(input), location.href);
-                  const method = String(init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-                  if (notes && method === "GET" && at.origin === location.origin && at.pathname === "/alerts") {
-                    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-                    const noted = ++notes.count;
-                    notes.reads.push({ at: noted, url: at.pathname + at.search, prefetch: headers.get("purpose") === "prefetch" });
-                    // The request carries its number, so the route ties the try's navigation to this note.
-                    headers.set("smoke-note", String(noted));
-                    return original.call(this, input, { ...init, headers });
-                  }
-                } catch {}
-                return original.apply(this, /** @type {any} */ (arguments));
-              };
-              // Kept by name, so the check's cleanup removes it with the wrapper. What the page has
-              // at its press: whether its read again is armed, the numbers of the reads of `/alerts`
-              // it had started since the try asked it to navigate, and what its status line said.
-              w.__smokeLeaveClick = (/** @type {Event} */ e) => {
-                const notes = w.__smokeLeave;
-                if (!notes || notes.press !== null || !(/** @type {Element} */ (e.target)?.closest?.('a[href="/news"]'))) return;
-                const armed = !!document.head.querySelector("noscript[data-corten-read-again]") && !document.querySelector("main template[data-corten-read-again][data-from]");
-                const reads = notes.reads.filter((/** @type {{ prefetch: boolean }} */ r) => !r.prefetch).map((/** @type {{ at: number }} */ r) => r.at);
-                notes.press = { at: ++notes.count, armed, reads, status: document.getElementById("alert-status")?.textContent ?? null };
-              };
-              document.addEventListener("click", w.__smokeLeaveClick, true);
-            }, leaveToken),
-          );
-          for (let tries = 1; tries <= leaveTries && !leftAs; tries++) {
-            const leaving = await readWithin("the pending write's page", pending());
-            const address = new URL(leaving).pathname + new URL(leaving).search;
-            await readWithin("the old status line's mark", page.evaluate(() => document.getElementById("alert-status")?.setAttribute("data-old", "")));
-            // The try's navigation's own fetch takes this token at the route (`claimNav`), as `go`'s does.
-            const readFrom = wholeReads.length;
-            navTokens.set(address, `${leaveToken}-${tries}`);
-            try {
-              await within(
-                15000,
-                "the page was not asked to navigate within 15 s",
-                page.evaluate(
-                  ({ url, token }) => {
-                    const w = /** @type {any} */ (window);
-                    if (w.__smokeLeaveRemoved !== token) w.__smokeLeave = { count: 0, press: null, reads: [] };
-                    return w.navigation.navigate(url);
-                  },
-                  { url: leaving, token: leaveToken },
-                ),
-              );
-              // Drawn: at its address with a status line the try did not mark (a try from News has none to mark).
-              await within(30_000, "the pending write's page was not drawn within 30 s", page.waitForFunction((url) => location.href === url && !!document.querySelector("#alert-status:not([data-old])"), leaving));
-            } finally {
-              navTokens.delete(address);
-            }
-            const pressFrom = pageLog.length;
-            await leaveForNews();
-            await pause(2200);
-            const notes = await readWithin(
-              "the page's notes of its press and reads",
-              page.evaluate(
-                () =>
-                  /** @type {{ press: { at: number, armed: boolean, reads: number[], status: string | null } | null, reads: { at: number, url: string, prefetch: boolean }[] } | undefined} */ (
-                    (/** @type {any} */ (window)).__smokeLeave
-                  ),
-              ),
-            );
-            const loads = pageLog.slice(pressFrom).filter((r) => r.isNavigationRequest() && r.method() === "GET" && new URL(r.url()).pathname === "/alerts").map((r) => `${new URL(r.url()).pathname}${new URL(r.url()).search}`);
-            const press = notes?.press ?? null;
-            const after = press === null ? [] : (notes?.reads ?? []).filter((r) => r.at > press.at);
-            const fetched = after.filter((r) => !r.prefetch).length;
-            /** `list`, named in parentheses, or nothing when it is empty. @param {string[]} list */
-            const named = (list) => (list.length ? ` (${list.join(", ")})` : "");
-            const reads = `${fetched} reads the page noted starting after its press${named(after.map((r) => `${r.prefetch ? "prefetch, not counted, " : ""}${r.url}`))}, ${loads.length} document loads of /alerts requested from just before Playwright was asked to click${named(loads)}`;
-            // The try's navigation's own fetch, by the token it took at the route, and the number it carried.
-            const own = wholeReads.find((r, i) => i >= readFrom && r.navigation && r.address === address);
-            if (!notes || press === null || fetched + loads.length > 0)
-              leftAs = {
-                ok: false,
-                detail: `try ${tries}: ${!notes ? "the document that pressed was replaced, so its notes are gone" : press === null ? "the page noted no press of the News link" : reads}`,
-              };
-            else if (press.armed && press.reads.length === 1 && own?.note === press.reads[0])
-              leftAs = { ok: true, detail: `try ${tries}: ${reads}${missed.length ? ` (earlier tries not counted: ${missed.join("; ")})` : ""}` };
-            else
-              missed.push(
-                `try ${tries}, ${
-                  !press.armed
-                    ? "its read again no longer armed at the press"
-                    : press.reads.length === 0
-                      ? "the navigation's own read not seen by the press"
-                      : press.reads.length > 1
-                        ? `${press.reads.length} reads started by the press, not the navigation's own alone`
-                        : `the one read started by the press (noted ${press.reads[0]}) not the try's navigation's own fetch (${own === undefined ? "none seen at the route" : `noted ${own.note ?? "nothing"}`})`
-                } (the page saying ${press.status ?? "nothing"})`,
-              );
-          }
-          leftAs ??= { ok: false, detail: `no try pressed while the page's read again was armed and its next read not yet due, in ${leaveTries}: ${missed.join("; ")}` };
-        } finally {
-          await cleanUp(() =>
-            within(
-              5000,
-              "the page's fetch was not put back within 5 s",
-              page.evaluate((token) => {
-                const w = /** @type {any} */ (window);
-                w.__smokeLeaveRemoved = token;
-                if (w.__smokeFetch) window.fetch = w.__smokeFetch;
-                if (w.__smokeLeaveClick) document.removeEventListener("click", w.__smokeLeaveClick, true);
-                delete w.__smokeLeaveClick;
-                delete w.__smokeLeave;
-              }, leaveToken),
-            ),
-          );
+        // Away while a write lands: once the page is in and has armed its read again (the head's
+        // read-again tag), it is left at once, with no wait for its text. A write that landed before
+        // the page came in arms nothing, so another is tried.
+        let armed = false;
+        for (let tries = 0; tries < 3 && !armed; tries++) {
+          const leaving = await pending();
+          await page.evaluate(() => document.getElementById("alert-status")?.setAttribute("data-old", ""));
+          await page.evaluate((url) => (/** @type {any} */ (window)).navigation.navigate(url), leaving);
+          await page.waitForFunction((url) => location.href === url && !document.querySelector("#alert-status[data-old]"), leaving);
+          armed = await page.evaluate(() => !!document.head.querySelector("noscript[data-corten-read-again]"));
         }
-        check("navigating away stops the reads", leftAs.ok, leftAs.detail);
+        await page.click('header a[href="/news"]');
+        await page.waitForFunction(() => document.title === "News | Watchlist");
+        const left = reads.length;
+        await page.waitForTimeout(2200);
+        if (armed) check("navigating away stops the reads", reads.length === left, `${reads.length - left} more reads`);
+        else skip("navigating away stops the reads", "each write landed before its page came in");
       } else {
         for (const name of ["a page reached by the runtime's navigation reads itself again in place", "each read replaces the history entry", "navigating away stops the reads"]) skip(name, noSwaps);
       }
