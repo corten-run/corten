@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, lookUntil, pause, steps, pollAsync, cleanUp, exchange, letThrough } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, steps, pollAsync, cleanUp, exchange, letThrough } from "./helpers.mjs";
 
 /**
  * The seconds the watchlist's alerts part waits before it reads itself again while a write lands
@@ -694,11 +694,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // The page's own tag, as the server drew it, so the check below can tell it from the one an
         // answer put in its place. The first answer the page draws whose tag asks again has that tag
         // moved to `movedFrom` the moment it is drawn, so the check can tell the tag on the page,
-        // which a script may change, from the answer's. And the first answer whose status line the
-        // page draws as `Saved.`, noted the moment it is drawn with the time it was drawn (its
-        // `data-smoke-read`, below), so a later answer that draws `Saved.` again before the check
-        // looks is not taken for it. Once the case ends (`__smokeOff`) the script does nothing in
-        // the document it ran in, and nothing in a later one (`offKey`).
+        // which a script may change, from the answer's. And the first status line the page draws as
+        // `Saved.`, whatever drew it, noted the moment it is drawn with the mark of the answer that
+        // drew it (its `data-smoke-read`, below; null for none), so a later answer that draws
+        // `Saved.` again before the check looks is not taken for it, marked or not. Once the case
+        // ends (`__smokeOff`) the script does nothing in the document it ran in, and nothing in a
+        // later one (`offKey`).
         script = page.addInitScript(
           ({ movedFrom, offKey }) => {
             try {
@@ -717,8 +718,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             if (location.pathname !== "/alerts") return;
             const observer = new MutationObserver(() => {
               const status = document.getElementById("alert-status");
-              const read = status?.getAttribute("data-smoke-read");
-              if (w.__smokeOff || !status || read == null) return;
+              if (w.__smokeOff || !status) return;
+              const read = status.getAttribute("data-smoke-read");
+              // The first `Saved.` drawn is noted whatever drew it, with its answer's mark or null
+              // for none, so a later marked `Saved.` cannot stand in for an unmarked first one.
+              if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = read;
+              if (read == null) return;
               if (w.__moved === undefined) {
                 const tag = document.querySelector("main template[data-corten-read-again][data-from]");
                 if (tag && tag !== w.__pageTag) {
@@ -726,7 +731,6 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                   w.__moved = read;
                 }
               }
-              if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = read;
               if (w.__moved !== undefined && w.__firstSaved !== undefined) observer.disconnect();
             });
             w.__smokeObserver = observer;
@@ -757,7 +761,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           releaseFirst();
           const came = await savedSoon();
           // The first answer the page drew `Saved.` from, noted as it drew it: before the wait above
-          // saw `Saved.`, so within its 6 s when the wait came in time.
+          // saw `Saved.`, so within its 6 s when the wait came in time. Null when that first `Saved.`
+          // came from an answer with no mark, which fails the case below.
           const first = came
             ? await readWithin("the page's note of what it drew Saved. from", page.evaluate(() => /** @type {string | undefined} */ ((/** @type {any} */ (window)).__firstSaved))).catch(() => undefined)
             : undefined;
@@ -831,7 +836,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               ? terminal < 0
                 ? `the read whose answer first drew Saved. (${drawn}) is not in the page's reads`
                 : `${later.length} reads after the read whose answer first drew Saved. (${drawn}), by the check's look at least 2.2 s after that draw: ${later.join(", ") || "none"}${prefetched.length ? `; prefetches not counted: ${prefetched.join(", ")}` : ""}`
-              : `no answer that does not ask again was the first to draw Saved., within 6 s (${JSON.stringify({ first: first ?? null, answers })})`),
+              : first === null
+                ? `the first Saved. drawn came from an answer with no mark, not one of the case's answers to its part reads (${JSON.stringify({ answers })})`
+                : `no answer that does not ask again was the first to draw Saved., within 6 s (${JSON.stringify({ first: first ?? null, answers })})`),
           );
         } finally {
           over = true;
@@ -2224,8 +2231,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // status line is patched, then read again from its route (`corten: action`) until the write
     // is in, with no navigation; the button keeps focus, and a navigation away stops the reads.
     /**
-     * Each part read of a receipt the page sends from here on (a GET of `/alerts?saved=..` with
-     * `corten: action`), in the order the check heard them sent.
+     * Each part read of the alerts page the page sends from here on (a same-origin GET of `/alerts`
+     * with `corten: action`, whatever its query and in whatever order its query puts `saved`), in
+     * the order the check heard them sent.
      * @type {import("@playwright/test").Request[]}
      */
     const again = [];
@@ -2235,8 +2243,22 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * answer). @type {Map<import("@playwright/test").Request, Promise<boolean>>}
      */
     const terminal = new Map();
+    /**
+     * Whether `r` is a part read of the alerts page: a GET of `/alerts` on the watchlist's origin
+     * with `corten: action`. Its address is parsed, so a read whose query puts `saved` anywhere, or
+     * carries more than the receipt (`/alerts?shown=2&saved=1`), is still one.
+     */
+    const alertsPartRead = (/** @type {import("@playwright/test").Request} */ r) => {
+      if (r.method() !== "GET" || r.headers()["corten"] !== "action") return false;
+      try {
+        const at = new URL(r.url());
+        return at.origin === new URL(base).origin && at.pathname === "/alerts";
+      } catch {
+        return false;
+      }
+    };
     const onAgain = (/** @type {import("@playwright/test").Request} */ r) => {
-      if (r.method() !== "GET" || !r.url().includes("/alerts?saved=") || r.headers()["corten"] !== "action") return;
+      if (!alertsPartRead(r)) return;
       again.push(r);
       const answered = r.response().then((res) => (res === null ? "" : res.text()));
       terminal.set(r, answered.then((body) => body.includes(savedLine) && !body.includes("data-corten-read-again"), () => false));
@@ -2501,6 +2523,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // stands 2.2 s later. The route is removed however the case ends.
     /** @type {import("@playwright/test").Request | null} */
     let held = null;
+    /** When the route heard the held read, by the smoke's clock (`performance.now()`), or null. @type {number | null} */
+    let heldTime = null;
     /** @type {(r: import("@playwright/test").Request) => void} */
     let heldIn = () => {};
     const heldCame = new Promise((resolve) => (heldIn = resolve));
@@ -2512,6 +2536,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const r = route.request();
       if (holdOver || held !== null || r.method() !== "GET" || r.headers()["corten"] !== "action") return letThrough(route);
       held = r;
+      heldTime = performance.now();
       heldIn(r);
       await going;
       await letThrough(route);
@@ -2520,7 +2545,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     try {
       await within(5000, "the held-read route was not set within 5 s", page.route("**/alerts?saved=*", holdRead));
       await submit();
-      heldSoon = await cameWithin(leftOf(pressedAt, 5000), heldCame);
+      // Judged by when the route heard the read (`heldTime`), not by when `submit` returned: a
+      // press acknowledged late does not fail a read held in time.
+      heldSoon = await notedBy(pressedAt + 5000, () => heldTime, heldCame);
       await leaveForNews();
     } finally {
       await cleanUp(

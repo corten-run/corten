@@ -280,7 +280,8 @@ A watchlist case that marks a request for its own route to read names the header
 the watchlist server, which ignores them: `the_smokes_request_marks_change_no_answer` in
 `examples/watchlist/src/smoke.rs` sends each kind of request the cases mark (the watchlist loaded,
 an alert written in action mode, the alerts page read whole at a receipt as a load, a navigation
-and in action mode, the writes to `/smoke/written` and `/smoke/written/again` in action mode with
+and in action mode, the alerts page read whole at the receipt's replaced address
+(`/alerts?saved=1&shown=1`), the writes to `/smoke/written` and `/smoke/written/again` in action mode with
 `Prefer: corten-draws=whole`, `/smoke/written` read by a navigation, `/smoke/written/again` and
 `/smoke/quoted` each read whole and by a navigation, a screen's data and its revalidation, and a
 stylesheet under `/assets/`) with and without every mark (`smoke-note`, `smoke-start`,

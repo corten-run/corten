@@ -708,7 +708,9 @@ mod tests {
     /// The requests the smoke's cases mark, in order, on an app of their own, each sent with
     /// `marks`: the watchlist loaded; an alert written as the runtime sends it; the alerts page read
     /// whole at its receipt, as a load and as a navigation, which the page-refresh cases mark
-    /// (`smoke-note`); the status line and list read in action mode; and what the write cases mark
+    /// (`smoke-note`); the status line and list read in action mode; the page read whole at the
+    /// receipt's replaced address (`/alerts?saved=1&shown=1`), which the replaced-address case's
+    /// fetch wrapper marks (`smoke-note`); and what the write cases mark
     /// (`smoke-start`, `smoke-styled`, on every fetch of their pages): the write to `/smoke/written`
     /// and to `/smoke/written/again`, each as the runtime sends it (`Prefer: corten-draws=whole`,
     /// so its answer is the whole page), `/smoke/written` read by a navigation, and
@@ -740,6 +742,12 @@ mod tests {
         ] {
             seen.push(Seen::of(what, &marked(app.get(&receipt), marks, ROUTED).mode(mode).await));
         }
+        // The receipt's address with `shown` set, as the replaced-address case puts it in place and
+        // its fetch wrapper marks the page's whole read of it (`smoke-note`).
+        let replaced = Local::parse("/alerts?saved=1&shown=1").unwrap();
+        let read = marked(app.get(&replaced), marks, ROUTED).mode(Mode::Document).await;
+        assert_eq!(read.status(), 200, "{}", read.text());
+        seen.push(Seen::of("GET /alerts?saved=1&shown=1 (whole)", &read));
         for (what, write) in [
             ("POST /smoke/written (action)", marked(app.post(&url::Written), marks, ROUTED).mode(Mode::Action).await),
             ("POST /smoke/written/again (action)", marked(app.post(&url::WrittenAgain), marks, ROUTED).mode(Mode::Action).await),
