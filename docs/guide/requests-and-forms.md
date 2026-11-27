@@ -2277,6 +2277,9 @@ form, marked or not, and take the place of a navigation on its way as they do wi
 A press a script makes as it hears the page move (in a `currententrychange` or `popstate`
 listener, one heard before the runtime's included) is on the entry the page moved to, and draws
 there; without the Navigation API that holds for Back between two entries of one address too.
+Where the runtime fetches the page Back or Forward reaches, such a press is made before its visit
+begins, so it is sent; its answer draws nothing once that page has taken the screen's place
+(where a form without the mark may draw its answer on the page reached).
 One that comes while the page reads itself again (`ReadAgain`), or after another form's answer was
 drawn in place, draws as usual, and the read starts again later at the new address. Where the
 runtime cannot tell that the screen is still the page and entry the press was made on, with no
