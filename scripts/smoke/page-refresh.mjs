@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, pause, steps, pollAsync, cleanUp, exchange, letThrough } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, lookUntil, pause, steps, pollAsync, cleanUp, exchange, letThrough } from "./helpers.mjs";
 
 /**
  * The seconds the watchlist's alerts part waits before it reads itself again while a write lands
@@ -455,7 +455,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     {
       // One log of the page's reads of the alerts page, started before the page is loaded, in the
       // order the page sent them: every GET of `/alerts`, whatever its query, with when it was sent
-      // (`Date.now()`) and its kind: a part read (`corten: action`), a hover prefetch (`purpose:
+      // (the smoke's monotonic clock, `performance.now()`) and its kind: a part read (`corten: action`), a hover prefetch (`purpose:
       // prefetch`, the runtime's fetch of a link under the pointer, which reads nothing again and is
       // named in the details but counted by no check), or a read of the page itself (any other). The
       // document the case loads is told from them by its own request, and only what came after it
@@ -467,7 +467,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         if (r.method() !== "GET" || new URL(r.url()).pathname !== "/alerts") return;
         const headers = r.headers();
         const kind = headers["corten"] === "action" ? "part" : headers["purpose"] === "prefetch" || headers["sec-purpose"]?.includes("prefetch") ? "prefetch" : "page";
-        log.push({ request: r, time: Date.now(), kind });
+        log.push({ request: r, time: performance.now(), kind });
       };
       /** The document the case loaded, once it has. @type {import("@playwright/test").Request | null} */
       let initial = null;
@@ -479,7 +479,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       /** A logged read's address. @param {Read} e */
       const address = (e) => new URL(e.request.url()).pathname + new URL(e.request.url()).search;
       /** A logged read, named for a check's detail, with when it was sent from `time`. @param {Read} e @param {number} time */
-      const named = (e, time) => `${e.kind} ${address(e)} (+${e.time - time} ms)`;
+      const named = (e, time) => `${e.kind} ${address(e)} (+${Math.round(e.time - time)} ms)`;
       /** The read the page sent next after `request`, prefetches aside, if any. @param {import("@playwright/test").Request | undefined} request */
       const after = (request) => {
         const at = request === undefined ? -1 : log.findIndex((e) => e.request === request);
@@ -1308,8 +1308,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * (`placeLoads`, the page reading itself again in a browser without the Navigation API), by
      * address (path and query), in the order it reached the route, with whether it was `go`'s
      * navigation's own fetch, so a check can count the reads after it, whether it was a load, and
-     * whether its answer said `Saved.` (null until it is in).
-     * @type {{ address: string, navigation: boolean, load: boolean, saved: boolean | null }[]}
+     * whether its answer said `Saved.` (null until it is in), and the number the replaced-address
+     * case's notes gave the fetch that sent it, as the request itself carries it (`smoke-note`; null
+     * for any other request).
+     * @type {{ address: string, navigation: boolean, load: boolean, saved: boolean | null, note: number | null }[]}
      */
     const wholeReads = [];
     /**
@@ -1396,7 +1398,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const token = read ? claimNav(address) : undefined;
       const navigation = token !== undefined;
       const at = wholeReads.length;
-      if (read) wholeReads.push({ address, navigation, load: placeLoad > 0, saved: null });
+      const noted = Number(request.headers()["smoke-note"] ?? NaN);
+      if (read) wholeReads.push({ address, navigation, load: placeLoad > 0, saved: null, note: Number.isInteger(noted) && noted > 0 ? noted : null });
       // Each step within 5 s, and no answer sent once the cases are over (`exchange`): one that fails
       // or runs out aborts the request and fails the check it belongs to (`wholeAnswerFaults`).
       const ex = exchange(route, `the whole-read route's answer to ${request.method()} ${address}${mode ? ` (corten: ${mode})` : ""}`, () => wholeOver);
@@ -1421,7 +1424,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      */
     const answerWhole = async (route, ex, answer, { mode, address, placeLoad, fullLoad, read, token, navigation, at }) => {
       const request = route.request();
-      const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } }));
+      // The replaced-address case's own mark on a request (`smoke-note`) is the check's, not the server's.
+      const sent = { ...request.headers(), "accept-encoding": "identity" };
+      delete sent["smoke-note"];
+      const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: sent }));
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
@@ -1696,7 +1702,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // not another with the same query. `Saved.` must be drawn by the answer to one of those reads:
       // each answer the route gives a read of that address has its status line marked with the
       // read's place in `wholeReads` (`pollTarget`), so `Saved.` an older read's answer or anything
-      // else drew does not pass for it. With the Navigation API the page reads in place, so that draw
+      // else drew does not pass for it, and that read must itself be one the page started after the
+      // replacement. A fetch carries its own number on the count (`smoke-note`, which the wrapper puts
+      // on the request it notes), so the answer is bound to that request, not to any read of the same
+      // address: one started before the replacement, though at the replaced address, does not do,
+      // however the reads arrive. A load (the page reading itself again without the Navigation API)
+      // carries no number: its document notes its own on the count as it starts, with its kind of
+      // load, and it must be a reload numbered after the replacement, at the replaced address, as only
+      // a reload asked for after the replacement loads that address (one asked for before loads the
+      // address the entry had then). With the Navigation API the page reads in place, so that draw
       // must be in the document the case loaded (a mark the replacement's task leaves on it), with no
       // other document started (the notes).
       {
@@ -1715,35 +1729,46 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const noting = page.addInitScript((key) => {
           if (window !== window.top) return;
           const w = /** @type {any} */ (window);
-          /** Notes `entry` with the next number of the count. @param {{ kind: string, url: string }} entry */
+          /** Notes `entry` with the next number of the count, and answers that number (false if it was not noted). @param {{ kind: string, url: string, load?: string | null }} entry */
           const note = (entry) => {
             if (w.__smokeReplacedOff) return false;
             try {
               const notes = JSON.parse(sessionStorage.getItem(key) ?? '{"count":0,"notes":[]}');
-              notes.notes.push({ at: ++notes.count, ...entry });
+              const at = ++notes.count;
+              notes.notes.push({ at, ...entry });
               sessionStorage.setItem(key, JSON.stringify(notes));
-              return true;
+              return at;
             } catch {
               return false;
             }
           };
           w.__smokeReplacedNote = note;
-          note({ kind: "document", url: location.href });
+          // The document's own number, with how it was loaded (a reload, or a navigation).
+          const loaded = /** @type {PerformanceNavigationTiming | undefined} */ (performance.getEntriesByType("navigation")[0]);
+          w.__smokeReplacedDocumentAt = note({ kind: "document", url: location.href, load: loaded?.type ?? null });
           const original = window.fetch;
           w.__smokeReplacedFetch = original;
           window.fetch = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
             try {
               const at = new URL(input instanceof Request ? input.url : String(input), location.href);
-              if (at.origin === location.origin && at.pathname === "/alerts") note({ kind: "fetch", url: at.href });
+              if (at.origin === location.origin && at.pathname === "/alerts") {
+                const noted = note({ kind: "fetch", url: at.href });
+                // The request carries its own number, so the answer the route marks is bound to it.
+                if (typeof noted === "number") {
+                  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+                  headers.set("smoke-note", String(noted));
+                  return original.call(this, input, { ...init, headers });
+                }
+              }
             } catch {}
             return original.apply(this, /** @type {any} */ (arguments));
           };
         }, noteKey);
         noting.catch(() => {});
         let replacedIn = false;
-        /** What the wait for `Saved.` saw: the mark of the read whose answer drew it, and whether it was drawn in the case's document. @type {unknown} */
+        /** What the wait for `Saved.` saw: the mark of the read whose answer drew it, whether it was drawn in the case's document, and that document's number on the count. @type {unknown} */
         let drawnAs = null;
-        /** The case's notes, read after the wait. @type {{ count: number, notes: { at: number, kind: string, url: string }[] } | null} */
+        /** The case's notes, read after the wait. @type {{ count: number, notes: { at: number, kind: string, url: string, load?: string | null }[] } | null} */
         let notes = null;
         try {
           await within(5000, "the replaced-address case's notes were not added within 5 s", noting);
@@ -1755,7 +1780,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               const to = new URL(location.href);
               to.searchParams.set("shown", "1");
               // Numbered in the same task as the replacement, so no read the page starts falls between.
-              const noted = /** @type {any} */ (window).__smokeReplacedNote?.({ kind: "replaced", url: to.href }) === true;
+              const noted = typeof (/** @type {any} */ (window).__smokeReplacedNote?.({ kind: "replaced", url: to.href })) === "number";
               // The document the case loaded, marked in the same task.
               /** @type {any} */ (window).__smokeReplacedDocument = true;
               history.replaceState(history.state, "", to);
@@ -1768,7 +1793,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             (address) => {
               const status = document.getElementById("alert-status");
               const mark = status?.getAttribute("data-smoke-poll");
-              return location.pathname + location.search === address && status?.textContent === "Saved." && mark && { mark, same: /** @type {any} */ (window).__smokeReplacedDocument === true };
+              const w = /** @type {any} */ (window);
+              return location.pathname + location.search === address && status?.textContent === "Saved." && mark && { mark, same: w.__smokeReplacedDocument === true, document: w.__smokeReplacedDocumentAt ?? null };
             },
             replacedAddress,
             loadFrom,
@@ -1809,16 +1835,29 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // With the Navigation API, the one document the tab started is the load's, before the replacement.
         const documents = notes === null ? [] : notes.notes.filter((n) => n.kind === "document");
         const oneDocument = !swaps || (documents.length === 1 && replacedAt !== null && documents[0].at < replacedAt);
-        const drawn = /** @type {{ mark: string, same: boolean } | null} */ (drawnAs && typeof drawnAs === "object" ? drawnAs : null);
+        const drawn = /** @type {{ mark: string, same: boolean, document: number | null } | null} */ (drawnAs && typeof drawnAs === "object" ? drawnAs : null);
         const by = drawn === null ? undefined : wholeReads[Number(drawn.mark)];
-        const ownRead = drawn !== null && Number(drawn.mark) >= readFrom && by !== undefined && by.address === replacedAddress && !by.navigation && by.saved === true;
+        /** The note numbered `at`, if the notes have one. @param {number | null | undefined} at */
+        const noteAt = (at) => (typeof at === "number" ? (notes?.notes.find((n) => n.at === at) ?? null) : null);
+        // The read whose answer drew `Saved.` started after the replacement, at the replaced address:
+        // a fetch by the number it carried, a load by its document's own.
+        const started = by === undefined ? null : by.load ? noteAt(drawn?.document) : noteAt(by.note);
+        const startedAfter =
+          started !== null &&
+          replacedAt !== null &&
+          started.at > replacedAt &&
+          started.url === replacedTo.href &&
+          (by?.load ? started.kind === "document" && started.load === "reload" : started.kind === "fetch");
+        const ownRead = drawn !== null && Number(drawn.mark) >= readFrom && by !== undefined && by.address === replacedAddress && !by.navigation && by.saved === true && startedAfter;
         const inPlace = !swaps || (ownRead && !by?.load && drawn.same);
         const replaced = await readWithin("the status line after the wait for Saved.", saved());
         const drawnBy =
           drawn === null
             ? " (Saved. not drawn by an answer to a read of the replaced address within 6 s of the load)"
             : !ownRead
-              ? ` (Saved. drawn with mark ${drawn.mark}, not an answer of the case's to a read of ${replacedAddress} that said Saved.)`
+              ? ` (Saved. drawn with mark ${drawn.mark}, not an answer of the case's to a read of ${replacedAddress} that said Saved. and that the page started after the replacement: ${
+                  by === undefined ? "no such read" : started === null ? `its ${by.load ? "document" : "request"} carried no note of the case's` : `its ${started.kind} was noted ${started.at} (${started.url}${started.load ? `, a ${started.load}` : ""}), the replacement ${replacedAt ?? "not at all"}`
+                })`
               : inPlace
                 ? ""
                 : ` (Saved. drawn ${drawn.same ? "by a load" : "in another document"}, where the Navigation API reads in place)`;
@@ -2263,14 +2302,21 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * page makes after this, not the line as it is now), the moment it is drawn, so a wait started
      * after the press does not miss a `Saving...` the write's read has already replaced with
      * `Saved.`; `notedSaving` reads the note, the time the page drew it by its own monotonic clock
-     * (`performance.now()` there). Armed before the press that draws it, and answers that clock's time
-     * as it armed, so a check can count from just before the press by the same clock.
+     * (`performance.now()` there). Armed before the press that draws it; the press itself is noted by
+     * the page by the same clock as it happens (`__smokePressed`, the first `click` after arming, heard
+     * by a capturing listener before any of the page's own), so a check counts from the press, not
+     * from the arming, whose answer can come back late.
      */
     const noteSaving = () =>
       page.evaluate(() => {
         const w = /** @type {any} */ (window);
         w.__smokeSavingSeen?.disconnect();
         w.__smokeSaving = false;
+        w.__smokePressed = null;
+        if (!w.__smokePressedListener) {
+          w.__smokePressedListener = () => (w.__smokePressed ??= performance.now());
+          addEventListener("click", w.__smokePressedListener, { capture: true });
+        }
         const seen = new MutationObserver(() => {
           if (document.getElementById("alert-status")?.textContent !== "Saving...") return;
           w.__smokeSaving = performance.now();
@@ -2278,7 +2324,6 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         });
         w.__smokeSavingSeen = seen;
         seen.observe(document, { subtree: true, childList: true, characterData: true });
-        return performance.now();
       });
     /** When the page noted `Saving...` drawn since `noteSaving` (`performance.now()` there), or false. */
     const notedSaving = () => page.evaluate(() => /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving));
@@ -2393,26 +2438,30 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // The writes above saved ACME at $175.00; this one, at $150.00, is the only such alert.
       const shown = await listed();
       check("a saved alert is listed once it lands", shown.filter((s) => s === "ACME above $150.00").length === 1, shown.join(", "));
-      // `Saving...` noted by the page as it is drawn (`noteSaving`, armed just before the press),
-      // within 5 s of the press. Judged by the time the page noted `Saving...` as it drew it, against
-      // the page's time as it armed the note, just before the press, both by the page's monotonic
-      // clock (`performance.now()` there, which a step of the wall clock does not move): the draw
-      // must come between them and 5 s after. Looked for until 5 s from the press by the smoke's own
-      // clock, then once more (that look bounded to 5 s), so a press that returns late neither fails
-      // a draw noted in time nor passes one noted after the 5 s.
-      const removedFrom = await readWithin("the page's note of Saving...", noteSaving());
+      // `Saving...` noted by the page as it is drawn (`noteSaving`, armed before the press), within
+      // 5 s of the press. Judged by the time the page noted `Saving...` as it drew it, against the
+      // time the page noted the press's `click` as it came, both by the page's monotonic clock
+      // (`performance.now()` there, which a step of the wall clock does not move): the draw must come
+      // after the press and within 5 s of it. Looked for by that clock until 5 s from the press, each
+      // look reading the note and the page's time in one task (`lookUntil`), so neither an arming or
+      // a press whose answer comes back late nor a check that looks late fails a draw noted in time,
+      // and none noted after the 5 s passes.
+      await readWithin("the page's note of Saving...", noteSaving());
       const removedAt = performance.now();
       await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
+      const pressedIn = await readWithin("the page's note of the press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokePressed))).catch(() => null);
       const savingAt =
-        (await pollAsync(leftOf(removedAt, 5000), notedSaving)) ?? (await readWithin("the page's note of Saving...", notedSaving()).catch(() => false));
-      const removing = typeof savingAt === "number" && savingAt >= removedFrom && savingAt <= removedFrom + 5000;
+        typeof pressedIn !== "number"
+          ? undefined
+          : await lookUntil(page, pressedIn + 5000, () => ({ now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
+      const removing = typeof pressedIn === "number" && typeof savingAt === "number" && savingAt >= pressedIn && savingAt <= pressedIn + 5000;
       const removedSoon = await savedSoon(removedAt);
       const left = await listed();
       const removedTo = await readWithin("the status line after the wait for Saved.", saved());
       check(
         "a removed alert leaves the list once the removal lands",
         removing && removedSoon && left.length === shown.length - 1 && removedTo === "Saved.",
-        `${shown.length} -> ${left.length}, ${removedTo}${removing ? "" : " (Saving... not seen within 5 s)"}${removedSoon ? "" : " (Saved. not seen within 6 s)"}`,
+        `${shown.length} -> ${left.length}, ${removedTo}${removing ? "" : typeof pressedIn !== "number" ? " (the page noted no press)" : ` (Saving... not seen within 5 s of the press${typeof savingAt === "number" ? `: noted ${Math.abs(Math.round(savingAt - pressedIn))} ms ${savingAt < pressedIn ? "before" : "after"} it` : ""})`}${removedSoon ? "" : " (Saved. not seen within 6 s)"}`,
       );
     } else {
       for (const name of ["a saved alert is listed once it lands", "a removed alert leaves the list once the removal lands"]) skip(name, "the browser does not send Secure cookies over http");

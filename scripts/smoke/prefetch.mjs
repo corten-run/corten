@@ -92,12 +92,12 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
       await page.hover(`header a.hovered[href="/news?p=${i}"]`);
       // Each hover's own prefetch must be seen: a missing one is not made up for by another request.
       if ((await prefetched) === null) unseen.push(i);
-      else if (i === 1) p1Prefetched = Date.now();
+      else if (i === 1) p1Prefetched = performance.now();
     }
     const hoveredCount = navRequests.length;
     // A prefetch older than the runtime's 10 s is not reused, so a slow run is told apart from a
     // cache that keeps too few. The age runs from when the prefetch was seen, so it reads low.
-    const p1Age = Date.now() - p1Prefetched;
+    const p1Age = Math.round(performance.now() - p1Prefetched);
     await page.click('header a.hovered[href="/news?p=1"]');
     await page.waitForFunction(() => location.search === "?p=1");
     await page.click('header a.hovered[href="/news?p=8"]');

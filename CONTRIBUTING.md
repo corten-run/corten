@@ -443,41 +443,49 @@ read before the press is drawn, which it tells from the write's own page by a ma
 puts in each whole page after the write (the page's first read of itself after the stand-in
 answered the first write, asked within five seconds of that answer, and drawn as below). A write's own `<main>` they wait
 for is noted the moment it is drawn with no element busy, with the time the page drew it, and must
-be drawn within five seconds counted from just before the press that sent the write, since the
-page's next read draws the form over it a second later; where a case
+be drawn after the press that sent the write and within five seconds of it, by the page's monotonic
+clock (`performance.now()` there) on both sides: the press task records the page's time just before
+it presses, since the page's next read draws the form over it a second later; where a case
 also waits for the brand that write changed, the brand must show the write's value at that same
 moment, so a brand drawn by a later whole read does not count.
 The checks that a failure stays shown while the page reads itself again require the page's first
 read of itself after the failure to be a navigation whose `<main>` is drawn, which a mark the
 stand-in puts in each navigation's `<main>` shows (a request alone is not a draw), and the failure
 already shown at that draw and still shown when the check looks again at least 500 ms after it,
-counted from the time the page recorded as it drew it (a later look, not a watch through those
-500 ms, waited by a timer of the smoke's own, as the failure's own wait is bounded by the smoke's
-clock): a poll drawn before the failure was shown is not one that kept it. In the cut-body cases
+counted from the time the page recorded as it drew it, against the page's own clock (a later look,
+not a watch through those 500 ms, waited by a timer of the smoke's own, as the failure's own wait is
+bounded by the smoke's clock): a poll drawn before the failure was shown is not one that kept it. In the cut-body cases
 the failure shown at that later look must be the body's own (its
 status), so another failure that took its place does not count. That first read is taken from the
 moment the stand-in failed (or answered) the write it follows, or from a held body's release, not
 from when the check sees the
-failure, and must reach the stand-in within five seconds of that moment: the stand-in records the
-time of each outcome and request, and the page records the time it let a held body go, so a read
-asked later fails however soon the check looks. A read counts as after that moment only if it
-reached the stand-in after its time, not in the same millisecond, and not only after its place
-among the reads: a read that came while the page's task to let the body go waited to run came
-before the release, and one in the same millisecond may have. In the check whose next read after
+failure, and must come within five seconds of that moment: the stand-in records the time of each
+outcome and request, so a read asked later fails however soon the check looks. A read counts as
+after that moment only if it reached the stand-in after its time, not in the same millisecond, and
+not only after its place among the reads. A held body's release is a moment the page records, as it
+lets the body go, so a read after it must be one the page started after that time and within five
+seconds of it: a read the page started while its task to let the body go waited to run came before
+the release, however late it reached the stand-in. In the check whose next read after
 the whole one is held, a read that comes after the stand-in handed that held read its answer has its
 five seconds counted from that moment instead, which the stand-in records: the page waits on the
 held read until then, and the check's wait to see the failure has five seconds of its own. The page
 records, the moment it draws each mark, the time and whether the failure was shown; the `<main>`
-must be drawn within five seconds of the read reaching the stand-in by that recorded time, so a
-check that looks late neither fails a draw made in time nor passes one made after. The stand-in and the page record times by the same clock
-(`Date.now()`), since the browser runs on the machine that runs the checks.
+must be drawn within five seconds of the page starting the read that brought it, by that recorded
+time, so a check that looks late neither fails a draw made in time nor passes one made after. No
+wall clock is compared, and no time the page records with one the smoke records: the smoke and its
+stand-in use the smoke's monotonic clock (`performance.now()`), and what the page records (a draw,
+a press, a release, the start of each fetch it makes, which a wrapper added before the page loads
+puts on the request, `smoke-start`) uses the page's (`performance.now()` there), each look at the
+page reading its records and its time in one task until that clock passes the bound.
 The whole-poll stylesheet case requires its
 write, that write's page, the poll's request for the held stylesheet (within five seconds from
 just before the press), the failing write and its failure in turn, then the next read after the
 hold is let go asked as a navigation and its answer drawn, which a mark the stand-in puts in each
 navigation's `<main>`
-shows, with the failure shown at that draw, both within five seconds of the release by the times
-recorded. It does not make a press once a step before it failed, and lets go of the hold, removes
+shows, with the failure shown at that draw, both within five seconds of the release: the read as
+the stand-in heard it, by the smoke's clock against its moment before it let go, and the draw by the
+page's clock against the moment the page had the released stylesheet, which it notes as that
+stylesheet loads. It does not make a press once a step before it failed, and lets go of the hold, removes
 its routes and closes its page however it ends, setting and removing its route each bounded to
 five seconds. The
 cut-body cases take a failure as the body's only when the page's own wrapper of that write's
@@ -529,7 +537,8 @@ context or page and closing its context are bounded to 30 seconds, Playwright's 
 action, since a loaded Firefox has taken over five seconds to close one. Each case makes its context
 before its page, so it holds the context to close even if making the page never settles, and
 closing one of its pages closes that page alone: if the context's close is not confirmed in time,
-each of its pages is closed, bounded the same, and the case fails rather than waits. The page these
+each of its pages is closed, bounded the same, and the case fails rather than waits. A context that
+comes only after its 30 seconds is closed as it comes, the same way. The page these
 checks make is closed by the helper that makes it if making it, its route, its load or its mark
 fails, before a case holds it. The stand-in in front of them fetches, reads and sends each answer
 within five seconds a step by the smoke's clock (a hold the case controls aside), and sends none
@@ -696,8 +705,9 @@ rest only on what they observe after that press. The other waits in these cases 
 rests on what is read after them or on what the page or the route recorded: a navigation's own
 `Saving...`, which the page notes by its own clock (above), a removal's `Saving...`, which the page
 notes with the time it drew it by its monotonic clock (`performance.now()`, which a step of the wall
-clock does not move) and which must come after, and within five seconds of, the page's time on that
-clock just before the press, however late the click returns, and the held slow part's busy, done and
+clock does not move) and which must come after, and within five seconds of, the press as the page
+notes it on that clock (the button's `click`, heard by a listener armed before the press, not the
+time it was armed), however late the arming or the click returns, and the held slow part's busy, done and
 failed marks, read once each wait has come or run out. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read

@@ -10,14 +10,14 @@ export async function modules(browser, live, page) {
     // What happened when, said only when the check fails, so a failure names its cause (#1053).
     /** @type {string[]} */
     const seen = [];
-    const started = Date.now();
-    dropped.on("console", (m) => m.type() === "error" && seen.push(`${Date.now() - started} ms: ${m.text().slice(0, 200)}`));
+    const started = performance.now();
+    dropped.on("console", (m) => m.type() === "error" && seen.push(`${Math.round(performance.now() - started)} ms: ${m.text().slice(0, 200)}`));
     try {
       await dropped.route(
         (url) => url.pathname.endsWith("/scripts/live_prices.js"),
         (route) => {
           tries += 1;
-          seen.push(`${Date.now() - started} ms: request ${tries} (${route.request().resourceType()})`);
+          seen.push(`${Math.round(performance.now() - started)} ms: request ${tries} (${route.request().resourceType()})`);
           return tries <= 2 ? route.abort("internetdisconnected") : route.continue();
         },
       );
@@ -126,7 +126,7 @@ export async function modules(browser, live, page) {
       await refused.route(
         (url) => url.pathname.endsWith("/scripts/corten-field.js"),
         (route) => {
-          at.push([Date.now(), open ? 200 : 503, route.request().resourceType()]);
+          at.push([Math.round(performance.now()), open ? 200 : 503, route.request().resourceType()]);
           return open ? route.continue() : route.fulfill({ status: 503, body: "Service Unavailable" });
         },
       );
@@ -139,7 +139,7 @@ export async function modules(browser, live, page) {
       await refused.waitForTimeout(200);
       first = await output();
       open = true;
-      for (let i = 0, deadline = Date.now() + 8000; !later && Date.now() < deadline; i += 1) {
+      for (let i = 0, deadline = performance.now() + 8000; !later && performance.now() < deadline; i += 1) {
         await refused.selectOption('#ship-form select[name="service"]', i % 2 ? "air" : "ground");
         await refused.waitForTimeout(250);
         later = await output();

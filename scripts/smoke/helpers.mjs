@@ -178,6 +178,27 @@ const notedBy = async (by, at, came) => {
 };
 
 /**
+ * What `look` (a page function, run with `arg`) saw in the page, `{ now, value }` from one page task
+ * (`now` the page's `performance.now()` there), looked at every 50 ms until its `value` is truthy
+ * or the page's own monotonic clock has reached `by` (a time by that same clock, a press or a read
+ * the page recorded as it made it): the value then, or undefined if a look failed or was not
+ * answered within 5 s. A look whose `now` is at or after `by` saw every record the page made by
+ * then, as `now` and `value` are read in one task, so the page's clock alone decides what came by
+ * `by` and a look that runs late neither loses a record made in time nor waits past `by` for one.
+ * A `by` that is not a number ends after the first look.
+ * @template A, V @param {import("@playwright/test").Page} page @param {number} by
+ * @param {(arg: A) => { now: number, value: V }} look @param {A} [arg] @returns {Promise<V | undefined>}
+ */
+const lookUntil = async (page, by, look, arg) => {
+  for (;;) {
+    const seen = await within(5000, "the page did not answer a look within 5 s", page.evaluate(look, /** @type {A} */ (arg))).catch(() => null);
+    if (seen === null || typeof seen.now !== "number") return undefined;
+    if (seen.value || !(seen.now < by)) return seen.value;
+    await pause(Math.min(50, by - seen.now));
+  }
+};
+
+/**
  * Waits `ms` by a timer of the smoke's own. A driver command (`page.waitForTimeout`) has no bound
  * on its answer: one whose answer never comes would keep a case from its cleanup.
  * @param {number} ms
@@ -426,14 +447,19 @@ const letThrough = (route) => within(5000, "", route.fallback()).catch(() => {})
  * `opening` (a context or page being made), within `ms` (by default 30 s, Playwright's own timeout
  * for an action: a loaded browser can take seconds to start a process for one). One made only after
  * them (by the monotonic clock, as `within` counts, though before its timer ran) is closed as it
- * comes, so a case that gave up on it does not leave it open.
+ * comes, so a case that gave up on it does not leave it open: a context as every context here is
+ * (`closeContext`, its pages closed if its own close is not confirmed within 30 s), a page within 30 s.
  * @template {{ close: () => Promise<unknown> }} T @param {string} what @param {Promise<T>} opening @param {number} [ms]
  * @returns {Promise<T>}
  */
 const opened = (what, opening, ms = 30_000) =>
   within(ms, `${what} was not made within ${ms / 1000} s`, opening).catch((error) => {
     opening.then(
-      (made) => within(30_000, "", made.close()).catch(() => {}),
+      (made) => {
+        const context = /** @type {any} */ (made);
+        const closing = typeof context.pages === "function" && typeof context.newPage === "function" ? closeContext(context, `${what}, made late`) : within(30_000, "", made.close());
+        return closing.catch(() => {});
+      },
       () => {},
     );
     throw error;
@@ -492,7 +518,7 @@ function track(browser) {
   browser.newContext = async (...args) => {
     const context = await newContext(...args);
     context.on("request", (r) => {
-      inflight.set(r, { at: Date.now(), context });
+      inflight.set(r, { at: performance.now(), context });
       const mine = [...inflight].filter(([, at]) => at.context === context).map(([q]) => q);
       const streams = mine.filter((q) => q.resourceType() === "eventsource").length;
       if (mine.length > busiest.requests || (mine.length === busiest.requests && streams > busiest.streams)) {
@@ -548,7 +574,7 @@ function policy(context) {
  * request can be told apart from the open streams that share its connections (#1149).
  */
 function pending() {
-  const now = Date.now();
+  const now = performance.now();
   /** @type {Map<import("@playwright/test").BrowserContext, { n: number, pages: Map<import("@playwright/test").Page, number> }>} */
   const contexts = new Map();
   return [...inflight]
@@ -558,7 +584,7 @@ function pending() {
       if (!c) contexts.set(context, (c = { n: contexts.size + 1, pages: new Map() }));
       const page = pageOf(r);
       if (page && !c.pages.has(page)) c.pages.set(page, c.pages.size + 1);
-      return `  ${now - at}ms page ${c.n}.${page ? c.pages.get(page) : "worker"} ${r.method()} ${r.url()} (${r.resourceType()})`;
+      return `  ${Math.round(now - at)}ms page ${c.n}.${page ? c.pages.get(page) : "worker"} ${r.method()} ${r.url()} (${r.resourceType()})`;
     });
 }
 
@@ -580,12 +606,12 @@ async function again() {
   }
   return Promise.all(
     [...gets].map(async ([url, headers]) => {
-      const start = Date.now();
+      const start = performance.now();
       const outcome = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) }).then(
         async (res) => (await res.arrayBuffer(), String(res.status)),
         (e) => (e instanceof Error ? e.name : String(e)),
       );
-      return `  ${Date.now() - start}ms ${outcome} ${url}`;
+      return `  ${Math.round(performance.now() - start)}ms ${outcome} ${url}`;
     }),
   );
 }
@@ -636,4 +662,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, leftOf, notedBy, pause, steps, pollRecord, pollAsync, cleanUp, exchange, letThrough, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, steps, pollRecord, pollAsync, cleanUp, exchange, letThrough, opened, closeContext };

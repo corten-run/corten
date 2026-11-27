@@ -1855,8 +1855,8 @@ export async function earlyNavigation(browser) {
   // for and got, the frames it committed, and the loads that failed.
   /** @type {string[]} */
   const trail = [];
-  const at = Date.now();
-  const note = (/** @type {string} */ what) => trail.push(`${Date.now() - at}ms ${what}`);
+  const at = performance.now();
+  const note = (/** @type {string} */ what) => trail.push(`${Math.round(performance.now() - at)}ms ${what}`);
   early.on("request", (r) => r.isNavigationRequest() && note(`request ${r.method()} ${new URL(r.url()).pathname}`));
   early.on("response", (r) => r.request().isNavigationRequest() && note(`response ${r.status()} ${new URL(r.url()).pathname}`));
   early.on("requestfailed", (r) => note(`failed ${new URL(r.url()).pathname} ${r.failure()?.errorText}`));

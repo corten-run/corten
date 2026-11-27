@@ -18,13 +18,13 @@ export async function feedRecovery(page, errors, located) {
   const feedTimes = async (name, stream, { forward, snapshot, body } = {}) => {
     const times = { snapshots: /** @type {number[]} */ ([]), streams: 0, streamsAt: /** @type {number[]} */ ([]), since: /** @type {(string | null)[]} */ ([]) };
     await page.route(`**/feed/${name}`, (route) => {
-      times.snapshots.push(Date.now());
+      times.snapshots.push(Math.round(performance.now()));
       const status = snapshot?.(times.snapshots.length) ?? 200;
       return route.fulfill({ status, contentType: "application/json", body: status === 200 ? (body?.(times.snapshots.length) ?? '{"epoch":"a","seq":1,"rows":[]}') : "{}" });
     });
     await page.route(`**/feed/${name}/live*`, (route) => {
       times.streams += 1;
-      times.streamsAt.push(Date.now());
+      times.streamsAt.push(Math.round(performance.now()));
       times.since.push(new URL(route.request().url()).searchParams.get("since"));
       if (forward) return route.continue({ url: forward });
       const answer = stream(times.streams);
@@ -74,7 +74,7 @@ export async function feedRecovery(page, errors, located) {
     await page.unroute(`**/feed/${name}/live*`);
   };
   const refusedFeed = await feedTimes("refused", () => 'event: sync\ndata: {"reason":"cursor-expired"}\n\n');
-  for (const end = Date.now() + 6000; refusedFeed.snapshots.length < 3 && Date.now() < end; ) await page.waitForTimeout(50);
+  for (const end = performance.now() + 6000; refusedFeed.snapshots.length < 3 && performance.now() < end; ) await page.waitForTimeout(50);
   const refusedAt = refusedFeed.snapshots.slice(0, 3);
   const refusedStates = await stopFeed("refused");
   // The next snapshot was due 4 s after the third: wait past it with the routes still counting.
@@ -114,7 +114,7 @@ export async function feedRecovery(page, errors, located) {
       held.push(res);
       if (held.length === 1)
         setTimeout(() => {
-          syncsSent.push(Date.now());
+          syncsSent.push(Math.round(performance.now()));
           res.end('event: sync\ndata: {"reason":"cursor-expired"}\n\n');
         }, 1500);
     });
@@ -124,7 +124,7 @@ export async function feedRecovery(page, errors, located) {
     let resetFeed = { snapshots: [], streams: 0, streamsAt: [], since: [] };
     try {
       resetFeed = await feedTimes("reset", () => "", { forward: `http://127.0.0.1:${resetPort}/live` });
-      for (const end = Date.now() + 5000; resetFeed.snapshots.length < 2 && Date.now() < end; ) await page.waitForTimeout(50);
+      for (const end = performance.now() + 5000; resetFeed.snapshots.length < 2 && performance.now() < end; ) await page.waitForTimeout(50);
       await stopFeed("reset");
     } finally {
       await unrouteFeed("reset");

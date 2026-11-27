@@ -98,8 +98,8 @@ export async function trustedTypes(page, browser) {
       const sdk = document.createElement("script");
       const other = outcome(() => (sdk.src = "http://scripts.test/sdk.js"));
       document.head.append(sdk);
-      const deadline = Date.now() + 5000;
-      while (!(w.smokeSdk && w.smokePart) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      const deadline = performance.now() + 5000;
+      while (!(w.smokeSdk && w.smokePart) && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
       const own = outcome(() => (document.createElement("script").src = "/assets/nothing.js"));
       const data = outcome(() => (document.createElement("script").src = "data:text/javascript,1"));
       const unlisted = await new Promise((resolve) => {
