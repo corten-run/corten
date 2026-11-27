@@ -336,14 +336,7 @@ impl Inbox {
     /// them. Nothing is unread when a look is made, so nothing is copied.
     pub(crate) fn poll_look<I: AsyncRead + Unpin>(&mut self, io: &mut I, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         if self.buf.capacity() == self.buf.len() {
-            let mut fresh = BytesMut::with_capacity(self.buf.len() + self.room.min(READ));
-            fresh.extend_from_slice(&self.buf);
-            self.buf = fresh;
-            #[cfg(test)]
-            {
-                HELD.set(HELD.get().max(self.buf.capacity()));
-                LOOKED.set(LOOKED.get().max(self.buf.capacity()));
-            }
+            self.room_for_a_look();
         }
         let offered = self.buf.capacity() - self.buf.len();
         let count = {
@@ -352,6 +345,22 @@ impl Inbox {
         };
         self.filled = count == offered;
         Poll::Ready(Ok(count))
+    }
+
+    /// A new buffer for a look that has no room ([`Inbox::poll_look`]). Out of line, and never
+    /// inlined: a look that has room, which is nearly every one, pays a comparison for it and
+    /// nothing of what making room takes.
+    #[cold]
+    #[inline(never)]
+    fn room_for_a_look(&mut self) {
+        let mut fresh = BytesMut::with_capacity(self.buf.len() + self.room.min(READ));
+        fresh.extend_from_slice(&self.buf);
+        self.buf = fresh;
+        #[cfg(test)]
+        {
+            HELD.set(HELD.get().max(self.buf.capacity()));
+            LOOKED.set(LOOKED.get().max(self.buf.capacity()));
+        }
     }
 }
 
