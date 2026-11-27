@@ -640,10 +640,11 @@ runner does not create cloud machines or operate the fullstack/nightly state. Th
 `Catalog Contract` workflow builds each framework a change selects and runs both of its
 sources, but does not publish performance numbers. `scripts/benchmark-scope.mjs` selects them
 from the pull request's merge commit against its first parent, or a push to `main` against the
-commit before it: a change to one app's directory selects that app and the apps that share a
-driver it changed (`aspnet-aot` runs the JSON jobs instead), a framework change or one of the
-listed fleet-controller files selects Corten, and a change to the benchmark's other shared
-inputs or the workflow selects them all. A manual run, and a push whose earlier commit is
+previous tip of `main`: a change to one app's directory selects that app and the apps that share
+a driver it changed (`aspnet-aot` runs the JSON jobs instead), a change to the framework's
+Rust inputs (`crates`, `Cargo.toml`, `Cargo.lock`, `.cargo`, the toolchain files) or to
+`bench/catalog/corten` selects Corten, one of the listed fleet-controller files selects Corten and both JSON jobs, and a change
+to the benchmark's other shared inputs or the workflow selects them all. A manual run, and a push whose earlier commit is
 unknown or not an ancestor, also select them all; a change to none of these builds none
 ([Checks](../../CONTRIBUTING.md#checks)).
 
