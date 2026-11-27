@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { once } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { ServerResponse } from "node:http";
-import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { classes, formEnv, kinds, mergedMixed, mixedOf } from "./mixed.mjs";
 import { ssrOf } from "./ssr.mjs";
 
@@ -123,231 +120,142 @@ test("mixed-load.js sends and counts the kinds and classes this module reads", (
   assert.ok(script.includes(`const classes = ${JSON.stringify(classes).replaceAll(",", ", ")};`), "mixed-load.js's classes");
 });
 
-/** The request whose handling is running: each timer the item API sets is its request's. */
-const requests = new AsyncLocalStorage();
-/** The held timer whose callback is running, and anything that callback started. */
-const running = new AsyncLocalStorage();
+/**
+ * A fresh instance of the item API (mixed-item-api.worker.mjs), run in a worker thread as `node
+ * server.mjs <items> 0 1` with SLOW_MS 300, its timers held or not; `end` terminates it, whatever
+ * state its import, timers and listeners are in. Each call waits on its reply until `signal` or 5 s.
+ */
+const instance = (/** @type {string} */ items, /** @type {boolean} */ held, /** @type {AbortSignal} */ signal) => {
+  const worker = new Worker(new URL("./mixed-item-api.worker.mjs", import.meta.url), {
+    argv: [items, "0", "1"],
+    env: { SLOW_MS: "300" },
+    workerData: { file: new URL("./item-api/server.mjs", import.meta.url).href, held },
+  });
+  /** @type {Map<number, { done: (reply: any) => void, failed: (error: Error) => void }>} */
+  const waiting = new Map();
+  /** @type {Error | undefined} */
+  let fault;
+  const fail = (/** @type {Error} */ error) => {
+    fault ??= error;
+    for (const one of waiting.values()) one.failed(fault);
+    waiting.clear();
+  };
+  worker.on("message", ({ re, error, ...reply }) => {
+    const one = waiting.get(re);
+    waiting.delete(re);
+    if (error) one?.failed(new Error(error));
+    else one?.done(reply);
+  });
+  worker.on("error", fail);
+  worker.on("exit", (code) => fail(new Error(`the item API's worker exited (${code})`)));
+  const reply = (/** @type {number} */ re, /** @type {string} */ what) => {
+    const bound = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
+    return /** @type {Promise<any>} */ (
+      new Promise((done, failed) => {
+        if (fault) return failed(fault);
+        const stop = () => {
+          waiting.delete(re);
+          failed(new Error(`${what}: ${bound.reason?.message ?? bound.reason}`));
+        };
+        if (bound.aborted) return stop();
+        bound.addEventListener("abort", stop, { once: true });
+        const off = () => bound.removeEventListener("abort", stop);
+        waiting.set(re, { done: (r) => (off(), done(r)), failed: (e) => (off(), failed(e)) });
+      })
+    );
+  };
+  let last = 0;
+  const send = (/** @type {Record<string, unknown>} */ message, /** @type {string} */ what) => {
+    worker.postMessage({ re: ++last, ...message });
+    return reply(last, what);
+  };
+  return {
+    loaded: reply(0, "the item API did not load and listen"),
+    /** Its handling, as `key`, of a request for `id`, and what it holds by the next check of the event loop. */
+    ask: (/** @type {string} */ key, /** @type {string} */ id) => send({ op: "ask", key, url: `/api/discovery/items/${id}` }, `asking for ${id}`),
+    /** Held timer `id` released, and what it holds by the next check of the event loop. */
+    release: (/** @type {number} */ id) => send({ op: "release", id }, `releasing timer ${id}`),
+    end: () => worker.terminate(),
+  };
+};
 
-/** A timer the item API set, held until the test releases it, shaped as Node's Timeout is. */
-class Held {
-  static last = 0;
-  id = ++Held.last;
-  cleared = false;
-  released = false;
-  refed = true;
-  /** @param {(...args: any[]) => void} callback @param {number} ms @param {any[]} args */
-  constructor(callback, ms, args) {
-    this.callback = () => callback(...args);
-    this.ms = ms;
-    /** @type {string | undefined} */
-    this.by = requests.getStore();
-  }
-  ref() {
-    this.refed = true;
-    return this;
-  }
-  unref() {
-    this.refed = false;
-    return this;
-  }
-  hasRef() {
-    return this.refed;
-  }
-  refresh() {
-    return this;
-  }
-  close() {
-    this.cleared = true;
-    return this;
-  }
-  [Symbol.toPrimitive]() {
-    return this.id;
-  }
-  /** Runs its callback, once, as its own. */
-  release() {
-    assert.ok(!this.cleared && !this.released, "a timer still set");
-    this.released = true;
-    running.run(this, this.callback);
-  }
-}
-
-// The item API's own file, unchanged (the benchmark measures it as it is), loaded into this process
-// the way `node server.mjs <items> 0 1` runs it, with SLOW_MS 300: each load a fresh instance of the
-// file, with process.argv, SLOW_MS and http.createServer replaced only until its import settles or
-// is given up at a bound. One instance's handler is driven directly, with every timer it sets, from
-// startup on, through the global or node:timers setTimeout, held and tied to the request whose
-// handling set it, and each answer's every send recorded with the held timer whose callback (or
-// anything that callback started) made it. So which answer waits, and on what, is read from the
-// server, with no time a busy machine can cross. "At once" here means ended by the next check of
-// the event loop without waiting on any timer: an answer deferred by promises or setImmediate
-// counts. A second instance, loaded after the real timers are back, answers the items over HTTP.
-test("the item API ends a late item as the item from its own SLOW_MS timer alone, and the others by the next check of the event loop without waiting on it", { timeout: 10_000 }, async (t) => {
+// The item API's own file, unchanged (the benchmark measures it as it is). In each held instance
+// every timer it sets is held and tied to the request whose handling set it, and each send of an
+// answer is recorded with the held timer whose callback made it, so which answer waits, and on what,
+// is read from the server, with no time a busy machine can cross. "At once" here means ended by the
+// next check of the event loop without waiting on any timer: an answer deferred by promises or
+// setImmediate counts. Every case has its own instance.
+test("the item API ends a late item as the item from its own SLOW_MS timer alone, and the others by the next check of the event loop without waiting on it", { timeout: 30_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "mixed-api-"));
   const items = join(dir, "items.json");
   writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" }, item_4: { id: "item_4", name: "another" } }));
   const json = (/** @type {string} */ id) => JSON.stringify({ id });
-  const require = createRequire(import.meta.url);
-  const http = require("node:http");
-  const timers = require("node:timers");
-  const file = new URL("./item-api/server.mjs", import.meta.url);
-  /** @type {Held[]} */
-  const held = [];
-  const real = [globalThis.setTimeout, globalThis.clearTimeout];
-  const fake = [
-    (/** @type {(...a: any[]) => void} */ callback, /** @type {number} */ ms, /** @type {any[]} */ ...args) => {
-      const timer = new Held(callback, ms, args);
-      held.push(timer);
-      return timer;
-    },
-    (/** @type {unknown} */ timer) => {
-      for (const one of held) if (one === timer || one.id === timer) one.cleared = true;
-    },
-  ];
-  /** Every timer the item API sets held, or not. */
-  const hold = (/** @type {boolean} */ on) => {
-    const [set, clear] = /** @type {any[]} */ (on ? fake : real);
-    globalThis.setTimeout = timers.setTimeout = set;
-    globalThis.clearTimeout = timers.clearTimeout = clear;
-    syncBuiltinESMExports();
+  /** @typedef {{ timers: { id: number, ms: number, by: string | null, cleared: boolean, released: boolean }[], answers: Record<string, { sends: { name: string, timer: number | null }[], status: number, body: string, ended: boolean }> }} Held */
+  const set = (/** @type {Held} */ held) => held.timers.map((one) => `${one.ms} ms for ${one.by ?? "no request"}${one.cleared ? ", cleared" : ""}${one.released ? ", released" : ""}`);
+  /** The late item ended, whole and as the item, from timer `id`'s callback and nothing else. */
+  const endedFrom = (/** @type {Held} */ held, /** @type {string} */ key, /** @type {number} */ id) => {
+    const late = held.answers[key];
+    assert.ok(late.ended, "releasing its timer ended the late item");
+    assert.deepEqual(late.sends.filter((one) => one.timer !== id).map((one) => one.name), [], "every send of the late answer made from its own released timer");
+    assert.equal(late.status, 200);
+    assert.equal(late.body, json("item_3"), "the late item is the item as the file has it");
   };
-  /** Each server an instance made, and its bind once it listens: closed when the test ends. */
-  /** @type {{ server: import("node:http").Server, bind?: Promise<unknown> }[]} */
-  const made = [];
-  /** `work`, given up when the test is cancelled or 5 s pass. @template T @param {Promise<T>} work @param {string} what @returns {Promise<T>} */
-  const bounded = (work, what) => {
-    const signal = AbortSignal.any([t.signal, AbortSignal.timeout(5_000)]);
-    return new Promise((done, failed) => {
-      const stop = () => failed(new Error(`${what}: ${signal.reason?.message ?? signal.reason}`));
-      if (signal.aborted) stop();
-      signal.addEventListener("abort", stop, { once: true });
-      work.then(done, failed).finally(() => signal.removeEventListener("abort", stop));
-    });
-  };
-  /** A fresh instance of the item API's file, as `tag`, and the handler and server it made. */
-  const load = async (/** @type {string} */ tag) => {
-    const { argv } = process;
-    const slow = process.env.SLOW_MS;
-    const { createServer } = http;
-    /** @type {{ handler?: (req: any, res: any) => void, server?: import("node:http").Server }} */
-    const loaded = {};
-    http.createServer = (/** @type {any[]} */ ...a) => {
-      loaded.handler = a.find((arg) => typeof arg === "function");
-      const server = (loaded.server = createServer(...a));
-      const one = { server, /** @type {Promise<unknown> | undefined} */ bind: undefined };
-      made.push(one);
-      const { listen } = server;
-      server.listen = /** @type {any} */ ((/** @type {any[]} */ ...b) => {
-        one.bind = once(server, "listening").catch(() => {});
-        return listen.apply(server, b);
-      });
-      return server;
-    };
-    syncBuiltinESMExports();
-    process.argv = [process.execPath, fileURLToPath(file), items, "0", "1"];
-    process.env.SLOW_MS = "300";
+  /** `body` with a fresh held instance, terminated after. @param {(api: ReturnType<typeof instance>) => Promise<void>} body */
+  const held = (body) => async (/** @type {import("node:test").TestContext} */ t) => {
+    const api = instance(items, true, t.signal);
     try {
-      await bounded(import(`${file.href}?${tag}`), `the item API's ${tag} instance did not load`);
+      await api.loaded;
+      await body(api);
     } finally {
-      http.createServer = createServer;
-      syncBuiltinESMExports();
-      process.argv = argv;
-      if (slow === undefined) delete process.env.SLOW_MS;
-      else process.env.SLOW_MS = slow;
+      await api.end();
     }
-    assert.ok(loaded.handler && loaded.server, `the item API's ${tag} instance made a server with a handler`);
-    return /** @type {Required<typeof loaded>} */ (loaded);
   };
-  // Its "listening" lines kept out of the test's output.
-  t.mock.method(console, "log", () => {});
-  const url = (/** @type {string} */ id) => `/api/discovery/items/${id}`;
   try {
-    hold(true);
-    const answers = (await load("held")).handler;
-    await t.test("in this process, with each request's timers held", async () => {
-      /** Its handling of a request for `id`, and every send its answer made. */
-      const ask = (/** @type {string} */ id) => {
-        const req = { method: "GET", url: url(id), headers: {}, httpVersionMajor: 1, httpVersionMinor: 1 };
-        const res = new ServerResponse(/** @type {any} */ (req));
-        /** @type {{ name: string, timer: Held | undefined }[]} */
-        const sent = [];
-        /** @type {Buffer[]} */
-        const chunks = [];
-        for (const name of /** @type {const} */ (["writeHead", "flushHeaders", "write", "end"])) {
-          const own = /** @type {(...a: any[]) => any} */ (res[name]);
-          /** @type {any} */ (res)[name] = function (/** @type {any[]} */ ...a) {
-            sent.push({ name, timer: running.getStore() });
-            if (name !== "writeHead" && name !== "flushHeaders" && (typeof a[0] === "string" || a[0] instanceof Uint8Array)) chunks.push(Buffer.from(a[0]));
-            return own.apply(this, a);
-          };
+    await t.test(
+      "a late item alone sets one SLOW_MS timer, the only one, and ends from it",
+      held(async (api) => {
+        let now = await api.ask("late", "item_slow_3");
+        assert.deepEqual(set(now), ["300 ms for late"], "the timers the item API set");
+        assert.deepEqual(now.answers.late.sends, [], "nothing of the late answer sent while its timer is held");
+        now = await api.release(now.timers[0].id);
+        endedFrom(now, "late", now.timers[0].id);
+        assert.deepEqual(set(now), ["300 ms for late, released"], "no other timer set");
+      }),
+    );
+    await t.test(
+      "with the instance's first late item held, the item and an unknown one end at once from no timer",
+      held(async (api) => {
+        let now = await api.ask("late", "item_slow_3");
+        for (const [key, id, status] of /** @type {const} */ ([["item", "item_3", 200], ["unknown", "item_slow_9", 404]])) {
+          now = await api.ask(key, id);
+          assert.ok(now.answers[key].ended, `ended ${id} at once`);
+          assert.equal(now.answers[key].status, status);
+          assert.deepEqual(now.answers[key].sends.filter((one) => one.timer !== null), [], "sent from no timer");
         }
-        requests.run(id, () => answers(req, res));
-        return { res, sent, body: () => Buffer.concat(chunks).toString() };
-      };
-      // The next check of the event loop: what it does without waiting on a timer is done by then.
-      const settle = () => new Promise((done) => setImmediate(done));
-      const set = () => held.map((timer) => `${timer.ms} ms for ${timer.by ?? "no request"}${timer.cleared ? ", cleared" : ""}`);
-      /** The late item ended, whole and as the item, from `timer`'s callback and nothing else. */
-      const endedFrom = (/** @type {ReturnType<typeof ask>} */ late, /** @type {Held} */ timer) => {
-        assert.ok(late.res.writableEnded, "releasing its timer ended the late item");
-        assert.deepEqual(late.sent.filter((send) => send.timer !== timer).map((send) => send.name), [], "every send of the late answer made from its own released timer");
-        assert.equal(late.res.statusCode, 200);
-        assert.equal(late.body(), json("item_3"), "the late item is the item as the file has it");
-      };
-
-      // The late item alone sets one timer, of SLOW_MS, the only one the item API sets, and sends
-      // nothing; releasing that timer, with no other request made, ends it.
-      const first = ask("item_slow_3");
-      await settle();
-      assert.deepEqual(set(), ["300 ms for item_slow_3"], "the timers the item API set");
-      assert.deepEqual(first.sent, [], "nothing of the late answer sent while its timer is held");
-      held[0].release();
-      await settle();
-      endedFrom(first, held[0]);
-      // With another late item held, the item and an unknown one end at once, set no timer of their
-      // own and send nothing from a timer; the late one still waits on its own.
-      const late = ask("item_slow_3");
-      const item = ask("item_3");
-      const unknown = ask("item_slow_9");
-      await settle();
-      for (const [answer, status] of /** @type {const} */ ([[item, 200], [unknown, 404]])) {
-        assert.ok(answer.res.writableEnded, `ended ${answer.res.req.url} at once`);
-        assert.equal(answer.res.statusCode, status);
-        assert.deepEqual(answer.sent.filter((send) => send.timer), [], "sent from no timer");
+        assert.equal(now.answers.item.body, json("item_3"), "the item as the file has it");
+        assert.deepEqual(set(now), ["300 ms for late"], "no timer set by an at-once answer");
+        assert.deepEqual(now.answers.late.sends, [], "the late answer still held");
+        now = await api.release(now.timers[0].id);
+        endedFrom(now, "late", now.timers[0].id);
+      }),
+    );
+    await t.test("over HTTP, with its real timers", async (t) => {
+      const api = instance(items, false, t.signal);
+      try {
+        const { port } = await api.loaded;
+        const at = async (/** @type {string} */ id) => {
+          const r = await fetch(`http://127.0.0.1:${port}/api/discovery/items/${id}`, { signal: AbortSignal.any([t.signal, AbortSignal.timeout(5_000)]) });
+          return { status: r.status, body: await r.text() };
+        };
+        const [now, late, unknown] = await Promise.all([at("item_3"), at("item_slow_3"), at("item_slow_9")]);
+        assert.deepEqual(now, { status: 200, body: json("item_3") });
+        assert.deepEqual(late, now, "the late item is the item");
+        assert.equal(unknown.status, 404);
+      } finally {
+        await api.end();
       }
-      assert.equal(item.body(), json("item_3"), "the item as the file has it");
-      assert.deepEqual(set(), ["300 ms for item_slow_3", "300 ms for item_slow_3"], "no timer set by an at-once answer");
-      assert.deepEqual(late.sent, [], "the late answer still held");
-      held[1].release();
-      await settle();
-      endedFrom(late, held[1]);
-    });
-
-    hold(false);
-    const { server } = await load("http");
-    await bounded(made[made.length - 1].bind ?? Promise.reject(new Error("it did not listen")), "the item API's http instance did not listen");
-    await t.test("over HTTP, with its real timers", async () => {
-      const { port } = /** @type {import("node:net").AddressInfo} */ (server.address());
-      const at = async (/** @type {string} */ id) => {
-        const r = await fetch(`http://127.0.0.1:${port}${url(id)}`, { signal: t.signal });
-        return { status: r.status, body: await r.text() };
-      };
-      const [now, late, unknown] = await Promise.all([at("item_3"), at("item_slow_3"), at("item_slow_9")]);
-      assert.deepEqual(now, { status: 200, body: json("item_3") });
-      assert.deepEqual(late, now, "the late item is the item");
-      assert.equal(unknown.status, 404);
     });
   } finally {
-    hold(false);
-    // A server whose bind is still pending is closed once it settles.
-    for (const { server, bind } of made) {
-      await bind;
-      if (server.listening) {
-        await new Promise((closed) => {
-          server.close(closed);
-          server.closeAllConnections();
-        });
-      }
-    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
