@@ -687,8 +687,9 @@ rather than keeping the case from its cleanup. Every other driver action the cas
 itself again, of a patch's reads (its refusals included), of a write's own page and of the held slow
 part make before a check or its cleanup (a click, fill, key press or load) is bounded the same way
 to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
-own time by the smoke's clock. The check that navigating away stops the reads is the exception, with
-no bound by the smoke's clock at all: it is as it was before these bounds, its navigations, press
+own time by the smoke's clock. The check that navigating away stops the reads is the exception: its own
+page operations have no bound by the smoke's clock (the whole-read route's exchange it shares and that
+route's removal keep theirs), as they were before these bounds, its navigations, press
 and waits under Playwright's own timeouts, its 2.2 s by Playwright's timer, and its reads of the page
 (`page.evaluate()`, the write it sends among them) under no timeout, so a page that never answers one
 keeps the case from its cleanup, until [#2217 The News leave smoke case ("navigating away stops the reads") needs a deterministic press and a request-identity check](https://github.com/corten-run/corten/issues/2217) reworks it. Where a check rests on a wait, that wait must come in its time,
