@@ -129,23 +129,44 @@ test("the item API answers a late item as the item, after SLOW_MS, and an unknow
   try {
     const items = join(dir, "items.json");
     writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" } }));
-    // The server runs with a preload that holds each timer it sets until the test writes "release"
-    // to its input, and writes to its output each timer it sets or clears and each answer it ends,
-    // with whether it ended inside a released timer's callback. Which answer waits, and on what,
-    // is read from the server, and no answer is held to a time a busy machine can cross.
+    // The server runs with a preload that holds each timer it sets until the test writes a
+    // "release" line to its input, and writes to its output, a whole line each, every timer it sets
+    // or clears and the first thing each answer sends (its headers flushed, a write or its end),
+    // with whether it sent it from inside a released timer's callback (anything that callback
+    // started, a microtask included) or not. Which answer waits, and on what, is read from the
+    // server, and no answer is held to a time a busy machine can cross.
     const timers = join(dir, "timers.mjs");
     writeFileSync(
       timers,
       [
-        'import { ServerResponse } from "node:http";',
+        "import { AsyncLocalStorage } from \"node:async_hooks\";",
+        "import { ServerResponse } from \"node:http\";",
+        "const released = new AsyncLocalStorage();",
         "const held = new Map();",
         "let last = 0;",
-        "let inTimer = false;",
-        "globalThis.setTimeout = (f, ms, ...a) => { const id = ++last; held.set(id, () => f(...a)); process.stdout.write(`timer ${ms}\\n`); return id; };",
-        "globalThis.clearTimeout = (id) => { held.delete(id); process.stdout.write(`cleared ${id}\\n`); };",
-        "const end = ServerResponse.prototype.end;",
-        'ServerResponse.prototype.end = function (...a) { process.stdout.write(`answered ${this.statusCode} ${this.req?.url} ${inTimer ? "in its timer" : "at once"}\\n`); return end.apply(this, a); };',
-        'process.stdin.setEncoding("utf8").on("data", (line) => { if (!line.includes("release")) return; const due = [...held.values()]; held.clear(); for (const f of due) { inTimer = true; try { f(); } finally { inTimer = false; } } });',
+        "const say = (line) => process.stdout.write(`${line}\\n`);",
+        "globalThis.setTimeout = (f, ms, ...a) => { const id = ++last; held.set(id, () => f(...a)); say(`timer ${ms}`); return id; };",
+        "globalThis.clearTimeout = (id) => { held.delete(id); say(`cleared ${id}`); };",
+        "const answered = new WeakSet();",
+        "for (const name of [\"flushHeaders\", \"write\", \"end\"]) {",
+        "  const own = ServerResponse.prototype[name];",
+        "  ServerResponse.prototype[name] = function (...a) {",
+        "    if (!answered.has(this)) { answered.add(this); say(`answered ${this.statusCode} ${this.req?.url} ${released.getStore() ? \"in its timer\" : \"at once\"}`); }",
+        "    return own.apply(this, a);",
+        "  };",
+        "}",
+        "let input = \"\";",
+        "process.stdin.setEncoding(\"utf8\").on(\"data\", (chunk) => {",
+        "  input += chunk;",
+        "  for (let at = input.indexOf(\"\\n\"); at >= 0; at = input.indexOf(\"\\n\")) {",
+        "    const line = input.slice(0, at);",
+        "    input = input.slice(at + 1);",
+        "    if (line !== \"release\") continue;",
+        "    const due = [...held.values()];",
+        "    held.clear();",
+        "    for (const f of due) released.run(true, f);",
+        "  }",
+        "});",
         "",
       ].join("\n"),
     );
@@ -158,6 +179,8 @@ test("the item API answers a late item as the item, after SLOW_MS, and an unknow
     });
     const child = spawn(process.execPath, ["--import", pathToFileURL(timers).href, fileURLToPath(new URL("./item-api/server.mjs", import.meta.url)), items, String(port), "1"], { env: { ...process.env, SLOW_MS: "300" }, stdio: ["pipe", "pipe", "inherit"], signal: t.signal, killSignal: "SIGKILL" });
     server = child;
+    // A spawn that fails, or the timeout's abort, ends its output, which fails the wait on it.
+    child.on("error", () => {});
     let output = "";
     let ended = false;
     child.stdout.setEncoding("utf8").on("data", (chunk) => (output += chunk));
@@ -223,7 +246,12 @@ test("the item API answers a late item as the item, after SLOW_MS, and an unknow
     assert.equal(answered.status, 200);
     assert.equal(answered.body, now.body, "the late item is the item");
   } finally {
-    server?.kill("SIGKILL");
+    // Ended, and its end awaited, before the test ends and aborts its signal.
+    if (server && server.exitCode === null && server.signalCode === null) {
+      const exited = new Promise((done) => server?.once("exit", done));
+      server.kill("SIGKILL");
+      await exited;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
