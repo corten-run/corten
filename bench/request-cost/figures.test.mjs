@@ -74,14 +74,14 @@ test("head's idle memory rises past base's by its growths in bytes, beyond base'
   // Base's three readings agree: four pages more pass (16,384 bytes), five do not (20,480).
   assert.deepEqual(idleRise({ base: agree, head: [grew(15339), grew(15339), grew(15335)], page, connections }), { rise: 16_384, allowed: 16_384, rose: false });
   assert.deepEqual(idleRise({ base: agree, head: [grew(15340), grew(15340), grew(15340)], page, connections }), { rise: 20_480, allowed: 16_384, rose: true });
-  // The rises the floor was raised for, one, two and three pages over base's agreeing three
-  // (4,096, 8,192 and 12,288 bytes), are under it, where one page allowed passed only the first.
+  // One, two and three pages over base's three equal runs (4,096, 8,192 and 12,288 bytes, the
+  // sizes of reading the ruling rests on) are under the floor.
   for (const pages of [1, 2, 3]) {
     const head = [grew(15335 + pages), grew(15335 + pages), grew(15335 + pages)];
     assert.deepEqual(idleRise({ base: agree, head, page, connections }), { rise: pages * page, allowed: 4 * page, rose: false }, String(pages));
   }
-  // What it still sees: one 8-byte field a connection, 40,000 bytes over 5,000, read as nine or
-  // ten pages, and over the fewest connections a 4,096-byte page allows, 32,768 bytes, eight pages.
+  // What it still sees, by arithmetic: 8 bytes a connection, 40,000 bytes over 5,000, given as nine
+  // or ten pages, and over the fewest connections a 4,096-byte page allows, 32,768 bytes, eight pages.
   for (const pages of [9, 10]) assert.equal(idleRise({ base: agree, head: [grew(15335 + pages), grew(15335 + pages), grew(15335 + pages)], page, connections }).rose, true, String(pages));
   assert.equal(idleRise({ base: agree, head: [grew(15343), grew(15343), grew(15343)], page, connections: page }).rose, true);
   // The figures a connection, rounded, do not tell the two sides of the floor apart (#2136's

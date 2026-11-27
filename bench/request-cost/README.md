@@ -474,14 +474,32 @@ anywhere in a page, the same draws read one by base's span alone in 5.9% of comp
 16.7% of jobs, with one page allowed, the rule until 2026-11-27, in 5.4% and 15.3%, and with
 the four pages now allowed in 0.38% and 1.1% (each simulated, 1,000,000 jobs): most of the
 fall from 8.7% to 5.4% is the rounding, the one page took away about half a point more, and
-the four pages take away nearly all the rest at that spread. The spread is an assumption, 1.5
-bytes a connection, which the comment that first gave the model fitted by eye to the spans
-the hosted job had then read, and not a rate seen on runners: a wider one gives more. The figures for four pages were made on 2026-11-27 by the
-method the description of
+the four pages take away nearly all the rest at that spread. The model is
+[`idle-model.mjs`](idle-model.mjs), which no check runs and which decides nothing: one seed
+gives the same figures each time, and `node bench/request-cost/idle-model.mjs 1000000 1`
+gives these. The figures before four pages are those the description of
 [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
-gives for the others, which kept no script, so the model was written again from those words:
-at two seeds it gave each of the earlier figures again within a tenth of a point, and the two
-for four pages the same both times. None of the five runs read one, whose
+gave, which kept no script. The kept one was written again from that description's words on
+2026-11-27, and at seeds 1 and 2 it gives each of them again within 0.12 of a point (the
+farthest is 15.18% of jobs with one page at seed 1, where 15.3% stands above), and for four
+pages 0.38% of comparisons both times and 1.13% and 1.12% of jobs (Node 24.22.1, the script
+as it is at `3603a9856`).
+
+The spread is an assumption, 1.5 bytes a connection for every reading, which the comment that
+first gave the model fitted by eye to the spans the hosted job had then read, and not a rate
+seen on runners: a wider one gives more. It fits the hosted runs this page cites poorly. In
+the nine under [The idle floor](#the-idle-floor), base's span of three averaged 6,827 bytes
+after one request, 4,551 after three of a browser's requests and 18,660 before any byte, where
+the one spread gives about 12,700 for each: two readings are narrower than assumed and the
+reading before any byte is wider. With a standard deviation for each reading that brings the
+model's mean span near those (0.81, 0.54 and 2.2 bytes a connection, a crude fit to nine runs
+a reading), the same script reads a rise with four pages allowed in 0.71% of comparisons and
+2.1% of jobs, all of them, to that figure, on the reading before any byte, and with one page
+in 3.4% and 9.8% (`node bench/request-cost/idle-model.mjs 1000000 1 0.81 0.54 2.2`; seed 2
+gives 0.71% and 2.1%, and 3.4% and 9.9%). So by this model a job of two builds that are the
+same fails on idle memory about once in fifty with four pages, not once in ninety, and about
+once in ten with one page, not once in seven; in the 27 hosted readings the largest rise,
+16,384 bytes, was on the reading before any byte. None of the five runs read such a rise, whose
 figures were compared, not their growths, which those runs did not print. A job that fails on
 idle memory alone is to be read with that in mind; by the rule its runs are still not taken
 again for their result.
@@ -515,11 +533,16 @@ above base's by 4,096 in seven readings, by 8,192 in three and by 16,384 in one,
 spanned 20,480; it was the same in twelve and below in four.
 
 What made the pages was established in none of them. The description of the second pull
-request reads its reading over 1,000, 2,500, 10,000 and 20,000 connections as well: one page
-over at 1,000, where five times the connections read one to three, and at the other three
-counts base's own runs 21 to 513 pages apart, which hides a difference of this size. That fits
-a page or two the process touches once, by where the allocator puts things, and does not show
-it: no run says what the pages are, so memory a connection holds is not ruled out.
+request reads its reading over 1,000, 2,500, 10,000 and 20,000 connections as well, on that
+other host: for the two commits of the fourth row, three pages over at 5,000, head read one
+page over at 1,000, and at the other three counts base's own runs are 21 to 513 pages apart,
+which hides a difference of this size. So where it can be seen the difference grew with the
+count, from one page to three where the connections grew five times: less than in proportion,
+and more than none. Whole pages cannot tell pages the process touches by where the allocator
+puts things from a cost of two to three bytes a connection, which is 2,000 to 3,000 bytes over
+1,000 connections, no page or one, and 10,000 to 15,000 over 5,000, two to four. The readings
+fit either and show neither: no run says what the pages are, so memory a connection holds is
+not ruled out.
 
 What the floor gives up, and keeps:
 
@@ -527,9 +550,11 @@ What the floor gives up, and keeps:
    16,384 bytes over 5,000 connections, which passes. Under one page that was about 0.8. A
    reading is whole pages, so a cost of 4 bytes a connection, 20,000 bytes, can read as four
    pages or as five.
-2. One 8-byte field a connection reads 40,000 bytes over 5,000 connections and 32,768 over
-   4,096, each more than the floor, so it is still a rise wherever base's span is under it.
-   A span of base's over four pages governs as before, and hides more.
+2. 8 bytes more a connection is 40,000 bytes over 5,000 connections and 32,768 over 4,096,
+   each more than the floor, so by arithmetic it is still a rise wherever base's span is
+   under it. No run has read an added field, and resident memory moves by the allocator's
+   size classes, so a field can read as nothing or as more. A span of base's over four pages
+   governs as before, and hides more.
 3. It is one rule for both page sizes. In 65,536-byte pages four pages are 262,144 bytes, over
    at least 65,536 connections, so at most the same four bytes a connection. No reading in
    such pages stands behind that: every reading above is in 4,096-byte pages, and that a
@@ -538,6 +563,10 @@ What the floor gives up, and keeps:
 4. The fewest connections stay the page's bytes. Keeping the floor at a byte a connection
    would take 16,384 connections for 4,096-byte pages and refuse the default 5,000, the
    setting the ruling names and every reading above was taken at.
+
+Items 3 and 4 are how the ruling was read when the rule was written, with no separate ruling
+behind them: it spoke of 16,384 bytes over 5,000 connections, which are four 4,096-byte pages,
+and not of the other page size or of four bytes a connection over as few as 4,096.
 
 ## Tests
 
@@ -557,7 +586,7 @@ for them.
 | `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
-with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 49 of the 74 tests run.
+with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 49 of the 76 tests run.
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).

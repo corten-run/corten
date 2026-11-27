@@ -11671,23 +11671,40 @@ rules something out.
     ([#2194 Tag an answer given its scope's lines in one pass without searching its lines](https://github.com/corten-run/corten/pull/2194)).
     [The kit's page](../bench/request-cost/README.md#the-idle-floor) has each run's growths.
     The cause was established in none of them. The description of the pull request the
-    question named takes its reading over 1,000 to 20,000 connections too, and the difference
-    does not grow with the count where it can be seen (one page at 1,000; at 2,500, 10,000 and
-    20,000 base's own runs are 21 to 513 pages apart, which hides it), which fits a page or
-    two the process touches once, by where the allocator puts things, and does not show it:
-    no run says what the pages are, so memory a connection holds is not ruled out. What is given up: at the gate's settings a cost under
+    question named takes its reading over 1,000 to 20,000 connections too, on that other
+    host: for the two commits that read three pages over 5,000 connections there (and two in
+    the hosted job), head read one page over base at 1,000, and at 2,500, 10,000 and 20,000
+    base's own runs are 21 to 513 pages apart, which hides a difference of this size. So
+    where it can be seen the difference grew with the count, from one page to three where
+    the connections grew five times: less than in proportion, and more than none. Whole
+    pages cannot tell pages the process touches by where the allocator puts things from a
+    cost of two to three bytes a connection, which is 2,000 to 3,000 bytes over 1,000
+    connections, no page or one, and 10,000 to 15,000 over 5,000, two to four. The question
+    as put said that the readings do not grow with the count, which they do not show. They
+    fit either cause and show neither: no run says what the pages are, so memory a
+    connection holds is not ruled out. What is given up: at the gate's settings a cost under
     about 3.3 bytes a connection is no longer seen, where one page saw down to about 0.8, and
     since a reading is whole pages a cost of 4 bytes a connection can read as four pages or as
-    five. What is kept: one 8-byte field a connection reads 40,000 bytes over 5,000 connections
-    and 32,768 over 4,096, the fewest a reading in 4,096-byte pages is taken over, each more
-    than the floor. It stays one rule for both page sizes, four pages of the size the runs
+    five. What is kept is arithmetic and not a reading: 8 bytes more a connection is 40,000
+    bytes over 5,000 connections and 32,768 over 4,096, the fewest a reading in 4,096-byte
+    pages is taken over, each more than the floor, but no run has read an added field, and
+    resident memory moves by the allocator's size classes, so a field can read as nothing or
+    as more. It stays one rule for both page sizes, four pages of the size the runs
     print: in 65,536-byte pages that is 262,144 bytes over at least 65,536 connections, the
     same four bytes a connection at most, with no reading in such pages behind it, and the
     hosted job still leaves such a runner's readings not decided. The fewest connections stay
     the page's bytes, since a floor kept to a byte a connection would take 16,384 of them in
-    4,096-byte pages and refuse the 5,000 the ruling names. By the kit's model, at its assumed
-    spread, two builds that are the same read a rise in about one comparison in 260 with four
-    pages, where one page read one in about nineteen (Revisit when, below).
+    4,096-byte pages and refuse the 5,000 the ruling names. Both are this change's reading of
+    the ruling, which spoke of 16,384 bytes over 5,000 connections, four 4,096-byte pages:
+    that the floor is four pages of the other size too, and that it is up to four bytes a
+    connection over as few as 4,096, have no reading and no separate ruling behind them. By
+    the kit's model ([`idle-model.mjs`](../bench/request-cost/idle-model.mjs)), two builds
+    that are the same read a rise in about one comparison in 260 with four pages at its
+    assumed spread, where one page read one in about nineteen, and in about one in 140 and
+    one in 30 with a spread fitted to each reading's spans in the hosted runs (Revisit when,
+    below). Both questions of 2026-11-27 as they were put, and the answers chosen, are in the
+    description of
+    [#2225 Record two rulings of the maintainer: the trend's threshold settled at +2%, and the counted lane's idle-memory floor raised to four pages](https://github.com/corten-run/corten/pull/2225).
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
@@ -11785,7 +11802,10 @@ rules something out.
     thread's user-space instructions, so the kernel, another thread, a lock, a wait and the
     cache are not in a count, which is what the list is made from; one idle figure a run
     cannot be told from another of the same binary, so a rise is read against base's own
-    runs; and a count attributes a cost to one pull request where a reading of `main` against
+    runs; 8 bytes more a connection is 40,000 bytes over the gate's 5,000 connections, over
+    twice the four pages, so the floor still sees a field a connection keeps, which is
+    arithmetic no run has read, resident memory moving by the allocator's size classes and
+    not by a field's bytes; and a count attributes a cost to one pull request where a reading of `main` against
     a release cannot, so the count gates and the trend reports); value (Fast, and proven
     fast: a claim has the number that can see it behind it, instructions where a count sees
     the change and cycles where only cycles do, README Values).
@@ -11831,7 +11851,9 @@ rules something out.
     growths in 4,096-byte pages and base's span alone, in about one in nineteen by those
     growths with one page allowed, and in about one in 260 with the four pages now allowed,
     on the same draws, at a spread of 1.5 bytes a
-    connection, each simulated, not a rate seen on runners, which the rule's idle statistic was
+    connection, and in about one in 30 with one page and one in 140 with four at a spread
+    for each reading fitted to base's spans in nine hosted runs, each simulated by the kit's
+    `idle-model.mjs`, not a rate seen on runners, which the rule's idle statistic was
     not chosen against); a job comes to tell the kinds a count cannot judge
     from a diff, so the line says nothing the job does not know and can be dropped; or a reading
     across placements comes to cost what a count does, so cycles can be asked of every change.
@@ -11872,11 +11894,17 @@ rules something out.
     rule allowed, with five more runs of the first pull request for how far base's own three
     are apart (0 to 40,960 bytes in the nine), and the three descriptions read for the two
     readings of another host and for the readings at other numbers of connections, none of
-    which was read from a log or taken again; 2026-11-27, the model of the idle rule written
-    again from the words of the description that first gave it and run on Node 24.22.1,
-    1,000,000 jobs at each of two seeds, which gave each earlier figure again within a tenth
-    of a point and 0.38% of comparisons and 1.1% of jobs with four pages allowed, with no
-    script kept in the repository.
+    which was read from a log or taken again; 2026-11-27, the model of the idle rule, written
+    again from the words of the description that first gave it and kept as
+    `bench/request-cost/idle-model.mjs` at `3603a9856`, run on Node 24.22.1, 1,000,000 jobs
+    at each of seeds 1 and 2: each earlier figure again within 0.12 of a point (the farthest
+    15.18% of jobs with one page at seed 1, where the kit's page gives 15.3%), and 0.38% of
+    comparisons and 1.13% and 1.12% of jobs with four pages allowed; and with a standard
+    deviation of 0.81, 0.54 and 2.2 bytes a connection for the three readings, fitted to
+    base's mean span of three in the nine hosted logs read for the floor (6,827 bytes after
+    one request, 4,551 after three of a browser's requests, 18,660 before any byte), 0.71%
+    of comparisons and 2.14% of jobs with four pages at both seeds, and 3.35% and 9.79%, and
+    3.37% and 9.87%, with one.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

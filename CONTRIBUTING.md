@@ -578,7 +578,8 @@ establish a general ranking.
       it. The floor was one page until 2026-11-27, when the maintainer raised it to four:
       [design Choice 76](docs/design.md#choice-counted-or-measured) gives the readings it rests
       on, whose cause was not established, and what it gives up, a cost under about 3.3 bytes a
-      connection at the default, where one 8-byte field a connection still reads 40,000 bytes. The
+      connection at the default, where 8 bytes more a connection is 40,000 bytes by arithmetic,
+      which no run has read. The
       hosted job decides each idle reading so, from each run's growth and page size, and at its
       fixed 5,000 connections a runner whose page has more bytes than that leaves the reading
       not decided, a case that cannot be counted. The description gives every figure of every run for both builds, each idle run's whole line as
