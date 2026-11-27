@@ -1,0 +1,1 @@
+- The benchmark observer can record a container that stops during its process census when the first census is empty and Docker confirms the same container stopped. This follows [#2188 Record a Docker exit proved by the closing benchmark inspect](https://github.com/corten-run/corten/pull/2188).

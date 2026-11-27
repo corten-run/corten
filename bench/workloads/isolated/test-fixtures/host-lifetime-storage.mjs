@@ -39,6 +39,7 @@ export async function samplingControl(t, signal, scenario) {
       if (program === "/usr/bin/getconf") { assert.deepEqual(args, ["CLK_TCK"]); return "100\n"; }
       if (program === "docker") {
         assert.deepEqual(args, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]);
+        scenario.onInventory?.();
         return "";
       }
       assert.equal(program, process.execPath); assert.equal(args.length, 2);

@@ -31,6 +31,7 @@ export async function storageControl(t) {
       const value = result === undefined ? await methods[name](...values) : result;
       if (name === "close") f.live.delete(handle);
       f.trace.push({ name, path, phase: "end", at: Date.now() });
+      f.afterOperation?.(name, path);
       return value;
     });
     return handle;

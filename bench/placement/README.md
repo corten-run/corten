@@ -178,7 +178,7 @@ give, with the rules that give it. A field that is not in this table is refused.
 | `base` | `"release"`: the commit of the highest tag `vX.Y.Z` the checkout has when the run starts. |
 | `head` | A remote's branch, `origin/main`, read as the checkout has it when the run starts. |
 | `seed` | `"date"`: a workload's seed is the run's date in UTC as `YYYYMMDD` and then its place in the plan as two digits (2026120201 for the first workload of a run of 2026-12-02), so each run has seeds of its own and nobody chooses one after a result. One run a date: the date names the run's plan too, so a run whose date is not later than every row of the page is refused, and a plan has at most 99 workloads. That is the page in the run's checkout: nothing reserves a date across checkouts or between two runs made at once. |
-| `threshold` | The rise the trend reports, as a fraction (`0.02`), read on the lower bound. |
+| `threshold` | The rise the trend reports, as a fraction (`0.02`), read on the lower bound. The maintainer settled it at +2% on 2026-11-27; [the trend's page](trend/README.md) says what that rests on and when it is read again. |
 | `plan` | The plan, without `base`, `head` and each workload's `seed` and `expect`. Every workload's K is `"pilot"`: each run sizes K from its own pilot. `probe.dir` is a path from the trend's plan file and may lead out of its directory, since the run copies the probe beside its own plan. It copies nothing else, so no workload names a `request.script`. Each workload's `declared` says why it is in the trend and what it does not read. |
 
 Before anything is made or run the command refuses, with exit 2: a run directory that is not as
