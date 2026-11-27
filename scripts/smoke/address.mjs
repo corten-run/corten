@@ -2488,6 +2488,46 @@ async function markedPatchVisits(browser, errors) {
       JSON.stringify(invalidHeld),
     );
 
+  // A press the runtime refuses records nothing: Week's 422 redraws the form with its id and a field
+  // marked invalid, and a `currententrychange` listener that hears the runtime put the entry's
+  // state back presses Day on the form it drew, inside the call. Day is not sent, and Week, its
+  // answer drawn, still puts focus on its invalid field (before, the refused press took Week's
+  // place as the form's latest, and Week, no longer its latest, put focus nowhere).
+  const refusedInvalid = await refusedInsideInvalid(page);
+  if (!refusedInvalid) skip("a marked press refused inside a 422's replace leaves focus to the 422's invalid field", "no Navigation API");
+  else
+    check(
+      "a marked press refused inside a 422's replace is not sent, and the 422 still puts focus on its invalid field and its address in",
+      refusedInvalid.restored && refusedInvalid.pressed && refusedInvalid.drawn && refusedInvalid.sent === 0 && refusedInvalid.focused === "smoke-address-invalid" &&
+        refusedInvalid.at === "?scope=week" && refusedInvalid.errors.length === 0,
+      JSON.stringify(refusedInvalid),
+    );
+  // A `navigate` listener holds Elsewhere's replace to another route's address before it goes in
+  // (`precommitHandler`): the nav link to the screen stays current while the address is the
+  // screen's, and once let go, the nav link to the address the held replace put in is (before, the
+  // link was marked as the answer drew, and the address that came in later left the old one current).
+  const heldMarks = await heldCommitMarks(page);
+  if (!heldMarks) skip("a marked patch whose replace a navigate listener holds marks the nav link current once its address goes in", "no precommitHandler");
+  else
+    check(
+      "a marked patch whose replace a navigate listener holds marks the nav link current once its address goes in",
+      heldMarks.held && heldMarks.drawn && heldMarks.during.at === "/smoke/address" && heldMarks.during.current === "/smoke/address" && heldMarks.ended &&
+        heldMarks.after.at === "/smoke/address-elsewhere?scope=far" && heldMarks.after.shown === "far" && heldMarks.after.current === "/smoke/address-elsewhere",
+      JSON.stringify(heldMarks),
+    );
+  // Week's replace is held after its address goes in (a listener's `handler`), and the runtime's
+  // last read of `navigation.transition` answers it but puts on, in a microtask, a getter that throws
+  // the next time it is read. Week has drawn: nothing the runtime reads after says it failed (before,
+  // the submit read the getter to see whether the hold was its own, and said `corten:error`).
+  const lateGetter = await heldLateGetter(page);
+  if (!lateGetter) skip("a marked answer whose held replace is followed by a throwing transition getter is not said to have failed", "no Navigation API");
+  else
+    check(
+      "a marked answer whose held replace is followed by a throwing transition getter is not said to have failed",
+      lateGetter.held && lateGetter.armed && lateGetter.drawn && lateGetter.at === "?scope=week" && lateGetter.ended && lateGetter.errors.length === 0,
+      JSON.stringify(lateGetter),
+    );
+
   // An answer whose address is already the entry's copies no `history.state`: the runtime looks for
   // what would leave the address before it copies the state (before, it copied the state, running
   // a getter of the page's on it, before it found it had nothing to put in). It is drawn: the mark
@@ -3289,6 +3329,168 @@ async function heldInvalid(page) {
   await page.unroute(week);
   const after = await page.evaluate(() => ({ at: location.search }));
   return { held, drawn, during, ended, after };
+}
+
+/**
+ * Gives the entry a Navigation API state, which the runtime puts back once Week's address is in, and
+ * answers Week with a 422 patch: its own panel, the form with its id among it, and a field marked
+ * invalid. A `currententrychange` listener of the page that hears that state go back (a null
+ * `navigationType`) presses Day on the form Week drew, inside the runtime's call. Says whether the
+ * state went back and Day was pressed, whether the 422 drew, how many reads of Day were sent, which
+ * element has focus, where the page is, and the `corten:error` statuses said; null where the browser
+ * has no Navigation API.
+ * @param {import("@playwright/test").Page} page
+ */
+async function refusedInsideInvalid(page) {
+  const home = `${base}/smoke/address`;
+  const week = `${home}?scope=week`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  if (!(await page.evaluate(() => "navigation" in window))) return null;
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    // Uncompressed: Firefox's route.fetch reads a compressed body it was not sent as empty.
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const body = (await res.text()).replace("</section>", '<input id="smoke-address-invalid" aria-invalid="true"></section>');
+    await route.fulfill({ response: res, status: 422, body });
+  });
+  let daySends = 0;
+  await page.route(day, (route) => {
+    if (route.request().headers()["corten"] === "action") daySends += 1;
+    return route.continue();
+  });
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    Object.assign(w, { __restored: false, __pressed: false, __errors: [] });
+    document.addEventListener("corten:error", (event) => w.__errors.push(/** @type {CustomEvent} */ (event).detail?.status ?? null));
+    w.navigation.updateCurrentEntry({ state: { kept: true } });
+    w.navigation.addEventListener("currententrychange", (/** @type {any} */ event) => {
+      if (w.__pressed || event.navigationType !== null || location.search !== "?scope=week") return;
+      w.__restored = w.navigation.currentEntry.getState()?.kept === true;
+      w.__pressed = true;
+      const day = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+      day.form?.requestSubmit(day);
+    });
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => !!document.getElementById("smoke-address-invalid") && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(week);
+  await page.unroute(day);
+  const state = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    return { restored: w.__restored, pressed: w.__pressed, focused: document.activeElement?.id ?? null, at: location.search, errors: w.__errors };
+  });
+  return { ...state, drawn, sent: daySends };
+}
+
+/**
+ * A `navigate` listener of the page holds the runtime's replace to Elsewhere's address, another
+ * route's, before it goes in (`precommitHandler`). Presses Elsewhere on the screen, then lets the
+ * replace go. Says whether it was held, whether Elsewhere's panel drew, where the page was and which
+ * nav link was current while it was held, whether the held replace ended, and where the page is,
+ * what it shows and which nav link is current then; null where the browser has no
+ * `precommitHandler`.
+ * @param {import("@playwright/test").Page} page
+ */
+async function heldCommitMarks(page) {
+  await page.goto(`${base}/smoke/address`);
+  if (!(await page.evaluate(() => "NavigationPrecommitController" in window))) return null;
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = resolve));
+    Object.assign(w, { __release: release, __held: false });
+    w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (w.__held || event.navigationType !== "replace" || new URL(event.destination.url).pathname !== "/smoke/address-elsewhere") return;
+      event.intercept({ precommitHandler: () => held });
+      w.__held = true;
+    });
+  });
+  const where = () =>
+    page.evaluate(() => ({
+      at: location.pathname + location.search,
+      shown: document.querySelector("#smoke-address output")?.textContent,
+      current: Array.from(document.querySelectorAll("main nav a[aria-current=page]"), (a) => a.getAttribute("href")).join(),
+    }));
+  await page.getByRole("button", { name: "Elsewhere", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "far" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  const during = await where();
+  const held = await page.evaluate(() => /** @type {any} */ (window).__held);
+  await page.evaluate(() => /** @type {any} */ (window).__release());
+  const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  return { held, drawn, during, ended, after: await where() };
+}
+
+/**
+ * A `navigate` listener of the page holds the runtime's replace to Week's address once it is in, in
+ * its own `handler`. A `currententrychange` listener, which hears that address go in after the
+ * runtime's own listeners, puts on a getter of `navigation.transition` that answers the browser's
+ * own once (the runtime's read as its call returns) and then, in a microtask, puts on one that
+ * throws the next time it is read. Presses Week, then lets the replace go. Says whether the replace
+ * was held and the getter put on, whether Week drew, where the page is, whether the held replace
+ * ended, and the `corten:error` statuses said; null where the browser has no Navigation API.
+ * @param {import("@playwright/test").Page} page
+ */
+async function heldLateGetter(page) {
+  await page.goto(`${base}/smoke/address`);
+  if (!(await page.evaluate(() => "navigation" in window))) return null;
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    const real = /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(Object.getPrototypeOf(w.navigation), "transition")).get;
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = resolve));
+    Object.assign(w, { __release: release, __held: false, __armed: false, __errors: [] });
+    document.addEventListener("corten:error", (event) => w.__errors.push(/** @type {CustomEvent} */ (event).detail?.status ?? null));
+    w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (w.__held || event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week") return;
+      event.intercept({ handler: () => held });
+      w.__held = true;
+    });
+    w.navigation.addEventListener("currententrychange", (/** @type {any} */ event) => {
+      if (w.__armed || event.navigationType !== "replace" || location.search !== "?scope=week") return;
+      w.__armed = true;
+      Object.defineProperty(w.navigation, "transition", {
+        configurable: true,
+        get() {
+          delete w.navigation.transition;
+          queueMicrotask(() =>
+            Object.defineProperty(w.navigation, "transition", {
+              configurable: true,
+              get() {
+                delete w.navigation.transition;
+                throw new Error("smoke: a one-shot transition getter");
+              },
+            }),
+          );
+          return real?.call(w.navigation);
+        },
+      });
+    });
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  const state = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    // The getter, if it is still on, is not read again by the test.
+    delete w.navigation.transition;
+    return { held: w.__held, armed: w.__armed, at: location.search };
+  });
+  await page.evaluate(() => /** @type {any} */ (window).__release());
+  const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
+  const errors = await page.evaluate(() => /** @type {any} */ (window).__errors);
+  return { ...state, drawn, ended, errors };
 }
 
 /**

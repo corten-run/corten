@@ -12423,7 +12423,8 @@ rules something out.
     the runtime follows has the same limit, and Corten's own redirect to a place names it in
     `corten-location`. The same
     address calls nothing, and a nav link to the new address is marked current, as for a
-    navigation. No entry is added, so Back goes to the page before the screen, and Forward and a
+    navigation, once that address is in: where a page's listener holds the replace (below), as the
+    held navigation commits the address it puts in, not as the answer draws. No entry is added, so Back goes to the page before the screen, and Forward and a
     reload read the page at the address, as for any entry. What the draw runs as it goes comes
     before the replace and sees the old address: a `focus` handler as focus is put back on a
     control the patch drew, a dialog it opens again, an element's `connectedCallback`. A submit
@@ -12448,24 +12449,29 @@ rules something out.
     that may yet put an address in, the replace's or another, over whatever is drawn before then,
     so the runtime goes by that navigation, not by whether the replace's address is in. Until that
     navigation ends, a press of a marked
-    form is taken as one made while a visit of the runtime's is on its way (below): never sent; and
+    form is taken as one made while a visit of the runtime's is on its way (below): refused as it is
+    made, before the runtime records anything of it, so it is never the form's latest press and the
+    answer already drawn goes on as if it had not been made (a 422's focus on its invalid field
+    included), and never sent; and
     an answer already on its way (to a press the held answer's own draw made, before the hold) draws
     nothing, as one that would draw while a visit is on its way does not. The browser runs the
     listener, and its `precommitHandler`, inside the `replaceState` call, before the runtime can
     read the hold back: so the runtime holds from just before the call until it has put the entry's
     state back (above) and read what is on its way, which it reads with that hold still on, then
-    goes on holding only while the browser shows that navigation (one it did not show before the
-    call), and a press of a marked form made inside the call (by the listener or its
+    goes on holding until that navigation (one the browser did not show before the call) ends, and
+    a press of a marked form made inside the call (by the listener or its
     `precommitHandler`), as the state goes back (a `currententrychange` listener, which can begin
     such a navigation there too) or as that read runs (a page's own getter on `navigation`) is
     never sent, whatever the call ends in. A read that throws (such a getter) leaves no hold, and
-    the answer, which has drawn, is not said to have failed, nor is one whose read throws as the
-    runtime checks its replace before the call, which leaves the address. The hold ends with that
-    navigation (its `finished` settles), keeping neither it nor the press whose answer it was, so a
-    later press reads nothing of it again. So nothing is drawn under
+    one whose read throws as the runtime checks its replace before the call leaves the address; an
+    answer that has drawn is never said to have failed, whatever a read after its draw throws. The
+    hold ends as the browser says that navigation ended (`navigatesuccess`, or `navigateerror`,
+    which an abort or another navigation taking its place fires at once), keeping neither it nor
+    the press whose answer it was: whether it still holds is the runtime's own record, which reads
+    nothing of the page, so a later press reads nothing of it again. So nothing is drawn under
     an address that may still change, and the screen keeps the answer whose address that is. The
-    limit is when it ends: the runtime goes by `navigation.transition`, which shows the navigation
-    until it finishes, is aborted or gives way to another, not merely until its address commits (the
+    limit is when it ends: the runtime goes by the navigation's end, as it finishes, is aborted or
+    gives way to another, not merely until its address commits (the
     HTML Standard's commit and finish differ, the handlers running between them), so a page's
     listener whose handler never settles keeps every press of a marked form from being sent until
     another navigation takes its place. Telling the commit apart would need a record of the
@@ -12639,7 +12645,9 @@ rules something out.
     address agree. Until it draws, a read is sent, drawn, or sent once the write it waited for is
     answered, only while it is the latest press of that id, so a newer press of the form, or of the
     one drawn in its place, drops it wherever it is (on its way, waiting for a write, about to be
-    sent again); once it draws, a press its draw makes does not stop it. Only a marked form's press
+    sent again); once it draws, a press its draw makes does not stop it. A marked read the runtime
+    refuses as it is made (while a visit or a held replace is on its way) is no newer press: it
+    drops nothing. Only a marked form's press
     is fenced so: a read of a form without the mark (or of a marked form with no id) is sent and
     drawn as before the mark, though its press, by its id, is still the newer press that drops a
     marked one's; a press of it the same as its read on its way is that read, even once its answer
@@ -12853,9 +12861,14 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 3,076 bytes larger raw (46,502 to 49,578), 1,249
-    with gzip (16,718 to 17,967) and 1,110 with brotli (15,106 to 16,216), paid once a release by
-    every user (128, 46 and 46 larger than the build before this one, which lifted the call's hold
+    What it costs: the runtime every page loads is 3,228 bytes larger raw (46,502 to 49,730), 1,309
+    with gzip (16,718 to 18,027) and 1,165 with brotli (15,106 to 16,271), paid once a release by
+    every user (152, 60 and 55 larger than the build before this one, which took a marked press it
+    refused as the form's latest, so the 422 already drawn put focus on no field; marked a nav link
+    current as the answer drew, not as a held replace's address went in, so the link to the address
+    it left stayed current; and read `navigation.transition` again after an answer drew, to tell
+    whether a hold was its own, so a getter that threw then said the drawn answer had failed; that
+    build was 128, 46 and 46 larger than the one before it, which lifted the call's hold
     before it read the navigation on its way, and read it before it put the entry's state back, so
     a press a page's getter made as it was read, or a navigation a `currententrychange` listener
     began as the state went back, let a press through whose panel the held navigation then put

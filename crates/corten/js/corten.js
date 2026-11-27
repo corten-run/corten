@@ -2696,6 +2696,9 @@ navigation
       const at = navigation.currentEntry;
       event.navigationType === null ? at && writes.set(at, written(at) + 1) : ((changes += 1), (changed = event.navigationType));
       look();
+      // The navigation that held a marked answer's replace ({@link held}) commits its address: the
+      // nav link to it is current from now, as the address is, not from when the answer was drawn.
+      if (event.navigationType && held && held !== true) markCurrent();
     })
   : // Every `popstate` the browser fires is a move, its address changed or not (Back between two
     // entries of one address, each with a null state), counted once: not again where its change of
@@ -3380,13 +3383,15 @@ const presses = new Map();
  * The navigation a page's `navigate` listener holds the runtime's own replace in, before its address
  * goes in (`precommitHandler`) or after, or any other the browser shows on its way as that call
  * returns and did not before it (one a listener began in the replace's place, once its address
- * went in or as its state went back), cleared as that navigation ends; and `true` from just before
- * the runtime's `replaceState` call, which runs the page's listeners and their `precommitHandler`
- * before it returns, until the entry's state is back and that navigation has been read: while it
- * holds ({@link holding}), a marked press
- * is for the page it may yet change, and is taken as one made while a visit is on its way
+ * went in or as its state went back), cleared as the browser says that navigation ended
+ * (`navigatesuccess`, `navigateerror`, which an abort or another navigation taking its place fires
+ * at once); and `true` from just before the runtime's `replaceState` call, which runs the page's
+ * listeners and their `precommitHandler` before it returns, until the entry's state is back and that
+ * navigation has been read: while it holds ({@link holding}), a marked press
+ * is for the page it may yet change, and is refused as one made while a visit is on its way
  * ({@link pressed}), never sent, and a marked answer already on its way draws nothing
- * ({@link standing}), so nothing is drawn under the address it may put in.
+ * ({@link standing}), so nothing is drawn under the address it may put in. The runtime's own record:
+ * nothing of the page is read to tell whether it holds.
  * @type {NavigationTransition | boolean | null | undefined}
  */
 let held;
@@ -3399,19 +3404,19 @@ let held;
 let heldFor;
 
 /**
- * Whether the runtime's `replaceState` call is still running, or the browser still shows the
- * navigation that holds the runtime's replace ({@link held}), for any press but the one whose
- * answer it holds ({@link heldFor}): until that navigation
- * finishes, is aborted or another takes its place, not merely until it commits, so a page's handler
- * that never settles holds it for good.
+ * Whether the runtime's `replaceState` call is still running, or the navigation that holds the
+ * runtime's replace ({@link held}) has not ended, for any press but the one whose answer it holds
+ * ({@link heldFor}): until that navigation finishes, is aborted or another takes its place, not
+ * merely until it commits, so a page's handler that never settles holds it for good.
  * @param {Press} [press]
  */
-const holding = (press) => !!held && (held === true || held === navigation?.transition) && press !== heldFor;
+const holding = (press) => press !== heldFor && !!held;
+for (const end of ["navigatesuccess", "navigateerror"]) navigation?.addEventListener(end, () => held !== true && (held = heldFor = undefined));
 
 /**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
- * it was made on ({@link entry}), null while a visit of the runtime's or a held replace
- * ({@link held}) was on its way, and that entry exactly ({@link exact}), with the draw of the
+ * it was made on ({@link entry}), null for a write made while a visit of the runtime's or a held
+ * replace ({@link held}) was on its way (a read made then is {@link refused}), and that entry exactly ({@link exact}), with the draw of the
  * marked answer that made it, if one did ({@link drawingFor}), and when it was made
  * (`performance.now()`), for a move the browser made before
  * it and says so only after it ({@link moves}). A marked form without an id cannot tell its latest
@@ -3419,18 +3424,26 @@ const holding = (press) => !!held && (held === true || held === navigation?.tran
  * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: Draw | null, t?: number }} Press
  */
 
+/** A marked read refused as it is made ({@link pressed}). @type {Press} */
+const refused = { id: null, at: null };
+
 /**
  * Takes a press of `form` by its id, which the form a patch draws in its place keeps, as the
  * runtime takes the submit: after the page's own `submit` listeners, before its `formdata` ones.
  * Whatever it sends, a press fences only a read ({@link standing}), and keeps where it was made for when
- * it is sent again as one (an answer drew its form with another method).
- * @param {HTMLFormElement} form
+ * it is sent again as one (an answer drew its form with another method). A marked `read` made while
+ * a visit of the runtime's or a held replace ({@link held}) is on its way is refused as it is made,
+ * before anything is recorded: it is never the id's latest press, so the press before it, an answer
+ * already drawn among them, goes on as if it had not been made.
+ * @param {HTMLFormElement} form @param {boolean} read
  * @returns {Press}
  */
-function pressed(form) {
+function pressed(form, read) {
   const id = idOf(form);
   const marked = id && hasAttr(form, "data-address");
-  const press = marked ? { id, at: reading.size || holding() ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
+  const away = marked && (reading.size > 0 || holding());
+  if (away && read) return refused;
+  const press = marked ? { id, at: away ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
   if (id) presses.set(id, press);
   return press;
 }
@@ -3520,7 +3533,9 @@ function asking(form, submitter) {
  *   for a write's answer, which read it at the press
  * @param {Press | null} [press] its press ({@link pressed}): taken now for a new one, kept by one that waited
  */
-async function send(form, submitter, sends, within = asking(form, submitter), press = pressed(form)) {
+async function send(form, submitter, sends, within = asking(form, submitter), press = pressed(form, sends.method === "get")) {
+  // Refused as it was made ({@link pressed}): nothing of it is recorded, nor the form read for it.
+  if (press === refused) return;
   sentFrom.add(form);
   const turn = turns;
   /** @type {FormData} */
@@ -3598,6 +3613,9 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
   const here = (/** @type {boolean} */ drawing = false) => !pending.here || standing(pending.here, drawing);
+  // Drawn once its draw passes this check (`drawIn`): from then on nothing read can say it failed.
+  let drewIt = false;
+  const drawIn = () => (drewIt = here());
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3835,23 +3853,14 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               now = null;
             }
             held = heldFor = undefined;
-            if (now && now !== transition) {
-              held = now;
-              heldFor = pending.here;
-              // Let go as it ends, so nothing of it is kept, nor read again for a press after it.
-              const end = () => void (held === now && (held = heldFor = undefined));
-              try {
-                now.finished.then(end, end);
-              } catch {
-                // Not a navigation the browser made (a page's getter): it holds while it is shown.
-              }
-            }
+            // Let go as it ends ({@link held}), so nothing of it is kept, nor read again for a press after it.
+            if (now && now !== transition) (held = now), (heldFor = pending.here);
           }
         };
         draws.set(done, draw);
       }
       if (res.headers.has("corten-patch")) {
-        await apply(body, signal, sent, res.ok, undefined, undefined, within, here, done);
+        await apply(body, signal, sent, res.ok, undefined, undefined, within, drawIn, done);
         // In: what it drew is current until a page made before it is drawn over it.
         if (!signal.aborted) undrawn.delete(write);
       } else {
@@ -3861,7 +3870,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
         // `<main>` (a count the layout reads) is drawn as a browser without JavaScript draws it.
         // Its notice is said unless it was dropped (one loaded in full instead is said too).
         if (res.headers.has("corten-page")) {
-          if ((await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, here, done)) || here()) announce(notice);
+          if ((await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, drawIn, done)) || here()) announce(notice);
         } else if (await swapDocument(body, signal, notice, false, false, true, { through, write }, undefined, here)) announce(notice);
       }
       // Dropped, the visit left while it waited for its modules or stylesheets, or left as it
@@ -3906,8 +3915,9 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
     // A write a navigation cut off was numbered by that navigation. One that failed on its way where
     // the page says so (the network failed, or the body of an answer that took it was cut off, or
     // did not draw) may have been applied too: the next navigation reads the whole page, but not the
-    // page reading itself again, which would draw away the failure shown.
-    if (signal.aborted || !here()) return;
+    // page reading itself again, which would draw away the failure shown. An answer that has drawn
+    // did not fail, whatever a read after its draw threw (a page's own getter), and is not read again.
+    if (signal.aborted || drewIt || !here()) return;
     if (pending.n) failedWrite(pending.n);
     else if (pending.went && !pending.answered && method !== "GET") failedWrite();
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without
