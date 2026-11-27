@@ -233,7 +233,14 @@ answers any other ([below](#host-names)). What differs:
 
 1. The answers to requests that arrived together (a pipeline) leave in one write, where hyper
    writes each as it is made. No answer waits for a request that has not come: what is written is
-   sent before the connection waits for anything.
+   sent before the connection waits for anything. For a handler this means it may run sooner
+   than hyper would run it. hyper begins a request only when the answers before it have been
+   taken by the socket; here the handlers of up to 16 requests that arrived together (or as
+   many as make 16 KiB of answers) run before any of their answers has gone. So a handler can
+   run for a request whose answer is never sent, where hyper would not have begun it: the
+   client left or stopped reading, or the connection closed on an answer before its own. A
+   handler that changes something has changed it then. Only a client that pipelines sends such
+   requests, and HTTP promises it nothing about a request it got no answer to.
 2. An answer's trailers are not sent, nor a `Trailer` line with them, and a status's reason
    phrase is always its own.
 3. A head that reaches `max_request_head` unfinished and is malformed further on is refused by
@@ -277,6 +284,16 @@ answers any other ([below](#host-names)). What differs:
    the answers to the requests that arrived with its own and had not yet been sent are lost with
    it, where hyper had written each as it was made. Those two questions are answered by the
    app's code only for a body type the app wrote and gave to `Body::new`.
+8. A client that closes its side of the connection before its answer is whole. Neither
+   connection goes on answering such a client once it knows: the answers before the one being
+   made are sent, for as long as `send_timeout` lets them wait, and that one is given up. Where
+   the answer waited for anything (its handler, its body's next piece, the client to read) both
+   cut it at the same byte in every sequence tested. Where nothing waited, a body of megabytes
+   whose every piece was ready and a client that took every write, each learns of the end only
+   when its task next yields, which the two do after different amounts, and may have finished
+   the answer by then: of 41 MB in 20 KiB pieces a run read all from hyper and 2.6 MB from
+   Corten's connection, and of 20 MB in 512-byte pieces 1.1 MB from hyper and 2.1 MB from
+   Corten's.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
 connection, at `553b27040`): the shortest request the counting kit sends, to a route that says
