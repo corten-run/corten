@@ -12,7 +12,7 @@ import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { verifyHostBoundary, verifyLifetimeSettledBoundary } from "./host-observation.mjs";
+import { readLiveWorkloadEnd, verifyHostBoundary, verifyLifetimeSettledBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -121,7 +121,7 @@ export async function validateCampaign(input) {
       assert.equal(entry.path, `${String(index).padStart(2, "0")}-${group}-${phase}`);
       assert.ok(groups.includes(group)); assert.ok(phase !== "prepare" || group === "json-api");
       const recorded = replay.phases.get(entry.path), hostObservations = [];
-      let hostBefore, boundary, ingress;
+      let hostBefore, boundary, ingress, workloadEnd;
       if (currentExecution && recorded.phaseManifestSha256 !== undefined) {
         assert.equal(phaseSnapshot(join(folder, id, entry.path), group === "json-api" && phase === "prepare").sha256,
           recorded.phaseManifestSha256, "phase host/native evidence differs from journal seal");
@@ -178,8 +178,11 @@ export async function validateCampaign(input) {
             settled = read(`${id}/${settlePath}`);
             if (offline) assert.equal(settled.controlApparatus, undefined);
             if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
-            boundary = verifyLifetimeSettledBoundary({ binding: recorded.binding, invocation: recorded.invocations.at(-1), round, phase,
-              lifetime: hostObservations.at(recorded.results.length - 1), before: hostBefore, after, settled, offline });
+            const invocation = recorded.invocations.at(-1), result = recorded.results.at(-1);
+            boundary = verifyLifetimeSettledBoundary({ binding: recorded.binding, invocation, round, phase,
+              lifetime: hostObservations.at(recorded.results.length - 1), before: hostBefore, after, settled, offline,
+              liveWorkloadEnd: () => (workloadEnd = readLiveWorkloadEnd({ binding: recorded.binding, invocation, round, phase, result,
+                folder: join(folder, id, entry.path, "native") })) });
           } else boundary = verifyHostBoundary(hostBefore, after);
         }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
@@ -211,6 +214,9 @@ export async function validateCampaign(input) {
       let report, invalid = false;
       if (currentExecution && phase === "timing") {
           const nativeResult = await inspectNative(binding, native);
+          if (workloadEnd && replay.completed.has(group)) assert.ok(
+            nativeResult.status === "verified" && nativeResult.cleanupComplete && nativeResult.resources === "verified",
+            "early udev settlement requires verified live workload evidence");
           const last = hostObservations[recorded.invocations.length - 1];
           const host = last ? composeHostProof(binding, nativeResult, last) : { resources: "blocked", cleanupComplete: false };
           const timingAudit = group === "json-api" ? validateTimingAudit(binding, native,

@@ -425,8 +425,21 @@ a supplied but invalid settlement cannot fall back to the first census.
 The last native command must have a verified sealed terminal lifetime, including
 proof that its accounting scope is empty, before the five-second wait begins. For
 official timing, each worker's Linux start ticks must place its birth strictly after
-the sealed terminal cutoff. For untimed JSON preparation, the same strict comparison
-uses the pre-phase census cutoff instead.
+the sealed terminal cutoff unless the following Live Delivery proof applies. For
+untimed JSON preparation, the same strict comparison uses the pre-phase census
+cutoff instead.
+
+Isolated measured Live Delivery can also settle a cohort born after measured
+work but before command exit. The successful native command records one workload
+end after every measured actor window and before the last browser and owned
+application are torn down. The phase seal binds that record to the command PID,
+round and commit. Replay checks every measured end and orders the record strictly
+between the pre-phase census and sealed terminal on the same boot, using both
+monotonic time and uptime. No baseline udev worker or child of that daemon may
+be present, and every worker in the first-after cohort must have been born strictly
+after the workload end tick. This does not establish the absence of transient
+workers outside that cohort. The ordinary post-terminal route does not require
+this evidence; historical rounds cannot use wall times to reconstruct it.
 
 Both uptime and the monotonic apparatus samples must support the wait. Cancellation
 keeps the first-after inventory and skips the second census. Exact cgroup, parent

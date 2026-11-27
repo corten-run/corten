@@ -279,10 +279,14 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   const invocation = args.slice(1); calls.push(invocation); currentInvocation = invocation;
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");
   if (liveRoundTrip) return liveFixtureChild((child) => {
-    const { capture, output } = liveRoundTrip;
+    const { capture, output, workloadEnd } = liveRoundTrip;
     assert.deepEqual(invocation, capture.binding.execution.invocation.argv);
     mkdirSync(dirname(output), { recursive: true }); renameSync(capture.folder, output);
-    child.close(1);
+    if (workloadEnd) writeFileSync(join(output, actualHost.liveWorkloadEndFile), JSON.stringify({
+      schema: actualHost.liveWorkloadEndSchema, round: capture.binding.request.round, commit: capture.binding.request.commit,
+      pid: liveFixturePid, clock: workloadEnd,
+    }));
+    child.close(workloadEnd ? 0 : 1);
   });
   const child = fakeChild((child) => {
     if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
@@ -584,8 +588,9 @@ test("isolated Live fixture drains a setup fault without OS signaling", { timeou
     error: "native host observation setup failed", success: false });
 });
 
-for (const group of ["live-delivery", "recoverable-live"]) for (const offline of [false, true]) {
-  test(`isolated Live round trip: ${group} ${offline ? "offline" : "monitored"}`, async (t) => {
+for (const [group, offline, early = false] of [["live-delivery", false], ["live-delivery", true],
+  ["recoverable-live", false], ["recoverable-live", true], ["live-delivery", true, true]]) {
+  test(`isolated Live round trip: ${group} ${offline ? "offline" : "monitored"}${early ? " refuses unproved early settle" : ""}`, async (t) => {
     forbidLiveSignals(t);
     const { campaign, plan } = setupGroup(group), proof = syntheticBootstrap(t);
     plan.round = proof.binding.round;
@@ -596,15 +601,25 @@ for (const group of ["live-delivery", "recoverable-live"]) for (const offline of
     plan.bindings[0] = capture.binding;
     delete plan.campaignSha256; plan.campaignSha256 = deploymentSha256(plan);
     admittedHost = proof.admission.host;
-    settleWorkerTicks = "10601"; settleSurvives = false;
+    settleWorkerTicks = early ? "10304" : "10601"; settleSurvives = false;
     const boot = offline ? BigInt(proof.admission.closedMonoNs) : 0n;
     const clock = { ...udevClock(), monoNs: String(boot + 4000000n) };
     const events = offline ? fakeOfflineFenceCommands(t, proof.binding, 0, 1) : [];
     const control = offline ? { ...proof, offlineHandoff: true } : monitoredSettlementControl(proof, liveActorCpus, events);
     const offlineClock = offline ? [0n, 0n, 2000000n, 5000000n, 5015000000n].map((offset) => String(boot + offset)) : null;
-    liveRoundTrip = { capture, output, clock, offlineClock, events, nativeReads: [] };
+    const workloadEnd = early ? { bootId: clock.bootId, uptime: "103.03 1277.00\n", monoNs: String(boot + 3500000n) } : undefined;
+    liveRoundTrip = { capture, output, clock, workloadEnd, offlineClock, events, nativeReads: [] };
     const handle = await campaign.begin(plan, { stateRoot: "/bench/campaign", control });
     controlWindows.directory = handle.directory; controlWindows.phase = `00-${group}-timing`;
+    if (early) {
+      // Exit zero and a sealed marker are not substitutes for successful native actor windows.
+      await assert.rejects(campaign.advance(handle), /early udev settlement requires verified live workload evidence/);
+      assert.ok(events.includes("settled-census"));
+      assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, cleanupComplete }) => [status, cleanupComplete]), [["invalid", false]]);
+      assert.equal(campaign.status(handle).state, "preserved-uncertain");
+      assert.ok(!readdirSync(handle.directory).some((name) => name.endsWith("-group-finished.json")));
+      return;
+    }
     const status = await campaign.advance(handle);
     assert.equal(status.state, "finished"); assert.equal(status.executionVersion, offline ? 6 : 5);
     assert.deepEqual(events.filter((kind) => kind !== "check"), offline

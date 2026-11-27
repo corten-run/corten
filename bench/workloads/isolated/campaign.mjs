@@ -11,7 +11,7 @@ import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingM
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { startupOutcome, supervise } from "./process.mjs";
-import { observeHost, sampleAuditClock, terminalClockPolicy, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { observeHost, readLiveWorkloadEnd, sampleAuditClock, terminalClockPolicy, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
@@ -224,14 +224,17 @@ export function createCampaign({ authorize }) {
       commands.push(result);
       if (!result.success) break;
     }
-    let after, settled, boundaryError;
-    const terminalClock = commands.at(-1)?.terminalClock;
+    let after, settled, boundaryError, workloadEnd;
+    const last = commands.at(-1), terminalClock = last?.terminalClock;
+    const readEnd = (folder) => readLiveWorkloadEnd({ binding, invocation: binding.execution.invocation,
+      round: c.plan.round, phase: phaseName, result: last, folder });
     try {
       if (!transfer) verifyWorkingSources(c.plan.bindings[0]);
       after = observeHost(c.stream?.registration, retainUdev, c.offlineHandoff);
       if (terminalClock) after.terminalClock = terminalClock;
       save(c, `${relative}/host-after.json`, after);
-      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy, c.offlineHandoff)) {
+      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy,
+        c.offlineHandoff, () => (workloadEnd = readEnd(original)))) {
         await delay(udevSettleMs, undefined, { signal });
         c.stream?.check();
         signal?.throwIfAborted();
@@ -261,8 +264,10 @@ export function createCampaign({ authorize }) {
     if (transfer) verifyWorkingSources(c.plan.bindings[0]);
     if (!c.offlineHandoff) closeControlWindow?.();
     c.stream?.close();
-    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy, c.offlineHandoff)
+    if (workloadEnd) assert.deepEqual(readEnd(native), workloadEnd, "live workload end changed during collection");
+    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy, c.offlineHandoff, () => workloadEnd)
       : verifyHostBoundary(before, after);
+    p.usedLiveWorkloadEnd = workloadEnd !== undefined;
     if (c.offlineHandoff && phaseName === "prepare") p.offlinePreparation = { before, after, settled, terminalClock };
     return p;
   }
@@ -389,6 +394,8 @@ export function createCampaign({ authorize }) {
             catch { throw new Error("timing-audit-does-not-match-accepted-subject"); }
           }
           const native = await inspectNative(effective, p.native);
+          if (p.usedLiveWorkloadEnd) assert.ok(native.status === "verified" && native.cleanupComplete && native.resources === "verified",
+            "early udev settlement requires verified live workload evidence");
           const last = p.commands.at(-1), { number, pid, hostManifestSha256, terminalClock: _clock, ...result } = last;
           let host = { resources: "blocked", cleanupComplete: false };
           if (hostManifestSha256) {
