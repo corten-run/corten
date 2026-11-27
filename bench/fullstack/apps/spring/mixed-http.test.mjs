@@ -24,6 +24,19 @@ const cleanupMs = parseArgs(["w1"]).cleanupMs;
 const listen = (server) => new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "0.0.0.0", resolve); });
 const close = (server) => !server.listening ? null : new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
 
+async function requireCancelledAfter(closed, abortedAt) {
+  const { outcome, at } = await bounded(closed, cleanupMs);
+  assert.equal(outcome, "cancelled");
+  assert.ok(at >= abortedAt, "upstream closed before the client abort");
+  assert.ok(at <= abortedAt + cleanupMs, "upstream drained after the Mixed cleanup bound");
+}
+
+test("cancellation proof refuses a pre-abort upstream close", async () => {
+  const closed = Promise.resolve({ outcome: "cancelled", at: 1 });
+  await closed;
+  await assert.rejects(requireCancelledAfter(closed, 2), /closed before the client abort/);
+});
+
 async function withCandidate(args, run) {
   const image = process.env.SPRING_MIXED_IMAGE;
   assert.match(image ?? "", /^sha256:[a-f0-9]{64}$/, "set SPRING_MIXED_IMAGE to the local candidate image ID");
@@ -81,6 +94,39 @@ test("Spring Mixed image passes the existing bounded production precheck", { tim
   }
 });
 
+test("Spring Mixed form POST writes one session alert and refuses an Origin-only cross-site POST", { timeout: 60000 }, async () => {
+  const server = marketplaceServer(records());
+  try {
+    await listen(server);
+    await withCandidate(["-e", "MARKETPLACE_SOURCE=api", "-e", "API_BASE=http://host.docker.internal:" + server.address().port], async (base) => {
+      const send = (path, opts) => fetch(base + path, { redirect: "error", signal: AbortSignal.timeout(10000), ...opts });
+      const form = (email) => new URLSearchParams({ email, target_price: "12.50" });
+      const post = (headers, email) => send("/marketplace/en-US/item_1", { method: "POST", headers, body: form(email) });
+      const readback = async (headers) => {
+        const res = await send("/api/alerts", { headers });
+        assert.equal(res.status, 200);
+        return res.json();
+      };
+      const email = "native-alert@example.test";
+      const accepted = await post({ origin: base }, email);
+      assert.equal(accepted.status, 200);
+      assert.match(accepted.headers.get("content-type") ?? "", /^text\/html\b/);
+      await accepted.arrayBuffer();
+      const cookies = accepted.headers.getSetCookie().filter((value) => /^SESSION=[^;]+/.test(value));
+      assert.equal(cookies.length, 1, "expected one session cookie");
+      const headers = { cookie: cookies[0].split(";", 1)[0] };
+      const expected = [{ item_id: "item_1", email, target_minor: 1250 }];
+      assert.deepEqual(await readback(headers), expected);
+      assert.deepEqual(await readback({}), [], "anonymous readback must not see the alert");
+
+      const refused = await post({ ...headers, origin: "https://foreign.example.test" }, "foreign-alert@example.test");
+      assert.equal(refused.status, 403);
+      await refused.arrayBuffer();
+      assert.deepEqual(await readback(headers), expected);
+    });
+  } finally { await close(server); }
+});
+
 test("Spring Mixed image cancels real marketplace reads at headers and during the body", { timeout: 120000 }, async (t) => {
   const { item_1 } = records(), body = Buffer.from(JSON.stringify(item_1));
   const trace = "00-11111111111111111111111111111111-2222222222222222-00";
@@ -91,7 +137,10 @@ test("Spring Mixed image cancels real marketplace reads at headers and during th
     if (!hold) { res.writeHead(200, headers).end(body); return; }
     const active = hold; active.requests++;
     const split = active.partial ? 32 : 0;
-    res.once("close", () => active.closed.resolve(res.writableFinished ? "finished" : "cancelled"));
+    res.once("close", () => {
+      active.close = { outcome: res.writableFinished ? "finished" : "cancelled", at: performance.now() };
+      active.closed.resolve(active.close);
+    });
     if (active.partial) res.writeHead(200, headers).write(body.subarray(0, split));
     active.entered.resolve({ trace: req.headers.traceparent, finish() {
       if (!active.partial) res.writeHead(200, headers);
@@ -121,17 +170,17 @@ test("Spring Mixed image cancels real marketplace reads at headers and during th
             assert.equal(upstream.trace, trace);
             await delay(abort ? 100 : cleanupMs + 150);
             assert.equal(responded, false, "rendering must still wait for the upstream");
+            assert.ok(!active.close, "upstream closed while the client was still connected");
             if (abort) {
-              const started = performance.now();
+              const abortedAt = performance.now();
               caller.destroy();
-              assert.equal(await bounded(active.closed.promise, cleanupMs), "cancelled");
-              assert.ok(performance.now() - started <= cleanupMs, "upstream drained after the Mixed cleanup bound");
+              await requireCancelledAfter(active.closed.promise, abortedAt);
             } else {
               upstream.finish();
               const page = await bounded(result.promise);
               assert.equal(page?.status, 200);
               assert.ok(page.html.includes(`lang="${locale}"`) && page.html.includes("<h1>"));
-              assert.equal(await bounded(active.closed.promise), "finished");
+              assert.equal((await bounded(active.closed.promise)).outcome, "finished");
             }
             assert.equal(active.requests, 1);
           } finally { caller.destroy(); hold = undefined; }
