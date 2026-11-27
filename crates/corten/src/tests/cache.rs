@@ -649,8 +649,9 @@ const CDN_OTHERS: [&str; 3] = ["cache-status", "surrogate-key", "cache-tag"];
 
 /// A CDN reads its own caching header before `Cache-Control`, so a page that draws a submit key
 /// goes out with none of those Corten names, whoever wrote one (here staged middleware), and also
-/// when its `Cache-Control` already keeps it private or out of every cache. Other headers a CDN
-/// reads stay, and a page with no key keeps what the middleware wrote.
+/// when its `Cache-Control` already keeps it private or out of every cache; a private lifetime
+/// its handler gave it goes too, so the browser asks again. Other headers a CDN reads stay, and a
+/// page with no key keeps what the middleware wrote.
 #[tokio::test]
 async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     assert_eq!(crate::cache::CDN_CACHING, CDN_OVERRIDES, "the list the guide names");
@@ -694,7 +695,7 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     for (uri, cache) in [
         ("/keyed", "private, no-cache"),
         ("/keyed-default", "private, no-cache"),
-        ("/keyed-private", "private, max-age=60"),
+        ("/keyed-private", "private, no-cache"),
         ("/keyed-no-store", "private, no-store"),
     ] {
         let headers = get(uri).await;
@@ -978,6 +979,204 @@ async fn a_boxed_answer_of_the_app_s_own_is_watched_for_a_submit_key() {
         assert_eq!(status, StatusCode::OK, "{app}");
         assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}");
     }
+}
+
+/// A `Public` answer converted to a response and put in the place of a page's or a JSON
+/// answer's through its `DerefMut` (`*answer = Public::new(..).into_response()`), in an
+/// `App::api` route, a page route and a page route's file slot (`PageOr`), and in a JSON
+/// refusal of the app's own that holds one (`JsonError::Own`): those answer types say nothing of
+/// what their handler put in them, so the handler is watched as a `Public` one's is. One whose
+/// handler rendered a form's new submit key to a string goes out `private, no-cache` without the
+/// CDN caching headers a middleware wrote, whatever the app keeps; one with no key keeps its
+/// lifetime and those headers.
+#[tokio::test]
+async fn a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key() {
+    use crate::response::IntoResponse;
+    use crate::route::get as typed;
+
+    struct CdnHeaders;
+
+    impl crate::Middleware for CdnHeaders {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    fn shared(keyed: bool) -> crate::response::Response {
+        let key = if keyed { crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html() } else { String::new() };
+        Public::new(Duration::from_secs(60), format!("{key}{}", "kept ".repeat(200))).into_response()
+    }
+    async fn replaced_page(req: Req, keyed: bool) -> HtmlResult {
+        let mut page = req.test_page("Replaced", html! { <p>"mine"</p> })?;
+        *page = shared(keyed);
+        Ok(page)
+    }
+    async fn replaced_file(req: Req) -> crate::Result<crate::PageOr<crate::Media>> {
+        let mut page = req.test_page("Replaced", html! { <p>"mine"</p> })?;
+        *page = shared(true);
+        Ok(crate::PageOr::Page(page))
+    }
+
+    let routes = || {
+        let routes = Table::new()
+            .route("/keyed-page", typed(|req: Req| replaced_page(req, true)).0)
+            .route("/keyed-file", typed(replaced_file).0)
+            .route("/plain-page", typed(|req: Req| replaced_page(req, false)).0);
+        Routes::from(routes)
+    };
+    #[cfg(feature = "json")]
+    let app = |app: App| app.api(replaced_api::api);
+    #[cfg(not(feature = "json"))]
+    let app = |app: App| app;
+    let (keyed, plain): (&[&str], &[&str]) = if cfg!(feature = "json") {
+        (&["/keyed-page", "/keyed-file", "/v2/keyed", "/v2/refused"], &["/plain-page", "/v2/plain"])
+    } else {
+        (&["/keyed-page", "/keyed-file"], &["/plain-page"])
+    };
+    let mut wrong = Vec::new();
+    for (label, router) in [
+        ("the default store", app(App::new(routes())).middleware(CdnHeaders).router()),
+        ("none kept", app(App::new(routes())).kept_answers(0).middleware(CdnHeaders).router()),
+        ("corten dev", app(App::new(routes())).dev(true).middleware(CdnHeaders).router()),
+    ] {
+        for path in keyed {
+            let (status, headers, body) = fetch(&router, "GET", path, &[]).await;
+            let (_, again, other) = fetch(&router, "GET", path, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{label}: {path}");
+            assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{label}: {path}");
+            for headers in [&headers, &again] {
+                let cdn = CDN_OVERRIDES.iter().filter(|cdn| headers.contains_key(**cdn)).count();
+                if headers[header::CACHE_CONTROL] != "private, no-cache" || cdn > 0 {
+                    wrong.push(format!("{label}: {path}: {:?} with {cdn} CDN headers", headers[header::CACHE_CONTROL]));
+                }
+            }
+        }
+        for path in plain {
+            for _ in 0..2 {
+                let (status, headers, _) = fetch(&router, "GET", path, &[]).await;
+                assert_eq!(status, StatusCode::OK, "{label}: {path}");
+                assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{label}: {path}");
+                for cdn in CDN_OVERRIDES {
+                    assert_eq!(headers[cdn], "max-age=60", "{label}: {path}: the middleware's {cdn}");
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "sent where a shared cache keeps it:\n{}", wrong.join("\n"));
+}
+
+/// An API whose handlers put a `Public` answer in the place of their own
+/// (`a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key`).
+#[cfg(feature = "json")]
+#[crate::routes(api = ReplacedRoot)]
+mod replaced_api {
+    #[route("/v2")]
+    pub struct ReplacedRoot;
+
+    #[route("/v2/keyed", get = replaced_keyed)]
+    pub struct Keyed;
+
+    #[route("/v2/refused", get = replaced_refused)]
+    pub struct Refused;
+
+    #[route("/v2/plain", get = replaced_plain)]
+    pub struct Plain;
+}
+
+/// A JSON answer whose response is a `Public` one the handler converted, with a form's new submit
+/// key rendered into it when `keyed`.
+#[cfg(feature = "json")]
+fn replaced_json(keyed: bool) -> crate::JsonResponse {
+    use crate::response::IntoResponse;
+    let key = if keyed { crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html() } else { String::new() };
+    let mut answer: crate::JsonResponse = Json(0u32).into();
+    *answer = Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json((key, "kept ".repeat(200))))).into_response();
+    answer
+}
+
+#[cfg(feature = "json")]
+async fn replaced_keyed() -> Result<crate::JsonResponse, JsonError> {
+    Ok(replaced_json(true))
+}
+
+#[cfg(feature = "json")]
+async fn replaced_refused() -> Result<crate::JsonResponse, JsonError> {
+    Err(JsonError::Own(Box::new(replaced_json(true))))
+}
+
+#[cfg(feature = "json")]
+async fn replaced_plain() -> Result<crate::JsonResponse, JsonError> {
+    Ok(replaced_json(false))
+}
+
+/// An answer that drew a form's new submit key is asked about again before the browser shows it,
+/// whatever lifetime a middleware gave it: a `private, max-age=60` goes out `private, no-cache`
+/// (a `private, no-store` stays), without the CDN caching headers the middleware wrote. So does
+/// one whose key a render made with `req.rendered` drew, placed in an answer no watch is around
+/// (text, `Json<T>`): that render marks the request's answer as a page's render does. An answer
+/// with no key keeps the middleware's lifetime and headers.
+#[tokio::test]
+async fn an_answer_that_drew_a_submit_key_is_asked_about_again_whatever_lifetime_a_middleware_gave_it() {
+    use crate::route::get as typed;
+    struct Lifetime(&'static str);
+
+    impl crate::Middleware for Lifetime {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(self.0));
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    let routes = || {
+        let routes = Table::new()
+            .route(
+                "/page",
+                typed(move |req: Req| async move { req.test_page("Keyed", html! { <form method="post">{field()}</form> }) }).0,
+            )
+            .route("/text", typed(move |req: Req| async move { req.rendered(field()).into_string() }).0)
+            .route("/plain", typed(|req: Req| async move { req.test_page("Plain", html! { <p>"plain"</p> }) }).0);
+        #[cfg(feature = "json")]
+        let routes = routes.route("/json", typed(move |req: Req| async move { Json(req.rendered(field()).into_string()) }).0);
+        Routes::from(routes)
+    };
+    let keyed: &[&str] = if cfg!(feature = "json") { &["/page", "/text", "/json"] } else { &["/page", "/text"] };
+    let mut wrong = Vec::new();
+    for (written, keyed_goes_out) in [("private, max-age=60", "private, no-cache"), ("private, no-store", "private, no-store")] {
+        for (label, router) in [
+            ("the default store", App::new(routes()).middleware(Lifetime(written)).router()),
+            ("corten dev", App::new(routes()).dev(true).middleware(Lifetime(written)).router()),
+        ] {
+            for path in keyed {
+                let (status, headers, body) = fetch(&router, "GET", path, &[]).await;
+                assert_eq!(status, StatusCode::OK, "{label}: {path}");
+                assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{label}: {path}");
+                let cdn = CDN_OVERRIDES.iter().filter(|cdn| headers.contains_key(**cdn)).count();
+                if headers[header::CACHE_CONTROL] != keyed_goes_out || cdn > 0 || headers.contains_key(header::ETAG) {
+                    wrong.push(format!(
+                        "{label}: {path} given {written:?}: {:?} with {cdn} CDN headers and tag {:?}",
+                        headers[header::CACHE_CONTROL],
+                        headers.get(header::ETAG)
+                    ));
+                }
+            }
+            let (status, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+            assert_eq!(status, StatusCode::OK, "{label}");
+            assert_eq!(headers[header::CACHE_CONTROL], written, "{label}: the middleware's own lifetime");
+            for cdn in CDN_OVERRIDES {
+                assert_eq!(headers[cdn], "max-age=60", "{label}: the middleware's {cdn}");
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "reusable without asking:\n{}", wrong.join("\n"));
 }
 
 /// A middleware may rebuild both sides: give `next` a request made from the method, URI, version,

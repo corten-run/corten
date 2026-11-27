@@ -904,9 +904,11 @@ impl<For: SetsCookies, Kind> HtmlResponse<For, Kind> {
 }
 
 impl<For, Kind> IntoResponse for HtmlResponse<For, Kind> {
+    // Its `DerefMut` lets a handler put any response in its place, a `Public` one it converted
+    // among them (`*page = Public::new(..).into_response()`): watched as that one is.
     #[inline]
     fn may_share() -> sealed::MayShare {
-        sealed::MayShare::NO
+        sealed::MayShare(true)
     }
 
     fn into_response(self) -> Response {
@@ -1255,9 +1257,11 @@ impl From<Relay> for JsonResponse {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonResponse {
+    // Its `DerefMut` lets a handler put any response in its place, a `Public` one it converted
+    // among them (`*answer = Public::new(..).into_response()`): watched as that one is.
     #[inline]
     fn may_share() -> sealed::MayShare {
-        sealed::MayShare::NO
+        sealed::MayShare(true)
     }
 
     fn into_response(self) -> Response {
@@ -1395,9 +1399,10 @@ impl From<crate::Errors> for JsonError {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonError {
+    // A refusal of the app's own is a `JsonResponse` ([`JsonError::Own`]), which may hold anything.
     #[inline]
     fn may_share() -> sealed::MayShare {
-        sealed::MayShare::NO
+        <JsonResponse as IntoResponse>::may_share()
     }
 
     fn into_response(self) -> Response {
@@ -1947,9 +1952,10 @@ impl<For> From<Relay> for PageOr<Relay, For> {
 }
 
 impl<A: FileAnswer, For> IntoResponse for PageOr<A, For> {
+    // Its page is an `HtmlResponse`, which may hold anything.
     #[inline]
     fn may_share() -> sealed::MayShare {
-        sealed::MayShare::NO
+        sealed::MayShare::either(<HtmlResponse<For> as IntoResponse>::may_share(), A::may_share())
     }
 
     fn into_response(self) -> Response {
@@ -2812,8 +2818,10 @@ fn mark<O: Answer>(res: &mut Response) {
 
 pin_project_lite::pin_project! {
     /// A route's answer as its handler makes it, [`mark`]ed. One that may be `Public`
-    /// (`IntoResponse::may_share`: a `Public` answer, or a type of the app's own, which may hold
-    /// one; known from the answer's type, so no other route's request does any of this) is
+    /// (`IntoResponse::may_share`: a `Public` answer, a page or a JSON answer, whose response the
+    /// handler may replace with a `Public` one it converted, or a type of the app's own, which
+    /// may hold one; known from the answer's type, so a route of text, `Json<T>` alone, a status,
+    /// a file, a relay, a live stream or a feed does none of this) is
     /// watched for a form's new submit key drawn in the handler's polls however it was rendered
     /// (into JSON or text, into a file, or to a string placed in a page as markup)
     /// ([`crate::form::KeyWatch`]): an answer whose handler drew one is the request's alone

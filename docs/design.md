@@ -8531,7 +8531,15 @@ rules something out.
     either makes the answer private.
     Which answers may be `Public` is known from the answer's type when the crate compiles, by a
     hidden function of `IntoResponse` with no arguments, `may_share`, whose body a release build
-    folds where it is read: `Public` says yes; each of Corten's other answers says no, and
+    folds where it is read: `Public` says yes, and so do a page and a JSON answer
+    (`HtmlResponse`, `JsonResponse`), whose `DerefMut` lets a handler put any response in their
+    place, a `Public` one it converted among them (`*answer = Public::new(..).into_response()`:
+    `e4a2e3db1`, which said no for them, sent such an `App::api` answer and such a page
+    `public, max-age=60` with the key in them, and
+    `tests::cache::a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key`
+    fails there), and what holds one (`HtmlResult`, `PageOr`, `JsonError`, whose own refusal is a
+    `JsonResponse`, and so `JsonResult<T>`); each of Corten's other answers says no (text,
+    `Json<T>` alone, a status, a file, a relay, a live stream, a feed), and
     one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
     what that one does, a tuple what each part's refusal does too, since a part that refuses
     answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
@@ -8554,8 +8562,13 @@ rules something out.
     as it was, with nothing around it. Refusing `Public` on an unstaged route was not chosen: the
     guide names it as how an unstaged answer that changes says so, and covering it costs no other
     unstaged route anything. On any route whose answer cannot be `Public` the watch compiles away.
-    Every render that draws a key also marks the request's signal (a bit beside the notice's, in
-    the byte that held it), which the stages read before they settle the answer, so a middleware of the
+    A render that draws a key and reads for itself that it did (a page's, a patch's, the layout
+    reads', and one made with `req.rendered`, wherever that one is placed) also marks the
+    request's signal (a bit beside the notice's, in
+    the byte that held it); a key drawn any other way (a field's `to_html`) is seen only by a
+    watch around its handler, and one a live stream's fragment draws by neither (below). The
+    stages read the signal
+    before they settle the answer, so a middleware of the
     app's that makes a new response of the one it was given, with its body and headers and none
     of its extensions, does not take the mark away; a layer around the app (`App::layer`) still
     runs after the answer is settled. A middleware can also give `next` a request rebuilt
@@ -8573,7 +8586,10 @@ rules something out.
     scoped thread of its own (a `Next` and its future are `Send`); the mark is the signal's, not
     a thread's, so it reaches the stages from there too. So a middleware that rebuilds both the
     request and the response does not take the mark away either, on whatever thread it polled
-    `next`. An earlier head (`cf2ea1a01`) set a flag of the thread's there instead, which each
+    `next`. That holds for an answer that comes back through the `next` of the request the
+    stages gave: a middleware that asks another router for an answer on its own and makes a new
+    response of that one without its extensions takes the mark away, and the guide says to keep
+    them. An earlier head (`cf2ea1a01`) set a flag of the thread's there instead, which each
     poll of the stages' chain read and reset: a middleware that polled `next` on a scoped thread
     and rebuilt both sides sent a keyed `Public` answer as `public, max-age=60`
     (`tests::cache::an_answer_a_middleware_rebuilt_on_a_thread_of_its_own_keeps_its_submit_key_from_shared_caches`

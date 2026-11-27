@@ -53,7 +53,10 @@ pub trait IntoResponse {
     /// does not show: [`crate::Public`] says so, a type of Corten's that is never `Public` does
     /// not, and one that holds another (`Result`, [`crate::NoStore`], a tuple of parts before it)
     /// says what that one does, and a tuple what each part's refusal does too, since a refusal is
-    /// the whole answer. A type of the app's own always does, since Corten cannot see what its
+    /// the whole answer. A page's and a JSON answer's ([`crate::HtmlResponse`],
+    /// `JsonResponse`) say so too, and with them what holds one (`HtmlResult`, `PageOr`,
+    /// `JsonError`): their `DerefMut` lets a handler put any response in their place, a `Public`
+    /// one it converted among them. A type of the app's own always does, since Corten cannot see what its
     /// `into_response` makes (a `Public` answer on one branch): its route's handler is watched
     /// for a form's new submit key, as a `Public` one's is, and an answer whose handler drew one is
     /// sent to no shared cache. A raw `Response`, a `[(name, value)]` of headers and a

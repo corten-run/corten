@@ -1587,17 +1587,25 @@ Keeping a personal answer out of a shared cache by any other means is the deploy
 its CDN is configured to read (RFC 9213 allows any), a layer around the app (`App::layer`, which
 runs after Corten settles the answer), and an edge rule that caches whatever the origin says. A
 submit key marks the answer it is rendered for: a page, a patch, the layout's reads, and a
-`Rendered` placed in one. A `Public` route's handler is also watched
+`Rendered` placed in one; one made with `req.rendered` marks the request's answer wherever it is
+placed (in text or `Json<T>` too). A `Public` route's handler is also watched
 for a key it draws any other way, rendered to a string and put in JSON, in text, in a file or
 relay it made, or in a page as `raw` markup, and such an answer goes out as a page that draws
 one does, in every build, with or without the app's kept answers, and on a route that says
 `unstaged` too. So is the handler of an answer type of the app's own (one that implements
 `Answer`), since it may hold a `Public` answer on one branch, and of `NoStore` or a tuple of
 headers around either (a `no-store` there does not take away a CDN's own caching header), or a
-tuple whose header part of the app's own refuses with one, since a refusal is the whole answer. The stages keep the mark past
-the app's middleware, so one that makes a new response of the one it was given does not take it
-away, nor one that also gives `next` a request rebuilt without the first one's extensions, on
-whatever thread it calls or polls `next`. The watch
+tuple whose header part of the app's own refuses with one, since a refusal is the whole answer.
+So is the handler of a page or a JSON answer (`HtmlResult`, `PageOr`, `JsonResponse`, and
+`JsonResult<T>`, whose `JsonError` may hold a `JsonResponse`): its `DerefMut` lets the handler
+put a `Public` answer it converted in its place (`*page = Public::new(..).into_response()`). The
+stages keep the mark past the app's middleware for an answer that comes back through the `next`
+of the request they gave it: a middleware that makes a new response of that answer does not take
+the mark away, nor one that also gives `next` a request rebuilt without the first one's
+extensions, on whatever thread it calls or polls `next`. A middleware that asks another router
+for an answer of its own (a router it holds, called on its own) and makes a new response of that
+one must keep the response's extensions (`Response::from_parts` with the parts it was given):
+without them this app may tag that answer, keep it, or keep a lifetime a middleware gives it. The watch
 sees what the handler draws itself, before it returns: a key drawn in a task it spawned, a
 render it handed to a blocking task or a thread of its own is not seen, nor is one drawn as a
 body is sent after the handler returned (`Media::stream`, a relay's body, a live stream's

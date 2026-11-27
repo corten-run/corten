@@ -2045,10 +2045,16 @@ impl Req {
 
     /// Renders `view` once, as the page would (in the visitor's time zone under
     /// [`crate::App::zoned_dates`]), to place in several answers: see [`crate::Rendered`].
+    /// One that draws a form's new submit key keeps this request's answer out of shared caches,
+    /// as a page whose render drew one is, wherever it is placed.
     pub fn rendered(&self, view: impl Render) -> crate::Rendered {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
-        crate::Rendered::new(view)
+        let rendered = crate::Rendered::new(view);
+        if rendered.drew_key() {
+            self.signal.mark_key_drawn();
+        }
+        rendered
     }
 
     /// This request's CSP nonce, for the layout's own inline scripts. Empty without a policy.

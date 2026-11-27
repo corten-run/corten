@@ -529,6 +529,12 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
             must_understand && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()))
         })
     {
+        // A browser asks again before it shows an answer that drew a form's new submit key: one it
+        // reused unasked would send the key that answer had, as the guide says it never does. So
+        // a lifetime a middleware or the app gave it goes, as one a CDN reads does above.
+        if drew_key {
+            keyed_private(headers);
+        }
         return;
     }
     if let Some(bug) = bug {
@@ -618,6 +624,23 @@ pub(crate) fn drop_keyed_reuse(headers: &mut HeaderMap) {
     }
     if tag {
         headers.remove(header::ETAG);
+    }
+}
+
+/// Gives an answer that drew a form's new submit key, whose `Cache-Control` is already a plain
+/// `private`, the policy every such answer goes out with: `private, no-store` where any reader
+/// could find a `no-store` in it, `private, no-cache` otherwise, so a lifetime it was given (a
+/// middleware's `private, max-age=60`) does not let the browser show it again unasked.
+#[cold]
+#[inline(never)]
+fn keyed_private(headers: &mut HeaderMap) {
+    let policy = if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
+        PRIVATE_NO_STORE
+    } else {
+        PRIVATE
+    };
+    if headers.get(header::CACHE_CONTROL) != Some(&policy) {
+        headers.insert(header::CACHE_CONTROL, policy);
     }
 }
 
@@ -1218,8 +1241,9 @@ mod tests {
     }
 
     /// A page that drew a submit key for this request ([`Unrepeatable`]) is the browser's alone
-    /// and asked about again, whoever set its header; a plain `private` stands, and a `no-store`
-    /// goes out `private, no-store`, since some CDNs keep an answer that says only `no-store`.
+    /// and asked about again, whoever set its header: a plain `private` with a lifetime goes out
+    /// `private, no-cache`, and a `no-store` goes out `private, no-store`, since some CDNs keep an
+    /// answer that says only `no-store`.
     #[test]
     fn an_answer_that_drew_a_submit_key_is_not_shared() {
         let drawn = |cache: Option<Cache>, lines: &[&'static str], seen: Seen| {
@@ -1244,7 +1268,11 @@ mod tests {
             assert_eq!(drawn(None, &["public, max-age=60"], asked()), "private, no-cache", "a header written by hand");
         }
         assert_eq!(drawn(None, &[], seen()), "private, no-cache", "the default");
-        assert_eq!(drawn(None, &["private, max-age=60"], seen()), "private, max-age=60", "the app's own choice");
+        for partial in [false, true] {
+            let asked = || Seen { partial, ..seen() };
+            assert_eq!(drawn(None, &["private, max-age=60"], asked()), "private, no-cache", "a lifetime the app gave it");
+            assert_eq!(drawn(None, &["private, no-store=1"], asked()), "private, no-store", "a no-store with a value");
+        }
         assert_eq!(drawn(None, &["private, no-store"], seen()), "private, no-store", "already private");
         // Every way a `no-store` goes out keeps the browser out and says `private` to a CDN.
         assert_eq!(drawn(Some(Cache::no_store()), &[], seen()), "private, no-store", "NoStore");
