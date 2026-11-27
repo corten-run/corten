@@ -14,7 +14,8 @@ import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 import { parseOptions as browserOptions } from "../../fullstack-browser/contract.mjs";
-import { budgets as hardeningBudgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { appSourceRows, budgets as hardeningBudgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { committedInputs as hardeningInputs } from "../../hardening/evidence.mjs";
 import { sourceRoots as clientSourceRoots } from "../../client-heavy/contract.mjs";
 import { committed as nativeClientSources } from "../../client-heavy/verify.mjs";
 
@@ -60,6 +61,36 @@ test("client source binding includes the actual complete native committed invent
       assert.equal(error.actual, false); assert.equal(error.expected, true);
       return true;
     });
+  }
+});
+
+test("Hardening binds the native app source closure without widening other groups", () => {
+  const request = requestFor("hardening");
+  const binding = bindExecution({ ...request, review: null }, "dedicated");
+  const common = captureSources(commit);
+  const files = hardeningInputs(root, commit);
+  const isAppFile = (app, { path }) => app === "corten"
+    ? /^(crates\/|bench\/marketplace\/corten\/)|^Cargo\.(toml|lock)$/.test(path)
+    : path.startsWith(`bench/fullstack/apps/${app}/`);
+  const apps = selectedApps("hardening");
+  for (const app of apps) {
+    const expected = files.filter((f) => isAppFile(app, f)).map(({ path, sha256 }) => [path, sha256]);
+    assert.deepEqual(appSourceRows(app, files), expected);
+    assert.deepEqual(appSourceRows(app, binding.sources.files), expected);
+  }
+  const sharedPaths = new Set(common.files.map((f) => f.path));
+  const extra = binding.sources.files.filter((f) => !sharedPaths.has(f.path));
+  assert.ok(extra.every((f) => apps.some((app) => isAppFile(app, f))));
+  assert.deepEqual(bind("catalog-page").sources, common);
+  assert.equal(binding.subjectSha256, reviewSubject(request, "dedicated"));
+  assert.equal(validateBinding(binding).binding, "verified-offline");
+  const target = (extra[0] ?? binding.sources.files[0]).path;
+  for (const remove of [true, false]) {
+    const bad = structuredClone(binding), index = bad.sources.files.findIndex((f) => f.path === target);
+    if (remove) bad.sources.files.splice(index, 1);
+    else bad.sources.files[index].sha256 = "0".repeat(64);
+    bad.sources.sha256 = bad.sourceSha256 = deploymentSha256(bad.sources.files);
+    assert.throws(() => validateBinding(reseal(bad)), /binding differs/);
   }
 });
 
