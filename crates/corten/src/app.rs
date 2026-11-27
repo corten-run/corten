@@ -2907,7 +2907,7 @@ impl<S: Steps> Layer<S> {
         let credentials = cache::Credentials::read(headers);
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
         let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
-        if let Some(refused) = self.policy.refuse(req.method(), &mut origin, cors.is_some() && !credentials.has_cookie()) {
+        if let Some(refused) = self.policy.refuse(req, &mut origin, cors.is_some() && !credentials.has_cookie()) {
             let (mut refused, vary) = match mount {
                 Some(mount) => {
                     let refused = crate::api::json_failure(refused, false, mount.errors.as_ref()).await;
