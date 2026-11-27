@@ -3244,7 +3244,11 @@ rules something out.
     when a stage comes to read something of an answer or its request that the pass's two tests
     cannot vary, so that nothing would hold the two paths equal.
 
-    Last checked: 2026-11-25, the any-host reader at `b52f57475` against `fca4ccd58` and main
+    Last checked: 2026-11-26, the final any-host reader at `b37df86a6` against `cbca34579`,
+    instructions and allocations a request by `bench/request-cost` in the hosted Request Cost job
+    ([run 45924572746](https://github.com/corten-run/corten/actions/runs/45924572746), AMD EPYC
+    9V74, valgrind 3.26.0, rustc 1.100.0; no cycles); 2026-11-25, the earlier any-host reader
+    experiment at `b52f57475` against `fca4ccd58` and main
     `ba6a7fe56` built twice, callgrind over a socket on the same kind of bench app and in process
     with `tests/router_cost.rs`, rustc 1.100.0, valgrind 3.24.0 (no cycles under load measured
     here either); 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
