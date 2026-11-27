@@ -1423,9 +1423,16 @@ three runs:
    there), every later step that changes the droplet, the unit's start included, first checks it
    is still this launch's and runs one at a time with the others (but the upload, which only writes
    `/bench/src.tgz` for a step that does to unpack), and the clear runs in one step with a second
-   check that must read as the first did. The start is sent once, and counts as acknowledged
+   check that must read as the first did and only reads (it disables and stops nothing), so a unit
+   that started again since refuses. A step refused that way, or because another launch holds or
+   took the lock, downloads nothing (it would land beside the other launch's results) and leaves
+   the droplet, even one this launch created. The start is sent once, and counts as acknowledged
    only when `systemctl start` succeeded: it can fail having lost systemd's reply while its job
-   goes on, and nothing read afterwards ties the unit's state to that start. A launch that fails
+   goes on, and nothing read afterwards ties the unit's state to that start. An acknowledged start
+   whose unit is then not read as active (the round already ended, or that check or its connection
+   failed) can no longer start anything: the launch goes on to watch the round as a started one,
+   and downloads from or destroys the droplet only once the watch has seen the round end (with
+   `--detach`, it leaves it for `--collect`, which waits for the same). A launch that fails
    releases the lock; one interrupted (Ctrl-C), or whose unit's start was sent but not acknowledged
    (it failed, or the connection dropped, so whether the round is starting is not known; such a
    start is not tried again), leaves the lock and the droplet, and says how to check the

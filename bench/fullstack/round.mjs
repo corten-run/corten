@@ -344,16 +344,20 @@ const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *   of a child group a process moved itself into).
  * Then it prints this boot's ID and the full-stack round's progress file, base64 ("present
  * <base64>", or "absent"), which relaunchError reads, in one write once both are read.
+ * With `observe` (clearAfterCustody's second check) it disables and stops nothing: it only reads,
+ * so a unit that started again since the first check reads as active, or enabled, and fails.
  * @param {string} unitName the round's unit, without ".service"
  * @param {string} progressFile the full-stack round's progress file on the droplet
- * @param {{ unitDir?: string, cgroupRoot?: string }} [paths] systemd's unit directory and the cgroup v2
- *   mount (tests point these elsewhere)
+ * @param {{ unitDir?: string, cgroupRoot?: string, observe?: boolean }} [paths] systemd's unit directory and
+ *   the cgroup v2 mount (tests point these elsewhere), and whether only to read
  */
-export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/systemd/system", cgroupRoot = "/sys/fs/cgroup" } = {}) => {
+export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/systemd/system", cgroupRoot = "/sys/fs/cgroup", observe = false } = {}) => {
   const name = `${unitName}.service`;
   const service = quote(name);
   const cgRoot = quote(cgroupRoot);
   const progress = quote(progressFile);
+  // What a state that should not be is read after: the stop, or (only reading) the first check.
+  const since = observe ? "since the launch's custody check" : "after its stop";
   return [
     `fail() { echo "unit ${unitName}: $*" >&2; exit 1; }`,
     `load=$(systemctl show -p LoadState --value ${service}) || fail "its load state could not be read"`,
@@ -361,17 +365,19 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
     // Nothing to disable or stop; whether something of it still runs is checked below all the same.
     `  not-found) ;;`,
     `  "") fail "its load state could not be read" ;;`,
-    `  *) systemctl disable --quiet ${service} >&2 || fail "its disable failed"`,
-    `     systemctl stop ${service} >&2 || fail "its stop failed"`,
+    ...(observe ? ["  *)"] : [
+      `  *) systemctl disable --quiet ${service} >&2 || fail "its disable failed"`,
+      `     systemctl stop ${service} >&2 || fail "its stop failed"`,
+    ]),
     // is-enabled exits 1 for a disabled unit, so its answer is read, not its exit status.
     `     enabled=$(systemctl is-enabled ${service} 2>/dev/null)`,
-    `     case "$enabled" in disabled|static|masked) ;; *) fail "it is \${enabled:-of unknown enablement} after its disable, so a boot could start it" ;; esac ;;`,
+    `     case "$enabled" in disabled|static|masked) ;; *) fail "it is \${enabled:-of unknown enablement} ${observe ? "since the launch's custody check" : "after its disable"}, so a boot could start it" ;; esac ;;`,
     `esac`,
     `for link in ${quote(unitDir)}/*.wants/${service} ${quote(unitDir)}/*.requires/${service}; do`,
     `  if [ -e "$link" ] || [ -L "$link" ]; then fail "$link is left, so a boot could start it"; fi`,
     `done`,
     `state=$(systemctl show -p ActiveState --value ${service}) || fail "its state could not be read"`,
-    `case "$state" in inactive|failed) ;; *) fail "it is \${state:-of unknown state} after its stop" ;; esac`,
+    `case "$state" in inactive|failed) ;; *) fail "it is \${state:-of unknown state} ${since}" ;; esac`,
     `cg=$(systemctl show -p ControlGroup --value ${service}) || fail "its control group could not be read"`,
     // With no group of its own known, the one systemd would give it is checked.
     `[ -n "$cg" ] || cg=/system.slice/${service}`,
@@ -382,7 +388,7 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
     // A cgroup file's size reads 0, so its content is read.
     `  events=$(cat "$dir/cgroup.events") || fail "its control group's events could not be read"`,
     `  populated=$(printf '%s\\n' "$events" | sed -n 's/^populated \\([01]\\)$/\\1/p')`,
-    `  [ "$populated" = 0 ] || fail "it still has processes after its stop (or its control group's events say nothing of them)"`,
+    `  [ "$populated" = 0 ] || fail "it still has processes ${since} (or its control group's events say nothing of them)"`,
     `fi`,
     `boot=$(cat /proc/sys/kernel/random/boot_id) || fail "this boot's ID could not be read"`,
     `if [ -e ${progress} ] || [ -L ${progress} ]; then`,
@@ -477,11 +483,13 @@ export const releaseLaunch = (lock, token) => [
 
 /**
  * Clears what an earlier round left (`clear`) in the same step as a check that the launch still
- * holds its lock and a second custody check whose output must equal the first's (`expected`):
- * a unit that started again, a progress file that changed, or another boot since then refuses
- * (exit 4, as a lock no longer held does) and clears nothing; a custody check or clear that fails
- * exits 1. A step tried again after it cleared (its connection dropped) finds its own marker
- * beside the lock and does not clear again; releaseLaunch removes the marker.
+ * holds its lock and a second custody check (`custody`, relaunchCustody with `observe`, which
+ * stops nothing) whose output must equal the first's (`expected`): a unit that started again (that
+ * check fails on it), a progress file that changed, another boot since then, or a second check
+ * that failed for any other reason refuses (exit 4, as a lock no longer held does) and clears
+ * nothing; a clear that fails exits 1. A step tried again after it cleared (its connection
+ * dropped) finds its own marker beside the lock and does not clear again; releaseLaunch removes
+ * the marker.
  * @param {{ lock: string, token: string, custody: string, expected: string, clear: string }} step
  */
 export const clearAfterCustody = ({ lock, token, custody, expected, clear }) => {
@@ -491,7 +499,7 @@ export const clearAfterCustody = ({ lock, token, custody, expected, clear }) => 
   return [
     ownsLaunch(lock, token),
     `if [ "$(cat ${marker} 2>/dev/null)" = ${quote(token)} ]; then exit 0; fi`,
-    `now=$(bash -c ${quote(custody)}) || exit 1`,
+    `now=$(bash -c ${quote(custody)}) || { echo "the round's unit could not be confirmed stopped and disabled, as the launch's custody check read it, at its clear (above), so nothing is cleared" >&2; exit 4; }`,
     `want=$(printf '%s' ${quote(want)} | base64 -d) || exit 1`,
     `[ "$now" = "$want" ] || { echo "the round's unit or progress file changed between the launch's custody check and its clear, so nothing is cleared" >&2; exit 4; }`,
     `(${clear}) || exit 1`,
