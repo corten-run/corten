@@ -288,23 +288,27 @@ fn handle<'a>(ends: &'a Ends<'a>, mut req: Request) -> impl Future<Output = Resp
         // request where main calls it once (callgrind).
         None => Either::Right(async { crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND)) }),
     };
-    let answer = match (here, theirs) {
-        (None, None) => Either::Left(answer),
-        // Boxed, so a request in an app without layout reads, to which no middleware gave a
-        // rebuilt request, carries none of the fill's or that signal's state.
-        (here, theirs) => Either::Right(Box::pin(async move {
-            let mut res = answer.await;
-            if let Some(here) = here {
-                res = here.fill(res).await;
-            }
-            // Marked as a render marks the answer it is drawn for, so `Keyed` marks the stages'
-            // signal too.
-            if theirs.is_some_and(|theirs| theirs.key_drawn()) {
-                crate::cache::unrepeatable(&mut res);
-            }
-            res
-        }) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
-    };
+    let answer =
+        match (here, theirs) {
+            (None, None) => Either::Left(answer),
+            // Boxed, so a request in an app without layout reads carries none of the fill's state.
+            (Some(here), None) => Either::Right(Box::pin(async move { here.fill(answer.await).await })
+                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
+            // Apart from the fill alone, whose future holds no signal: with one beside it there, each
+            // filled request ran 63 instructions more in it (callgrind, the settle test's `fill`).
+            (here, Some(theirs)) => Either::Right(Box::pin(async move {
+                let mut res = answer.await;
+                if let Some(here) = here {
+                    res = here.fill(res).await;
+                }
+                // Marked as a render marks the answer it is drawn for, so `Keyed` marks the stages'
+                // signal too.
+                if theirs.key_drawn() {
+                    crate::cache::unrepeatable(&mut res);
+                }
+                res
+            }) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
+        };
     Keyed { answer, signal: ends.signal }
 }
 
