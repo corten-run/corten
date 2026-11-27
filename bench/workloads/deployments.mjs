@@ -7,8 +7,7 @@ import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
 import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
 import { cpuSettings as marketplaceCpus, parseArgs as marketplaceOptions } from "../marketplace/run-contract.mjs";
-import { springWebflux } from "../mixed-production/source-audit.mjs";
-import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "./registry.mjs";
+import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps, springWebflux } from "./registry.mjs";
 
 export const deploymentSchema = "benchmark-deployments/v1";
 export const receiptSchema = "benchmark-deployment-review/v1";

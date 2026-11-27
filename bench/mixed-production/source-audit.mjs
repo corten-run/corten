@@ -3,7 +3,10 @@ import { readFileSync, realpathSync } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { verifyNativeReceipt } from "../json-api/contract.mjs";
+import { springWebflux } from "../workloads/registry.mjs";
 import { sha256 } from "./capture.mjs";
+
+export { springWebflux };
 
 export const djangoAsgi = Object.freeze({
   recipe: "mixed-production-django-asgi",
@@ -12,15 +15,6 @@ export const djangoAsgi = Object.freeze({
   entrypoint: null,
   command: Object.freeze(["sh", "-c", "python -m django migrate --noinput && exec python start_mixed_asgi.py"]),
   settings: "itempage.mixed_asgi_settings",
-});
-
-export const springWebflux = Object.freeze({
-  recipe: "mixed-production-asgi-webflux",
-  deployment: "spring-webflux",
-  buildProfile: "matched-webflux",
-  dockerfile: "Dockerfile.mixed",
-  entrypoint: Object.freeze(["java", "-jar", "marketplace-mixed.jar"]),
-  command: null,
 });
 
 export function mixedDeploymentArgs(recipe) {

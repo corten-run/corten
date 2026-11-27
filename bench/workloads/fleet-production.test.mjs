@@ -227,6 +227,8 @@ export async function productionMain(...args) {
 
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
   const p = fixture(t, "ssh-late");
+  // The controller must launch from captured sources without marketplace fixture data.
+  assert.equal(fs.existsSync(path.join(p.h.temp, "captured/bench/marketplace/labels.json")), false);
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, 1, "bootstrap must not admit any later production child");
   const fleet = readFleet(p.h.base, "r21").manifest, events = p.events();

@@ -26,8 +26,6 @@ export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-opti
   "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "cloud-sealed-collection.mjs", "cloud-setup-drain-source.mjs", "isolated/control-admission.mjs",
   "isolated/control-session-source.mjs", "isolated/control-stream-source.mjs", "isolated/control-stream.mjs", "isolated/host-observation.mjs", "isolated/native-roles.mjs",
   "../hardening/plan.mjs", "../hardening/bounded-requests.mjs", "../hardening/dependency-recovery-contract.mjs",
-  "mixed.mjs", "../mixed-production/source-audit.mjs", "../mixed-production/capture.mjs",
-  "../mixed-production/response-evidence.mjs", "../mixed-production/snapshot.mjs", "../marketplace/records.mjs",
   "deployments.mjs", "../marketplace/feature-contract.mjs", "../marketplace/run-contract.mjs", "../marketplace/groups.mjs",
   "../fullstack/conformance.mjs"].map((p) => posix.normalize(`bench/workloads/${p}`));
 export const nativePaths = ["campaign-entry.mjs", "campaign-verify.mjs", "campaign-contract.mjs", "campaign-journal.mjs", "campaign.mjs", "contract.mjs", "worker.mjs", "process.mjs", "evidence.mjs", "host-observation.mjs", "json-staging.mjs", "mixed-staging.mjs", "composition.mjs", "native-replay.mjs", "host-lifetime.mjs", "bootstrap.mjs", "raw-support.mjs"].map((p) => `bench/workloads/isolated/${p}`);
