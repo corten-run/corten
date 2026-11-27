@@ -1,4 +1,4 @@
-import { base, swapped, shadowing, engine, skip, check, precommits, entriesWhileRecordingAddresses, pollFor } from "./helpers.mjs";
+import { base, swapped, shadowing, engine, skip, check, precommits, entriesWhileRecordingAddresses, pollAsync } from "./helpers.mjs";
 
 export async function sectionNavigation(feedSources, page, redirectName, openFeeds, holdWatch, abandoned, openStreams, swaps) {
   // The feed sources before the write: a write that swaps the page in brings the component a new one.
@@ -14,7 +14,7 @@ export async function sectionNavigation(feedSources, page, redirectName, openFee
       return /** @type {any} */ (window).__goHeld.getAttribute("aria-busy");
     });
     // Settled within 5 s, a page that settles after them failing the check.
-    const goSettled = !!(await pollFor(5000, () =>
+    const goSettled = !!(await pollAsync(5000, () =>
       page.evaluate(() => !document.getElementById("busy-w") && /** @type {any} */ (window).__goHeld.getAttribute("aria-busy") !== "true" && !document.querySelector("main[aria-busy]")),
     ));
     const goAfter = await page.evaluate(() => ({
@@ -114,7 +114,7 @@ export async function sectionNavigation(feedSources, page, redirectName, openFee
       await page.waitForFunction(() => document.title === "News | Watchlist");
       // The page gives the held write up as it leaves (every engine reports it failed while the
       // route still holds it).
-      gaveUpInTime = !!(await pollFor(5000, async () => gaveUp.length > 0));
+      gaveUpInTime = !!(await pollAsync(5000, async () => gaveUp.length > 0));
     } finally {
       held = false;
       holdWatch.value = null;

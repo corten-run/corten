@@ -1,4 +1,4 @@
-import { base, swapped, engine, skip, check, within, steps, pollFor, cleanUp } from "./helpers.mjs";
+import { base, swapped, engine, skip, check, within, steps, pollAsync, cleanUp } from "./helpers.mjs";
 
 export async function scroll(swaps, page, errors, browser, noSwaps) {
   // A filter applied on change (data-keep-place): the page changes under the user, who stays
@@ -398,7 +398,7 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
           }
           if (
             !stopped &&
-            !(await pollFor(5000, () =>
+            !(await pollAsync(5000, () =>
               page.evaluate(() => document.title === "Stocks | Watchlist" && !!document.querySelector("main #watch-form") && (/** @type {any} */ (window)).__marker === 1),
             ))
           )

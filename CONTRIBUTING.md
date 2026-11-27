@@ -681,7 +681,7 @@ own time by the smoke's clock. Where a check rests on a wait, that wait must com
 whose answer comes late or never counts as one that did not come: each wait for `Saved.` (six
 seconds, required by every check that waits for it), the `Saving...` a submit draws
 before its `Saved.`, and a refused field's mark (five seconds), which must also still be on the
-field in the sample the check reads. Three rules keep such a wait honest, in every case: what the
+field in the sample the check reads. Three rules keep such a wait honest: what the
 check relies on is observed by a listener, route or note in the page installed before the press
 (or load) that leads to it, never sampled before it is installed (the page notes a `Saving...` the
 moment it is drawn, armed before the key press, so a `Saved.` drawn soon after does not hide it); a
@@ -689,11 +689,15 @@ wait for what a press causes is started, or its note armed, before that press, n
 driver's action returns; and its time is counted from just before the press or load, not from
 when the action returned, so a slow driver does not stretch it. The waits for `Saved.` after a
 runtime navigation start once that navigation's own draw is confirmed, which the page times by its
-own clock (above). A case does not make its next press until what it rests on is confirmed in time. The other waits in these cases only end a look, and the check
+own clock (above). A write's own page case presses its link onward only once every step its check
+rests on came in time, and the held slow part's link is pressed only once the part showed it; other
+cases may go on to a later press after a check failed, to report the checks that follow, and those
+rest only on what they observe after that press. The other waits in these cases only end a look, and the check
 rests on what is read after them or on what the page or the route recorded: a navigation's own
 `Saving...`, which the page notes by its own clock (above), a removal's `Saving...`, which the page
-notes with the time it drew it and which must be within five seconds of just before the press by
-that same clock, however late the click returns, and the held slow part's busy, done and
+notes with the time it drew it by its monotonic clock (`performance.now()`, which a step of the wall
+clock does not move) and which must come after, and within five seconds of, the page's time on that
+clock just before the press, however late the click returns, and the held slow part's busy, done and
 failed marks, read once each wait has come or run out. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read
@@ -722,7 +726,8 @@ once its load's read has reached the route, within five seconds counted from jus
 (or, after a client navigation, the press of the link), judged by the time the route saw it, so a
 read seen in time counts however late the load or press returns: Firefox marks the
 part busy as its fetch starts, which can be before the route sees it. The link a failed slow part
-shows is pressed in the page too; the page it opens must commit within five seconds counted from
+shows is pressed in the page too; the page it opens, at exactly the link's address (`/?picks=true`,
+not another path with that query), must commit within five seconds counted from
 just before the press, a budget the press task shares, and have its part read in within five
 seconds of the check seeing that commit. A press that fails names its step: the press task finding
 no link, failing or not returning in time, or the commit not coming in time or its wait failing. A

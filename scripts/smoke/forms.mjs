@@ -1,5 +1,5 @@
 import http from "node:http";
-import { base, shadowing, engine, skip, check, steps, pollFor, cleanUp } from "./helpers.mjs";
+import { base, shadowing, engine, skip, check, steps, pollAsync, cleanUp } from "./helpers.mjs";
 
 /**
  * A named control must not turn a runtime walk into form -> control -> form. The timeout
@@ -381,7 +381,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
       async seen() {
         try {
           // Polled on a timer: a loaded browser may not be delivering animation frames.
-          return await pollFor(6000, () => page.evaluate(() => /** @type {number | undefined} */ (/** @type {any} */ (window).__formError.status)));
+          return await pollAsync(6000, () => page.evaluate(() => /** @type {number | undefined} */ (/** @type {any} */ (window).__formError.status)));
         } finally {
           await stop();
         }
@@ -490,7 +490,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     if (keyedStatus !== null) {
       kept = await page.inputValue("#keyed [name=submit]");
       await press("#keyed button");
-      renewed = await pollFor(5000, () =>
+      renewed = await pollAsync(5000, () =>
         page.evaluate((zero) => {
           const key = /** @type {HTMLInputElement | null} */ (document.querySelector("#keyed [name=submit]"))?.value;
           return key && key !== zero ? key : undefined;
@@ -537,7 +537,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   let afterAnswer = null;
   // Each answer is drawn within 5 s of its press; without the first, the retry is not made.
   const drawnThen = (/** @type {string} */ said) =>
-    pollFor(5000, () =>
+    pollAsync(5000, () =>
       page.evaluate(
         (said) => (document.querySelector("#upstream-said")?.textContent === said ? /** @type {HTMLInputElement} */ (document.querySelector("#keyed [name=submit]")).value : undefined),
         said,
@@ -707,7 +707,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     /** @param {string} row */
     const keyOf = (row) => page.inputValue(`#count-row-${row} [name=submit]`);
     /** @param {string} row */
-    const saidBy = (row) => pollFor(5000, () => page.evaluate((row) => document.getElementById(`count-row-${row}-said`)?.textContent || undefined, row));
+    const saidBy = (row) => pollAsync(5000, () => page.evaluate((row) => document.getElementById(`count-row-${row}-said`)?.textContent || undefined, row));
     // The routes, the copies and the failure's listener go however the case ends, set up in full or
     // not, and each goes even when removing another fails.
     try {
@@ -768,7 +768,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         // In the page too: the fresh page's live updates can still be moving the copy when it is pressed.
         await plainPage.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#count-row-plain button")).click());
         // The post's page, within 5 s of the press.
-        if (!(await pollFor(5000, async () => plainSent.length > 0 && new URL(plainPage.url()).pathname === "/count-row"))) stopped = "the plain copy's post did not land within 5 s";
+        if (!(await pollAsync(5000, async () => plainSent.length > 0 && new URL(plainPage.url()).pathname === "/count-row"))) stopped = "the plain copy's post did not land within 5 s";
         else readPlain = await plainPage.evaluate(() => sessionStorage.getItem("read-key")).catch(() => null);
       } finally {
         await plainContext.close();
@@ -811,7 +811,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   } catch {
     // Its reason is `answered.over`.
   }
-  const watching = !!viaButtonStatus && !!(await pollFor(15_000, () => page.evaluate(() => !!document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"))));
+  const watching = !!viaButtonStatus && !!(await pollAsync(15_000, () => page.evaluate(() => !!document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"))));
   check(
     "a submit button's formaction and formmethod are used",
     viaButtonStatus === 200 && watching,

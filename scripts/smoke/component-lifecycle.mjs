@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, pollFor } from "./helpers.mjs";
+import { base, shadowing, skip, check, pollAsync } from "./helpers.mjs";
 
 export async function componentLifecycle(page, live, prices, feedSources, signsIn) {
   // Text a script computes, from the catalog: on:connect={js::watch(.., updates, t.js().prices_updates())},
@@ -351,7 +351,7 @@ export async function componentLifecycle(page, live, prices, feedSources, signsI
   // A row's Remove button submits the watch form to /unwatch.
   await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector('button[formaction="/unwatch"][value="HLTH"]')).click());
   // Answered within 4 s, an answer after them failing the check.
-  const unwatched = !!(await pollFor(4000, () => page.evaluate(() => document.getElementById("watch-message")?.textContent === "Stopped watching Halcyon Health.")));
+  const unwatched = !!(await pollAsync(4000, () => page.evaluate(() => document.getElementById("watch-message")?.textContent === "Stopped watching Halcyon Health.")));
   check(
     "unwatching a stock takes its row away and offers it again",
     unwatched && (await page.$('[data-ref="price"][data-key="HLTH"]')) === null && (await page.$('select[name=id] option[value="HLTH"]')) !== null,

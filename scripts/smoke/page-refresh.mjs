@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, pause, steps, pollFor, cleanUp, exchange, letThrough } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, pause, steps, pollAsync, cleanUp, exchange, letThrough } from "./helpers.mjs";
 
 /**
  * The seconds the watchlist's alerts part waits before it reads itself again while a write lands
@@ -1121,7 +1121,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             awayFrom = new URL(awayUrl).pathname + new URL(awayUrl).search;
             await goTo(awayUrl);
             /** The held reads and the status line, once the route holds one. */
-            const owes = await pollFor(5000, async () => owed.length > 0 && { held: owed.length, status: await page.textContent("#alert-status") });
+            const owes = await pollAsync(5000, async () => owed.length > 0 && { held: owed.length, status: await page.textContent("#alert-status") });
             const left = parts().length;
             await leaveForNews();
             gone = true;
@@ -1235,8 +1235,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               }
               const leave = counted;
               if (leave) {
-                past = await pollFor(pastBy + 5000, () => page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokeLeave.past) ?? false));
-                await pollFor(1500, async () => sentTo(leave).length > 0);
+                past = await pollAsync(pastBy + 5000, () => page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokeLeave.past) ?? false));
+                await pollAsync(1500, async () => sentTo(leave).length > 0);
               }
               const sent = leave ? sentTo(leave) : [];
               const tried = attempts.map((a) => `${a.address} ${a.said || "(not reached)"}`).join("; ");
@@ -1332,8 +1332,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     /**
      * The fragment case's receipt, while it runs, and how many loads of it (navigation requests) the
      * whole-read route has seen: the first is answered still saving (`stillSaving`), and each later
-     * one is a read of the page, as the runtime's own are (`wholeReads`).
-     * @type {{ address: string, count: number } | null}
+     * one is a read of the page, as the runtime's own are (`wholeReads`). The replaced-address case
+     * uses it too, with the address its script puts in place (`also`), whose every load is a read.
+     * @type {{ address: string, count: number, also?: string } | null}
      */
     let placeLoads = null;
     /** What the fragment case's first load was answered with, once it came. @type {{ saving: boolean, what: string } | null} */
@@ -1387,7 +1388,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // The runtime's reads (`corten: nav`, or `page` for a whole read; a prefetch aside); `go`'s
       // navigation's own fetch is the one that takes its token, as it reaches the route.
       // A load of the fragment case's receipt: its place among those loads (0 for its first), else -1.
-      const placeLoad = placeLoads !== null && address === placeLoads.address && request.isNavigationRequest() ? placeLoads.count++ : -1;
+      // A load of the replaced address the replaced-address case follows (`placeLoads.also`) is one
+      // of its later loads, a read of the page.
+      const placeLoad =
+        placeLoads === null || !request.isNavigationRequest() ? -1 : address === placeLoads.address ? placeLoads.count++ : address === placeLoads.also ? 1 : -1;
       const read = (request.method() === "GET" && (mode === "nav" || mode === "page") && !isPrefetch(request)) || placeLoad > 0;
       const token = read ? claimNav(address) : undefined;
       const navigation = token !== undefined;
@@ -1685,14 +1689,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // own order of events: an init script, added before the load, numbers by one count (in session
       // storage, which a full load keeps) the start of each document the tab makes and each fetch of
       // `/alerts` it starts (the runtime's reads are fetches), and the page task that replaces the
-      // address numbers the replacement on the same count just before it. A read the page started
-      // with the old address before the replacement, though the check hears of it after the driver's
-      // call returns, is not one after it; one started after it, at whatever address, is.
+      // address numbers the replacement, with the address it puts in place, on the same count just
+      // before it. A read the page started with the old address before the replacement, though the
+      // check hears of it after the driver's call returns, is not one after it; one started after it
+      // is, and each must be of exactly the address the replacement put in place, the receipt's own,
+      // not another with the same query. `Saved.` must be drawn by the answer to one of those reads:
+      // each answer the route gives a read of that address has its status line marked with the
+      // read's place in `wholeReads` (`pollTarget`), so `Saved.` an older read's answer or anything
+      // else drew does not pass for it. With the Navigation API the page reads in place, so that draw
+      // must be in the document the case loaded (a mark the replacement's task leaves on it), with no
+      // other document started (the notes).
       {
         const faultsFrom = wholeAnswerFaults.length;
         const target = await readWithin("the pending write's page", pending());
         loadAnswer = null;
-        placeLoads = { address: new URL(target).pathname + new URL(target).search, count: 0 };
+        /** The address the case's script puts in place: the receipt's with `shown` set, as the page task below writes it. */
+        const replacedTo = new URL(target);
+        replacedTo.searchParams.set("shown", "1");
+        const replacedAddress = replacedTo.pathname + replacedTo.search;
+        placeLoads = { address: new URL(target).pathname + new URL(target).search, count: 0, also: replacedAddress };
+        const readFrom = wholeReads.length;
+        pollTarget = replacedAddress;
         /** The `sessionStorage` key of the case's notes, its own each run. */
         const noteKey = `smoke-replaced-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
         const noting = page.addInitScript((key) => {
@@ -1724,7 +1741,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         }, noteKey);
         noting.catch(() => {});
         let replacedIn = false;
-        let came = false;
+        /** What the wait for `Saved.` saw: the mark of the read whose answer drew it, and whether it was drawn in the case's document. @type {unknown} */
+        let drawnAs = null;
         /** The case's notes, read after the wait. @type {{ count: number, notes: { at: number, kind: string, url: string }[] } | null} */
         let notes = null;
         try {
@@ -1738,11 +1756,23 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               to.searchParams.set("shown", "1");
               // Numbered in the same task as the replacement, so no read the page starts falls between.
               const noted = /** @type {any} */ (window).__smokeReplacedNote?.({ kind: "replaced", url: to.href }) === true;
+              // The document the case loaded, marked in the same task.
+              /** @type {any} */ (window).__smokeReplacedDocument = true;
               history.replaceState(history.state, "", to);
               return noted;
             }),
           );
-          came = await savedSoon(loadFrom);
+          drawnAs = await seenWithin(
+            6000,
+            "Saved. drawn by an answer to a read of the replaced address",
+            (address) => {
+              const status = document.getElementById("alert-status");
+              const mark = status?.getAttribute("data-smoke-poll");
+              return location.pathname + location.search === address && status?.textContent === "Saved." && mark && { mark, same: /** @type {any} */ (window).__smokeReplacedDocument === true };
+            },
+            replacedAddress,
+            loadFrom,
+          );
           notes = await readWithin(
             "the page's notes of its replacement and reads",
             page.evaluate((key) => {
@@ -1752,6 +1782,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           ).catch(() => null);
         } finally {
           placeLoads = null;
+          pollTarget = null;
           await cleanUp(
             () => within(5000, "the replaced-address case's notes were not removed within 5 s", noting.then((s) => s.dispose())),
             () =>
@@ -1768,20 +1799,33 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               ),
           );
         }
-        const replacedAt = notes?.notes.find((n) => n.kind === "replaced")?.at ?? null;
-        const again = replacedAt === null || notes === null ? [] : notes.notes.filter((n) => n.at > replacedAt && new URL(n.url).pathname === "/alerts").map((n) => `${n.kind} ${n.url}`);
+        const replacement = notes?.notes.find((n) => n.kind === "replaced") ?? null;
+        const replacedAt = replacement?.at ?? null;
+        const after = replacedAt === null || notes === null ? [] : notes.notes.filter((n) => n.at > replacedAt && new URL(n.url).pathname === "/alerts");
+        const again = after.map((n) => `${n.kind} ${n.url}`);
+        // Every read after the replacement is of the address it put in place, that address the one the
+        // case meant (`replacedTo`).
+        const exact = replacement !== null && replacement.url === replacedTo.href && after.length > 0 && after.every((n) => n.url === replacement.url);
+        // With the Navigation API, the one document the tab started is the load's, before the replacement.
+        const documents = notes === null ? [] : notes.notes.filter((n) => n.kind === "document");
+        const oneDocument = !swaps || (documents.length === 1 && replacedAt !== null && documents[0].at < replacedAt);
+        const drawn = /** @type {{ mark: string, same: boolean } | null} */ (drawnAs && typeof drawnAs === "object" ? drawnAs : null);
+        const by = drawn === null ? undefined : wholeReads[Number(drawn.mark)];
+        const ownRead = drawn !== null && Number(drawn.mark) >= readFrom && by !== undefined && by.address === replacedAddress && !by.navigation && by.saved === true;
+        const inPlace = !swaps || (ownRead && !by?.load && drawn.same);
         const replaced = await readWithin("the status line after the wait for Saved.", saved());
+        const drawnBy =
+          drawn === null
+            ? " (Saved. not drawn by an answer to a read of the replaced address within 6 s of the load)"
+            : !ownRead
+              ? ` (Saved. drawn with mark ${drawn.mark}, not an answer of the case's to a read of ${replacedAddress} that said Saved.)`
+              : inPlace
+                ? ""
+                : ` (Saved. drawn ${drawn.same ? "by a load" : "in another document"}, where the Navigation API reads in place)`;
         check(
           "a page reads itself again at the address a script replaced",
-          !!loadAnswer?.saving &&
-            replacedIn &&
-            replacedAt !== null &&
-            came &&
-            replaced === "Saved." &&
-            again.length > 0 &&
-            again.every((u) => new URL(u.slice(u.indexOf(" ") + 1)).searchParams.get("shown") === "1") &&
-            wholeAnswerFaults.length === faultsFrom,
-          `${faultsSince(faultsFrom)}${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${replaced}${came ? "" : " (Saved. not seen within 6 s of the load)"}${replacedIn && replacedAt !== null ? "" : " (the replacement was not noted in the load's document)"} after the replacement: ${again.join(", ") || "no read"}`,
+          !!loadAnswer?.saving && replacedIn && replacedAt !== null && ownRead && inPlace && oneDocument && replaced === "Saved." && exact && wholeAnswerFaults.length === faultsFrom,
+          `${faultsSince(faultsFrom)}${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${replaced}${drawnBy}${replacedIn && replacedAt !== null ? "" : " (the replacement was not noted in the load's document)"}${replacement === null || replacement.url === replacedTo.href ? "" : ` (replaced with ${replacement.url}, not ${replacedTo.href})`}${oneDocument ? "" : ` (documents ${documents.map((d) => `${d.at} ${d.url}`).join(", ") || "none"}, replaced at ${replacedAt ?? "none"})`} after the replacement: ${again.join(", ") || "no read"}${exact || after.length === 0 ? "" : `, wanted every one ${replacement?.url ?? replacedTo.href}`}`,
         );
       }
       // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
@@ -1919,7 +1963,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               waiting = (await readWithin("the status line once the held page loaded", saved())) ?? "";
               const held = await steps(5000, "no read held within 5 s").step(() => isHeld).catch(() => false);
               // The page's event for the read held may come a moment after its route.
-              if (held) await pollFor(1000, async () => polls.length > 0);
+              if (held) await pollAsync(1000, async () => polls.length > 0);
               if (!held) stopped = "no read held within 5 s";
               else if (polls[0] !== heldRead || bare(/** @type {import("@playwright/test").Request} */ (heldRead).url()) !== address)
                 stopped = `the document's first read was ${polls[0]?.url() ?? "none"}, not ${address}`;
@@ -1950,7 +1994,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 ).catch((/** @type {unknown} */ e) => (e instanceof Error ? e.message.split("\n")[0] : String(e)));
                 if (cancelled) stopped = cancelled;
                 // Its failure's event may come a moment after the navigation ends; "" is no answer yet.
-                else if (!(await pollFor(5000, async () => failedShut || undefined))) stopped = "the held read did not fail while held within 5 s";
+                else if (!(await pollAsync(5000, async () => failedShut || undefined))) stopped = "the held read did not fail while held within 5 s";
                 else if (failedShut !== "after") stopped = "the held read failed before the script replaced the address";
               }
             }
@@ -1960,12 +2004,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             await within(5000, "the held-read route was not removed within 5 s", page.unroute(alerts, slow));
           }
           if (!stopped) {
-            const drawn = await pollFor(6000, () =>
+            const drawn = await pollAsync(6000, () =>
               page.evaluate(() => document.getElementById("alert-status")?.textContent === "Saved." && (/** @type {any} */ (window)).__replayed === 7),
             );
             if (!drawn) stopped = "Saved. not drawn in the same document within 6 s";
             // The answered read's event may come a moment after its page is drawn.
-            else if (!(await pollFor(1000, async () => answered.length > 0))) stopped = "no read of the replaced address finished within 1 s";
+            else if (!(await pollAsync(1000, async () => answered.length > 0))) stopped = "no read of the replaced address finished within 1 s";
             else
               outcome = {
                 status: (await readWithin("the status line once Saved. was drawn", saved())) ?? "",
@@ -2218,8 +2262,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * Starts noting whether the status line says `Saving...` in a draw from now on (a mutation the
      * page makes after this, not the line as it is now), the moment it is drawn, so a wait started
      * after the press does not miss a `Saving...` the write's read has already replaced with
-     * `Saved.`; `notedSaving` reads the note, the time the page drew it (`Date.now()` there). Armed
-     * before the press that draws it.
+     * `Saved.`; `notedSaving` reads the note, the time the page drew it by its own monotonic clock
+     * (`performance.now()` there). Armed before the press that draws it, and answers that clock's time
+     * as it armed, so a check can count from just before the press by the same clock.
      */
     const noteSaving = () =>
       page.evaluate(() => {
@@ -2228,13 +2273,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         w.__smokeSaving = false;
         const seen = new MutationObserver(() => {
           if (document.getElementById("alert-status")?.textContent !== "Saving...") return;
-          w.__smokeSaving = Date.now();
+          w.__smokeSaving = performance.now();
           seen.disconnect();
         });
         w.__smokeSavingSeen = seen;
         seen.observe(document, { subtree: true, childList: true, characterData: true });
+        return performance.now();
       });
-    /** When the page noted `Saving...` drawn since `noteSaving` (`Date.now()` there), or false. */
+    /** When the page noted `Saving...` drawn since `noteSaving` (`performance.now()` there), or false. */
     const notedSaving = () => page.evaluate(() => /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving));
     /**
      * Sends the alert from its form, until the page says `Saving...`, all within 30 s by the smoke's
@@ -2347,19 +2393,19 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // The writes above saved ACME at $175.00; this one, at $150.00, is the only such alert.
       const shown = await listed();
       check("a saved alert is listed once it lands", shown.filter((s) => s === "ACME above $150.00").length === 1, shown.join(", "));
-      // `Saving...` noted by the page as it is drawn (`noteSaving`, armed before the press), within
-      // 5 s of the press.
-      await readWithin("the page's note of Saving...", noteSaving());
-      // Judged by the time the page noted `Saving...` as it drew it, against 5 s from just before the
-      // press by the same clock (`Date.now()`, as the page notes it): looked for until then, then
-      // once more (that look bounded to 5 s), so a press that returns late neither fails a draw noted
-      // in time nor passes one noted after the 5 s.
-      const removedFrom = Date.now();
+      // `Saving...` noted by the page as it is drawn (`noteSaving`, armed just before the press),
+      // within 5 s of the press. Judged by the time the page noted `Saving...` as it drew it, against
+      // the page's time as it armed the note, just before the press, both by the page's monotonic
+      // clock (`performance.now()` there, which a step of the wall clock does not move): the draw
+      // must come between them and 5 s after. Looked for until 5 s from the press by the smoke's own
+      // clock, then once more (that look bounded to 5 s), so a press that returns late neither fails
+      // a draw noted in time nor passes one noted after the 5 s.
+      const removedFrom = await readWithin("the page's note of Saving...", noteSaving());
       const removedAt = performance.now();
       await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
       const savingAt =
-        (await pollFor(leftOf(removedAt, 5000), notedSaving)) ?? (await readWithin("the page's note of Saving...", notedSaving()).catch(() => false));
-      const removing = typeof savingAt === "number" && savingAt <= removedFrom + 5000;
+        (await pollAsync(leftOf(removedAt, 5000), notedSaving)) ?? (await readWithin("the page's note of Saving...", notedSaving()).catch(() => false));
+      const removing = typeof savingAt === "number" && savingAt >= removedFrom && savingAt <= removedFrom + 5000;
       const removedSoon = await savedSoon(removedAt);
       const left = await listed();
       const removedTo = await readWithin("the status line after the wait for Saved.", saved());
@@ -2485,7 +2531,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       page.on("requestfinished", onFailingDone);
       await submit();
       const sentBy = pressedAt + 5000;
-      if (pressRead() === null) await pollFor(Math.max(0, sentBy - performance.now()), async () => pressRead() !== null);
+      if (pressRead() === null) await pollAsync(Math.max(0, sentBy - performance.now()), async () => pressRead() !== null);
       // The read must be of the receipt the press's own POST answer named, so a read of an older
       // receipt (a timer of an earlier write's) answered 502 is not taken for it.
       const receipt = await receiptOf(pressPost()?.request);
@@ -2495,7 +2541,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const failingAt = read?.at ?? 0;
       const sent = read !== null && failingAt > pressedAt && failingAt <= sentBy;
       const finishedBy = failingAt + 5000;
-      if (sent && failing !== null && !doneAt.has(failing)) await pollFor(Math.max(0, finishedBy - performance.now()), async () => doneAt.has(failing));
+      if (sent && failing !== null && !doneAt.has(failing)) await pollAsync(Math.max(0, finishedBy - performance.now()), async () => doneAt.has(failing));
       const failingDoneAt = failing === null ? null : (doneAt.get(failing) ?? null);
       const failingStatus = failing === null ? null : (statusOf.get(failing) ?? null);
       const finished = sent && failingDoneAt !== null && failingDoneAt <= finishedBy;

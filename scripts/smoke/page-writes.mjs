@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, leftOf, notedBy, pause, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
+import { base, skip, check, pollRecord, pollAsync, cleanUp, steps, within, readWithin, actWithin, cameWithin, leftOf, notedBy, pause, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   /** Whether the browser has the Navigation API, read within 5 s. */
@@ -370,7 +370,7 @@ export async function pageWrites(page, browser) {
     const look = () =>
       own.evaluate((at) => /** @type {{ time: number, failed: string | null, mark: string | null } | undefined} */ ((/** @type {any} */ (window)).__marks[String(at)]), at);
     const drawn =
-      (await pollFor(Math.max(0, by - Date.now()), look)) ?? (await within(5000, "the page did not say what it drew within 5 s", look()).catch(() => undefined));
+      (await pollAsync(Math.max(0, by - Date.now()), look)) ?? (await within(5000, "the page did not say what it drew within 5 s", look()).catch(() => undefined));
     return drawn && drawn.time <= by ? drawn : null;
   };
   /**
@@ -391,7 +391,7 @@ export async function pageWrites(page, browser) {
     const after = resumed !== undefined && resumed > from.time ? resumed : undefined;
     const last = (after ?? from.time) + 5000;
     const first = () => seen.asked.findIndex((a, i) => i >= from.at && seen.askedAt[i] > from.time && a.startsWith("GET /smoke/written/again"));
-    if (first() < 0) await pollFor(Math.max(0, last - Date.now()), async () => first() >= 0);
+    if (first() < 0) await pollAsync(Math.max(0, last - Date.now()), async () => first() >= 0);
     const at = first();
     if (at < 0) return null;
     const by = (after !== undefined && seen.askedAt[at] > after ? after : from.time) + 5000;
@@ -437,7 +437,7 @@ export async function pageWrites(page, browser) {
   const writtenSeen = async (own, from) => {
     const by = from + 5000;
     const look = () => own.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__writtenSeen) ?? false);
-    const drawn = (await pollFor(Math.max(0, by - Date.now()), look)) ?? (await within(5000, "the page did not say whether it drew the write's page within 5 s", look()).catch(() => false));
+    const drawn = (await pollAsync(Math.max(0, by - Date.now()), look)) ?? (await within(5000, "the page did not say whether it drew the write's page within 5 s", look()).catch(() => false));
     return typeof drawn === "number" && drawn <= by;
   };
   /**
@@ -852,7 +852,10 @@ export async function pageWrites(page, browser) {
           "whether the failure was still shown",
           own.evaluate(() => !!document.querySelector("header[data-failed]") && location.pathname === "/smoke/written/again"),
         ));
-      const arrived = await toQuoted(own);
+      // The link is pressed only once every step before it came in time.
+      /** @type {Pressed} */
+      const arrived =
+        failed && legacyDrew && again === "GET /smoke/written/again nav" && drewAgain && kept ? await toQuoted(own) : { ok: false, failed: "not pressed: a step before it did not come" };
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         failedName,
@@ -1222,13 +1225,16 @@ export async function pageWrites(page, browser) {
           )
         : null;
       const kept = keptAs !== null && keptAs.failed === expected && outcome.failedMark !== null && keptAs.mark === outcome.failedMark;
-      const arrived = await toQuoted(own);
+      // The link is pressed only once every step before it came in time.
+      const proven =
+        sent.ok && (!overlap || !!sentSecond?.ok) && bodyAsked && drewOver && released && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
+        again === "GET /smoke/written/again nav" && drewAgain && kept;
+      /** @type {Pressed} */
+      const arrived = proven ? await toQuoted(own) : { ok: false, failed: "not pressed: a step before it did not come" };
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         cutBodyName,
-        sent.ok && (!overlap || !!sentSecond?.ok) && bodyAsked && drewOver && released && failed && afterHeaders === (complete ? "completed" : "cut") && seen.answers === (overlap ? 2 : 1) &&
-          again === "GET /smoke/written/again nav" && drewAgain && kept && arrived.ok && shown.brand === (overlap ? "Poll brand" : "Watchlist, written") &&
-          seen.asked.includes("GET /smoke/quoted page"),
+        proven && arrived.ok && shown.brand === (overlap ? "Poll brand" : "Watchlist, written") && seen.asked.includes("GET /smoke/quoted page"),
         JSON.stringify({ sent, sentSecond, bodyAsked, drewOver, released, failed, outcome, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, keptAs, arrived, asked: seen.asked, shown }),
       );
     } finally {
@@ -1316,7 +1322,7 @@ export async function pageWrites(page, browser) {
       let secondWrite;
       if (wholeDraw !== null) {
         const heldBy = wholeDraw.time + 5000;
-        if (heldAt === null) await pollFor(Math.max(0, heldBy - Date.now()), async () => heldAt !== null);
+        if (heldAt === null) await pollAsync(Math.max(0, heldBy - Date.now()), async () => heldAt !== null);
         const heldRead = heldAt;
         held = heldRead !== null && /** @type {number} */ (seen.askedAt[heldRead]) <= heldBy;
         if (held) {
@@ -1331,7 +1337,7 @@ export async function pageWrites(page, browser) {
       // When the stand-in handed the held read its answer, once let go: the stand-in's plumbing,
       // bounded to 10 s, not part of the read's 5 s.
       const heldOne = heldAt;
-      const resumed = heldOne === null ? undefined : ((await pollFor(10000, async () => seen.delivered[heldOne] ?? false))?.time ?? undefined);
+      const resumed = heldOne === null ? undefined : ((await pollAsync(10000, async () => seen.delivered[heldOne] ?? false))?.time ?? undefined);
       // The page's first read of itself after the stand-in failed the second write, drawn with the
       // failure already shown.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite], "", undefined, resumed);
@@ -1344,7 +1350,12 @@ export async function pageWrites(page, browser) {
           "whether the failure was still shown",
           own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Count 1"),
         ));
-      const arrived = await toQuoted(own);
+      // The link is pressed only once every step before it came in time.
+      /** @type {Pressed} */
+      const arrived =
+        drew && wholeBefore === "GET /smoke/written/again page" && wholeDrawn && held && sentSecond && failed && again === "GET /smoke/written/again nav" && drewAgain && kept
+          ? await toQuoted(own)
+          : { ok: false, failed: "not pressed: a step before it did not come" };
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         againName,
@@ -1722,9 +1733,9 @@ export async function pageWrites(page, browser) {
       await actWithin("the press of the form's button", own.click("main form button"));
       const finishedBy = pressedAt + 5000;
       // Judged by the time the check heard the finish (`heard.mono`), looked at once more when the
-      // 5 s are over (`pollFor` with a probe that answers at once), so a finish heard in time counts
+      // 5 s are over (`pollRecord`, which reads the record at once), so a finish heard in time counts
       // however late the click returned.
-      const heard = (await pollFor(finishedBy - performance.now(), () => seen.finished[1] ?? false)) || null;
+      const heard = (await pollRecord(finishedBy - performance.now(), () => seen.finished[1] ?? false)) || null;
       const finished = heard !== null && heard.mono <= finishedBy ? heard : null;
       if (finished !== null && askedAt === null) await cameWithin(leftOf(finished.mono, 5000), waiting);
       const stalled = finished !== null && askedAt !== null && askedAt <= finished.mono + 5000;

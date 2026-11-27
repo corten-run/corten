@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, opened, closeContext, exchange } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, pollRecord, within, readWithin, actWithin, cameWithin, opened, closeContext, exchange } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -61,6 +61,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
     const onDocument = (/** @type {import("@playwright/test").Request} */ r) => r.resourceType() === "document" && documents++;
     /** The address the failed part links to: the page with the part read in. */
     const linkTo = new URL("/?picks=true", base);
+    /** Whether `at` is that address (its fragment aside). @param {URL} at */
+    const atLink = (at) => at.origin === linkTo.origin && at.pathname === linkTo.pathname && at.search === linkTo.search;
     /**
      * The first request after the press that could be the link's navigation reading that address: a
      * load of the held page's own main frame, or a read of the page as the runtime makes one
@@ -74,7 +76,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
     let linkAnswered = false;
     const onLinkRead = (/** @type {import("@playwright/test").Request} */ r) => {
       const at = new URL(r.url());
-      if (linkRead !== null || r.method() !== "GET" || at.origin !== linkTo.origin || at.pathname !== linkTo.pathname || at.search !== linkTo.search) return;
+      if (linkRead !== null || r.method() !== "GET" || !atLink(at)) return;
       const headers = r.headers();
       const prefetch = headers["purpose"] === "prefetch" || !!headers["sec-purpose"]?.includes("prefetch");
       if (r.isNavigationRequest()) {
@@ -133,7 +135,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
        */
       const routeSaw = async (count, from) => {
         const by = from + 5000;
-        const at = await pollFor(by - performance.now(), () => readAt[count - 1] ?? false);
+        const at = await pollRecord(by - performance.now(), () => readAt[count - 1] ?? false);
         return at !== null && at <= by;
       };
       const loadedFrom = performance.now();
@@ -254,7 +256,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
           if (!found) notOpened = "the press task found no link in the part";
           else {
             pressing = false;
-            await press.step(() => held.waitForURL((url) => url.search === "?picks=true", { waitUntil: "commit", timeout: Math.max(1, until - performance.now()) }));
+            await press.step(() => held.waitForURL(atLink, { waitUntil: "commit", timeout: Math.max(1, until - performance.now()) }));
             linkOpened = true;
           }
         } catch (error) {
@@ -273,7 +275,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
       }
       check(
         "the page it links to has the slow part read in, with JavaScript too",
-        linkOpened && listed && new URL(held.url()).search === "?picks=true",
+        linkOpened && listed && atLink(new URL(held.url())),
         `${held.url()}${linkOpened ? (listed ? "" : `, its part not read in within 5 s of its commit (${linkRead === null ? `no load or page read of ${linkTo.pathname}${linkTo.search} seen after the press` : `the first load or page read of ${linkTo.pathname}${linkTo.search} after the press, a ${linkRead.isNavigationRequest() ? "load" : `corten: ${linkRead.headers()["corten"]} fetch`}, ${linkAnswered ? "answered" : "not answered"}`})`) : `, ${notOpened}`}`,
       );
     } finally {

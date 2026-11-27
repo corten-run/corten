@@ -243,42 +243,64 @@ const steps = (ms, what) => {
   };
 };
 
+/** A poll given a probe of the other kind than it takes (`pollRecord`, `pollAsync`): a fault of the smoke's, thrown, never read as no answer. */
+class ProbeKind extends Error {}
+
 /**
  * `probe`'s first answer other than `undefined` or `false` within `ms` (see `steps`), or null if
- * none came in time (a late one included) or a probe threw.
- *
- * A probe that answers at once, with no promise (one that reads what a listener, route or note
- * already recorded, with no call to the browser), is looked at once more when the `ms` are over,
- * and once even when `ms` is 0 or less, so a record made in time is not lost because the check
- * came to look late: its caller judges it by the time it records, never by whether the poll still
- * had time. A probe that answers with a promise (a read of the page) is not looked at again: an
- * answer that comes after the `ms` is no answer.
- * @template T @param {number} ms @param {() => T | undefined | false | Promise<T | undefined | false>} probe @returns {Promise<T | null>}
+ * none came in time or it threw. `probe` reads a record a listener, route or page note already
+ * made, at once, with no call to the browser (it must not answer with a promise), and its caller
+ * judges the record by the time it holds, never by whether the poll still had time: so it is looked
+ * at once more when the `ms` are over, and once even when `ms` is 0 or less, and a record made in
+ * time is not lost because the check came to look late.
+ * @template T @param {number} ms @param {() => T | undefined | false} probe @returns {Promise<T | null>}
  */
-const pollFor = async (ms, probe) => {
-  /** Whether the probe answered at once (null until it has been called). @type {boolean | null} */
-  let atOnce = null;
+const pollRecord = async (ms, probe) => {
+  const look = () => {
+    const answer = /** @type {unknown} */ (probe());
+    if (answer instanceof Promise) {
+      answer.catch(() => {});
+      throw new ProbeKind("pollRecord's probe answered with a promise: poll a read of the page with pollAsync");
+    }
+    return /** @type {T | undefined | false} */ (answer);
+  };
   const got = await steps(ms, `nothing within ${ms} ms`)
-    .poll(() => {
-      const answer = probe();
-      atOnce ??= !(answer instanceof Promise);
-      return Promise.resolve(answer);
-    })
-    .catch(() => null);
-  if (got !== null || atOnce === false) return got;
-  /** @type {unknown} */
+    .poll(async () => look())
+    .catch((error) => {
+      if (error instanceof ProbeKind) throw error;
+      return null;
+    });
+  if (got !== null) return got;
+  /** @type {T | undefined | false} */
   let last;
   try {
-    last = probe();
-  } catch {
+    last = look();
+  } catch (error) {
+    if (error instanceof ProbeKind) throw error;
     return null;
   }
-  if (last instanceof Promise) {
-    last.catch(() => {});
-    return null;
-  }
-  return last === undefined || last === false ? null : /** @type {T} */ (last);
+  return last === undefined || last === false ? null : last;
 };
+
+/**
+ * `probe`'s first answer other than `undefined` or `false` within `ms` (see `steps`), or null if
+ * none came in time (a late one included) or a probe threw. `probe` answers with a promise (a read
+ * of the page, or a check that must answer within the `ms`): no probe is started once the `ms` are
+ * over, none when they are 0 or less, and no last look is taken, so an answer after them is no
+ * answer.
+ * @template T @param {number} ms @param {() => Promise<T | undefined | false>} probe @returns {Promise<T | null>}
+ */
+const pollAsync = (ms, probe) =>
+  steps(ms, `nothing within ${ms} ms`)
+    .poll(() => {
+      const answer = /** @type {unknown} */ (probe());
+      if (!(answer instanceof Promise)) throw new ProbeKind("pollAsync's probe answered at once: poll a record with pollRecord");
+      return /** @type {Promise<T | undefined | false>} */ (answer);
+    })
+    .catch((error) => {
+      if (error instanceof ProbeKind) throw error;
+      return null;
+    });
 
 /**
  * Runs each of a case's cleanup steps in turn, the later ones even when one before them rejects,
@@ -411,7 +433,7 @@ const letThrough = (route) => within(5000, "", route.fallback()).catch(() => {})
 const opened = (what, opening, ms = 30_000) =>
   within(ms, `${what} was not made within ${ms / 1000} s`, opening).catch((error) => {
     opening.then(
-      (made) => made.close().catch(() => {}),
+      (made) => within(30_000, "", made.close()).catch(() => {}),
       () => {},
     );
     throw error;
@@ -489,23 +511,37 @@ function track(browser) {
  * policy. The runtime has its own; the markup this test writes into a page to set up a case goes
  * through `__html`, a policy named `smoke`, which the watchlist allows when it runs with
  * `SMOKE_TRUSTED_TYPES=1`. A runtime sink that skipped its policy still throws.
+ *
+ * The context is this wrapper's until it is returned: no caller has it to close while its script is
+ * added, so one whose script fails or is not added within 30 s (Playwright's own timeout for an
+ * action) is closed here, bounded (`closeContext`), and the call rejects. A caller that gave up on it
+ * sooner (`opened`) leaves it to this.
  * @param {import("@playwright/test").Browser} browser
  */
 function trusting(browser) {
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...args) => {
     const context = await newContext(...args);
-    await context.addInitScript(() => {
-      /** @type {{ createHTML: (html: string) => unknown } | undefined} */
-      let policy;
-      Object.defineProperty(window, "__html", { value: (/** @type {string} */ html) => {
-        // This init script also runs on redirect destinations where the test writes no markup.
-        policy ??= /** @type {any} */ (globalThis).trustedTypes?.createPolicy("smoke", { createHTML: (/** @type {string} */ html) => html });
-        return policy ? policy.createHTML(html) : html;
-      } });
-    });
+    try {
+      await within(30_000, "the smoke's Trusted Types policy was not added to a new context within 30 s", policy(context));
+    } catch (error) {
+      await closeContext(context, "a context whose setup failed").catch(() => {});
+      throw error;
+    }
     return context;
   };
+}
+/** Adds the `smoke` policy's init script (`trusting`) to `context`. @param {import("@playwright/test").BrowserContext} context */
+function policy(context) {
+  return context.addInitScript(() => {
+    /** @type {{ createHTML: (html: string) => unknown } | undefined} */
+    let policy;
+    Object.defineProperty(window, "__html", { value: (/** @type {string} */ html) => {
+      // This init script also runs on redirect destinations where the test writes no markup.
+      policy ??= /** @type {any} */ (globalThis).trustedTypes?.createPolicy("smoke", { createHTML: (/** @type {string} */ html) => html });
+      return policy ? policy.createHTML(html) : html;
+    } });
+  });
 }
 /**
  * What is still loading, oldest first, each with its context's and page's number, so a stalled
@@ -600,4 +636,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, leftOf, notedBy, pause, steps, pollFor, cleanUp, exchange, letThrough, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, leftOf, notedBy, pause, steps, pollRecord, pollAsync, cleanUp, exchange, letThrough, opened, closeContext };

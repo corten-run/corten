@@ -1,4 +1,4 @@
-import { skip, check, pollFor } from "./helpers.mjs";
+import { skip, check, pollAsync } from "./helpers.mjs";
 
 export async function busyForms(page) {
   // A data-patch form's submit marks the button that sent it busy with the form, one outside the
@@ -153,7 +153,7 @@ export async function busyForms(page) {
     }
     // Polled on a timer, as a loaded browser may not be delivering animation frames; settling after
     // the 5 s fails the check.
-    settled = !!(await pollFor(5000, () => page.evaluate(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"))));
+    settled = !!(await pollAsync(5000, () => page.evaluate(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"))));
   } finally {
     await page.evaluate(() => /** @type {any} */ (window).__unwrapFetch?.());
   }

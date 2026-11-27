@@ -1,4 +1,4 @@
-import { check, pollFor } from "./helpers.mjs";
+import { check, pollAsync } from "./helpers.mjs";
 
 export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   // The cases below press their buttons in the page (`button.click()`), so each submit has run
@@ -80,7 +80,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
       holdWatch.value = null;
       releaseWatch();
     }
-    watched = !!(await pollFor(6000, () => page.evaluate(() => !!document.getElementById("watch-message")?.textContent?.startsWith("Watching Vertigo Robotics"))));
+    watched = !!(await pollAsync(6000, () => page.evaluate(() => !!document.getElementById("watch-message")?.textContent?.startsWith("Watching Vertigo Robotics"))));
     // Time in which a send the queue must not make would be seen.
     await page.waitForTimeout(300);
     written = writes.join();
@@ -188,7 +188,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
         pressed();
       }
       // A `done` that comes true only after the 6 s is not ended.
-      const ended = !!(await pollFor(6000, done));
+      const ended = !!(await pollAsync(6000, done));
       await page.waitForTimeout(700);
       const status = await page.evaluate(() => {
         const w = /** @type {any} */ (window);
@@ -357,7 +357,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
       } finally {
         pressed();
       }
-      const ended = !!(await pollFor(6000, async () => queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null));
+      const ended = !!(await pollAsync(6000, async () => queueAnswered === 1 && (await page.getAttribute("#queue-box form", "aria-busy")) === null));
       // Time for a corten:error to be heard, or a waiting submit to go.
       await page.waitForTimeout(300);
       const reset = await queueFields();
@@ -451,7 +451,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
         answerOther();
         queueSecondHeld = Promise.resolve();
       }
-      const ended = !!(await pollFor(6000, async () => queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null));
+      const ended = !!(await pollAsync(6000, async () => queueAnswered === 2 && (await page.getAttribute("#queue-box form", "aria-busy")) === null));
       await page.waitForTimeout(300);
       const after = await queueFields();
       const error = await page.evaluate(() => {
@@ -545,7 +545,7 @@ export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
     const want = second ? "saved 2" : "saved 1";
     // Polled on a timer, as a loaded browser may not be delivering animation frames; a match after
     // the 6 s is not ended.
-    const ended = !!(await pollFor(6000, () => page.evaluate((want) => document.getElementById("queue-file-out")?.textContent === want, want)));
+    const ended = !!(await pollAsync(6000, () => page.evaluate((want) => document.getElementById("queue-file-out")?.textContent === want, want)));
     // Time in which a send the queue must not make would be seen.
     await page.waitForTimeout(700);
     const out = await page.evaluate(() => document.getElementById("queue-file-out")?.textContent ?? null);
