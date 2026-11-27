@@ -192,11 +192,12 @@ test("production cancellation during launch closes the browser and removes its o
   assert.deepEqual(replay.notAttempted.aspnet, { scenarios: ["normal", "slow-reader"], clients: [] });
 });
 
-for (const stage of ["scenario", "fanout"]) test(`production cancellation retains completed ${stage} prefix and never retries`, async (t) => {
+for (const stage of ["scenario", "fanout", "fanout-lag"]) test(`production cancellation retains completed ${stage} prefix and never retries`, async (t) => {
   const { out, history, spawn } = await runnerFixture(t);
   const stop = new AbortController(), attempts = [];
+  const publisherLag = { sequence: 2, lagMs: 500.25, previousSendMs: 500.25 };
   let closed = 0;
-  await assert.rejects(runLiveAdapters({ ...options, out, measure: stage === "fanout" }, {
+  await assert.rejects(runLiveAdapters({ ...options, out, measure: stage !== "scenario" }, {
     spawn, signal: stop.signal, chromium: { async launch() { return { async close() { closed++; }, isConnected: () => closed === 0 }; } },
     async journey(_browser, _base, _input, settings, port) {
       assert.equal(port.directory, "aspnet");
@@ -209,6 +210,7 @@ for (const stage of ["scenario", "fanout"]) test(`production cancellation retain
     fanout(_browser, _base, _settings, clients) {
       attempts.push(clients);
       stop.abort(new Error("controlled stop"));
+      if (stage === "fanout-lag") throw Object.assign(new Error("native publisher behind offered rate"), { evidence: { publisherLag } });
       throw new Error("synthetic in-flight fanout failed");
     },
   }), /controlled stop/);
@@ -223,7 +225,14 @@ for (const stage of ["scenario", "fanout"]) test(`production cancellation retain
     assert.deepEqual(replay.inspected, ["aspnet-normal.json.gz"]);
     assert.deepEqual(replay.notAttempted.aspnet, { scenarios: ["slow-reader"], clients: [] });
   } else {
-    assert.equal((await readArtifact(out, "aspnet-fanout-1.json.gz")).schema, "native-live-fanout-failure/v1");
+    const failed = await readArtifact(out, "aspnet-fanout-1.json.gz");
+    assert.equal(failed.schema, "native-live-fanout-failure/v1");
+    assert.ok(!Object.hasOwn(failed, "summary"));
+    assert.deepEqual(replay.measured, []);
+    if (stage === "fanout-lag") {
+      assert.equal(failed.error, "native publisher behind offered rate");
+      assert.deepEqual(failed.publisherLag, publisherLag);
+    } else assert.ok(!Object.hasOwn(failed, "publisherLag"));
     assert.deepEqual(replay.notAttempted.aspnet, { scenarios: [], clients: [2, 4] });
     assert.equal(replay.inspected.length, 3);
   }

@@ -14,6 +14,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sort = (rows) => [...rows].sort((a, b) => a.id.localeCompare(b.id));
 const pct = (values, p) => [...values].sort((a, b) => a - b)[Math.ceil(p * values.length) - 1];
 
+/** @typedef {{sequence: number, lagMs: number, previousSendMs: number | null}} PublisherLag */
+
+/** @returns {PublisherLag | undefined} */
+function publisherLagReceipt(sequence, scheduledAt, startedAt, previous) {
+  const lagMs = startedAt - scheduledAt;
+  if (!Number.isInteger(sequence) || sequence < 1 || sequence > fanoutProfile.eventCount
+      || !Number.isFinite(scheduledAt) || !Number.isFinite(startedAt)
+      || !(lagMs > fanoutProfile.maxScheduleLagMs && lagMs <= Number.MAX_SAFE_INTEGER)) return;
+  if (sequence === 1 && !previous) return { sequence, lagMs, previousSendMs: null };
+  if (previous?.seq !== sequence - 1 || !Number.isFinite(previous.startedAt)
+      || !Number.isFinite(previous.finishedAt) || previous.finishedAt > startedAt) return;
+  const previousSendMs = previous.finishedAt - previous.startedAt;
+  if (previousSendMs >= 0 && previousSendMs <= Number.MAX_SAFE_INTEGER) return { sequence, lagMs, previousSendMs };
+}
+
 export function kernelObservation(raw) {
   const [cpu, memory] = raw.split("MEMORY\n"), [current, peak] = (memory ?? "").trim().split(/\s+/).map(Number);
   const cpuUsageUs = Number(/^usage_usec\s+(\d+)/m.exec(cpu)?.[1]);
@@ -145,6 +160,8 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
 export async function fanoutJourney(browser, base, settings, clients, { wire }, kernelCounters, recordRenderer) {
   const workload = createLiveWorkload(fanoutProfile), contexts = [], readers = [];
   const host = { timeOrigin: performance.timeOrigin, base, requests: [] }, resourceObservations = {};
+  /** @type {PublisherLag | undefined} */
+  let publisherLag;
   const deadline = setTimeout(() => { for (const c of contexts) c.close().catch(() => {}); }, fanoutProfile.deadlineMs);
   const api = async (name, data, phase = name) => {
     const startedAt = performance.now();
@@ -202,7 +219,10 @@ export async function fanoutJourney(browser, base, settings, clients, { wire }, 
       const scheduledAt = start + (event.seq - 1) * 1000 / fanoutProfile.rate;
       while (performance.now() < scheduledAt) await sleep(Math.max(1, scheduledAt - performance.now()));
       const startedAt = performance.now();
-      assert.ok(startedAt - scheduledAt <= fanoutProfile.maxScheduleLagMs, "native publisher behind offered rate");
+      if (!(startedAt - scheduledAt <= fanoutProfile.maxScheduleLagMs)) {
+        publisherLag = publisherLagReceipt(event.seq, scheduledAt, startedAt, schedule.at(-1));
+        assert.fail("native publisher behind offered rate");
+      }
       await readers[0].page.evaluate((e) => window.liveApp.publish(e), event);
       schedule.push({ seq: event.seq, scheduledAt, startedAt, finishedAt: performance.now() });
     }
@@ -230,7 +250,7 @@ export async function fanoutJourney(browser, base, settings, clients, { wire }, 
     return { clients, configuration, workload, settings, resources: { attached, delivered, released }, resourceObservations,
       host, interval, kernel: { before, after }, browsers, schedule };
   } catch (error) {
-    error.evidence = { workload, settings, browsers: await Promise.all(readers.map(async (r) => ({
+    error.evidence = { workload, settings, ...(publisherLag ? { publisherLag } : {}), browsers: await Promise.all(readers.map(async (r) => ({
       network: r.network, failures: r.failures, records: await r.page.evaluate(() => window.liveApp?.records ?? []).catch(() => []),
       html: await captureHtml(r.page, wire).catch(() => ""),
     }))) };

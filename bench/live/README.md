@@ -212,6 +212,15 @@ More than 500 ms publisher schedule lag fails the level; a snapshot concealing l
 Each level has a 90-second hard bound, and includes a duplicate native delivery plus final
 detach, post-detach publication and zero-resource observation. Native ports cap readers at 16.
 
+On a schedule-lag refusal, the `native-live-fanout-failure/v1` artifact can include
+`publisherLag`: the one-based attempted `sequence` (not sent), `lagMs` from its scheduled
+time to the refusal check, and `previousSendMs`, the preceding awaited browser publish
+duration, or `null` at sequence 1. The durations use the existing monotonic clock readings,
+are not rounded, and do not isolate server or transport time. An invalid or inconsistent
+reading omits the diagnostic, not the failure. Successful levels do not write these fields.
+The saved verifiers still classify the artifact as failed with or without this diagnostic;
+they do not validate the diagnostic or use it to qualify a level.
+
 Raw browser frame observations retain the first animation frame seeing a version and the
 following frame (a paint opportunity, not a pixel-photometry claim). Visible latency uses
 that second frame against the publisher browser's actual publication start, with Chromium
