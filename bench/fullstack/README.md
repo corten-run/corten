@@ -1431,7 +1431,11 @@ three runs:
    took the lock, downloads nothing (it would land beside the other launch's results) and leaves
    the droplet, even one this launch created, with how to delete it. So does a step that checks the
    lock whose answer never came back on its last try (no answer within its time limit, or ssh's own
-   failure such as a dropped connection): it may have refused there, so it is taken as refused. The
+   failure such as a dropped connection), or that got no turn at the droplet's flock within its
+   wait (`flock -E` gives that its own exit status, 75, which another launch's step holding the
+   flock causes): it may have refused there, or never checked, so it is taken as refused. A step
+   that ran and failed for another reason (a build that failed) is an ordinary failure, and a
+   droplet this launch created is destroyed. The
    start is sent once, and counts as acknowledged
    only when `systemctl start` succeeded: it can fail having lost systemd's reply while its job
    goes on, and nothing read afterwards ties the unit's state to that start. An acknowledged start

@@ -163,11 +163,14 @@ let startUnconfirmed = false;
 // answer never came back (custodyUnconfirmed): something else may be acting on the droplet, so this
 // run neither collects from it nor destroys it.
 let custodyRefused = false;
-// Whether a step of the launch that checks its custody (the custody check, the clear, the builds
-// and the unit's files) failed without an answer from the droplet on its last try: no answer
-// within its time limit, or ssh's own failure (exit 255) such as a dropped connection. It may have
-// refused there (exit 3 or 4), so it is taken as a refusal.
-let custodyUnconfirmed = false;
+// Why a step of the launch that checks its custody (the custody check, the clear, the builds and
+// the unit's files) failed on its last try without saying whether it refused, or null: no answer
+// from the droplet within its time limit, ssh's own failure (exit 255) such as a dropped
+// connection, or no turn at the droplet's flock within its wait (noTurn), which another launch's
+// step may hold. It may have refused there (exit 3 or 4), or not yet have checked, so it is taken
+// as a refusal.
+/** @type {string | null} */
+let custodyUnconfirmed = null;
 // Exit statuses of a launch's steps on the droplet (round.mjs): the lock another launch holds
 // (takeLaunch), and the lock lost or the custody changed since its check (ownsLaunch,
 // clearAfterCustody). Neither is tried again: each would refuse again.
@@ -176,11 +179,16 @@ const lockLost = (/** @type {any} */ e) => e?.status === 4;
 // A remote call that ended without the droplet's answer (run's status: null for no answer or no
 // process, 255 for ssh's own failure).
 const noAnswer = (/** @type {any} */ e) => e?.status === null || e?.status === 255;
+// The exit status of a remote step that got no turn at the droplet's flock within its wait (flock
+// -E): not one the steps' scripts, timeout or ssh exit with, so it is not read as a step's failure.
+const flockBusy = 75;
+const noTurn = (/** @type {any} */ e) => e?.status === flockBusy;
 // A step that checks the launch's custody, tried as `work` does; one whose last try had no answer
-// marks the launch's custody unconfirmed.
+// or no turn at the flock marks the launch's custody unconfirmed.
 const custodyStep = async (/** @type {() => Promise<unknown>} */ work) => {
   try { return await work(); } catch (e) {
-    if (noAnswer(e)) custodyUnconfirmed = true;
+    if (noAnswer(e)) custodyUnconfirmed = "got no answer from the droplet";
+    else if (noTurn(e)) custodyUnconfirmed = "got no turn at the droplet's flock within its wait (another launch's step may hold it)";
     throw e;
   }
 };
@@ -236,9 +244,10 @@ const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFa
 const scp = (/** @type {string} */ from, /** @type {string} */ to) => run("scp", ["-q", ...sshOptions, from, to], { timeout: 15 * minute });
 // Runs `script` on the droplet for at most `limit` minutes there, one such script at a time: a
 // retry after a dropped connection waits for the attempt it replaces (or its time limit) rather
-// than running beside it (two apt or docker builds at once).
+// than running beside it (two apt or docker builds at once). A step that gets no turn within its
+// wait exits flockBusy, having run nothing.
 const remote = (/** @type {string} */ script, /** @type {number} */ limit, /** @type {{ quiet?: boolean, allowFail?: boolean }=} */ options) => ssh(
-  `flock -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,
+  `flock -E ${flockBusy} -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,
   { timeout: (2 * limit + 2) * minute, ...options },
 );
 const answers = async (/** @type {number} */ tries) => {
@@ -464,8 +473,8 @@ const launch = async () => {
     // here), and release runs under the same flock as remote steps, after any still running. A
     // start not acknowledged is the exception: whether the round is starting is not known, so the
     // lock is left, as an interrupt leaves it, with how to check and remove it. A custody step
-    // with no answer is refused as one that refused there is.
-    if (!startUnknown && (lockLost(e) || lockHeldElsewhere(e) || custodyUnconfirmed)) {
+    // with no answer, or no turn at the flock, is refused as one that refused there is.
+    if (!startUnknown && (lockLost(e) || lockHeldElsewhere(e) || custodyUnconfirmed !== null)) {
       custodyRefused = true;
       mayDestroy = false;
     }
@@ -624,10 +633,10 @@ try {
   // watch has not seen end: the droplet is left for a --collect. A launch refused for its custody
   // (another launch holds or took the lock, or the round's unit or progress file changed) collects
   // nothing, which would land beside another launch's, and leaves the droplet to it; so does one
-  // whose custody step got no answer, which may have refused there.
+  // whose custody step got no answer or no turn at the flock, which may have refused there.
   if (custodyRefused) {
-    const why = custodyUnconfirmed
-      ? "a step that checks its lock got no answer from the droplet, so whether another launch holds or took its lock, or the round's unit or progress file changed after its custody check, is not known, and it is taken as refused"
+    const why = custodyUnconfirmed !== null
+      ? `a step that checks its lock ${custodyUnconfirmed}, so whether another launch holds or took its lock, or the round's unit or progress file changed after its custody check, is not known, and it is taken as refused`
       : "another launch holds or took its lock, or the round's unit or progress file changed after its custody check";
     console.log(`round ${round}'s launch on the droplet at ${host} was refused: ${why}. Nothing is downloaded from that droplet and it is left as it is${dropletId && !keep ? ` (droplet ${dropletId}: once no launch or round of ${round} is using it, delete it with doctl compute droplet delete ${dropletId} --force)` : ""}`);
     throw e;

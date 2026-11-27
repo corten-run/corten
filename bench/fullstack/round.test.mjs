@@ -645,8 +645,10 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       'case "$last" in *cloud-init*) exit 0 ;; esac',
       // The clear's step, by words of it its quoting leaves whole.
       'case "$last" in *"so nothing is cleared"*) if [ -f "$FAKE_HOOK" ]; then sh "$FAKE_HOOK"; fi ;; esac',
-      // /bench only where a path starts (not the second of /bench/bench).
-      'script=$(printf "%s" "$last" | sed -E -e "s#(^|[^A-Za-z0-9_./-])/bench#\\1$FAKE_REMOTE/bench#g" -e "s#/var/lib/corten-bench#$FAKE_REMOTE/lock#g" -e "s#/sys/fs/cgroup#$FAKE_REMOTE/cgroup#g" -e "s#/etc/systemd/system#$FAKE_REMOTE/systemd#g" -e "s#/tmp/droplet.lock#$FAKE_REMOTE/droplet.lock#g" -e "s#/tmp/results.tgz#$FAKE_REMOTE/results.tgz#g")',
+      // /bench only where a path starts (not the second of /bench/bench). FAKE_FLOCK_WAIT, when
+      // set, is how many seconds a step waits for its turn at the droplet's flock.
+      'wait="s#^##"; [ -z "$FAKE_FLOCK_WAIT" ] || wait="s#-w [0-9][0-9]* /tmp/droplet.lock#-w $FAKE_FLOCK_WAIT /tmp/droplet.lock#"',
+      'script=$(printf "%s" "$last" | sed -E -e "$wait" -e "s#(^|[^A-Za-z0-9_./-])/bench#\\1$FAKE_REMOTE/bench#g" -e "s#/var/lib/corten-bench#$FAKE_REMOTE/lock#g" -e "s#/sys/fs/cgroup#$FAKE_REMOTE/cgroup#g" -e "s#/etc/systemd/system#$FAKE_REMOTE/systemd#g" -e "s#/tmp/droplet.lock#$FAKE_REMOTE/droplet.lock#g" -e "s#/tmp/results.tgz#$FAKE_REMOTE/results.tgz#g")',
       // FAKE_DROP_START: the unit's start runs there, and then the connection drops before its
       // output comes back, as ssh reports a connection lost.
       'case "$last" in *"systemctl start corten-bench-r1"*|*"start settled"*) if [ -n "$FAKE_DROP_START" ]; then bash -c "$script" >/dev/null 2>&1; echo "Connection to 203.0.113.9 closed by remote host." >&2; exit 255; fi ;; esac',
@@ -680,7 +682,9 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       "",
     ].join("\n"), { mode: 0o755 });
     writeFileSync(join(bin, "systemctl"), fakeSystemctl, { mode: 0o755 });
-    for (const stub of ["docker", "npm", "npx"]) writeFileSync(join(bin, stub), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    // docker exits FAKE_DOCKER_RC (0 unless set), as a build that failed would.
+    writeFileSync(join(bin, "docker"), '#!/bin/sh\nexit "${FAKE_DOCKER_RC:-0}"\n', { mode: 0o755 });
+    for (const stub of ["npm", "npx"]) writeFileSync(join(bin, stub), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     const other = bootId === "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" ? "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
     const unfinished = (/** @type {string} */ boot) => `t boot\nt start fixture\nt end fixture\nt start count ${boot}\n`;
@@ -961,6 +965,45 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     }
     assert.equal(target(), null);
     assert.notEqual(silentClear.progress, null, "an unanswered clear's progress file was cleared");
+    // Another launch's step holds the droplet's flock past this launch's wait for its custody
+    // check (here a second): the check never ran, so whether it would have refused is not known,
+    // and it is taken as refused, as an unanswered one is. Tried again, then nothing started,
+    // downloaded or destroyed, with how to delete the droplet this launch created.
+    const holding = join(root, "holding");
+    rmSync(holding, { force: true });
+    const busy = prepare({ progress: unfinished(other), fake: { FAKE_FLOCK_WAIT: "1" }, fast: true, create: true });
+    // flock -o: only flock holds the lock, not the command; the group is ended below.
+    const holder = spawn("flock", ["-o", join(remote, "droplet.lock"), "-c", `: > '${holding}'; sleep 60`], { detached: true, stdio: "ignore" });
+    let flockBusy;
+    try {
+      for (const deadline = Date.now() + 10_000; !existsSync(holding) && Date.now() < deadline; ) await new Promise((r) => setTimeout(r, 50));
+      assert.ok(existsSync(holding), "the flock holder did not take the lock");
+      flockBusy = outcome(spawnSync(process.execPath, busy.argv, { ...busy.options, timeout: 120_000 }));
+    } finally {
+      // Its leader is not yet reaped (it sleeps a minute), so the group is still its own.
+      if (holder.exitCode === null && holder.signalCode === null && holder.pid) process.kill(-holder.pid, "SIGKILL");
+    }
+    assert.notEqual(flockBusy.status, 0, flockBusy.stdout);
+    assert.equal(flockBusy.calls.filter((c) => c.startsWith("ssh ") && c.includes("another droplet.mjs is launching")).length, 3, "the custody check was not tried three times");
+    assert.ok(flockBusy.calls.some((c) => c.startsWith("doctl compute droplet create")), "no droplet was created");
+    assert.ok(!flockBusy.started, flockBusy.units.join("; "));
+    assert.ok(!flockBusy.downloaded, "a custody check with no turn at the flock downloaded results");
+    assert.ok(!flockBusy.deleted, "a custody check with no turn at the flock deleted the droplet");
+    assert.match(flockBusy.stdout, /round r1's launch on the droplet at 203\.0\.113\.9 was refused: a step that checks its lock got no turn at the droplet's flock within its wait/);
+    assert.match(flockBusy.stdout, /delete it with doctl compute droplet delete 4242 --force/);
+    assert.equal(flockBusy.progress, unfinished(other));
+    assert.equal(target(), null);
+    // The control: a custody step that ran and failed for another reason (its docker build exits
+    // 1) is an ordinary failure, as before: the lock released and the created droplet destroyed.
+    const buildFailed = launch({ progress: unfinished(other), fake: { FAKE_DOCKER_RC: "1" }, fast: true, create: true });
+    assert.notEqual(buildFailed.status, 0, buildFailed.stdout);
+    assert.match(buildFailed.stderr, /docker build/);
+    assert.ok(!buildFailed.started, buildFailed.units.join("; "));
+    assert.ok(!buildFailed.downloaded, buildFailed.calls.join("\n---\n").slice(0, 2000));
+    assert.ok(buildFailed.deleted, buildFailed.calls.join("\n---\n").slice(0, 2000));
+    assert.ok(!buildFailed.stdout.includes("was refused"), buildFailed.stdout);
+    assert.ok(buildFailed.calls.some((c) => c.includes("launch release")), "a failed build kept the lock");
+    assert.equal(target(), null);
     // The watch collects a round only once its unit reads inactive or failed with no job queued
     // for it: the log's "all done" alone, printed before the unit's process exits or kept by a
     // round resumed with --from, is not the round's end. A --collect that finds the unit active, a
