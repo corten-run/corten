@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { fork } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { Worker } from "node:worker_threads";
 import { classes, formEnv, kinds, mergedMixed, mixedOf } from "./mixed.mjs";
 import { ssrOf } from "./ssr.mjs";
 
@@ -120,17 +121,38 @@ test("mixed-load.js sends and counts the kinds and classes this module reads", (
   assert.ok(script.includes(`const classes = ${JSON.stringify(classes).replaceAll(",", ", ")};`), "mixed-load.js's classes");
 });
 
+/** `promise`, or a failure naming `what` once `signal` aborts or 5 s pass. */
+const within = (/** @type {Promise<any>} */ promise, /** @type {string} */ what, /** @type {AbortSignal | undefined} */ signal) => {
+  const bound = signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000);
+  return /** @type {Promise<any>} */ (
+    new Promise((done, failed) => {
+      const stop = () => failed(new Error(`${what}: ${bound.reason?.message ?? bound.reason}`));
+      if (bound.aborted) return stop();
+      bound.addEventListener("abort", stop, { once: true });
+      promise.then(
+        (value) => (bound.removeEventListener("abort", stop), done(value)),
+        (error) => (bound.removeEventListener("abort", stop), failed(error)),
+      );
+    })
+  );
+};
+
 /**
- * A fresh instance of the item API (mixed-item-api.worker.mjs), run in a worker thread as `node
- * server.mjs <items> 0 1` with SLOW_MS 300, its timers held or not; `end` terminates it, whatever
- * state its import, timers and listeners are in. Each call waits on its reply until `signal` or 5 s.
+ * A fresh instance of the item API (mixed-item-api.child.mjs), in a child process forked with the
+ * arguments `<items> 0 1` and SLOW_MS 300, its timers held or not, so the server reads the argv
+ * `node server.mjs <items> 0 1` gives it. It is driven over IPC; this process's globals, argv and
+ * env are left as they are. Each wait on a reply ends at `signal` or 5 s; `end` kills the process
+ * with SIGKILL, whatever it is doing, and waits at most 5 s for it to exit.
  */
 const instance = (/** @type {string} */ items, /** @type {boolean} */ held, /** @type {AbortSignal} */ signal) => {
-  const worker = new Worker(new URL("./mixed-item-api.worker.mjs", import.meta.url), {
-    argv: [items, "0", "1"],
-    env: { SLOW_MS: "300" },
-    workerData: { file: new URL("./item-api/server.mjs", import.meta.url).href, held },
+  const { ITEM_API_SERVER: _server, NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const child = fork(fileURLToPath(new URL("./mixed-item-api.child.mjs", import.meta.url)), [items, "0", "1"], {
+    env: { ...env, SLOW_MS: "300", MIXED_ITEM_API_HELD: held ? "1" : "0" },
+    execArgv: [],
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
+  let stderr = "";
+  child.stderr?.setEncoding("utf8").on("data", (/** @type {string} */ text) => (stderr = (stderr + text).slice(-4_000)));
   /** @type {Map<number, { done: (reply: any) => void, failed: (error: Error) => void }>} */
   const waiting = new Map();
   /** @type {Error | undefined} */
@@ -140,116 +162,165 @@ const instance = (/** @type {string} */ items, /** @type {boolean} */ held, /** 
     for (const one of waiting.values()) one.failed(fault);
     waiting.clear();
   };
-  worker.on("message", ({ re, error, ...reply }) => {
+  /** @type {Promise<void>} */
+  const exited = new Promise((done) => {
+    child.on("exit", (code, killed) => {
+      fail(new Error(`the item API's process exited (${killed ?? code})${stderr ? `: ${stderr}` : ""}`));
+      done();
+    });
+    child.on("error", (error) => {
+      fail(error);
+      if (child.pid === undefined) done();
+    });
+  });
+  // The server's own process.send (its item count once it listens) is not one of these.
+  child.on("message", (/** @type {any} */ message) => {
+    if (message?.harness !== "mixed-item-api") return;
+    const { harness: _, re, error, ...reply } = message;
     const one = waiting.get(re);
     waiting.delete(re);
     if (error) one?.failed(new Error(error));
     else one?.done(reply);
   });
-  worker.on("error", fail);
-  worker.on("exit", (code) => fail(new Error(`the item API's worker exited (${code})`)));
   const reply = (/** @type {number} */ re, /** @type {string} */ what) => {
-    const bound = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
-    return /** @type {Promise<any>} */ (
-      new Promise((done, failed) => {
-        if (fault) return failed(fault);
-        const stop = () => {
-          waiting.delete(re);
-          failed(new Error(`${what}: ${bound.reason?.message ?? bound.reason}`));
-        };
-        if (bound.aborted) return stop();
-        bound.addEventListener("abort", stop, { once: true });
-        const off = () => bound.removeEventListener("abort", stop);
-        waiting.set(re, { done: (r) => (off(), done(r)), failed: (e) => (off(), failed(e)) });
-      })
-    );
+    const answer = new Promise((done, failed) => (fault ? failed(fault) : waiting.set(re, { done, failed })));
+    answer.catch(() => {});
+    return within(answer, what, signal);
   };
   let last = 0;
   const send = (/** @type {Record<string, unknown>} */ message, /** @type {string} */ what) => {
-    worker.postMessage({ re: ++last, ...message });
-    return reply(last, what);
+    const re = ++last;
+    const answer = reply(re, what);
+    child.send({ re, ...message }, (error) => error && fail(error));
+    return answer;
   };
   return {
     loaded: reply(0, "the item API did not load and listen"),
-    /** Its handling, as `key`, of a request for `id`, and what it holds by the next check of the event loop. */
-    ask: (/** @type {string} */ key, /** @type {string} */ id) => send({ op: "ask", key, url: `/api/discovery/items/${id}` }, `asking for ${id}`),
-    /** Held timer `id` released, and what it holds by the next check of the event loop. */
+    /** What it holds, once the handling of a request for `id` has set a timer. */
+    until: (/** @type {string} */ id) => send({ op: "until", by: id }, `waiting for a timer set for ${id}`),
+    /** What it holds by the next check of the event loop. */
+    state: () => send({ op: "state" }, "asking what it holds"),
+    /** Held timer `id` released. */
     release: (/** @type {number} */ id) => send({ op: "release", id }, `releasing timer ${id}`),
-    end: () => worker.terminate(),
+    end: async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      try {
+        await within(exited, "the item API's process did not exit after SIGKILL", undefined);
+      } finally {
+        child.stderr?.destroy();
+      }
+    },
   };
 };
 
-// The item API's own file, unchanged (the benchmark measures it as it is). In each held instance
-// every timer it sets is held and tied to the request whose handling set it, and each send of an
-// answer is recorded with the held timer whose callback made it, so which answer waits, and on what,
-// is read from the server, with no time a busy machine can cross. "At once" here means ended by the
-// next check of the event loop without waiting on any timer: an answer deferred by promises or
-// setImmediate counts. Every case has its own instance.
-test("the item API ends a late item as the item from its own SLOW_MS timer alone, and the others by the next check of the event loop without waiting on it", { timeout: 30_000 }, async (t) => {
+/**
+ * A GET of item `id` from the instance on `port`, on its own connection, cancelled with `signal`:
+ * whether its answer's head has arrived yet, and its whole answer.
+ */
+const get = (/** @type {number} */ port, /** @type {string} */ id, /** @type {AbortSignal} */ signal) => {
+  const seen = { headed: false };
+  /** @type {Promise<{ status: number | undefined, type: string | undefined, length: string | undefined, body: string }>} */
+  const whole = new Promise((done, failed) => {
+    const req = request({ host: "127.0.0.1", port, path: `/api/discovery/items/${id}`, agent: false, signal }, (res) => {
+      seen.headed = true;
+      /** @type {Buffer[]} */
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => done({ status: res.statusCode, type: res.headers["content-type"], length: res.headers["content-length"], body: Buffer.concat(chunks).toString() }));
+      res.on("error", failed);
+      res.on("close", () => res.complete || failed(new Error(`the answer for ${id} was cut off`)));
+    });
+    req.on("error", failed);
+    req.end();
+  });
+  whole.catch(() => {});
+  return { seen, whole };
+};
+
+// The item API's own file, unchanged (the benchmark measures it as it is), asked over HTTP. In each
+// held instance every timer it sets through the global or node:timers setTimeout is held and tied to
+// the request whose handling set it, and each send of an answer is recorded with the held timer
+// whose callback made it, so which answer waits, and on what, is read from the server, and what has
+// arrived is read from the client, with no time a busy machine can cross. "At once" here means
+// received whole while the late item's timer is still held: an answer deferred by promises,
+// setImmediate or another wait that is not a held setTimeout counts. Every case has its own instance.
+test("the item API answers a late item as the item from its own SLOW_MS timer alone, and the others whole while that timer is held", { timeout: 30_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "mixed-api-"));
-  const items = join(dir, "items.json");
-  writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" }, item_4: { id: "item_4", name: "another" } }));
-  const json = (/** @type {string} */ id) => JSON.stringify({ id });
-  /** @typedef {{ timers: { id: number, ms: number, by: string | null, cleared: boolean, released: boolean }[], answers: Record<string, { sends: { name: string, timer: number | null }[], status: number, body: string, ended: boolean }> }} Held */
-  const set = (/** @type {Held} */ held) => held.timers.map((one) => `${one.ms} ms for ${one.by ?? "no request"}${one.cleared ? ", cleared" : ""}${one.released ? ", released" : ""}`);
-  /** The late item ended, whole and as the item, from timer `id`'s callback and nothing else. */
-  const endedFrom = (/** @type {Held} */ held, /** @type {string} */ key, /** @type {number} */ id) => {
-    const late = held.answers[key];
-    assert.ok(late.ended, "releasing its timer ended the late item");
-    assert.deepEqual(late.sends.filter((one) => one.timer !== id).map((one) => one.name), [], "every send of the late answer made from its own released timer");
-    assert.equal(late.status, 200);
-    assert.equal(late.body, json("item_3"), "the late item is the item as the file has it");
-  };
-  /** `body` with a fresh held instance, terminated after. @param {(api: ReturnType<typeof instance>) => Promise<void>} body */
-  const held = (body) => async (/** @type {import("node:test").TestContext} */ t) => {
-    const api = instance(items, true, t.signal);
-    try {
-      await api.loaded;
-      await body(api);
-    } finally {
-      await api.end();
-    }
-  };
   try {
+    const items = join(dir, "items.json");
+    writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" }, item_4: { id: "item_4", name: "another" } }));
+    const body = JSON.stringify({ id: "item_3" });
+    const item = { status: 200, type: "application/json", length: String(body.length), body };
+    /** @typedef {{ timers: { id: number, ms: number, by: string | null, cleared: boolean, released: boolean }[], sends: Record<string, { name: string, timer: number | null }[]> }} Held */
+    const set = (/** @type {Held} */ held) => held.timers.map((one) => `${one.ms} ms for ${one.by ?? "no request"}${one.cleared ? ", cleared" : ""}${one.released ? ", released" : ""}`);
+    /** Every send of the late answer made from timer `id`'s callback and nothing else. */
+    const sentFrom = (/** @type {Held} */ held, /** @type {number} */ id) => {
+      const sends = held.sends.item_slow_3 ?? [];
+      assert.notDeepEqual(sends, [], "the late answer sent");
+      assert.deepEqual(sends.filter((one) => one.timer !== id).map((one) => one.name), [], "every send of the late answer made from its own released timer");
+    };
+    /** `body` with a fresh held instance, killed after. @param {(api: ReturnType<typeof instance>, port: number, t: import("node:test").TestContext) => Promise<void>} body */
+    const held = (body) => async (/** @type {import("node:test").TestContext} */ t) => {
+      const api = instance(items, true, t.signal);
+      try {
+        const { port } = await api.loaded;
+        await body(api, port, t);
+      } finally {
+        await api.end();
+      }
+    };
     await t.test(
-      "a late item alone sets one SLOW_MS timer, the only one, and ends from it",
-      held(async (api) => {
-        let now = await api.ask("late", "item_slow_3");
-        assert.deepEqual(set(now), ["300 ms for late"], "the timers the item API set");
-        assert.deepEqual(now.answers.late.sends, [], "nothing of the late answer sent while its timer is held");
-        now = await api.release(now.timers[0].id);
-        endedFrom(now, "late", now.timers[0].id);
-        assert.deepEqual(set(now), ["300 ms for late, released"], "no other timer set");
+      "a late item alone sets one SLOW_MS timer, the only one, and arrives whole from it once released",
+      held(async (api, port, t) => {
+        const late = get(port, "item_slow_3", t.signal);
+        let now = await api.until("item_slow_3");
+        assert.deepEqual(set(now), ["300 ms for item_slow_3"], "the timers the item API set");
+        assert.deepEqual(now.sends.item_slow_3 ?? [], [], "nothing of the late answer sent while its timer is held");
+        assert.equal(late.seen.headed, false, "nothing of the late answer arrived while its timer is held");
+        const id = now.timers[0].id;
+        await api.release(id);
+        assert.deepEqual(await within(late.whole, "the late item after its timer's release", t.signal), item, "the late item, whole, as the file has it");
+        now = await api.state();
+        sentFrom(now, id);
+        assert.deepEqual(set(now), ["300 ms for item_slow_3, released"], "no other timer set");
       }),
     );
     await t.test(
-      "with the instance's first late item held, the item and an unknown one end at once from no timer",
-      held(async (api) => {
-        let now = await api.ask("late", "item_slow_3");
-        for (const [key, id, status] of /** @type {const} */ ([["item", "item_3", 200], ["unknown", "item_slow_9", 404]])) {
-          now = await api.ask(key, id);
-          assert.ok(now.answers[key].ended, `ended ${id} at once`);
-          assert.equal(now.answers[key].status, status);
-          assert.deepEqual(now.answers[key].sends.filter((one) => one.timer !== null), [], "sent from no timer");
+      "with the instance's first late item held, the item and an unknown one arrive whole from no timer, and the late one after them from its own",
+      held(async (api, port, t) => {
+        const late = get(port, "item_slow_3", t.signal);
+        let now = await api.until("item_slow_3");
+        assert.deepEqual(set(now), ["300 ms for item_slow_3"], "the timers the item API set");
+        assert.deepEqual(now.sends.item_slow_3 ?? [], [], "nothing of the late answer sent while its timer is held");
+        const known = get(port, "item_3", t.signal);
+        const unknown = get(port, "item_slow_9", t.signal);
+        assert.deepEqual(await within(known.whole, "the item while the late one is held", t.signal), item, "the item, whole, as the file has it");
+        const missing = await within(unknown.whole, "the unknown item while the late one is held", t.signal);
+        assert.deepEqual({ status: missing.status, body: missing.body }, { status: 404, body: "" }, "the unknown item");
+        assert.equal(late.seen.headed, false, "nothing of the late answer arrived before the others");
+        now = await api.state();
+        assert.deepEqual(set(now), ["300 ms for item_slow_3"], "the late item's timer still held, and none set by the others");
+        assert.deepEqual(now.sends.item_slow_3 ?? [], [], "nothing of the late answer sent");
+        for (const key of ["item_3", "item_slow_9"]) {
+          const sends = now.sends[key] ?? [];
+          assert.notDeepEqual(sends, [], `${key} sent`);
+          assert.deepEqual(sends.filter((one) => one.timer !== null).map((one) => one.name), [], `${key} sent from no timer`);
         }
-        assert.equal(now.answers.item.body, json("item_3"), "the item as the file has it");
-        assert.deepEqual(set(now), ["300 ms for late"], "no timer set by an at-once answer");
-        assert.deepEqual(now.answers.late.sends, [], "the late answer still held");
-        now = await api.release(now.timers[0].id);
-        endedFrom(now, "late", now.timers[0].id);
+        const id = now.timers[0].id;
+        await api.release(id);
+        assert.deepEqual(await within(late.whole, "the late item after its timer's release", t.signal), item, "the late item, whole, as the file has it");
+        now = await api.state();
+        sentFrom(now, id);
       }),
     );
-    await t.test("over HTTP, with its real timers", async (t) => {
+    await t.test("with its real timers", async (t) => {
       const api = instance(items, false, t.signal);
       try {
         const { port } = await api.loaded;
-        const at = async (/** @type {string} */ id) => {
-          const r = await fetch(`http://127.0.0.1:${port}/api/discovery/items/${id}`, { signal: AbortSignal.any([t.signal, AbortSignal.timeout(5_000)]) });
-          return { status: r.status, body: await r.text() };
-        };
-        const [now, late, unknown] = await Promise.all([at("item_3"), at("item_slow_3"), at("item_slow_9")]);
-        assert.deepEqual(now, { status: 200, body: json("item_3") });
-        assert.deepEqual(late, now, "the late item is the item");
+        const answers = Promise.all(["item_3", "item_slow_3", "item_slow_9"].map((id) => get(port, id, t.signal).whole));
+        const [known, late, unknown] = await within(answers, "the answers with real timers", t.signal);
+        assert.deepEqual(known, item, "the item");
+        assert.deepEqual(late, item, "the late item is the item");
         assert.equal(unknown.status, 404);
       } finally {
         await api.end();
