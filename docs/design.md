@@ -3398,14 +3398,23 @@ rules something out.
     still being sent at the deadline says the deadline is too short for it. The mark is one
     thread-local value: the body `corten::serve` hands the router sets it when a read waits, a
     read past a limit sets it to that limit, and the deadline clears it before each poll of the
-    handler, so nothing is allocated. A request served another way is not marked as waiting for
+    handler, so nothing is allocated. A body hyper says has ended when its request comes, which
+    is that of every request sent without one, has no read that can wait: it is handed on as a
+    body that holds nothing and says what hyper's says (at its end, no bytes long, nothing to
+    read), without the stream or the mark, so the box a body is kept in is not allocated for it
+    ([#2172 A request without a body still has its finished incoming body wrapped and boxed, one allocation and about 100 instructions a request](https://github.com/corten-run/corten/issues/2172)).
+    A request served another way is not marked as waiting for
     the body, so its deadline is the 503 there (a read past a limit is still marked). Not chosen:
     an idle time under the deadline (any route whose deadline is set lower brings the 503 back,
     and nginx's `client_body_timeout`, whose minute the idle time follows, is usually what a proxy
     in front already uses); a deadline that starts after the body has arrived (a client that sends
     slowly would then hold a handler's slot past any bound).
 
-    Stands on: platform (RFC 9110, section 15.5.9: 408 Request Timeout); reasoned (the wait is
+    Stands on: platform (hyper, serving HTTP/1.1: a request with no length or a length of zero,
+    with `Expect: 100-continue` or asking to switch protocols as without, is handed on with a
+    body that has ended, is no bytes long and has no channel to the connection behind it, and
+    any other with one that has not ended, a chunked one whatever it holds); platform (RFC 9110,
+    section 15.5.9: 408 Request Timeout); reasoned (the wait is
     known where the deadline is, in the same poll, so the mark reads that poll's wait and needs no
     allocation); measured (callgrind, card-market's item page and its JSON over one keep-alive
     connection, 1,300 requests less 300 over 1,000, three repeats each, medians and ranges: the
@@ -3417,10 +3426,14 @@ rules something out.
     not mark the handler's thread; nor does one driven inside something that is not polled again
     when the deadline's timer fires, such as a `FuturesUnordered` of reads, which is the 503
     today), or Corten serves HTTP/2, where a body's reads would need the same mark and a test
-    that a stalled stream is the 408 while the connection's other streams go on.
+    that a stalled stream is the 408 while the connection's other streams go on, and where what
+    hyper holds for a stream that ended with its headers is to be read before that body is
+    handed on without it; or hyper comes to hand on a body it says has ended that still has
+    something to read or to release.
 
     Last checked: 2026-11-07, the count on `e4d8281c` (`5dba8477` with this change), and the
-    socket tests at the default deadline.
+    socket tests at the default deadline; 2026-11-26, hyper 1.12.0 (`Cargo.lock`), its source
+    read for which request bodies have ended as they are handed on, with a socket test of each.
 
 31. <a id="choice-favicon-path"></a>**`/favicon.ico` is the static directory's icon itself, the
     SVG when there is no `.ico`, not a redirect to its versioned URL.** Browsers ask for the
