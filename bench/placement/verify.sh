@@ -3,13 +3,19 @@
 # answers the workload's request as its side's unpadded binary does (the placement plan's first
 # point, CONTRIBUTING.md, Pull requests, item 2). run.sh runs it first.
 #   1. The base's unpadded binary is started twice and its answer's headers kept from each start
-#      (<out dir>/start-1.raw-headers, start-2.raw-headers): every header the plan masks, with a
-#      stated range or without, must have been sent once by each start and differ between them
-#      (mask.mjs starts). A value that is not shown to differ is not one the plan may mask.
+#      (<out dir>/start-1.raw-headers, start-2.raw-headers), each answer fetched by answers.mjs,
+#      the request builder turns.sh's comparison uses (Host and the plan's header lines, nothing
+#      else), and of the plan's status, or it is no evidence and fails verify.sh: every header the
+#      plan masks, with a stated range or without, must have been sent once by each start and
+#      differ between them (mask.mjs starts, on the headers answers.mjs wrote, by their SHA-256s).
+#      A value that is not shown to differ is not one the plan may mask.
 #   2. For each bin/<side>-p<pad>, it and bin/<side> are started and turns.sh, with no pair,
 #      compares their answers: status, every header but Date after the plan's mask, and the body
 #      as received, byte for byte; two answers of the unpadded binary must agree too, and a masked
-#      header with a stated range must be within it in every answer.
+#      header with a stated range must be within it in every answer. A placement is recorded as
+#      verified only from what answers.mjs verifies of what turns.sh left: its handoff line,
+#      printed after its servers' stop, the handoff.json of that SHA-256, the diff.txt and
+#      bodies.txt it seals and the verdict.txt of its outcome.
 # Any difference stops: the placement is not the same program. Each check is stopped (and fails)
 # after the plan's placementSeconds; each of the two starts of the base is given 100 tries of a
 # readiness request bounded to a second, and is stopped however verify.sh ends: TERM, and KILL
@@ -20,6 +26,7 @@
 # and stopping that server is the operator's. Every curl is run with --disable, so no curl
 # configuration of HOME's (a retry, a header) changes a request or stretches its bound, and with
 # --noproxy '*', so no proxy of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1.
+# answers.mjs reads neither, and gives the answer 10 s.
 # Every server is started with an environment of PATH, HOME, PORT and BIN alone, kept in
 # <out dir>/server-env.txt. Writes <out dir>/<side>-p<pad>/ and
 # <out dir>/verdicts.txt, one line a binary: "<binary> as <side>: answers: same; ...".
@@ -103,19 +110,24 @@ for s in 1 2; do
     until curl --disable --noproxy '*' -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null 3>&-; do
         i=$((i + 1)); [ $i -lt 100 ] || { echo "verify: nothing answers on 18083" >&2; exit 1; }; sleep 0.1 3>&-
     done
-    set --
-    while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    curl --disable --noproxy '*' -sS --max-time 10 -D "$out/start-$s.raw-headers" -o /dev/null "$@" "http://127.0.0.1:18083$REQ_PATH" </dev/null 3>&-
+    # The SHA-256 of the headers it wrote, which the mask's check below reads them by.
+    sha=$(exec 3>&-; exec node "$KIT/answers.mjs" start verify 18083 "$REQ_PATH" "$HEADERS" "$STATUS" "$out/start-$s") || exit 1
+    if [ $s = 1 ]; then sha1=$sha; else sha2=$sha; fi
     halt || exit 1
 done
-node "$KIT/mask.mjs" starts "$MASK_JSON" "$out/start-1.raw-headers" "$out/start-2.raw-headers" || { echo "VERIFY FAILED: the plan's mask" >&2; exit 1; }
-echo "two starts of base: every header the plan masks differs between them ($(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).map((m) => m.header).join(", ") || "none masked")' "$MASK_JSON"))" | tee "$out/starts.txt"
+said=$(node "$KIT/answers.mjs" starts verify "$MASK_JSON" "$out/start-1.raw-headers" "$sha1" "$out/start-2.raw-headers" "$sha2") || { echo "VERIFY FAILED: the plan's mask" >&2; exit 1; }
+printf '%s\n' "$said" >"$out/starts.txt"
+printf '%s\n' "$said"
+verified=0
 one() { # <side> <pad>
     d=$out/$1-p$2
     timeout -k 30 "$PLACEMENT_SECONDS" taskset -c "$CPU_DRIVER" sh "$KIT/turns.sh" "$d" "$W" 0 "$B/$1" "$B/$1-p$2" >"$d.log" 2>&1 \
         || { cat "$d.log" >&2; echo "VERIFY FAILED: $1-p$2 against $1" >&2; exit 1; }
-    echo "$1-p$2 as $1: $(cat "$d/answers/verdict.txt"); $(cat "$d/answers/bodies.txt")" >>"$out/verdicts.txt"
+    # Both the verdict and the bodies' evidence, as answers.mjs verifies them, or nothing is recorded.
+    line=$(node "$KIT/answers.mjs" verified "verify: $1-p$2" "$d/answers" "$d.log" "turns: $W") || { echo "VERIFY FAILED: $1-p$2 against $1: what turns.sh left is not a verified placement" >&2; exit 1; }
+    printf '%s as %s: %s\n' "$1-p$2" "$1" "$line" >>"$out/verdicts.txt"
+    verified=$((verified + 1))
 }
 for n in $PADS_P $PADS_Q; do one base "$n"; done
 case " $SIDES " in *" head "*) for n in $PADS_P; do one head "$n"; done ;; esac
-echo "verify: $(( $(wc -l <"$out/verdicts.txt") )) placements answer as their unpadded binary"
+echo "verify: $verified placements answer as their unpadded binary"

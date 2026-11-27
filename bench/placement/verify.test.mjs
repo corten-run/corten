@@ -13,7 +13,7 @@
 // connection while it runs and refuses one once it has ended.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -56,20 +56,24 @@ const LIFE = 45000;
  * TERM, writing its pid to terms when sent it, answers readiness and the request, drops the
  * connection of a request for /drop and never answers one for /hang, writing its pid to hung;
  * yielding: the same but ending on TERM; silent: ends on TERM, takes every connection and answers
- * no request, writing the time each arrives to asked. late: how long after it starts it begins
- * to listen on its port (its liveness socket is there at once).
+ * no request, writing the time each arrives to asked; unavailable: ends on TERM, answers every
+ * request but readiness (/) 503 with an x-nonce header of a value of its own. Every kind writes
+ * the header names of each request but readiness, lower case and sorted, to names. late: how long
+ * after it starts it begins to listen on its port (its liveness socket is there at once).
  */
 function fixture(kind, life = LIFE, late = 0) {
   const answer = kind === "silent"
     ? 'note("asked", Date.now());'
-    : 'if (q.url === "/drop") s.socket.destroy(); else if (q.url === "/hang") note("hung"); else s.end("ok");';
+    : kind === "unavailable"
+      ? 'if (q.url === "/") s.end("ok"); else { s.statusCode = 503; s.setHeader("x-nonce", String(process.pid) + Math.random()); s.end("busy"); }'
+      : 'if (q.url === "/drop") s.socket.destroy(); else if (q.url === "/hang") note("hung"); else s.end("ok");';
   return `#!/usr/bin/env node
 const at = (f) => require("node:path").join(__dirname, "..", f), note = (f, v = process.pid) => require("node:fs").appendFileSync(at(f), v + "\\n");
 setTimeout(() => process.exit(0), ${life});
 require("node:net").createServer((c) => c.destroy()).listen(at("alive-" + process.pid + ".sock"));
 note("pids");
 ${kind === "stubborn" ? 'process.on("SIGTERM", () => note("terms"));' : ""}
-setTimeout(() => require("node:http").createServer((q, s) => { ${answer} }).listen(Number(process.argv[2]), "127.0.0.1"), ${late});
+setTimeout(() => require("node:http").createServer((q, s) => { if (q.url !== "/") note("names", q.rawHeaders.filter((_, i) => i % 2 === 0).map((n) => n.toLowerCase()).sort().join(",")); ${answer} }).listen(Number(process.argv[2]), "127.0.0.1"), ${late});
 `;
 }
 
@@ -78,19 +82,29 @@ setTimeout(() => require("node:http").createServer((q, s) => { ${answer} }).list
  * command that checks it; the test then waits, past its end, for the work directory's servers
  * to have ended by themselves. start: the plan's start command; life: the server's own bound;
  * serve: the text of a stand-in for serve.mjs, put in a kit of its own under the work directory;
- * late: how long the server waits before it listens on its port.
+ * late: how long the server waits before it listens on its port; headers and mask: the plan's
+ * headers.txt and mask.json; pads: the plan's PADS_P, each bin/base-p<pad> a copy of bin/base;
+ * turns: the text of a turns.sh put in a kit of its own under the work directory, with the kit's
+ * own turns.sh beside it as turns-kit.sh.
  */
-function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life = LIFE, serve = null, late = 0 } = {}) {
+function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life = LIFE, serve = null, late = 0, headers = "", mask = "[]\n", pads = "", turns = null } = {}) {
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
   assert.ok(!taken(), "port 18083 is in use, and verify.sh's port is fixed: this test needs it free");
-  const work = join(tmp, name), vars = { WORK: work, KIT: serve === null ? here : join(work, "kit"), START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: 60, PADS_P: "", PADS_Q: "", SIDES: "base" };
+  const own = serve !== null || turns !== null;
+  const work = join(tmp, name), vars = { WORK: work, KIT: own ? join(work, "kit") : here, START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: 60, PADS_P: pads, PADS_Q: "", SIDES: "base" };
   mkdirSync(join(work, "plan"), { recursive: true });
   mkdirSync(join(work, "bin"));
   writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));
-  for (const [f, text] of [["headers.txt", ""], ["mask.sed", ""], ["mask.json", "[]\n"], ["request.lua", ""]]) writeFileSync(join(work, "plan", f), text);
+  for (const [f, text] of [["headers.txt", headers], ["mask.sed", ""], ["mask.json", mask], ["request.lua", ""]]) writeFileSync(join(work, "plan", f), text);
   writeFileSync(join(work, "bin", "base"), fixture(kind, life, late), { mode: 0o755 });
-  if (serve !== null) { mkdirSync(join(work, "kit")); writeFileSync(join(work, "kit", "serve.mjs"), serve); }
+  for (const pad of pads.split(" ").filter(Boolean)) writeFileSync(join(work, "bin", `base-p${pad}`), fixture(kind, life, late), { mode: 0o755 });
+  if (own) {
+    mkdirSync(join(work, "kit"));
+    for (const f of ["serve.mjs", "answers.mjs", "mask.mjs", "turns.sh"]) if (existsSync(join(here, f))) copyFileSync(join(here, f), join(work, "kit", f));
+    if (serve !== null) writeFileSync(join(work, "kit", "serve.mjs"), serve);
+    if (turns !== null) { copyFileSync(join(here, "turns.sh"), join(work, "kit", "turns-kit.sh")); writeFileSync(join(work, "kit", "turns.sh"), turns); }
+  }
   t.after(() => settle(work, life + 5000));
   return { work, args: [join(here, "verify.sh"), work, join(work, "verify")] };
 }
@@ -190,6 +204,42 @@ test("verify.sh stops a base that ends on TERM without waiting out the time it g
   // Two stops held to their 5 s each would take 10 s: an exited server is seen as one at once.
   assert.ok(r.seconds < 8, `verify.sh took ${r.seconds} s to stop two servers that end on TERM`);
   assert.ok(!taken(), "something still answers on 18083");
+});
+
+test("verify.sh's starts and turns.sh's comparison send the one request, Host and the plan's header lines alone, and a placement is recorded with its verdict and its bodies line", LINUX, async (t) => {
+  // Two starts of the base, and then one placement, base-p1, whose comparison asks A twice and B
+  // once: five requests for the page, each with the same header names. A request with a client's
+  // own User-Agent or Accept could be answered otherwise than the one the comparison makes.
+  const r = await verify(t, "one-request", "/page", { kind: "yielding", headers: "X-Plan: 1\n", pads: "1" });
+  assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
+  assert.equal(r.status, 0, r.said);
+  const names = readFileSync(join(r.work, "names"), "utf8").split("\n").filter(Boolean);
+  assert.deepEqual(names, Array(5).fill("host,x-plan"), `the requests for the page did not all send Host and the plan's header alone: ${names.join(" | ")}`);
+  assert.ok(r.said.includes("verify: 1 placements answer as their unpadded binary"), r.said);
+  assert.match(readFileSync(join(r.work, "verify", "verdicts.txt"), "utf8"), /^base-p1 as base: answers: same; body 2 bytes as received, sha256 [0-9a-f]{16} A and [0-9a-f]{16} B\n$/);
+});
+
+test("verify.sh takes no answer of another status than the plan's as evidence for its mask, though two such answers differ in the masked header", LINUX, async (t) => {
+  const r = await verify(t, "unavailable", "/page", { kind: "unavailable", mask: '[{ "header": "x-nonce" }]\n' });
+  assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
+  assert.notEqual(r.status, 0, r.said);
+  assert.ok(r.said.includes("verify: HTTP/1.1 503 Service Unavailable on 18083") && r.said.includes("not status 200: an answer of another status is no evidence for the plan's mask"), r.said);
+  assert.ok(!r.said.includes("every header the plan masks differs between them") && !existsSync(join(r.work, "verify", "starts.txt")), r.said);
+  assert.ok(!r.said.includes("placements answer as their unpadded binary"), r.said);
+});
+
+test("verify.sh records no placement whose bodies line or verdict is not what turns.sh sealed, though turns.sh passed it", LINUX, async (t) => {
+  // A turns.sh that runs the kit's own, which passes, and then takes away or replaces part of
+  // what it left: the placement is recorded only from both the verdict and the bodies' evidence.
+  for (const [name, after] of [["no-bodies", 'rm -f "$1/answers/bodies.txt"'], ["other-bodies", `printf 'body 2 bytes as received, sha256 ${"1".repeat(16)} A and ${"1".repeat(16)} B\\n' >"$1/answers/bodies.txt"`], ["no-verdict", 'rm -f "$1/answers/verdict.txt"']]) {
+    const turns = `st=0; sh "$KIT/turns-kit.sh" "$@" || st=$?\n${after}\nexit $st\n`;
+    const r = await verify(t, `unsealed-${name}`, "/page", { kind: "yielding", pads: "1", turns });
+    assert.equal(r.error, undefined, `${name}: verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
+    assert.equal(r.status, 1, `${name}: ${r.said}`);
+    assert.ok(r.said.includes("VERIFY FAILED: base-p1 against base: what turns.sh left is not a verified placement"), `${name}: ${r.said}`);
+    assert.equal(readFileSync(join(r.work, "verify", "verdicts.txt"), "utf8"), "", `${name}: a placement was recorded`);
+    assert.ok(!r.said.includes("placements answer as their unpadded binary"), `${name}: ${r.said}`);
+  }
 });
 
 test("verify.sh fails, saying so, when a START that forks the server and ends on TERM leaves that server listening after its stop", LINUX, async (t) => {

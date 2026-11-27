@@ -36,7 +36,11 @@
 //              accepted on either port when checked (status 4 and its line), is kept as the workload's expected difference
 //              (<run dir>/expect-<workload>.txt) and every placement of the run must show
 //              exactly it. Nobody reviewed that difference: the run recorded it. The digests of
-//              the two bodies are kept too (<run dir>/bodies-<workload>.txt)
+//              the two bodies are kept too (<run dir>/bodies-<workload>.txt). What the check left
+//              is read only as its handoff binds it: the handoff line turns.sh printed after that
+//              stop names answers/handoff.json by its SHA-256, which names the outcome (the same
+//              for status 0, differ for 4) and the SHA-256s of diff.txt and bodies.txt, so a file
+//              put in place of one of them is refused (answers.mjs handoff)
 //   plan       <run dir>/plan.json, check.json with those expected differences, and what it
 //              declares (<run dir>/declared.txt)
 //   parts      for each workload its pilot and then its gated part at the K that pilot sizes,
@@ -78,9 +82,10 @@
 // 0 when every part ran to its end as a dry run, though nothing was read, and 3 otherwise.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, constants, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve as path, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { handoff, regularBytes } from "./answers.mjs";
 import { K_MAX, K_MIN, problems as planProblems } from "./plan.mjs";
 import { pct } from "./stats.mjs";
 
@@ -303,25 +308,12 @@ export function issue({ date, tag, base, head, threshold, readings, line, since 
 
 const BODIES = /^body (\d+) bytes as received, sha256 ([0-9a-f]{16}) A and ([0-9a-f]{16}) B$/;
 
-const KINDS = [["isFIFO", "a FIFO"], ["isDirectory", "a directory"], ["isSymbolicLink", "a symbolic link"], ["isSocket", "a socket"], ["isBlockDevice", "a block device"], ["isCharacterDevice", "a character device"]];
-
 /**
  * The text of a file the kit left, read only when it is a regular file of its own: never
  * through a link, and a FIFO or a device is never opened, so no read of one can hold the run.
  * Throws an error with code ENOTREG for anything else, and lstat's when it is not there.
  */
-export function regular(file) {
-  const not = (s) => { const e = new Error(`${file} is ${KINDS.find(([k]) => s[k]())?.[1] ?? "something else"}, not a regular file, so it is not read`); e.code = "ENOTREG"; return e; };
-  const s = lstatSync(file);
-  if (!s.isFile()) throw not(s);
-  // Opened without following a link and without waiting, so one put in its place since is refused, not read.
-  const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-  try {
-    const f = fstatSync(fd);
-    if (!f.isFile()) throw not(f);
-    return readFileSync(fd, "utf8");
-  } finally { closeSync(fd); }
-}
+export const regular = (file) => regularBytes(file).toString("utf8");
 
 /** Whether a path is there, a link or a FIFO included, without opening or following it. */
 function there(file) {
@@ -479,15 +471,15 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
     // status 4 and that line together. A difference it found and then failed to clean up after,
     // or any other failure, leaves the workload not read, and nothing that check left is opened:
     // turns.sh may have refused what was at diff.txt (a FIFO, say), which a read could wait on.
-    const confirmed = failed?.status === 4 && readFileSync(failed.log, "utf8").split("\n").includes(`turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked`);
+    const log = regular(join(logs, `check-${w}-answers.out`));
+    const confirmed = failed?.status === 4 && log.split("\n").includes(`turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked`);
     if (failed && !confirmed) { why[w] = `the two sides' answers could not be compared: ${failed.said}`; continue; }
-    // A comparison that found the answers the same left a diff.txt, an empty one: none is nothing
-    // to read. Each file the check left is read only as a regular file of its own.
-    const at = join(work, "compare", "answers"), diff = failed && !there(join(at, "diff.txt")) ? "" : regular(join(at, "diff.txt"));
-    const differs = confirmed && diff !== "";
-    if (failed && !differs) { why[w] = `the two sides' answers could not be compared: ${failed.said}`; continue; }
-    const b = bodies(join(at, "bodies.txt"));
-    if (!b || (!failed && b.a !== b.b)) { why[w] = "the two sides' answers were compared, and their bodies' digests are not there as the kit keeps them (answers/bodies.txt)"; continue; }
+    // What the check left is read as its handoff binds it, after the stop: the outcome turns.sh's
+    // status says (the same for 0, a difference for 4), diff.txt and bodies.txt by the SHA-256s it
+    // sealed, each read once, as a regular file of its own. Anything else leaves the workload not read.
+    const sealed = handoff(join(work, "compare", "answers"), log, `turns: ${w}`, [failed ? "differ" : "same"]);
+    if (typeof sealed === "string") { why[w] = `the two sides' answers were compared, and what the check left is not what it sealed: ${clean(sealed)}`; continue; }
+    const diff = sealed.diff, b = sealed.bodies, differs = Boolean(failed);
     kept[w] = b;
     writeFileSync(join(dir, `bodies-${w}.txt`), `${b.line}\n`);
     if (differs) {
