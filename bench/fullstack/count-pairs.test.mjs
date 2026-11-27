@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
+import { EVERY_EVENT } from "./count-perf.mjs";
 import { EventEmitter } from "node:events";
 import { BAND, compare, complete, COUNTS, DAEMON_LOCK, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, RELEASE_MS, resolution, runPairs, schedule, spawnBounded, spawnExec, within } from "./count-pairs.mjs";
 
@@ -236,8 +237,8 @@ test("the runner pins each image's ID, tags by it, runs each invocation once and
     // Tagged by the pinned ID, never by the image's name.
     assert.ok(h.state.tags.every((t) => t === "sha256:base" || t === "sha256:head"));
     for (const [round, image] of h.state.counted) assert.equal(image, round.includes("-ab-") && round.endsWith("-head") ? "sha256:head" : "sha256:base", round);
-    // count.mjs is given the run's environment.
-    assert.ok(h.state.counted.every(([, , e]) => e === env));
+    // count.mjs is given the run's environment, and EVERY_EVENT, so its probe refuses a set any event of which it cannot read (#2232).
+    assert.ok(h.state.counted.every(([, , e]) => JSON.stringify(e) === JSON.stringify({ ...env, [EVERY_EVENT]: "1" })), JSON.stringify(h.state.counted[0]?.[2]));
     const json = first.targets.json;
     assert.equal(json.change.n, 6);
     assert.ok(json.change.bound > 0.05 && json.aa.bound < 0.01);
@@ -1102,8 +1103,8 @@ const a = process.argv.slice(2);
 const cpuList = a.includes("-C") ? a[a.indexOf("-C") + 1] : fs.readFileSync("/sys/devices/system/cpu/online", "utf8").trim();
 const cpus = cpuList.split(",").flatMap((p) => { const [x, y = x] = p.split("-").map(Number); return Array.from({ length: y - x + 1 }, (_, i) => x + i); });
 // Each event's name as perf 6.8 prints it: a legacy cache event less its modifier, and with -A
-// with its PMU's name in brackets (captured on perf 6.8.12, #2232).
-const shown = (e) => (e === "L1-icache-load-misses:u" ? (a.includes("-A") ? "L1-icache-load-misses [cpu]" : "L1-icache-load-misses") : e);
+// with its PMU's name in brackets (captured on perf 6.8.12, #2232); FAKE_PERF_L1I names it otherwise.
+const shown = (e) => (e === "L1-icache-load-misses:u" ? process.env.FAKE_PERF_L1I ?? (a.includes("-A") ? "L1-icache-load-misses [cpu]" : "L1-icache-load-misses") : e);
 // The probe (perf stat -A -e <set> -- sleep 1, no cgroup) answers on --log-fd 1 for each event it names, a row a CPU.
 // With FAKE_PROBE_HOLD naming its set, it leaves a self-bounded child holding its output as it exits.
 // With FAKE_BREAK too, it first makes that path a directory, so count.mjs's next write there fails.
@@ -1282,6 +1283,30 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       assert.ok(!existsSync(join(dir, "perf.jsonl")), "no count after an unconfirmed probe");
       assert.ok(!existsSync(join(kit, "results", "probe-held", "instructions.json")));
       assert.match(readFileSync(join(kit, "results", "probe-held", "count-kernel.txt"), "utf8"), /refused: .*cleanup unconfirmed[\s\S]*stopped: the probe's perf was not seen to end/);
+    }
+    // A perf that names the cache row in a way the kit does not read (here as perf 6.13's source
+    // writes it, which no one has captured, #2232): a round's count keeps its other events and records
+    // no L1i row, its probe noting why; under count-pairs.mjs (EVERY_EVENT), which needs every event,
+    // the probe refuses the host before any load.
+    {
+      const unread = { FAKE_PERF_L1I: "cpu/L1-icache-load-misses/" };
+      const round = await count("l1i-unread", "none", "none", unread);
+      assert.equal(round.code, 0);
+      assert.ok(Array.isArray(round.row) && round.row[0].userPerRequest === 100000 && round.row[0].userCyclesPerRequest === 100000 && round.row[0].userL1iMissesPerRequest === null, JSON.stringify(round.row));
+      assert.equal(round.row[0].perfDiagnostics["L1-icache-load-misses:u"], "no perf row");
+      assert.match(readFileSync(join(kit, "results", "l1i-unread", "count-kernel.txt"), "utf8"), /not counted: .*printed a row for "cpu\/L1-icache-load-misses\/"/);
+      const dir = join(root, "l1i-every");
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", HOME: process.env.HOME ?? root, ...unread, [EVERY_EVENT]: "1" };
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), "l1i-every", "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      assert.equal(code, 1, said);
+      assert.match(said, /perf cannot count .*printed a row for "cpu\/L1-icache-load-misses\/"/);
+      assert.ok(!existsSync(join(dir, "perf.jsonl")), "no load is counted once the probe refuses");
+      assert.ok(!existsSync(join(kit, "results", "l1i-every", "instructions.json")));
+      assert.match(readFileSync(join(kit, "results", "l1i-every", "count-kernel.txt"), "utf8"), /refused: .*printed a row for "cpu\/L1-icache-load-misses\/"/);
     }
     // Each pass's perf must be counting before its load starts and still counting when it ends
     // (#2183): one that starts late is waited for, and one that exits during its load fails the

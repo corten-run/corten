@@ -53,7 +53,7 @@ import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { k6Image } from "../load-tool.mjs";
-import { HALT_EXIT, loadTotals } from "./count-perf.mjs";
+import { EVERY_EVENT, HALT_EXIT, loadTotals } from "./count-perf.mjs";
 import { median, pct, upperRank } from "../placement/stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -767,7 +767,8 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
       else {
         // Written before count.mjs starts, so a restart that finds no exit after it refuses to go on.
         appendFileSync(file, JSON.stringify({ name: inv.name, dispatched: now() }) + "\n");
-        const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env });
+        // Every event is needed here (invalid), so count.mjs's probe refuses a set any event of which it cannot read.
+        const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env: { ...env, [EVERY_EVENT]: "1" } });
         // Its exit first, before anything here that can fail: a halt is in the ledger whatever follows.
         const exited = { name: inv.name, exited: now(), rc: r.status, signal: r.signal ?? null };
         appendFileSync(file, JSON.stringify(exited) + "\n");

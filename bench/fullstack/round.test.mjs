@@ -2210,11 +2210,11 @@ test("the probe refuses a set perf cannot count or does not answer for, and note
   // did not answer within its bound is refused, as any set is.
   const failed = probeVerdict(main, { status: 129, stdout: "", stderr: "event syntax error: 'L1-icache-load-misses:u'" });
   assert.equal(failed.refuse, null);
-  assert.match(failed.note, /exited 129: event syntax error.*the count repeats its first load with instructions:u alone/);
+  assert.match(failed.note, /exited 129: event syntax error.*the count goes on with the events it reads, and repeats its first load with instructions:u alone where that is unusable/);
   assert.match(probeVerdict(main, { status: null, stdout: "", stderr: "", error: "no answer: it did not finish within 30 s" }).refuse, /no answer/);
 });
 
-test("the probe reads perf's rows as the count does, and refuses a set whose rows the count would not read (#2232)", () => {
+test("the probe reads each CPU's row by the names a count reads, notes for a round and refuses for count-pairs.mjs an event a count would not read (#2232)", () => {
   // perf 6.8.12's probe output with -A on CPU 1, each set as count.mjs gives it (captured).
   const captured = {
     "instructions:u": "CPU1,9876399085,,instructions:u,1001211953,100.00,,",
@@ -2226,21 +2226,48 @@ test("the probe reads perf's rows as the count does, and refuses a set whose row
       "CPU1,189026,,L1-icache-load-misses [cpu],1001534115,100.00,,",
     ].join("\n"),
   };
-  for (const names of PROBE_SETS) assert.deepEqual(probeVerdict(names, { status: 0, signal: null, stdout: `${captured[names.join(",")]}\n`, stderr: "" }), { refuse: null, note: null }, names.join(","));
-  // main's whole set with its cache row under a name the count does not read is refused, not noted:
-  // the count's repeat with instructions:u alone would leave the row unread all the same.
-  const main = passEvents("main");
-  for (const other of ["cpu_core/L1-icache-load-misses/", "L1-icache-load-misses [cpu_core]"]) {
-    const v = probeVerdict(main, { status: 0, signal: null, stdout: captured[main.join(",")].replace("L1-icache-load-misses [cpu]", other), stderr: "" });
-    assert.equal(v.note, null, other);
-    assert.ok(v.refuse?.includes(`printed a row for ${JSON.stringify(other)}, which a count does not read as an event of the set`), String(v.refuse));
+  const out = (/** @type {string} */ stdout) => ({ status: 0, signal: null, stdout, stderr: "" });
+  for (const every of [false, true]) {
+    for (const names of PROBE_SETS) assert.deepEqual(probeVerdict(names, out(`${captured[names.join(",")]}\n`), every), { refuse: null, note: null }, names.join(","));
   }
-  // A hybrid CPU's rows name every event by its PMU ("%s/%s/"): a set's required event is unread too.
-  assert.match(probeVerdict(["instructions:u"], { status: 0, signal: null, stdout: "CPU1,9876399085,,cpu_core/instructions:u/,1001211953,100.00,,", stderr: "" }).refuse, /printed a row for "cpu_core\/instructions:u\/"/);
-  // A required event that did not count on one of its CPUs gave no count, whatever its other CPUs did.
-  assert.match(probeVerdict(["instructions:k"], { status: 0, signal: null, stdout: "CPU0,<not counted>,,instructions:k,0,100.00,,\nCPU1,5921134,,instructions:k,1001364859,100.00,,", stderr: "" }).refuse, /gave no count for instructions:k: /);
-  // perf's total with no CPU column (the probe as it was before -A, captured) is no row a count reads.
-  assert.match(probeVerdict(["instructions:u"], { status: 0, signal: null, stdout: "9875347976,,instructions:u,1001701573,100.00,2.93,insn per cycle", stderr: "" }).refuse, /gave no count for instructions:u/);
+  // main's whole set with its cache row under a name a count does not read (another PMU's, as perf
+  // 6.8 to 6.12 print one, or perf 6.13's form, from their source; edited from the capture), or with
+  // its cache event <not supported> (edited from the capture): a round's count goes on, recording no
+  // L1i, so its probe notes it; count-pairs.mjs needs every event, so its probe refuses it.
+  const main = passEvents("main");
+  for (const [row, why] of [
+    ["L1-icache-load-misses [armv8_pmuv3_0]", `printed a row for "L1-icache-load-misses [armv8_pmuv3_0]", which a count does not read as an event of the set`],
+    ["cpu/L1-icache-load-misses/", `printed a row for "cpu/L1-icache-load-misses/", which a count does not read as an event of the set`],
+  ]) {
+    const text = captured[main.join(",")].replace("L1-icache-load-misses [cpu]", row);
+    assert.deepEqual(probeVerdict(main, out(text)), { refuse: null, note: `perf stat -e ${main.join(",")} ${why}; the count goes on with the events it reads, and repeats its first load with instructions:u alone where that is unusable` }, row);
+    assert.deepEqual(probeVerdict(main, out(text), true), { refuse: `perf stat -e ${main.join(",")} ${why}`, note: null }, row);
+  }
+  const unsupported = captured[main.join(",")].replace("CPU1,189026,,L1-icache-load-misses [cpu]", "CPU1,<not supported>,,L1-icache-load-misses [cpu]");
+  assert.deepEqual(probeVerdict(main, out(unsupported)), { refuse: null, note: null });
+  assert.deepEqual(probeVerdict(main, out(unsupported), true), { refuse: `perf stat -e ${main.join(",")} gave no count for L1-icache-load-misses:u: CPU 1: <not supported>`, note: null });
+  // No row at all for an event the set holds, under EVERY_EVENT: refused (CPU 1's cycles:k row dropped).
+  assert.match(String(probeVerdict(main, out(captured[main.join(",")].split("\n").filter((l) => !l.includes("cycles:k")).join("\n")), true).refuse), /gave no count for cycles:k: no row for it$/);
+  // A hybrid CPU's rows name every event by its PMU ("%s/%s/", from source): a set's required event is unread too, and refused either way.
+  assert.match(String(probeVerdict(["instructions:u"], out("CPU1,9876399085,,cpu_core/instructions:u/,1001211953,100.00,,")).refuse), /printed a row for "cpu_core\/instructions:u\/"/);
+  // A required event that did not count on one of its CPUs gave no count, naming that CPU (CPU 1's
+  // row from the kernel set's probe, captured; CPU 0's edited, in the form of the <not counted>
+  // rows a captured count printed, less their cgroup).
+  assert.equal(probeVerdict(["instructions:k"], out("CPU0,<not counted>,,instructions:k,0,100.00,,\nCPU1,5921134,,instructions:k,1001364859,100.00,,")).refuse, "perf stat -e instructions:k gave no count for instructions:k: CPU 0: <not counted>");
+  // perf's totals with no CPU column (main's whole set probed without -A, captured) are no rows a
+  // count reads: instructions:u has none, a note for a round; under EVERY_EVENT the set's first
+  // event, cycles:u, already has none and refuses it.
+  const totals = [
+    "3371703422,,cycles:u,1001713984,100.00,,",
+    "11014109,,cycles:k,1001713188,100.00,,",
+    "9875347976,,instructions:u,1001701573,100.00,2.93,insn per cycle",
+    "175727,,L1-icache-load-misses,1001692230,100.00,,",
+  ].join("\n");
+  assert.match(String(probeVerdict(main, out(totals)).note), /gave no count for instructions:u: no row for it/);
+  assert.match(String(probeVerdict(main, out(totals), true).refuse), /gave no count for cycles:u: no row for it$/);
+  // A row with no event name is skipped, as a count skips it (perf writes a second metric of an event so in CSV; constructed).
+  assert.deepEqual(probeVerdict(["instructions:u"], out(`${captured["instructions:u"]}\nCPU1,,,,,,0.50,frontend cycles idle`), true), { refuse: null, note: null });
+  // The probe reads names and counts only: not one row a CPU, nor running times, which the count checks (parsePerCpuCounts).
 });
 
 test("a bounded run kills a command past its bound and gives up one that does not exit, instead of waiting it out", async () => {

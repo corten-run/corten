@@ -27,7 +27,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
-import { ACK_FD, ACK_MS, acknowledgments, CONTROL_FD, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
+import { ACK_FD, ACK_MS, acknowledgments, CONTROL_FD, EVERY_EVENT, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
@@ -230,8 +230,9 @@ async function counted(id, name, work, events) {
 // Before any load: the kernel and CPU this runs on, and `perf` counting an idle second on the
 // count's CPUs with each event set a count gives it (PROBE_SETS), a row a CPU as a count asks, one
 // at a time, each within a bound, so a `perf` that does not fit the running kernel, cannot count a
-// set, names a row as a count would not read it (#2232) or does not answer stops the step here
-// with the reason. Each set is written to count-kernel.txt before it runs, so
+// set's required event, names a row as a count would not read it (#2232) or does not answer stops
+// the step here with the reason (in main's whole set, a note: probeVerdict). Under count-pairs.mjs
+// (EVERY_EVENT) every event of a set is required. Each set is written to count-kernel.txt before it runs, so
 // a host that stops as one runs leaves its name (#2151); a stopped host cannot refuse, and is the
 // watcher's to notice (droplet.mjs). r8's droplet locked up as counting started (#466); this probe
 // has no `-G`, so it would not have caught that, but the round's log says how far counting got.
@@ -241,6 +242,7 @@ const waiting = existsSync("/var/run/reboot-required.pkgs") ? readFileSync("/var
 const pending = waiting ? ` (installed, waiting for a reboot: ${waiting})` : "";
 // The CPUs perf counts on, each of which must give its own row in a count: -C's list, or every online CPU for -a.
 const cpus = selectedCpus(countCpus, existsSync("/sys/devices/system/cpu/online") ? readFileSync("/sys/devices/system/cpu/online", "utf8") : undefined);
+const everyEvent = process.env[EVERY_EVENT] === "1";
 const kernelFile = join(dir, "count-kernel.txt");
 writeFileSync(kernelFile, `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\ncpu ${cpu}\n`);
 console.log(`counting on kernel ${kernel}${pending}, cpu ${cpu}, perf stat ${countCpus.join(" ")}`);
@@ -249,7 +251,7 @@ for (const names of PROBE_SETS) {
   appendFileSync(kernelFile, `${line}\n`);
   console.log(line);
   const probe = await runBounded("perf", perfProbeArgs(countCpus, names), { env: { ...process.env, LC_ALL: "C" } });
-  const { refuse, note } = probeVerdict(names, probe);
+  const { refuse, note } = probeVerdict(names, probe, everyEvent);
   // A probe whose end was not seen stops the step before anything else is written: its record
   // is the halt's to write, and a write that fails does not turn the halt into another exit.
   if (probe.cleanup !== "confirmed") halt(() => {

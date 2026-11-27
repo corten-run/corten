@@ -1599,12 +1599,19 @@ three runs:
    CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
    count, a running time above zero and 100% of its enabled time (read from the digits perf
    printed: a percentage above 100 is refused, not read as 100, and one just below 100 is not taken
-   as 100), and no other CPU did. A row is read by the name `perf` prints: a cache event without its
-   `:u`, and with `-A`, from `perf` 6.8 on, with its PMU's name in brackets, so the user L1i row is
-   `L1-icache-load-misses [cpu]` on a CPU with one core PMU, or `L1-icache-load-misses`; a row
-   under another PMU's name (a hybrid CPU's `cpu_core/L1-icache-load-misses/`) or of an event the
-   count did not ask for is not read, and the count has no row for that event
+   as 100), and no other CPU did. A row is read by the name `perf` prints, and the user L1i row is
+   read as `L1-icache-load-misses` or `L1-icache-load-misses [cpu]` only
    ([#2232 The catalog count reads no L1i row since perf is run with -A: perf names the row with a suffix, so every invocation is not valid](https://github.com/corten-run/corten/issues/2232)).
+   `perf` prints a cache event without its `:u`, and with `-A` names it by version: 6.1 to 6.7
+   bare; 6.8 to 6.12 with the core PMU's name in brackets, which is `cpu` only on an x86 CPU with
+   one core PMU (`L1-icache-load-misses [cpu]`, captured from `perf` 6.8.12); 6.13 and 6.14 as
+   `cpu/L1-icache-load-misses/`; 6.15 on bare again. Only 6.8.12's rows are captured (with `-A`
+   and, bare, without it); the other versions' names are read from `perf`'s source. A hybrid CPU names every
+   event by its PMU (`cpu_core/...`). A host whose `perf` names the row any other way (6.13 or
+   6.14, an Arm or a hybrid CPU) has no L1i row for the count: a round's count goes on with its
+   other events and records L1i as having no `perf` row, and `count-pairs.mjs`, which needs every
+   event, is refused at the probe (below). A name is added to those read only from a row captured
+   on such a host.
    A CPU the
    app never ran on during the load gives no running time either and cannot be told from one whose
    counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
@@ -1629,10 +1636,14 @@ three runs:
    leader has exited, when the group's number may be another's) and given up as no answer 5 s
    after that rather than waited out; a probe whose `perf` exits while something it started
    holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with the reason when `perf` does not fit that kernel, cannot count a set's
-   required event on every row of it, prints a row a count would not read as an event of the set,
-   or does not answer; the first pass's whole set failing by itself is noted, not
-   refused, since the count then repeats that load with `instructions:u` alone (a row a count
-   would not read is refused there too, since the repeat would leave it unread). Each set is written
+   required event (`instructions:u` or `instructions:k`) on any of its rows, prints a row a count
+   would not read as an event of the set, or does not answer. The first pass's whole set failing
+   by itself (its cache row under another name, say) is noted, not refused: the count goes on with
+   the events it reads and repeats that load with `instructions:u` alone where that is unusable.
+   Under `count-pairs.mjs` every event of a set is required and nothing is a note, so a host on
+   which any event has no whole count or no row the count reads is refused before the first load.
+   The probe checks names and counts only; one row a CPU and the running times are the count's
+   checks. Each set is written
    to `count-kernel.txt` before it runs, so a host that stops during one leaves its name. A host
    that stops cannot refuse: `droplet.mjs` notices one that does not answer (`--stall`). A count's
    `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails
