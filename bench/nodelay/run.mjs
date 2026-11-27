@@ -28,9 +28,9 @@ const [name = "run", rounds = "20", repeat = "5", gapsArg = "0,1000,10000"] = ar
 const gaps = gapsArg.split(",").map(Number);
 const apps = ["default", "on", "off"];
 const network = "nodelay";
-// nginx 1.31.9 since 2026-11-20; the run README.md reports (2026-11-11) used 1.29.8, and each
-// result records `nginx -v`, so compare across that change as a changed input.
-const nginxImage = "nginx:1.31.9-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7";
+// nginx 1.31.10 since 2026-11-26 (1.31.9 from 2026-11-20); the run README.md reports (2026-11-11) used
+// 1.29.8, and each result records `nginx -v`, so compare across those changes as a changed input.
+const nginxImage = "nginx:1.31.10-alpine@sha256:7fc0fb4af7bf006aeb31aea88069976060f8f0a0a86b667126742cc17f4e31ae";
 const docker = (...a) => {
   const run = spawnSync("docker", a, { encoding: "utf8", maxBuffer: 1 << 28 });
   if (run.status !== 0) throw new Error(`docker ${a.join(" ")}: ${run.stderr}`);

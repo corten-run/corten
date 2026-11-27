@@ -23,9 +23,9 @@ const docker = (...a) => {
   if (r.status !== 0 && !optional) throw new Error(`docker ${a.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
 };
-// nginx 1.31.9 since 2026-11-20; failover-r1 and -r2 ran nginx:1.27-alpine, so compare across
-// that change as a changed input. Each result records `nginx -v`.
-const nginxImage = "nginx:1.31.9-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7";
+// nginx 1.31.10 since 2026-11-26 (1.31.9 from 2026-11-20); failover-r1 and -r2 ran nginx:1.27-alpine,
+// so compare across those changes as a changed input. Each result records `nginx -v`.
+const nginxImage = "nginx:1.31.10-alpine@sha256:7fc0fb4af7bf006aeb31aea88069976060f8f0a0a86b667126742cc17f4e31ae";
 const containers = ["fb-lb", "fb-a", "fb-b", "fb-nats", "fb-pg"];
 const net = ["--network", "feedbench"];
 const db = "postgres://postgres:postgres@10.77.77.10/feeds";
