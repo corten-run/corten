@@ -63,7 +63,7 @@ async function placementCatalog(call) {
 }
 // Private object identity, never a caller-supplied property or public diagnostic.
 const closedReads = new WeakMap(), settledAccountFailures = new WeakSet(), settledCatalogFailures = new WeakSet();
-const unsentDeletes = new WeakSet();
+const unsentDeletes = new WeakSet(), dispatchRefusals = new WeakSet();
 export const isSettledAccountFailure = (error) => settledAccountFailures.has(error);
 export const isSettledCatalogFailure = (error) => settledCatalogFailures.has(error);
 const diagnosticOption = /^--(?:inspect(?:-brk|-wait)?|trace-tls|tls-keylog|heapsnapshot-signal|heap-prof|cpu-prof|report-on-signal|report-on-fatalerror|report-uncaught-exception|trace-events-enabled|trace-event-categories|experimental-network-inspection)$/;
@@ -311,12 +311,16 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     } catch (error) { throw stopped(error?.controlUncertain === true, { code: "provider-credential" }); }
     finally { if (Buffer.isBuffer(result?.stdout)) result.stdout.fill(0); if (Buffer.isBuffer(result?.stderr)) result.stderr.fill(0); }
   };
-  return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
+  // An in-process caller may pass the controller's DELETE dispatch guard. It runs after this
+  // engine's last await before the request: a throw refuses with nothing sent, and false is a
+  // proof that expired, reported as unsent only where an unsent DELETE can be reported.
+  return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, _registration, guardDispatch) => {
     const now = args?.[0] === "account" || args?.[1] === "placement" ? readClock(clock) : clock;
     const started = now(), deadline = started + timeout;
     assert.ok(Array.isArray(args) && args.at(-2) === "--context", "saved provider context required");
     if (args[2] === "create") assert.ok(host && args[7] === host.region, "provider create placement differs from authorized mode");
     if (deleteProofExpiresAtMs !== undefined) assert.ok(args[2] === "delete" && positive(deleteProofExpiresAtMs));
+    if (guardDispatch !== undefined) assert.ok(args[2] === "delete" && typeof guardDispatch === "function", "a dispatch guard is only for a DELETE");
     const consumptionBudget = Math.ceil(deadline - now());
     if (!Number.isSafeInteger(consumptionBudget) || consumptionBudget <= 0 || consumptionBudget > timeout)
       throw stopped(true, { code: "provider-credential" });
@@ -345,6 +349,18 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       if (deleteProofExpiresAtMs !== undefined) {
         const current = now();
         assert.ok(phase === "delete" && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
+      }
+      if (guardDispatch !== undefined) {
+        assert.equal(phase, "delete");
+        let fresh;
+        try { fresh = guardDispatch(); }
+        catch (error) {
+          // The controller's own refusal: nothing was sent, and its reason stays its own.
+          mutationPending = false;
+          if (error && typeof error === "object") dispatchRefusals.add(error);
+          throw error;
+        }
+        assert.ok(fresh !== false, "current retirement proof expired");
       }
       try { requestEntered = true; response = await request({ method, path, body, credential, timeout: remaining, interrupted,
         ...(phase === "account" || phase === "catalog" ? { readDeadline: deadline, now } : {}),
@@ -593,6 +609,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       return { status: 0, stdout, stderr: "" };
     } catch (error) {
+      if (dispatchRefusals.has(error)) throw error;
       if (reportUnsent && mutationPending && (!requestEntered || unsentDeletes.has(error))) {
         mutationPending = false;
         return unsentDelete;

@@ -1392,8 +1392,278 @@ observations or a running unit preserves the host. Fleet output reports
 without another DELETE. Native-started jobs use the separate collection and
 custody paths above. No retirement path can delete a running benchmark.
 
-For failure before monitor registration, `setup-watcher-proof-missing` means
-the preserved archive already records a watcher failure. `setup-host-proof-refused`
+For failure before monitor registration, an archived
+`control/watch-failure-<id>.json` is never a receipt. Only the exact record the
+guardian's watcher writes when its loop reaches the session's drainage deadline
+can select a drain proof, and only when it names exactly one settled bootstrap
+control in the saved ledger and the archive holds no receipt for it. Any other
+watcher failure (an unowned scope participant, a changed listener or observer, a
+sample or row cap, a launcher or observation timing failure) keeps refusing. The
+terminal host query then also runs a separate fixed drain proof
+(`cloud-setup-drain-source.mjs`) after the guardian, in its namespace. For each
+failed watcher it requires, on the same boot: the live failure record
+byte-identical to the archived one; that control's result exiting with the
+ledger's code; its watcher unit failed or unloaded, with no main or control PID,
+no queued job, an absent or empty cgroup and its observer gone; the session scope
+from its registration absent or empty, with no process of the query's own inventory
+inside it; and no process with an identity from that
+session's chain or a parent among its PIDs. A process can leave both the scope
+and its parent (for example `systemd-run --scope`, then reparenting to PID 1),
+so every process outside the live query's own set must also have started before
+the earliest failed session's first process. That set is the live session's
+chain, its watcher, the query, its timeout and the SSH listener. The listener
+must be the same process (PID and start time) that served every failed session,
+so a listener restarted during or after a session, or a different one, refuses.
+Outside that set only kernel threads are exempt: the kernel-thread flag, kthreadd
+(PID 2) as parent and the root cgroup, all three.
+Every check of the ordinary query still applies, including
+the exact custody inventory, so a stream or unknown control file still refuses.
+The host and the verifier also bind each of the failed control's request, start,
+launcher, registration, result and failure records to the copied custody, which
+retirement compares with the archive. Its receipt is
+`benchmark-failed-setup-retirement/v3` (host observation
+`benchmark-failed-setup-host/v3`, control proof
+`benchmark-control-setup-query/v2` with exact top-level fields). A query with no
+archived failure keeps its previous bytes and schemas, so the droplet path replays
+saved receipts unchanged. Fleet verification and group continuation replay a v1,
+v2 or v3 retirement receipt with the same verifier, which selects the drain proof
+from the archived watcher failures, not from the receipt, so a group retired this
+way can be continued. The proof adds no write: the failure, archive and exit
+stay as they were, and it never qualifies the group.
+
+The drain proof observes host state that can change, so its DELETE carries the
+same deadline as the pinned unused proof: 60 seconds from the local start of the
+host query, checked after the retirement's exact host read, before and after the
+receipt is written, again after the intent's evidence verification immediately
+before the intent is saved, after the DELETE's account preflight and in the
+provider request. A drain proof's intent
+is saved only after that preflight and the deadline check that follows it, as the
+exit-one retirement's is, so a proof that expires during the preflight (or a
+preflight that fails) leaves its receipt and recorded digest with no intent, and
+the next collect recovers them on a fresh proof as below; so does a drain proof
+that expires during the intent's evidence verification. The pinned unused and
+v1 and v2 setup retirements save their intent before the DELETE's preflight, as
+before (a pinned unused proof that expires during that verification likewise
+saves no intent); a v1 or v2 setup retirement keeps its existing check of 60 seconds from
+the proof's end, made before the intent. Expiry before the intent does not
+consume the intent; expiry after the intent forbids another DELETE, so a later
+collect only verifies the saved receipt and checks exact absence. For a drain
+proof that leaves only the interval between the intent and the request (the
+dispatch guards, the production checkpoint and worker IPC, and the provider's own
+deadline check), which has no provider read; a proof that expires there still
+leaves the host retired with no DELETE sent, which
+[#2166 A failed-setup retirement whose drain proof expires before its DELETE is sent stays retired with no way to a fresh proof](https://github.com/corten-run/corten/issues/2166)
+tracks.
+
+Expiry after the receipt is written but before the intent leaves a receipt with no
+intent. The next collect runs a fresh status check and host query, which appends
+controls, so the old receipt is no longer for the final control. Collection
+verifies it against the ledger prefix it names, which must still bind those exact
+rows, and keeps it under its content hash for archival only. Only the fresh
+receipt, which must be for the final control, authorizes the intent and the DELETE
+under its own deadline. A history copy kept by an earlier interrupted recovery is
+read back at the receipt's own bound (8 MiB for a v2 or v3 receipt), not 4 KiB.
+
+That prefix check takes the receipt's own timestamps, so it cannot tell an edited
+receipt from the one written. Before a v2 or v3 receipt is published, the state
+therefore records its digest as `pendingRetirement` (`kind` `setup-failed` and
+`evidenceSha256`); the retirement state that carries the intent removes it, and
+each new receipt replaces it first. An interrupted v2 or v3 receipt is recovered
+only when its bytes match that digest. A mismatch refuses with `interrupted
+retirement receipt differs from its recorded digest; preserve host`, and a state
+with such a receipt but no recorded digest (left by a controller from before this
+check) refuses with `interrupted retirement receipt has no recorded digest;
+preserve host`. Either refusal keeps no history copy, writes no intent and sends
+no DELETE; the host is then handled by the operator cleanup below. Without the
+prefix rule such a receipt could never be recovered anyway, because the retry's
+appended controls make it fail the full-ledger check. A v1 setup receipt and the
+unused and pinned unused receipts record no digest and keep their recovery by full
+verification against the current state; the pinned unused reservation is locked
+by its digest, so it cannot carry one. `controllerState` accepts
+`pendingRetirement` only on a bound `starting` or `running` host with its
+archive, evidence hash and extracted evidence preserved, and with no
+`retirement`, `deletionIntentAt` or `destroyedAt`.
+
+The digest is saved before the receipt is published, so a published v2 or v3
+receipt always has one, and a collect stopped between the two saves only the
+digest: the next collect finds no receipt and retires on a fresh proof. The
+digest is saved through its own fresh exclusive staging file
+(`state.json.pending-retirement-<random>.tmp`), as `createErrored` is, so a
+save torn there leaves that stage and no digest, and the next collect retires
+on a fresh proof. The stage is never read or removed; it stays for the operator
+to archive. A v2 or
+v3 receipt and its history copy are published whole: each is written and synced
+as `<name>.stage` in the same directory, then hard-linked to its final name,
+which fails rather than replace an existing file, and the directory is synced
+(except on Windows, where the controller does not sync directories at all, so a
+power loss there can still lose a link the collect reported). Publication
+requires hard links in the state root; on a filesystem without them the link
+fails, the collect refuses with the stage left in place and no receipt, and
+nothing falls back to a direct write.
+Between writing and syncing the stage and the link, each runs the retirement's
+custody check below; a refusal there publishes nothing, so a saved digest changed
+or a drain proof expired while the stage was written leaves no receipt or history
+copy. The stage's name alone is not trusted: the write holds the file it created
+open by its own descriptor until the link or the refusal, so a replacement cannot
+reuse its inode, and keeps the digest of the bytes it wrote. Immediately before
+the link the name must still be that file (device and inode) holding those bytes,
+and after the link both names must be that file before the stage name is removed. A stage replaced or rewritten there
+refuses with `publication stage replaced before its link; nothing published, the
+replacement is kept` and is left as found. A custody refusal removes the stage
+only while it is still the file this write created; a replaced stage is kept and
+the refusal says `the publication stage was replaced and is kept`.
+A write interrupted before publication therefore leaves only that stage, never a
+partial receipt or history copy. A stage is never read: the next collect removes
+a stage with exactly that name before it reads the receipt or the history copy,
+including one left beside a published file whose stage link was not yet removed.
+The v1, unused and pinned unused receipts keep their exclusive direct writes.
+
+The bytes this process wrote, not the file, are the authority for the DELETE.
+From publication until the DELETE is sent, the receipt is part of the custody
+check below and must match that digest each time it runs.
+
+Every write a retirement makes, and its DELETE, rests on one custody check. In
+order: once the intent's verification has run, the evidence it pinned (below), the
+slowest part; once published, the receipt this process wrote; the lock this
+operation holds (the file this process created, by identity and bytes); the saved
+reservation (`state.json`, byte for byte) as this process last loaded or saved
+it; and, until the intent, a pinned unused or drain proof's deadline. The fast
+checks always follow the slow ones, so a change made while the evidence is walked
+is still seen. Once the DELETE has been sent, only the lock and the reservation
+remain. That lock is
+`operation.lock` for an ordinary collect and `stream-recovery.lock` for an
+invalid-monitor recovery collect, which never takes the original
+`operation.lock` it finds; a retirement under any other lock refuses. The
+reservation bytes are read before the retirement's first await and must hold
+exactly the state this process has loaded or saved; they are replaced only by the
+retirement's own saves (a v2 or v3 receipt's digest, then the intent), so a
+change made by anything else is refused and kept as made, never overwritten. The check runs after every await
+or slow step and immediately before every write: after the exact host read (a
+provider read), before a stale publication stage is removed, after an
+interrupted receipt is verified (which hashes the archive and its extraction) and
+before each of its stage removal, history copy and unlink, before the digest,
+before and after the receipt is written, at the start of the intent (for a drain
+proof, after the DELETE's account preflight), again after the intent's own
+verification immediately before it is saved, and after the absence read before
+`destroyedAt`. Each state save (the digest, the intent and `destroyedAt`)
+checks it once more after writing and syncing its stage, immediately before the
+rename that replaces `state.json`, and so does each receipt and history
+publication before its link (above); a refusal there removes that complete stage,
+which this write created, so it blocks no later save (a torn write's stage still
+stays, as above). For the intent save that check includes the receipt and the
+pinned evidence, so a receipt edited while the intent's stage is written refuses
+with no intent and leaves the receipt and its recorded digest. Before the intent a mismatch refuses with `saved reservation
+changed before the deletion intent; preserve host`, `retirement proof expired
+before deletion`, `operation.lock changed; preserve custody` or
+`stream-recovery.lock changed; preserve custody`, writes nothing after it and
+sends no DELETE: changed during the host read, no digest, receipt or intent is
+saved; changed during the account preflight or the intent's verification, the
+receipt and its digest stay with no intent. A drain proof that expires during
+that verification likewise leaves the receipt and its digest, which the next
+collect recovers on a fresh proof. The retirement is verified, and its archive
+and extraction pinned (below), before the intent is saved, so evidence that
+changed by then refuses with no intent and leaves the receipt and its digest for
+the next collect, which recovers them on a fresh proof once the evidence matches
+again. After the intent the deadline goes with the DELETE itself rather than with
+this check, so the absence read that follows a DELETE sent in time is not refused
+for it.
+
+After the intent, every retirement kind
+(unused, pinned unused and failed-setup v1, v2 and v3) checks through that same
+custody check, as this process left them, the
+receipt, the saved reservation (`state.json`, byte for byte, so including its
+retirement digest), for a v2 or v3 receipt the archived control custody its proof
+was built from (the inventory and bytes of the evidence's `control/` folder,
+including every watcher failure), for every failed-setup receipt the other inputs
+its replay verifier hashes, and the lock this operation holds. The control custody
+and those other inputs are checked first, then the receipt, the lock and the
+reservation, so the last step before dispatch follows the slower evidence checks
+and a receipt edited while the archive's identity is read is still refused. Those other inputs are `results.tgz` and the
+whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
+and `control/`). They are pinned without rereading them: the verification just
+before the intent hashes each, recording `results.tgz`'s file identity (device,
+inode, size, mode, link count, birth, modification and change times) around its hash and
+every tree entry's identity in the same walk, and the dispatch check compares only
+those identities. The archive's identity is compared on both sides of the tree walk,
+the slow part, so `results.tgz` changed while the tree is walked still refuses. Nothing else in the state root is pinned; the replay verifier
+reads nothing else. The check runs after the DELETE's account
+preflight, before the controller hands the DELETE to its transport, and again in
+the dispatch guard the transport calls after its last local await before the
+request: the production transport's cancellation checkpoint, and, for an
+in-process provider engine, the engine's own checkpoint before its REST request.
+There it runs before a pinned retirement's own guard and refuses by throwing,
+never by reporting the request unsent. The production provider worker is a
+separate process and a function cannot cross its IPC, so in production the last
+fence is the controller's, immediately before the action is sent to the worker; the
+worker's own checkpoint and the IPC transit are not covered, and nothing covers
+the interval between the request leaving and the provider acting on it; a change
+made only in that uncovered interval is not detected. A mismatch found by one of
+these checks refuses with `saved retirement reservation changed; preserve host`,
+`archived control custody changed; preserve host`, `setup archive changed;
+preserve host`, `setup evidence changed; preserve host`, `operation.lock changed;
+preserve custody` or `stream-recovery.lock changed; preserve custody` and sends no
+DELETE. A receipt edited before the intent (for a drain proof, including during
+the DELETE's account preflight) refuses with
+`published retirement receipt differs from the bytes written; preserve host`,
+saving no intent; its recorded digest stays, so a later collect refuses it as an
+interrupted receipt that differs from its recorded digest. Edited after the
+intent, it refuses with the same message before the DELETE is sent, and a later
+collect refuses with `retirement evidence changed`. Neither sends a DELETE; the
+host is handled by the operator cleanup below.
+
+The exact absence read after the DELETE is a provider read too, so `destroyedAt`
+is saved only after the lock this operation holds and the saved reservation (the
+intent state it wrote) are checked again. A lock missing or replaced during that
+read refuses with `operation.lock changed; preserve custody` and keeps the
+replacement; a changed reservation refuses with `saved retirement reservation
+changed; preserve host`. Either leaves the intent without `destroyedAt`, and a
+later collect under its own lock verifies the receipt, checks exact absence and
+sends no second DELETE.
+
+The drain proof is narrow. It can settle only a setup job whose host shows no
+Docker socket or daemon at query time (in practice one that failed before
+`docker-install`), with the guardian's exact deadline record archived, and that
+left no process running that started during or after the failed session.
+`bootstrap_stage=docker-install` starts `dockerd` and `containerd`, and the
+controller keeps polling for the bootstrap marker (about every 30 seconds) while
+the job runs, so a poll whose watcher fails after that point would find both
+daemons older than its fence, which alone would accept them. In drain mode only,
+the host query and the verifier therefore both refuse with
+`Docker or containerd present` when `/run/docker.sock` or
+`/run/containerd/containerd.sock` exists or is a symlink (even a dangling one), or
+when any process's kernel command name is `dockerd` or `containerd` or starts with
+`containerd-` (a shim). The query records the two socket observations in the proof
+as `dockerSockets`. A `dockerd` or `containerd` started after the fence never
+reaches this check: the start-time check runs first on both sides and refuses it
+with `process started during or after a failed session`. The
+command name is what a process reports, not an identity: this is a conservative
+refusal, not a proof that no daemon held session work, and it also refuses a host
+running Docker for any other reason. A failure before Docker started that leaves
+any process behind refuses too. A
+timer or other short-lived service that happens to run at query time (for example
+`apt-daily` or `fwupd-refresh`, before the job disables them) refuses too. A
+refusal is not retried: the query's refusal is recorded in the ledger, every later
+collect stops with `setup-host-proof-refused` before another query, and the host
+is then handled as it was before this proof existed, by the operator cleanup
+below. The proof covers processes that were started. It cannot see work the
+session handed to a process that already existed (such as `dockerd` or a D-Bus
+service) or a thread added to an existing process. Nor does it see work handed to
+systemd or D-Bus that has not started a process yet, such as a transient timer
+that has not fired; that is acceptable only because control sessions run the
+controller's fixed scripts.
+
+`setup-watcher-proof-missing` means an
+archived failure is not that deadline record, there is no control ledger, the
+failure does not name exactly one bootstrap row in the ledger, that row is not
+settled (no local terminal) or its code is not an integer, or the failure sits
+beside its own receipt; collection stops before any query. A
+custody read failure (for example a non-physical control folder or a record that is
+not a regular file) is not reported with that stage: it keeps its own error, which
+the production wrapper reports as `controller-collect`, and also stops before any
+query. After
+monitor registration the drain proof is never used: an archived watcher failure
+refuses with the same stage before any query, because stream state may exist on
+the host. `setup-host-proof-refused`
 means the registered terminal host query had an acknowledged nonzero exit, or
 exited zero but returned unusable proof. In the latter case the ledger retains
 code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
@@ -2058,7 +2328,13 @@ grouped attempts. `groups-rN/` is the exclusive durable reservation; even failed
 preflight consumes it. An unresolved reservation blocks another round in that root.
 The root launch lock and round operation lock are exclusive files with process
 identity, synced before work. No PID liveness guess, stale-lock removal or takeover
-is automatic. A killed process may leave both locks. Inspect the exact process and
+is automatic. The round's `operation.lock` and its `stream-recovery.lock`, the
+child locks the controller takes around a round operation, are removed only while
+that path is still the file the controller created, with its bytes: if one was replaced during the
+operation, teardown keeps the replacement and refuses with `<lock> was replaced
+during this operation; the replacement is kept; preserve custody`, with any
+earlier refusal as its cause. The root launch lock is still removed by path at
+the end of a launch. A killed process may leave both locks. Inspect the exact process and
 all state/evidence before any operator recovery; never relaunch the reserved round.
 
 State writes use exclusive temporary files, file fsync, atomic rename and directory

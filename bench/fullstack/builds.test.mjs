@@ -590,8 +590,8 @@ const otherSpringBuilds = [
   // The defaults and legacy Live rounds build every image in one remote setup step of 90 minutes, a
   // limit all those images share, not Spring's own: this checks only that it is passed on and that
   // Spring's Maven runs alone fit inside it.
-  { runner: "bench/fullstack/droplet.mjs", call: '].join(" && "), 90));', builds: 0, seconds: 90 * 60,
-    forward: "`flock -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,", shorter: ["), 90));", "), 15));"] },
+  { runner: "bench/fullstack/droplet.mjs", call: '].join(" && ")), 90), lockLost));', builds: 0, seconds: 90 * 60,
+    forward: "`flock -E ${flockBusy} -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,", shorter: ["), 90), lockLost));", "), 15), lockLost));"] },
 ];
 
 /** Whether a runner builds images in its known calls only, with its deadline written and passed on as expected. */
@@ -699,18 +699,24 @@ function measuredStepSeconds(/** @type {string} */ source, /** @type {number} */
 
 /**
  * Whether run-all.mjs stops an unattended build call at the limit `calls()` gives it: round.mjs's
- * buildStep passes each call's limit on unchanged, and the watchdog compares the call's time with it,
- * and a call's quiet time with round.mjs's idleMinutes.
+ * buildStep passes each call's limit on unchanged, run-all.mjs's call hands it to round.mjs's
+ * superviseCall in milliseconds with round.mjs's idleMinutes, and superviseCall compares the call's
+ * time with the one and its quiet time with the other.
  */
 function watchdogUses(/** @type {string} */ runAll, /** @type {string} */ round) {
   return runAll.split("const minute = 60_000;").length === 2 && runAll.split("const all = calls(").length === 2 &&
     runAll.split("await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call,").length === 2 &&
-    runAll.split("const call = (/** @type {number} */ limit, /** @type {string[]} */ args) =>").length === 2 &&
-    runAll.split("if (Date.now() - started > limit * minute) stopped =").length === 2 &&
-    runAll.split("else if (Date.now() - heard > idleMinutes * minute) stopped =").length === 2 &&
+    runAll.split("const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) =>").length === 2 &&
+    runAll.split("const result = await superviseCall(child, {").length === 2 &&
+    runAll.split("limitMs: unattended ? limit * minute : Infinity,").length === 2 &&
+    runAll.split("idleMs: unattended ? idleMinutes * minute : Infinity,").length === 2 &&
     !/(?<![\w.])idleMinutes\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/.test(runAll) &&
     !/(?<![\w.])limit\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/.test(runAll) &&
-    round.split("for (const [step, limit, ...args] of all) {").length === 2 && round.split("const { stopped, code } = await call(limit, args);").length === 2;
+    round.split("for (const [step, limit, ...args] of all) {").length === 2 &&
+    (round.match(/built\.push\(app\);\r?\n\s*const result = await call\(limit, args\);/g) ?? []).length === 1 &&
+    round.split("if (Date.now() - started > limitMs) stopped =").length === 2 &&
+    round.split("else if (Date.now() - heard > idleMs) stopped =").length === 2 &&
+    !/(?<![\w.])(?:limitMs|idleMs)\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/.test(round);
 }
 
 /** The parity job's Spring test and proof steps. */
@@ -770,9 +776,11 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   const runAll = readFileSync(join(repo, "bench/fullstack/run-all.mjs"), "utf8");
   const roundSource = readFileSync(join(repo, "bench/fullstack/round.mjs"), "utf8");
   assert.ok(watchdogUses(runAll, roundSource), "run-all.mjs does not stop a build call at the limit calls() gives it");
-  assert.ok(!watchdogUses(runAll.replace("started > limit * minute", "started > Math.min(limit, 15) * minute"), roundSource), "accepted a clamped watchdog");
+  assert.ok(!watchdogUses(runAll.replace("limitMs: unattended ? limit * minute", "limitMs: unattended ? Math.min(limit, 15) * minute"), roundSource), "accepted a clamped watchdog limit");
+  assert.ok(!watchdogUses(runAll, roundSource.replace("started > limitMs", "started > Math.min(limitMs, 15 * 60_000)")), "accepted a clamped watchdog");
   assert.ok(!watchdogUses(runAll, roundSource.replace("await call(limit, args);", "await call(Math.min(limit, 15), args);")), "accepted a clamped build call limit");
-  assert.ok(!watchdogUses(runAll.replace("heard > idleMinutes * minute", "heard > 15 * minute"), roundSource), "accepted a shorter idle cutoff");
+  assert.ok(!watchdogUses(runAll.replace("idleMs: unattended ? idleMinutes * minute", "idleMs: unattended ? 15 * minute"), roundSource), "accepted a shorter idle cutoff");
+  assert.ok(!watchdogUses(runAll, roundSource.replace("heard > idleMs", "heard > Math.min(idleMs, 15 * 60_000)")), "accepted a clamped idle watchdog");
   // The watchdog also stops a call that prints nothing for idleMinutes, and build.mjs prints a measured
   // step's output only when it returns, so a silent build-cost step is stopped then, before its two-hour
   // deadline; that cutoff is still longer than the image's Maven runs are allowed.

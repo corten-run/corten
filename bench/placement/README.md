@@ -33,7 +33,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `probe.env` | The build's environment, names to text. The build sees these, `PATH`, `HOME`, where `rustup` and `cargo` keep their files, the toolchain and the kit's own three variables, and nothing else of the shell `build.sh` is run from. |
 | `probe.build` | The build command, run in the probe's copy. |
 | `probe.binary` | The built binary under the target directory, as `release/probe`. |
-| `probe.start` | The command that serves `$BIN` on `127.0.0.1:$PORT`: the allocator, its settings and the probe's configuration belong here, since a server sees `PATH`, `HOME`, `PORT` and `BIN` and nothing else of the shell `run.sh` is run from. A workload may give a `start` of its own. |
+| `probe.start` | The command that serves `$BIN` on `127.0.0.1:$PORT`: the allocator, its settings and the probe's configuration belong here, since a server sees `PATH`, `HOME`, `PORT` and `BIN` and nothing else of the shell `run.sh` is run from. It must be, or `exec`, the process that listens: the kit stops the process the command is and nothing it started, so a command that starts the server and waits (a shell that does not `exec` it, say) can end on TERM and leave the server listening, and `verify.sh` fails when anything still accepts on its port after a stop. A workload may give a `start` of its own. |
 | `host.cpuModel` | Text the host's CPU model must contain, or `null` for any. |
 | `host.cpus` | `server`, `load` (a list) and `driver`: CPUs of their own for the server, `wrk`, and the driver with `perf`. |
 | `load` | `threads` and `connections` of `wrk`, and a turn's `seconds`. |
@@ -42,7 +42,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `pilot` | Optional: `K` of the pilot A/A, and `why` when it is not 100. |
 | `workloads[].name` | Lowercase letters. A work directory runs one workload. |
 | `workloads[].declared` | What the plan says of the workload; the report prints it. |
-| `workloads[].request` | `path`, `headers` (each `"Name: value"`) and optionally `script`, a `wrk` script in place of [`get.lua`](get.lua) that ends with the same `RESULT` line. |
+| `workloads[].request` | `path`, `headers` (each `"Name: value"`) and optionally `script`, a `wrk` script in place of [`get.lua`](get.lua) that ends with the same `RESULT` line. The path is the request target the answers are captured from, sent as written (a `/./` or `/../` in it included), and the one `wrk` asks for under the kit's `get.lua`; a custom `script` can send another path, and the kit does not check that it does not. The path starts with `/`, is printable ASCII and holds no quote, backslash or `#`: `curl` drops a fragment and `wrk` sends it, so the answers and the load would ask for different targets. |
 | `workloads[].status` | The status every compared answer must have. |
 | `workloads[].mask` | The header values masked when two answers are compared: `{ "header": name }`, with `"range": [low, high]` for one the workload's cost depends on. `[]` when none. Every masked header must differ between two starts of the base, and one with a range (`low` under `high`) must also be within it in every answer; a single stated value could not do both, so the kit takes a range alone. A header with a range that the two starts send alike stops the run at `verify.sh`: see [what it does not do](#what-it-does-not-do), item 12. |
 | `workloads[].K` | `"pilot"`, the smallest K the sizing check passes from this plan's pilot, or a number from 5 to 254. |
@@ -51,10 +51,18 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `workloads[].reads` | The thresholds this run reads across placements: `["margin"]`, `["reduction"]` or both. One a single build already read outside its band is left out and stays as that build read it, but for the margin of a workload read for the catalog's `page` or `json`: see [what it does not do](#what-it-does-not-do), item 14. |
 | `workloads[].reduction` | The smallest worthwhile reduction as a fraction (`0.02`), or `null` when the plan declares no benefit side. |
 | `workloads[].recordsSpread` | Whether the plan declares, before the run, that its A/A records a placement spread. |
-| `workloads[].expect` | Optional: a file holding the exact difference between base's and head's answers that the change makes by design (the `diff` of their masked headers, and a line for bodies that differ). Without it the two must answer the same. |
+| `workloads[].expect` | Optional: a file holding the exact difference between base's and head's answers that the change makes by design, as `turns.sh` writes it to `answers/diff.txt`: the difference of their masked headers in `diff`'s normal format (empty when those are the same), then one bodies line, `bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>` when the bodies differ and `bodies same: <N> bytes, sha256 <its>` when they do not, each SHA-256 in full. `turns.sh` compares the two files byte for byte, so an expected difference binds the header lines that differ, every other header line to being the same on both sides, and both bodies by their lengths and SHA-256s, whether the bodies differ or not. `plan.mjs` refuses one that does not end with exactly one bodies line of those two forms, and a `bodies same` line alone, which `turns.sh` writes only after the headers' difference. Without it the two must answer the same, and `diff.txt` is empty. [`answers.mjs`](answers.mjs) has `curl` capture each answer once, into files it has just created, and takes whether the two differ, the difference held to `expect`, the lengths and the SHA-256s from those bytes as `curl` wrote them; the headers' difference is the system `diff`'s, run once on the two masked headers' files. It writes `diff.txt` once, created new, and never reads it back: anything already at `diff.txt` when it is written, a link included, fails the placement. The difference is kept as bytes throughout, so a header byte that is not UTF-8 is compared and kept as it was sent. |
 
 The pad lists are not in the plan: `pads.mjs` gives the two lists for a K, and `plan.mjs` refuses a
 K whose lists miss the fourth point's phase rules.
+
+The bodies line took its SHA-256s, and a difference in the headers alone its `bodies same` line, in
+[#2152 A plan's expected difference holds a placement to its bodies' lengths, not to the bodies](https://github.com/corten-run/corten/issues/2152).
+An expected difference written before then has the lengths alone, or no bodies line when the
+bodies were the same, and `plan.mjs` now refuses both: record it again. Kept results are read as
+the kit they ran under compared their answers, and their `kit-sha256.txt` names that kit's
+files: results of an earlier kit were held to the bodies' lengths, or to no body when the headers
+alone differed, not to the bodies.
 
 ## The commands, in order
 
@@ -128,7 +136,9 @@ there is not mended by running it again. The kit has gone down that path twice: 
 for nothing, and then in the trend's first run, the first of the kit's runs that was read
 ([Tests](#tests) says what each was and what no kept run has shown).
 
-`sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer, a
+`sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer
+(and, under the difference it made as the expected one, a third body of its length, and the
+probe's own body under other headers, whose difference ends with its `bodies same` line), a
 failed request, a placement past its time limit, a second pad of a wrong size, files that are no
 longer what `plan.mjs` listed, a run `run.sh` must refuse and a counter that read zero each stop
 what they must. Name a case to run it alone (`answers`, `failed`, `limit`, `map`, `inputs`,
@@ -189,11 +199,85 @@ one of the commands above with its output under `<run dir>/log`:
    second pad fits is refused when that part is built, which for a gated part is after its
    pilot's turns. It then starts the two sides' unpadded binaries once and compares their
    answers as `turns.sh` compares a placement's, stopped at the plan's `placementSeconds` as a
-   placement is. That limit is on this check, which the command adds: `verify.sh`, which each
-   part's `run.sh` runs first, waits for the servers it starts with no limit of its own. A release
+   placement is. That limit is on this check, which the command adds; `verify.sh`, which each
+   part's `run.sh` runs first, holds each placement's comparison to the same limit, gives
+   each of its two starts of the base 100 readiness requests of at most a second, and stops
+   each start with TERM and, if it is still running 5 s later, KILL. Each start runs under
+   [`serve.mjs`](serve.mjs), the parent of the process the start command is (or execs), which
+   sends those two signals to that direct child alone, through its child handle (a number it has
+   not yet reaped cannot name another process), and stops it when `verify.sh`'s end of its input
+   closes. So a signal during the stop does not cut it short, and a `verify.sh` killed outright
+   still has that child stopped. `serve.mjs` gets an environment of `PATH` and `HOME` alone, so
+   no `NODE_OPTIONS` holds it, and `verify.sh` waits for it about 15 s at most (it ends within
+   about 10 s), then fails, saying the cleanup is unconfirmed, and signals nothing. Nothing the
+   child started is stopped: after each stop `verify.sh` makes one connection to its port, of at
+   most a second, and fails if anything takes it, so a listener left by a start command that does
+   not exec its server is found, and fails the check, but stopping it is the operator's.
+   `turns.sh` runs each server it starts, for a placement's answers and for each turn, the same
+   way: under `serve.mjs`, which writes the server's process number for the CPU check and `perf`
+   (the start command is exec'd, so that process is the server; `serve.mjs` waits idle on its
+   input, on the driver's CPU), stopped through its input after the answers check, after each
+   turn and however `turns.sh` ends, the placement's deadline TERM during the stop and a KILL of
+   `turns.sh` included, waited for about 15 s at most and, once every server that stop ends has
+   ended, followed by one connection to each of their ports that nothing may take (a port checked
+   while the other server's stop still ran could be opened again in that time). Before its first
+   start it makes one connection to each of its two ports, which nothing may take either. The deadline's `timeout` signals `turns.sh`'s whole
+   process group, so its TERM reaches the servers too, and `serve.mjs`, sent it as well, stops
+   each as it does when its input ends. The
+   `curl`s in `verify.sh` and `turns.sh`, all to 127.0.0.1 and used only for readiness requests
+   and the checks of a port, run with `--disable`, so a `.curlrc` (a retry, a header) changes
+   neither a request nor its bound, and with `--noproxy '*'`, so no `http_proxy` or `ALL_PROXY`
+   of the environment's answers for the servers, each bound to a second. The answers both
+   scripts check are captured by `curl`, which `answers.mjs` runs with `--disable` and
+   `--noproxy '*'` as well, `--globoff`, so a path such as `/{a,b}` is sent as it is and never
+   becomes two requests, and `--path-as-is`, so a path such as `/root/../target` is asked for as
+   written, not as `/target`: one request each, sending the `Host` line and the plan's header lines
+   (`curl`'s own `Accept` and `User-Agent` left out unless the plan has them), bound to 10 s, its
+   header lines kept as `curl` writes them and its body as received, and refused unless its final
+   response has the plan's status. An interim `1xx` response (`103 Early Hints`) is not the
+   answer's status, but its header lines are kept and compared with the final response's, so an
+   answer with early hints differs from one without. The mask's checks (every masked header sent
+   once, different in two starts, and within its stated range) read the final response's header
+   block alone, from its status line to the blank line that ends it, so a masked header only an
+   interim response or a chunked trailer sends is sent 0 times. The comparison masks a header in
+   that final block alone, so an interim block and any trailers are compared with no header
+   masked (every block, the final one included, is compared with each line's CR before its LF
+   taken off and every `Date` line left out): two answers whose early hints preload different files differ, even when the plan masks
+   `Link`, because nothing shows an interim block's value may differ between starts. Both scripts run `answers.mjs` with an
+   environment of `PATH` alone (so no `NODE_OPTIONS` holds it) under `timeout`, 30 s (60 s for a
+   placement's comparison, which takes three answers) and KILL 5 s after, and fail saying so when
+   it is stopped. That stop reaches `answers.mjs` alone, so each command it runs has a bound of its
+   own that outlives it: `curl`'s `--max-time`, and a `timeout` of 10 s, KILL 2 s after, around
+   `diff`. `serve.mjs` publishes its
+   server's process number by writing it to a staging file it creates new (`.pid.tmp`) and renaming
+   that over the published path, so anything already at the staging path, a FIFO included, stops
+   the server and fails the start instead of holding `serve.mjs`. A file or link at the published
+   path is replaced; anything `rename` cannot replace, such as a directory, stops the server and
+   fails the start. So a server that takes a
+   connection and never answers holds neither script, nor a signal it has held off until that
+   request ends, any longer. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
    file by a hash of it), and no plan written before the run can say how. So the difference
-   found there is kept as the workload's `expect` for this run
+   found there is kept as the workload's `expect` for this run, but only as `turns.sh` reports
+   one after both servers ended and nothing accepted on either port when checked (status 4 and
+   its line `A and B answer differently; both servers ended and nothing accepted on either port
+   when checked`): a difference after which a stop fails, is unconfirmed or is cut by a signal
+   ends `turns.sh` 1, and leaves the workload not read. `turns.sh` likewise prints a passing
+   verdict (`answers: same`, or as the expected difference says) and writes
+   `answers/verdict.txt` only after that stop of both servers has passed. What the stop checks
+   is limited: `serve.mjs` exits 0 only once Node reports its server's exit, which it does once
+   it has reaped that process, so the server `serve.mjs` started (the process the start command
+   is, or execs) has ended; and each port refuses one connection when it is checked. A process
+   the start command leaves behind, rather than being or exec'ing the server, is not tracked: if
+   it opens a port after that check, it is not seen. The start command must be, or exec, the
+   server. `turns.sh` prints, after that stop, one line `turns: <workload>: handoff sha256
+   <SHA-256>` naming `answers/handoff.json`, which `answers.mjs` wrote with the outcome (the
+   same, as expected, or differ) and the SHA-256s of `diff.txt` and `bodies.txt`, in one form
+   (those three keys in that order, as `JSON.stringify` writes them, and a newline), which is read
+   only when its bytes are exactly that form again, so a key given twice is refused; the trend reads
+   the outcome, the difference and the bodies line only from files whose bytes have those
+   SHA-256s, so a file put in place of one of them after the comparison leaves the workload not
+   read. The difference is kept
    (`<run dir>/expect-<workload>.txt`), with the two bodies' digests
    (`<run dir>/bodies-<workload>.txt`), and the row says "answers differ as recorded". Nobody
    reviewed that difference: the run recorded it.
@@ -201,9 +285,12 @@ one of the commands above with its output under `<run dir>/log`:
    part it reads `answers/bodies.txt` of every placement the part was resolved to have (its
    `plan/resolved.json`), so results that hold fewer are not read, and requires the two bodies
    the check kept: the release's on both sides of a pilot's or an A/A's placement, the release's and
-   `main`'s in the change. `turns.sh` holds a placement to the expected difference, which has
-   the header lines that differ and the two bodies' lengths, and keeps the bodies' digests
-   without comparing them, so a third body of the same length passes it and does not pass here.
+   `main`'s in the change. `turns.sh` holds a placement of the change to the expected
+   difference, which has the header lines that differ and a bodies line of the two bodies'
+   lengths and SHA-256s (of the one body, when the headers alone differ), so a third body of
+   the same length fails it there. A pilot's or an A/A's placement has no
+   expected difference: `turns.sh` holds its two sides to each other, and this holds them to the
+   release's body.
 4. It reads each gated part's `report.json`, keeps the row as `<run dir>/row.md` and then adds
    it to the page, which it replaces whole from a file written beside it.
 
@@ -215,8 +302,8 @@ lower bound of the change, `main` against the release, is at or above the thresh
 otherwise. A pass says the run did not show a rise of at least the threshold. It does not say
 the cost is under it: a lower bound of +1.9% under a bound of +5% is a pass. Anything else is
 "not read", with the reason in the row, never a pass: a probe that does not build at the
-release tag, answers not compared in time or a comparison that left no `diff.txt` that can be
-read (one that found the answers the same leaves an empty one), a pilot that sizes no K, a step that failed whatever
+release tag, answers not compared in time or a comparison whose files are not what its handoff
+sealed (one that found the answers the same leaves an empty `diff.txt`), a pilot that sizes no K, a step that failed whatever
 report it left, a report that cannot be read, a placement with another body, an A/A that does
 not resolve, a comparison without a bound. One workload not read leaves the other to be read
 and the row to be written. Nothing is run again for its result. The kit's own page for a gated
@@ -225,7 +312,10 @@ part still reads its bound against +1%, as for a change; the trend's row does no
 What the command trusts is what the kit's own scripts wrote in `<run dir>` during this run, when
 the step that wrote it ended with status 0. It does not defend against a file edited by hand or
 by another process. It does guarantee that nothing it cannot read becomes a pass or loses the
-row: such a workload is "not read", and the row is written.
+row: such a workload is "not read", and the row is written. It reads a file a step left only as
+a regular file of its own, never through a link, and never opens a FIFO, a directory or a device
+there, so no file left behind can hold the run; and of an answers check that failed (any status
+but 4 with its line), it opens nothing at all.
 
 For a run past its threshold the command drafts an issue, its title and body kept as
 `<run dir>/issue.md`, with the pull requests `main` merged from the row before it to this one.
@@ -270,9 +360,9 @@ while it ran.
 | The map check | `map.mjs check` | With aligned code, the placement's map against the unpadded link's by LLD's layout rule, in place of "moved by the pad". |
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
-| The mask | `verify.sh`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. A masked header the two starts send alike stops the run, with a range or without. |
-| Answers | `verify.sh`, `turns.sh` | Each placement answers as its unpadded binary, and a placement's two binaries alike, before its turns. |
-| Turns | `turns.sh` | Every turn on a fresh start on the server's CPU; a failed request, or a counter that is zero or under 100%, fails the placement, and nothing is run again. |
+| The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every compared answer (the two starts are checked for presence and difference only). Both read each answer's final response's header block, never an interim `1xx` one's header lines or a trailer `curl` writes after it, and the comparison masks a header in that block alone, comparing the others with nothing masked. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
+| Answers | `plan.mjs`, `verify.sh`, `turns.sh`, `answers.mjs` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. Each answer is captured once by `curl`, with the plan's status, and every fact about it is taken from those bytes, the headers' difference by the system `diff`; the difference and the bodies line are compared and written as `diff.txt` once, created new, and never read back, with `bodies.txt` and a `handoff.json` that names the outcome and both files' SHA-256s. Anything already at a file it writes (a file, or a link, to `/dev/null` or the expected difference say), an answer of another status, cut short or not sent in 10 s, fails the placement. `verify.sh` records a placement only as `answers.mjs verified` reads it from that handoff. |
+| Turns | `turns.sh`, `answers.mjs` | Every turn on a fresh start on the server's CPU, its `perf` and `wrk` output written to files created new for that turn and kept byte for byte; a failed request, output that is not exactly one complete `RESULT` line of decimal counts and each counter once in a row that ends with a newline, or a counter that is zero or whose percentage is not `100.00` (or `100`) as written, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |
 | Eligibility and K | `pilot.mjs`, `plan.mjs --sized-from` | The A/A may size a run, on this plan's setup as far as item 11 below compares it, and the K passes under each model kept, at that K itself. A K nothing checked is said to be unchecked in every reading. |
 
@@ -348,8 +438,8 @@ side's aligned sections, its list and the second pads' lines.
 ## What is this host's alone
 
 The scripts assume, and nothing in a plan changes: an x86-64 Linux host (a pad is bytes of `int3`,
-`0xcc`); ports 18081 and 18082 on 127.0.0.1 for a placement's two servers and 18083 for
-`verify.sh`'s, free when a run starts; `cc` on `PATH` as the C compiler that assembles the pads
+`0xcc`); ports 18081 and 18082 on 127.0.0.1 for a placement's two servers (`plan.mjs` writes
+them to `resolved.sh` as `PORT_A` and `PORT_B`) and 18083 for `verify.sh`'s, free when a run starts; `cc` on `PATH` as the C compiler that assembles the pads
 and that `rustc` links through (`wrap/cc` runs `/usr/bin/cc` after recording the link); a probe
 binary named `probe`; `/proc/cpuinfo` for the CPU model; and, for `setup.sh` only, Debian 13's
 package names. `get.lua` and a plan's own script are `wrk`'s Lua.
@@ -367,24 +457,92 @@ files of those names under the tag `evidence/deadline-timer-2`; about a fifth of
 
 ## Tests
 
-`npm run check` runs `pads.test.mjs`, `stats.test.mjs`, `map.test.mjs`, `report.test.mjs` and
-`trend.test.mjs` without a bench host. Two of them read earlier runs' kept files where they are kept, under the
+`npm run check` runs `pads.test.mjs`, `stats.test.mjs`, `map.test.mjs`, `report.test.mjs`,
+`answers.test.mjs`, `trend.test.mjs` and `verify.test.mjs` without a bench host. Two of them read earlier runs' kept files where they are kept, under the
 tags `evidence/placement-sizing-1999` (an A/A's counts) and `evidence/placement-aligned-code-6`
 (the maps), which are too large for `bench/`; in a checkout without those tags they fail with the
 `git fetch` that brings them ([`tags.mjs`](tags.mjs)).
 
-Those tests run one shell script, and only on Linux: `trend.test.mjs` runs the trend's answers
+`answers.test.mjs` runs `answers.mjs` on servers of its own; its captures and comparisons need
+Linux, `curl`, `diff` and `timeout` and are skipped elsewhere: the one request sends the `Host` line and the
+plan's header lines alone, to the path as written (one request for `/{a,b}` or `/p[1-2]`), and
+reaches no proxy of the environment's; an answer of another status is refused by the comparison and
+by a start, the final response's status counting (`103` then `503` is refused as `103`, and `103`
+then `200` accepted as `200`); a `diff` that stalls is gone within its own bound once the
+`timeout` around `answers.mjs` has stopped it; the difference, the lengths, the SHA-256s and the kept
+bodies come from one request per answer, and the difference is the system `diff`'s of the masked
+headers; a header that differs only in its whitespace (`X-Test:\t alpha  ` against
+`X-Test: alpha`), a change after the 1,000th header line, and lines B,A,B against A,A,B (`2c2`)
+are each found as `diff` finds them; a header byte that is not UTF-8 (`0xe9`) is kept in the
+difference byte for byte and matches it as `expect`; an answer cut short or never sent is refused;
+something put at `diff.txt` or at a capture's files just before they are made (a link to
+`/dev/null`, to the expected difference or nowhere, or a file) is refused and never written
+through. On any platform: a handoff refuses a regular file put in place of `diff.txt`,
+`bodies.txt` or `handoff.json`, another outcome, and a handoff in any other form (a key twice,
+pretty-printed, reordered, no newline); and a turn is recorded only from exactly one complete
+`RESULT` line and newline-ended `perf` rows at `100.00` or `100` as written (not `100oops`,
+`99.99`, `99.99999999999999999`, `100.0`, `1e2` or `+100`), its output kept byte for byte, a
+NUL included.
+
+Two shell scripts are run, and only on Linux: `trend.test.mjs` runs the trend's answers
 check, which is `turns.sh` with no pair turned, on servers of its own (the same answer, two
-bodies of one length, a side that never answers), on a CPU the test may run on, and fails
-saying so when the kit's two ports are in use. What `build.sh`, `run.sh`, `verify.sh` and
-`turns.sh` refuse otherwise is held by the selftest alone, on a host that has `perf` and `wrk`,
-and by nothing in `npm run check`. The selftest's `inputs` case holds `build.sh`'s four checks of the files named
-by path and `run.sh`'s two, `refusals` holds `run.sh`'s refusal of results already there, of
-binaries built for another part and of another CPU model, and `zero` holds the above-zero test
-of the counters before a run and in a turn. Held by a whole run on a host and by no case: the
-counters at 100% and the refusal of one under it, the answers of every placement against its
-unpadded binary, a masked header that does differ between two starts, and the probe's source
-and each build's environment reaching the results.
+bodies of one length, a third body of that length under the difference the two made, a
+difference in a header alone and, under it, another body both sides share, a difference in two
+headers with one between them, whose first hunk alone, expected, must fail, a `diff.txt` that
+cannot be written, an empty file, a link to `/dev/null`, a lone first hunk or a link to the
+expected difference put at `diff.txt` by a server while it answers, which must fail and leave
+that file as it was, a stand-in `diff` that replaces B's body with a third of the same length,
+which must change nothing, headers that differ only in their whitespace or after the 1,000th
+line and the B,A,B lines, each found as `diff` finds them, answers of another status under a stand-in `head` that prints a
+`200` line, which must leave no verdict, no handoff and no counts, an answer cut short, a side
+that never answers, answers that differ after which a start command that forks its server
+leaves it listening, which must not read as a difference, and a proxy of the environment's
+that answers everything, which no request may reach), on a CPU the test may run on, and fails
+saying so when the kit's two ports are in use. Its trend runs, with a stand-in for the kit, also
+refuse a regular file put at `diff.txt` or `bodies.txt` after the check, another outcome
+sealed, a handoff with a key twice, and a FIFO there, and keep a recorded difference that is not
+UTF-8 byte for byte in `expect-<workload>.txt`. It also runs `turns.sh` itself on two servers that ignore TERM: after
+answers that are the same, sent TERM while it stops them after answers that differ (which then
+must say no difference), sent TERM alone while a readiness request waits on a server that takes
+the connection and never answers, and under the check's own deadline, whose TERM reaches the
+whole process group, it must have both stopped within a bound, and leave nothing on the kit's
+ports, by the time it exits; killed outright while they run, while `answers.mjs` waits on B's
+answer, or while B's start waits to open its log (a FIFO there), it cannot wait for them, and
+`serve.mjs` stops them after it has ended, within a bound the test counts from the KILL (9 s).
+With a server that ends at once on TERM but leaves a process that opens its port again 1.5 s
+later, while the other's stop takes 5 s, it must fail, after answers that differ and after the
+same, rather than say the stop was confirmed; and with something on its port that takes a
+connection and never answers before it starts, it must refuse at once and start no server. With
+stand-ins for `perf` and `wrk`, a turn's output must reach the raw log byte for byte, a NUL
+included; two incomplete `RESULT` lines, a percentage of `100oops` or `99.99999999999999999`,
+or a `perf` row cut before its newline must record no row; and a second turn whose `perf` writes
+nothing must fail rather than read the first turn's output.
+`verify.test.mjs`, which `npm run check` runs too, runs the second, `verify.sh`, and with a plan
+of no placement, on a base that ignores TERM: after its two starts, ended by a failed request
+while the base runs, sent TERM while it stops the base after a request that succeeded (which
+must then fail it) and killed outright while the base runs, it must have the base stopped within
+a bound and leave nothing on its port; it must fail when a start command forks the server and
+leaves it listening, give each readiness request to a base that never answers at most a second
+under a `.curlrc` that asks for retries, send no request to a proxy of the environment's, keep a
+caller's `NODE_OPTIONS` from `serve.mjs` and `answers.mjs`, stop an `answers.mjs` that stalls and
+ignores TERM at 30 s and fail with nothing left running, stop the server and fail at once when a
+FIFO is at `serve.mjs`'s process-number file, and, with a stand-in `serve.mjs` that does not end when
+its input closes, fail about 15 s later saying the cleanup is unconfirmed, signalling nothing.
+With a placement, its starts and `turns.sh`'s comparison must send the same one request, answers
+of another status must be no evidence for the mask though they differ in the masked header, and
+a placement whose bodies line or verdict is not what `turns.sh` sealed must not be recorded. Each
+of its servers ends by itself within a bound, so no test signals one by its number; and
+`serve.mjs` on its own, which must stop a server when its input ends (KILL 5 s after TERM for one
+that ignores TERM), and end at once, saying so, when its server ends before it is stopped. What
+`build.sh`, `run.sh`, `verify.sh` and `turns.sh` refuse otherwise is held by the selftest alone,
+on a host that has `perf` and `wrk`, and by nothing in `npm run check`. The selftest's `inputs`
+case holds `build.sh`'s four checks of the files named by path and `run.sh`'s two, `refusals`
+holds `run.sh`'s refusal of results already there, of binaries built for another part and of
+another CPU model, and `zero` holds the above-zero test of the counters before a run and in a
+turn. Held by a whole run on a host and by no case: the counters at 100% as `perf` itself reports
+them, the answers of every placement against its unpadded binary, a masked header that does
+differ between two starts, and the probe's source and each build's environment reaching the
+results.
 
 Three runs of the kit on a host with `perf` and `wrk` are kept, each a test of the scripts and
 read for nothing. What they turned is `main` at `e2d0c464e` against itself with the example

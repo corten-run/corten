@@ -89,7 +89,9 @@ export function problems(plan) {
     why.push(...unknown(w, "workload", at), ...unknown(w.request, "request", `${at}: request`));
     if (!(printable(w.declared) && w.declared.trim())) bad(`${at}: declared, what the plan says of the workload before the run`);
     const r = w.request ?? {};
-    if (!/^\/[\x21-\x7e]*$/.test(r.path ?? "") || /['"\\]/.test(r.path)) bad(`${at}: request.path`);
+    // A fragment is no part of a request target. curl drops it, so the captured answers would be of
+    // the path without it, while wrk 4.1.0 sends "/p#marker" verbatim: the two would ask for different targets.
+    if (!/^\/[\x21-\x7e]*$/.test(r.path ?? "") || /['"\\#]/.test(r.path)) bad(`${at}: request.path, from /, of printable ASCII, with no quote, backslash or fragment (#)`);
     if (!Array.isArray(r.headers) || !r.headers.every((h) => printable(h) && /^[A-Za-z0-9-]+: ?\S/.test(h))) bad(`${at}: request.headers, each "Name: value"`);
     if (r.script !== undefined && !relative(r.script)) bad(`${at}: request.script, a path from the plan file to a wrk script`);
     if (!int(w.status, 100) || w.status > 599) bad(`${at}: status`);
@@ -183,6 +185,30 @@ export function inputs(probe, script, expect) {
 /** The line that declares them. */
 export const inputsLine = (i) => `inputs: sha256 ${i.sha256} over the ${i.files} files the plan names by path (the probe's, the request script${/  plan\/expect\.txt\n/.test(i.text) ? ", the expected answer" : ""}), each listed with its own`;
 
+/**
+ * The line turns.sh ends a non-empty answers/diff.txt with, after the headers' diff: for two
+ * bodies that differ their lengths and SHA-256s, and for one body its length and SHA-256.
+ */
+export const BODIES = /^bodies (differ: \d+ and \d+ bytes, sha256 [0-9a-f]{64} and [0-9a-f]{64}|same: \d+ bytes, sha256 [0-9a-f]{64})$/;
+/**
+ * Why an expected difference's text is not one turns.sh can write, or null. It is the headers'
+ * diff, if any, and then exactly one bodies line as BODIES gives it, ended by a newline: a
+ * difference without one (in the headers alone, written before the kit bound the shared body)
+ * would hold a placement to no body, and one of another form, such as the lengths alone or a
+ * digest cut short, can never be matched, so the placement would fail after its build. A
+ * "bodies same" line follows the headers' diff alone: turns.sh writes nothing when neither the
+ * headers nor the bodies differ, so one standing by itself can never be matched either.
+ */
+export function expectProblem(text) {
+  const lines = text.split("\n"), last = lines.at(-2) ?? "";
+  if (text.endsWith("\n") && BODIES.test(last) && lines.filter((l) => l.startsWith("bodies ")).length === 1) {
+    if (last.startsWith("bodies same: ") && !lines.slice(0, -2).some((l) => l !== "")) return `is a "bodies same" line alone, which turns.sh writes only after the headers' diff (when neither the headers nor the bodies differ, it writes nothing, and no expected difference is needed): record the difference again with this kit`;
+    return null;
+  }
+  const odd = lines.find((l) => l.startsWith("bodies ") && !BODIES.test(l));
+  return `does not end with one bodies line as turns.sh writes it, "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>" or "bodies same: <N> bytes, sha256 <its>", each SHA-256 in full (${odd !== undefined ? `its line "${odd.slice(0, 120)}" is neither` : text === "" ? "it is empty" : !lines.some((l) => l.startsWith("bodies ")) ? "it has no bodies line" : "its bodies line is not its only one, or not its last line ended by a newline"}): record the difference again with this kit`;
+}
+
 const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 
 function dryRun(env) {
@@ -205,6 +231,8 @@ async function main(argv) {
   const named = (w) => {
     const at = { probe: from(plan.probe.dir), script: w.request.script ? from(w.request.script) : join(here, "get.lua"), expect: w.expect ? from(w.expect) : null };
     for (const f of Object.values(at)) if (f && !existsSync(f)) throw new Error(`${f}: named by the plan and not there`);
+    const odd = at.expect && expectProblem(readFileSync(at.expect, "utf8"));
+    if (odd) throw new Error(`${at.expect}, the workload's expected difference: ${odd}`);
     if (existsSync(join(at.probe, "Cargo.lock"))) throw new Error(`${join(at.probe, "Cargo.lock")}: the probe's directory holds a Cargo.lock, and build.sh puts each side's own there`);
     return { ...at, list: inputs(at.probe, at.script, at.expect) };
   };
@@ -262,6 +290,8 @@ async function main(argv) {
     TOOLCHAIN: plan.probe.toolchain, BUILD: plan.probe.build, BINARY: plan.probe.binary, TREE: plan.probe.tree.join(" "), PROBE: from(plan.probe.dir),
     START: w.start ?? plan.probe.start, REQ_PATH: w.request.path, STATUS: w.status, EXPECT: w.expect ? join(out, "expect.txt") : "", EVENTS,
     CPU_SERVER: c.server, CPU_LOAD: c.load.join(","), CPU_DRIVER: c.driver, CPU_MODEL: plan.host.cpuModel ?? "", WRK_T: plan.load.threads, WRK_C: plan.load.connections, PLACEMENT_SECONDS: plan.placementSeconds,
+    // The host's, not the plan's (README.md, What is this host's alone): turns.sh's two servers' ports.
+    PORT_A: 18081, PORT_B: 18082,
   };
   writeFileSync(join(out, "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}=${quote(v)}\n`).join(""));
   console.log(declaration(r).join("\n"));

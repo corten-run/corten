@@ -23,7 +23,7 @@ import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, rea
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
-  "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "cloud-sealed-collection.mjs", "isolated/control-admission.mjs",
+  "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "cloud-sealed-collection.mjs", "cloud-setup-drain-source.mjs", "isolated/control-admission.mjs",
   "isolated/control-session-source.mjs", "isolated/control-stream-source.mjs", "isolated/control-stream.mjs", "isolated/host-observation.mjs", "isolated/native-roles.mjs",
   "../hardening/plan.mjs", "../hardening/bounded-requests.mjs", "../hardening/dependency-recovery-contract.mjs",
   "deployments.mjs", "../marketplace/feature-contract.mjs", "../marketplace/run-contract.mjs", "../marketplace/groups.mjs",
@@ -229,6 +229,55 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
+// The controller's run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration,
+// guardDispatch) in production: one cancellation checkpoint before dispatch, then the
+// controller's dispatch guard, then the private provider worker or the process transport.
+// Exported only so tests drive the controller through these exact dispatch steps.
+export function productionDispatch({ processRun, provider, interrupted, historicalDispatch = () => undefined, dispatchRefusals = new WeakSet() }) {
+  return async (...args) => {
+    const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
+    const creating = args[0] === "doctl" && args[1][0] === "compute" && args[1][1] === "droplet" && args[1][2] === "create";
+    try { await controlCheckpoint(interrupted); } catch (error) {
+      if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
+      if (creating) return unsentCreate;
+      throw error;
+    }
+    const guardDispatch = args[6];
+    if (guardDispatch !== undefined) {
+      assert.ok(args[0] === "doctl" && args[1][2] === "delete");
+      // The controller's local custody must still match after this last await,
+      // before the private worker receives the mutation. A refusal throws; only a
+      // DELETE bounded by a proof deadline can instead report its proof expired.
+      if (guardDispatch() === false) {
+        assert.ok(args[4] !== undefined, "an unbounded DELETE guard cannot report an expired proof");
+        return unsentDelete; // The local proof expired before worker dispatch.
+      }
+    }
+    const checkHistoricalDispatch = historicalDispatch();
+    if (creating && checkHistoricalDispatch) {
+      try { checkHistoricalDispatch(); } catch (error) {
+        if (!dispatchRefusals.has(error)) throw error;
+        return unsentCreate;
+      }
+    }
+    let result, failure;
+    // An in-process provider engine awaits once more before its request, so it receives the
+    // same guard and calls it after that await. The private provider worker is another
+    // process: a function cannot cross its IPC, so there the fence above is the last one.
+    const send = (argv, ...rest) => guardDispatch === undefined ? provider()(argv, ...rest)
+      : provider()(argv, rest[0], rest[1], rest[2], rest[3], guardDispatch);
+    try { result = args[0] === "doctl" ? await send(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
+    if (creating && result === unsentCreate) return result;
+    // Hand custody back before cancellation: take the stream handle, record
+    // the acknowledged command exit, or clear a positively unsent DELETE.
+    if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
+    try { await controlCheckpoint(interrupted); }
+    catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
+    if (failure) throw failure;
+    return result;
+  };
+}
+
 export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler, roleCheck, remainingAdmission = false } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
@@ -258,38 +307,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   try {
   let checkHistoricalDispatch;
   const setupDispatchRefusals = new WeakSet();
-  const run = async (...args) => {
-    const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
-    const creating = args[0] === "doctl" && args[1][0] === "compute" && args[1][1] === "droplet" && args[1][2] === "create";
-    try { await controlCheckpoint(interrupted); } catch (error) {
-      if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
-      if (creating) return unsentCreate;
-      throw error;
-    }
-    const guardDispatch = args[6];
-    if (guardDispatch !== undefined) {
-      assert.ok(args[0] === "doctl" && args[1][2] === "delete" && args[4] !== undefined);
-      // The controller's local custody must still match after this last await,
-      // before the private worker receives the mutation.
-      if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
-    }
-    if (creating && checkHistoricalDispatch) {
-      try { checkHistoricalDispatch(); } catch (error) {
-        if (!setupDispatchRefusals.has(error)) throw error;
-        return unsentCreate;
-      }
-    }
-    let result, failure;
-    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
-    if (creating && result === unsentCreate) return result;
-    // Hand custody back before cancellation: take the stream handle, record
-    // the acknowledged command exit, or clear a positively unsent DELETE.
-    if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
-    try { await controlCheckpoint(interrupted); }
-    catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
-    if (failure) throw failure;
-    return result;
-  };
+  const run = productionDispatch({ processRun, provider: () => providerRun, interrupted,
+    historicalDispatch: () => checkHistoricalDispatch, dispatchRefusals: setupDispatchRefusals });
   const manifest = options.group === undefined ? undefined
     : requireStagedFleet(JSON.parse(regular(resolve(options.fleet), 1024 * 1024)));
   const stagedSibling = manifest && options.group !== manifest.jobs[0].group;

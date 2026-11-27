@@ -23,7 +23,7 @@ export async function storageControl(t) {
       async write() { throw new Error("not a file"); }, async readFile() { throw new Error("not a file"); },
     } : await originalOpen(path, ...args);
     f.live.add(handle); f.maximumFiles = Math.max(f.maximumFiles, f.live.size);
-    const methods = Object.fromEntries(["write", "sync", "close", "readFile"].map((name) => [name, handle[name].bind(handle)]));
+    const methods = Object.fromEntries(["write", "stat", "sync", "close", "readFile"].map((name) => [name, handle[name].bind(handle)]));
     actual.set(handle, methods);
     for (const name of Object.keys(methods)) t.mock.method(handle, name, async (...values) => {
       f.trace.push({ name, path, phase: "begin", at: Date.now() });
