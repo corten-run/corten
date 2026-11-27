@@ -141,11 +141,12 @@ fn app() -> App {
         tokio::time::sleep(Duration::from_millis(3)).await;
         "waited"
     };
-    // A body that waits between its pieces, a millisecond or two, which is how far apart a
-    // client's writes and its end are: so a piece can be ready in the turn that brings more of
-    // what the client sent, or its end, and the connection's task is woken for both at once.
+    // A body whose last piece comes a millisecond after its first, which is how long a client
+    // leaves between two writes and before it closes its side: so the piece is ready in the
+    // turn that brings more of what the client sent, or its end, and the connection's task is
+    // woken for both at once.
     let drip = || async {
-        let pieces: [(u64, &'static [u8]); 4] = [(0, b"first"), (1, b"second"), (2, &X), (1, b"last")];
+        let pieces: [(u64, &'static [u8]); 2] = [(0, b"first"), (1, &X)];
         let pieces = futures_util::StreamExt::then(futures_util::stream::iter(pieces), |(wait, piece)| async move {
             if wait > 0 {
                 tokio::time::sleep(Duration::from_millis(wait)).await;
@@ -1491,12 +1492,12 @@ async fn a_bodys_piece_that_is_ready_with_its_clients_end_is_not_sent() {
 }
 
 /// Shutdown that begins while an answer waits for its client to read it does not make the
-/// connection finish that answer for a client that then closes its side, on either connection:
+/// connection finish that answer for a client that closes its side, on either connection:
 /// hyper goes on looking for the client's end while it drains, and Corten's connection, which
 /// sends what is unsent before it closes, looks while that waits. An answer short enough that
 /// its connection has gone on to wait for the next request, and one that has not. A client that
-/// stays and reads has all of it from both; one that closes its side, after shutdown began or
-/// before, has what the pipe held.
+/// stays and reads has all of it from both; one that closes its side, after shutdown began,
+/// before, or in the same turn of the server (in either order), has what the pipe held.
 #[tokio::test(start_paused = true)]
 async fn an_answer_that_waits_when_shutdown_begins_is_cut_when_its_client_closes_its_side() {
     let app = || {
@@ -1504,9 +1505,17 @@ async fn an_answer_that_waits_when_shutdown_begins_is_cut_when_its_client_closes
         App::new(Routes::from(table))
     };
     let moment = || tokio::time::sleep(Duration::from_millis(5));
-    let sequences = [("the client stays", false, false), ("shutdown, then the client's end", true, false), ("the client's end, then shutdown", true, true)];
+    // Whether the client closes its side, whether it does before shutdown begins, and whether
+    // the server's tasks run between the two.
+    let sequences = [
+        ("the client stays", false, false, true),
+        ("shutdown, then the client's end", true, false, true),
+        ("the client's end, then shutdown", true, true, true),
+        ("shutdown and the client's end at once", true, false, false),
+        ("the client's end and shutdown at once", true, true, false),
+    ];
     for (path, pipe, whole) in [("/short", 1_024, 3_000), ("/long", 4_096, 10 * 1024)] {
-        for (name, leaves, first) in sequences {
+        for (name, leaves, first, apart) in sequences {
             let mut got = Vec::new();
             for own in [false, true] {
                 let (connect, accepted) = tokio::sync::mpsc::unbounded_channel();
@@ -1521,14 +1530,18 @@ async fn an_answer_that_waits_when_shutdown_begins_is_cut_when_its_client_closes
                 moment().await;
                 if leaves && first {
                     client.shutdown().await.unwrap();
-                    moment().await;
+                    if apart {
+                        moment().await;
+                    }
                 }
                 stop.send(()).unwrap();
-                moment().await;
-                if leaves && !first {
-                    client.shutdown().await.unwrap();
+                if apart {
                     moment().await;
                 }
+                if leaves && !first {
+                    client.shutdown().await.unwrap();
+                }
+                moment().await;
                 let mut all = Vec::new();
                 client.read_to_end(&mut all).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
@@ -1546,24 +1559,29 @@ async fn an_answer_that_waits_when_shutdown_begins_is_cut_when_its_client_closes
 
 /// The answers before one that is given up are the client's, and wait for it to read them, on
 /// both connections alike. A client pipelines requests whose first answer is longer than the
-/// pipe holds, closes its side and reads nothing for a second. Corten's connection has made the
-/// answers by then, finds the client's end where its write waits, takes back the last (none of
-/// it has gone) and sends the ones before it; hyper's has begun none but the first, whose flush
-/// waits with the requests behind it unread, and it does not look for the client's end past
-/// them. So neither drops the connection when the client's end comes: when the client reads at
-/// last it has every answer but the last, whole, from both. (How long either waits is the send
-/// timeout's to say, as for any write that waits:
+/// pipe holds, closes its side and reads nothing for a second. Corten's connection, where it
+/// has made every answer by then, finds the client's end where its write waits, takes back the
+/// last answer (none of it has gone) and goes on sending the ones before it; hyper's has begun
+/// none but the first, whose flush waits with the requests behind it unread, and it looks for
+/// no client's end past them. So neither drops the connection when the client's end comes: when
+/// the client reads at last it has every answer but the last, whole, from both. (How long
+/// either waits is the send timeout's to say, as for any write that waits:
 /// `tests::h1::a_client_that_pipelines_and_reads_nothing_is_closed_at_the_send_timeout`.)
 #[tokio::test(start_paused = true)]
 async fn the_answers_before_one_given_up_wait_for_their_client_on_both_connections() {
-    const PIPE: usize = 4_096;
-    const MID: usize = 30 * 1024;
+    const PIPE: usize = 1_024;
+    const SHORT: usize = 3_000;
     let app = || {
-        let table = Table::new().route("/", get(|| async { "hi" })).route("/mid", get(|| async { vec![b'm'; MID] }));
+        let table = Table::new()
+            .route("/", get(|| async { "hi" }))
+            .route("/short", get(|| async { vec![b's'; SHORT] }))
+            .route("/mid", get(|| async { vec![b'm'; 30 * 1024] }));
         App::new(Routes::from(table))
     };
     let (hyper, own) = (serve_app(app(), false, 32 * 1024), serve_app(app(), true, 32 * 1024));
-    for paths in [vec!["/mid", "/mid"], vec!["/mid", "/"], vec!["/mid", "/", "/"]] {
+    // The first two have Corten's connection take an answer back; in the third the answer its
+    // write waits in has requests unread behind it, as hyper's always has.
+    for paths in [vec!["/short", "/"], vec!["/short", "/short", "/"], vec!["/short", "/mid"], vec!["/mid", "/short", "/"]] {
         let sent: String = paths.iter().map(|path| format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n")).collect();
         let mut got = Vec::new();
         for (which, connect) in [("hyper's", &hyper), ("own", &own)] {
@@ -1577,7 +1595,7 @@ async fn the_answers_before_one_given_up_wait_for_their_client_on_both_connectio
             client.read_to_end(&mut all).await.unwrap();
             let statuses = answers(&all).iter().map(|answer| answer.status).collect::<Vec<_>>();
             assert_eq!(statuses, vec![200; paths.len() - 1], "{which}, {paths:?}: {} bytes", all.len());
-            assert!(all.len() > MID, "{which}, {paths:?}: {} bytes, where the pipe holds {PIPE}", all.len());
+            assert!(all.len() > SHORT, "{which}, {paths:?}: {} bytes, where the pipe holds {PIPE}", all.len());
             got.push(undated(&all));
         }
         assert_eq!(got[1], got[0], "{paths:?}");
