@@ -176,6 +176,21 @@ fn app(log: &Log) -> App {
                 Body::from_stream(futures_util::stream::once(whole))
             }),
         )
+        // The request's body never asked for, and an answer whose second piece comes a millisecond
+        // behind its first.
+        .route(
+            "/drip",
+            any(|| async {
+                let pieces = futures_util::stream::iter(["first", "second"]).enumerate();
+                let pieces = futures_util::StreamExt::then(pieces, |(index, piece)| async move {
+                    if index > 0 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    Ok::<_, std::io::Error>(Bytes::from_static(piece.as_bytes()))
+                });
+                Body::from_stream(pieces)
+            }),
+        )
         .route("/late", any(late))
         .route("/panic", any(panics))
         .route(
@@ -883,7 +898,8 @@ async fn left_at_once(connect: &Connect, request: &str) -> String {
 async fn a_client_gone_by_its_bodys_end_is_written_no_more() {
     let pair = pair();
     let mut wrong = Wrong::default();
-    for path in ["/read", "/unread", "/framing", "/first", "/first-held", "/drop-wait", "/echo", "/echo-whole", "/late"] {
+    let paths = ["/read", "/unread", "/framing", "/first", "/first-held", "/drop-wait", "/echo", "/echo-whole", "/late", "/drip"];
+    for path in paths {
         for (lines, body) in [
             ("content-length: 11\r\n", "hello world"),
             (CHUNKED, HELLO),
@@ -912,6 +928,12 @@ async fn a_client_gone_by_its_bodys_end_is_written_no_more() {
         theirs.starts_with("HTTP/1.1 200 ") && theirs.ends_with("\r\n\r\n") && !theirs.contains("hello"),
         "hyper's: {theirs:?}"
     );
+    // An answer that began before its request's body was read to its end has that beginning
+    // sent: the handler never asked for the body, so its end, and the client's behind it, are
+    // found only when the answer's first piece has been written.
+    let whole = format!("POST /drip HTTP/1.1\r\nhost: localhost\r\n{CHUNKED}\r\n{HELLO}");
+    let theirs = left_at_once(&pair.hyper, &whole).await;
+    assert!(theirs.ends_with("\r\n\r\n5\r\nfirst\r\n"), "hyper's: {theirs:?}");
 }
 
 /// **Three differences from hyper, each from what hyper has read by a time and Corten's

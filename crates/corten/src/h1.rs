@@ -482,6 +482,9 @@ struct Conn<I> {
     /// client's end ([`Conn::poll_body`]).
     waited: bool,
     vectored: bool,
+    /// What the head just read says of its request's body, where it frames one, until the
+    /// request's answerer begins the body ([`Conn::coming`]); [`Said::NOTHING`] otherwise.
+    said: Said,
     /// The connection's end of the body of the request being answered, until the body has been
     /// read to its end, has failed, or has been dropped by the app and read past or given up
     /// ([`Conn::poll_feed`]). While it is here, what is unread is the body's, and no head is read.
@@ -521,6 +524,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     fn new(io: I, limit: usize) -> Conn<I> {
         let vectored = io.is_write_vectored();
         Conn {
+            said: Said::NOTHING,
             feed: None,
             ends: false,
             unkept: false,
@@ -587,14 +591,10 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             return Err(Instead::Hypers);
         }
         let bytes = self.inbox.take(scanned.len);
-        let mut said = Said::NOTHING;
-        let head = head::build(&bytes, scanned, &self.indices, &mut self.cached, &mut said)?;
-        // The body's reader is made here, where the head is read, and found by the request's
-        // answerer in `feed`: a head is then moved as it was before bodies were read.
-        if said.framing != Framing::None {
-            self.body(said);
-        }
-        Ok(Some(head))
+        // What the head says of a body is left in `said` for the request's answerer
+        // (`Conn::coming`), and is not part of the head: a head is then made and moved as it
+        // was before bodies were read.
+        Ok(Some(head::build(&bytes, scanned, &self.indices, &mut self.cached, &mut self.said)?))
     }
 
     /// Writes everything written so far to the IO and flushes it. Pending: the IO has no room,
@@ -752,33 +752,28 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         Ok(())
     }
 
-    /// Begins the body of a request whose head frames one: the connection's end of it (`feed`),
-    /// with nothing of it read or given yet. Made where the head is read, so that a head is
-    /// what it was before bodies were read; the request's answerer finds it there
-    /// ([`Conn::coming`]).
+    /// Begins the body of the request whose head was just read and frames one (`said`, taken
+    /// here): the connection's end of it (`feed`), and the app's, which is what hyper's
+    /// `Incoming` is on its connection, wrapped as that is so that a read of it that waits for
+    /// the client is marked for the deadline ([`crate::extract::Arriving`]). What has been read
+    /// of it already (it came with the head) is the app's at once, a piece that needs no read;
+    /// not for a client that waits to be told to send it, which is told when the app asks.
+    ///
+    /// Apart from the path of a request that has no body, which reads `said` and no more.
     #[cold]
     #[inline(never)]
-    fn body(&mut self, said: Said) {
+    fn coming(&mut self) -> Body {
+        let said = std::mem::replace(&mut self.said, Said::NOTHING);
         let decoder = match said.framing {
-            Framing::None => return,
+            Framing::None => return Body::empty(),
             Framing::Length(length) => Decoder::length(length),
             Framing::Chunked => Decoder::chunked(self.limit),
         };
         #[cfg(test)]
         BODIES.set(BODIES.get() + 1);
-        self.feed = Some(Feed::new(decoder, said.expects));
-    }
-
-    /// The body [`Conn::body`] began, as the app is given it: what hyper's `Incoming` is on its
-    /// connection, wrapped as that is so that a read of it that waits for the client is marked
-    /// for the deadline ([`crate::extract::Arriving`]). What has been read of it already (it
-    /// came with the head) is the app's at once, a piece that needs no read; not for a client
-    /// that waits to be told to send it, which is told when the app asks.
-    #[cold]
-    #[inline(never)]
-    fn coming(&mut self) -> Body {
-        let Some(feed) = &self.feed else { return Body::empty() };
+        let feed = Feed::new(decoder, said.expects);
         let (coming, expects) = feed.coming();
+        self.feed = Some(feed);
         if !expects {
             self.feed(None);
         }
@@ -1136,9 +1131,20 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// writes: a client that has closed its side by then has left, and is written no more of an
     /// answer that waited for what it sent.
     ///
+    /// `late`: the request's body was found to have ended in this poll of the task, as its
+    /// handler dropped it with its answer. hyper reads that end only once it has written and
+    /// flushed what the answer gave in the turn it was made, and looks for the client's end
+    /// then; so what is written goes out here before the look, and a client that has left has
+    /// the beginning of the answer from both.
+    ///
     /// Apart from [`Conn::poll_body`], which a body that does not wait never leaves.
     #[inline(never)]
-    fn poll_waiting(&mut self, cx: &mut Context<'_>, body: &mut Answered) -> Poll<io::Result<Option<Bytes>>> {
+    fn poll_waiting(&mut self, cx: &mut Context<'_>, body: &mut Answered, late: bool) -> Poll<io::Result<Option<Bytes>>> {
+        if late {
+            if let Poll::Ready(Err(error)) = self.poll_send(cx) {
+                return Poll::Ready(Err(error));
+            }
+        }
         let mut turns = 0;
         loop {
             self.poll_meanwhile(cx)?;
@@ -1187,10 +1193,14 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         // the body's end in the piece hyper reads ahead of the app, the client's end is looked
         // for at once: hyper has looked since it read that piece, and a client that closed its
         // side while its handler held a body that had ended is given no answer by either.
-        let ended_ahead = self.feed.is_some() && self.poll_feed(cx, false) == Fed::EndedAhead;
+        let unfinished = self.feed.is_some();
+        let ended_ahead = unfinished && self.poll_feed(cx, false) == Fed::EndedAhead;
         if self.waited || ended_ahead {
             self.poll_left(cx)?;
         }
+        // The body ended here and not ahead: hyper reads that end behind what this turn writes
+        // of the answer (`poll_waiting`).
+        let late = unfinished && !ended_ahead && self.feed.is_none();
         loop {
             // A piece too large to copy, or enough to fill a write, goes out before anything is
             // written behind it: a client that reads slowly holds the stream back. The body is
@@ -1202,7 +1212,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                 if ahead.is_none() {
                     match Self::poll_piece(cx, body)? {
                         Poll::Ready(next) => *ahead = Some(next),
-                        Poll::Pending => match self.poll_waiting(cx, body)? {
+                        Poll::Pending => match self.poll_waiting(cx, body, late)? {
                             Poll::Ready(next) => *ahead = Some(next),
                             Poll::Pending => return Poll::Pending,
                         },
@@ -1214,7 +1224,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                 Some(next) => next,
                 None => match Self::poll_piece(cx, body)? {
                     Poll::Ready(next) => next,
-                    Poll::Pending => match self.poll_waiting(cx, body)? {
+                    Poll::Pending => match self.poll_waiting(cx, body, late)? {
                         Poll::Ready(next) => next,
                         Poll::Pending => return Poll::Pending,
                     },
@@ -1400,10 +1410,14 @@ where
         let (request, mut asked) = {
             let Head { parts, keep_alive } = head;
             let asked = Asked { head: parts.method == Method::HEAD, http11: parts.version == Version::HTTP_11, keep_alive };
-            // A body is unfinished here only if this request's head framed one (`parse`): the
-            // body of the request before has ended by now (below).
-            let body = if conn.feed.is_some() { conn.coming() } else { Body::empty() };
-            (http::Request::from_parts(parts, body), asked)
+            let mut request = http::Request::from_parts(parts, Body::empty());
+            // The body, where the head framed one (`parse`); the body of the request before has
+            // ended by now (below). It is put into a request made without one, so that a request
+            // that has none is made where it will be, as before bodies were read.
+            if conn.said.framing != Framing::None {
+                *request.body_mut() = conn.coming();
+            }
+            (request, asked)
         };
         let answer = {
             let mut answering = pin!(service.call(request));

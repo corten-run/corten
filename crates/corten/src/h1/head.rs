@@ -118,7 +118,7 @@ pub(crate) struct Said {
 }
 
 impl Said {
-    /// What a head with no line about a body says.
+    /// What a head that frames no body says.
     pub(crate) const NOTHING: Said = Said { framing: Framing::None, expects: false };
 }
 
@@ -224,7 +224,7 @@ fn keeps(name: &[u8], value: &[u8]) -> bool {
 
 /// The request whose head is `bytes` (all of it, and no more), scanned by [`scan`], which found
 /// no line that makes it hyper's. `cached` is a header map to fill, emptied by the answer before.
-/// `said`: written only where the head frames a body or its client waits to be told.
+/// `said`: written only where the head frames a body.
 pub(crate) fn build(
     bytes: &Bytes,
     scanned: Scanned,
@@ -300,13 +300,16 @@ pub(crate) fn build(
     if is_te && is_cl {
         keep_alive = false;
     }
-    if is_te || is_cl || expects {
+    if is_te || is_cl {
         let framing = match length {
             _ if is_te => Framing::Chunked,
             Some(length) if length > 0 => Framing::Length(length),
             _ => Framing::None,
         };
-        *said = Said { framing, expects: expects && http11 };
+        // A client that expects to be told, with no body to send, is told nothing.
+        if framing != Framing::None {
+            *said = Said { framing, expects: expects && http11 };
+        }
     }
     let (mut parts, ()) = http::Request::new(()).into_parts();
     parts.method = method;
