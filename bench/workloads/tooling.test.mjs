@@ -20,7 +20,12 @@ test("browser CI keeps its pinned Playwright base and prepares immutable-source 
   assert.ok(step.run.indexOf(select) < step.run.indexOf("PLAYWRIGHT=$run $image"));
   assert.ok(step.run.includes('PLAYWRIGHT_SOURCE=$run --user $(id -u):$(id -g) -e HOME=/tmp $image'));
   const sourceChecks = workflow.jobs.smoke.steps.find((entry) => entry.run?.includes("MIXED_BROWSER_TESTS=1 npm run check:groups:browser"));
-  assert.equal(sourceChecks.run, "$PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser");
+  const [command, ...rest] = sourceChecks.run.trimEnd().split("\n");
+  assert.equal(command, "$PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser");
+  assert.deepEqual(rest, ['echo group-apparatus >> "$RUNNER_TEMP/ran"']);
+  // The group whose step replays sources is the one that builds the test-tools image.
+  assert.equal(sourceChecks.if, "contains(env.PARTS, ' group-apparatus ')");
+  assert.ok(step.run.includes('if [[ "$PARTS" == *" group-apparatus "* ]]; then'));
   assert.doesNotMatch(step.run, /safe\.directory/);
   const dockerfile = readFileSync(new URL("test-tools.Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /^ARG PLAYWRIGHT_IMAGE\r?\nFROM \$\{PLAYWRIGHT_IMAGE\} AS playwright\r?\nFROM playwright AS build/m);
