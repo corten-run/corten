@@ -32,7 +32,7 @@
 //! head frames, read as any other, so the bytes behind it are never taken for a request.
 //!
 //! `Expect: 100-continue`, the whole value in any case, on the last such line, says the client
-//! waits to be told to send its body ([`Head::expects`]).
+//! waits to be told to send its body ([`Said::expects`]).
 //!
 //! A `CONNECT`, a request with an `Upgrade` line, whatever the line says, and an HTTP/1.0 request
 //! that asks to keep its connection ([`keeps`]) are not this connection's to answer
@@ -100,14 +100,26 @@ pub(crate) enum Framing {
 /// stand for a chunked body and for one that ends with its connection there.
 const MAX_LENGTH: u64 = u64::MAX - 2;
 
-/// A request's head, of a request this connection answers.
+/// A request's head, of a request this connection answers. What it says of a body is not here
+/// ([`Said`]): a head is what every request has, and is moved as it was before bodies were read.
 pub(crate) struct Head {
     pub parts: http::request::Parts,
     /// The connection may go on to another request after this one.
     pub keep_alive: bool,
+}
+
+/// What a head says of its request's body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Said {
     pub framing: Framing,
-    /// The client waits to be told to send the body (`Expect: 100-continue`).
+    /// The client waits to be told to send the body (`Expect: 100-continue`, on HTTP/1.1: an
+    /// HTTP/1.0 client is told nothing before its answer, as with hyper).
     pub expects: bool,
+}
+
+impl Said {
+    /// What a head with no line about a body says.
+    pub(crate) const NOTHING: Said = Said { framing: Framing::None, expects: false };
 }
 
 /// Where a header's name and value are in the head's bytes.
@@ -212,11 +224,13 @@ fn keeps(name: &[u8], value: &[u8]) -> bool {
 
 /// The request whose head is `bytes` (all of it, and no more), scanned by [`scan`], which found
 /// no line that makes it hyper's. `cached` is a header map to fill, emptied by the answer before.
+/// `said`: written only where the head frames a body or its client waits to be told.
 pub(crate) fn build(
     bytes: &Bytes,
     scanned: Scanned,
     indices: &[Indices],
     cached: &mut Option<HeaderMap>,
+    said: &mut Said,
 ) -> Result<Head, Refusal> {
     let Scanned { method, target, http11, .. } = scanned;
     let uri = http::Uri::from_maybe_shared(bytes.slice(target.0..target.1)).map_err(|_| Refusal::Bad)?;
@@ -286,17 +300,20 @@ pub(crate) fn build(
     if is_te && is_cl {
         keep_alive = false;
     }
-    let framing = match length {
-        _ if is_te => Framing::Chunked,
-        Some(length) if length > 0 => Framing::Length(length),
-        _ => Framing::None,
-    };
+    if is_te || is_cl || expects {
+        let framing = match length {
+            _ if is_te => Framing::Chunked,
+            Some(length) if length > 0 => Framing::Length(length),
+            _ => Framing::None,
+        };
+        *said = Said { framing, expects: expects && http11 };
+    }
     let (mut parts, ()) = http::Request::new(()).into_parts();
     parts.method = method;
     parts.uri = uri;
     parts.version = if http11 { Version::HTTP_11 } else { Version::HTTP_10 };
     parts.headers = headers;
-    Ok(Head { parts, keep_alive, framing, expects })
+    Ok(Head { parts, keep_alive })
 }
 
 /// Whether a `Transfer-Encoding` line's last coding is `chunked`, as hyper reads it
@@ -736,9 +753,10 @@ mod tests {
             let head = Bytes::from(format!("POST / HTTP/1.1\r\n{lines}\r\n"));
             let mut indices = Vec::new();
             let scanned = scan(&head, 1 << 16, &mut indices).unwrap().unwrap();
-            build(&head, scanned, &indices, &mut None).map(|head| {
+            let mut said = Said::NOTHING;
+            build(&head, scanned, &indices, &mut None, &mut said).map(|head| {
                 let lengths = head.parts.headers.get_all(header::CONTENT_LENGTH).iter().count();
-                (head.framing, head.keep_alive, head.expects, lengths)
+                (said.framing, head.keep_alive, said.expects, lengths)
             })
         };
         assert_eq!(read("").unwrap(), (Framing::None, true, false, 0));

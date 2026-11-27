@@ -998,7 +998,11 @@ fn read_request(dice: &mut Dice) -> Vec<u8> {
             break format!("{line}\r\n\r\n{body}");
         }
     };
-    let (method, target) = (pick(dice, &["POST", "PUT"]), pick(dice, &["/read", "/seen", "/echo"]));
+    // Not `/echo`, which answers before it has read: over a pipe that holds little, the head of
+    // such an answer waits behind the answers before it on Corten's connection and has gone, in
+    // part, on hyper's, when a client that has left is found at the body's end
+    // (`h1_body::a_body_held_or_given_back_is_cut_where_each_connection_has_read`).
+    let (method, target) = (pick(dice, &["POST", "PUT"]), pick(dice, &["/read", "/seen"]));
     format!("{method} {target} HTTP/1.1\r\nhost: localhost\r\n{framed}").into_bytes()
 }
 
@@ -1071,8 +1075,24 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     if chance(&mut dice, 30) && !read {
         bytes = mutate(&mut dice, bytes);
     }
+    // A handler that holds its body is sent its request whole, in one write no longer than
+    // hyper's first read. hyper reads a piece ahead of the app, so while a body is held it has
+    // read what came meanwhile, in pieces that end where its reads did, and Corten's connection
+    // has read none of it: where the rest comes in several writes, or is longer than a read,
+    // the two cut the body in different places and learn of its end, and of the client's
+    // behind it, at different times. Those are differences `docs/design.md#choice-own-http1`
+    // lists, each held by a fixed test, and not ones a stream made at random can be judged by;
+    // such a stream goes to a route the app does not have, which reads no body either.
+    const HELD: &[u8] = b" /held ";
+    let held = find(&bytes, HELD).is_some();
+    let whole = held && bytes.len() <= 8192;
+    if held && !whole {
+        while let Some(at) = find(&bytes, HELD) {
+            bytes[at..at + HELD.len()].copy_from_slice(b" /hold ");
+        }
+    }
     let mut writes = Vec::new();
-    if chance(&mut dice, 35) && bytes.len() > 1 {
+    if chance(&mut dice, 35) && bytes.len() > 1 && !whole {
         let mut cuts: Vec<usize> = (0..1 + dice.below(4)).map(|_| dice.below(bytes.len())).collect();
         cuts.sort_unstable();
         let mut from = 0;

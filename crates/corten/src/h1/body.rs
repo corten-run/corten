@@ -457,12 +457,9 @@ pub(crate) struct Feed {
 }
 
 impl Feed {
-    /// A body with this framing, and the app's end of it.
-    pub(crate) fn new(decoder: Decoder, expects: bool) -> (Feed, Coming) {
-        let left = match decoder {
-            Decoder::Length(length) => Some(length),
-            Decoder::Chunked { .. } => None,
-        };
+    /// A body with this framing: the connection's end of it. `expects`: its client waits to be
+    /// told to send it.
+    pub(crate) fn new(decoder: Decoder, expects: bool) -> Feed {
         let app = Mutex::new(Shared {
             piece: None,
             trailers: None,
@@ -473,8 +470,19 @@ impl Feed {
             reader: None,
             conn: None,
         });
-        let shared = Arc::new(Ends { app, conn: Mutex::new(Reading { decoder, expects, cut: false }) });
-        (Feed { shared: shared.clone() }, Coming { shared, left })
+        Feed { shared: Arc::new(Ends { app, conn: Mutex::new(Reading { decoder, expects, cut: false }) }) }
+    }
+
+    /// The app's end of the body, and whether its client waits to be told to send it. Asked
+    /// once, before anything of the body is read: what is left to give of a `Content-Length` is
+    /// all of it.
+    pub(crate) fn coming(&self) -> (Coming, bool) {
+        let reading = self.reading();
+        let left = match reading.decoder {
+            Decoder::Length(length) => Some(length),
+            Decoder::Chunked { .. } => None,
+        };
+        (Coming { shared: self.shared.clone(), left }, reading.expects)
     }
 
     /// Where the connection is in the body: the connection's own, which nothing else waits for.

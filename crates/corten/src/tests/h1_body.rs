@@ -119,6 +119,17 @@ fn app(log: &Log) -> App {
                 read
             }),
         )
+        // The same, held for longer than a client takes to send three writes and leave.
+        .route(
+            "/first-held-longer",
+            any(move |req: Request<Body>| async move {
+                let mut body = req.into_body();
+                let read = first(&mut body).await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                drop(body);
+                read
+            }),
+        )
         // The first piece, the body dropped, and the answer a moment later.
         .route(
             "/first-wait",
@@ -873,9 +884,16 @@ async fn a_client_gone_by_its_bodys_end_is_written_no_more() {
     let pair = pair();
     let mut wrong = Wrong::default();
     for path in ["/read", "/unread", "/framing", "/first", "/first-held", "/drop-wait", "/echo", "/echo-whole", "/late"] {
-        for (lines, body) in
-            [("content-length: 11\r\n", "hello world"), (CHUNKED, HELLO), (CHUNKED, "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n")]
-        {
+        for (lines, body) in [
+            ("content-length: 11\r\n", "hello world"),
+            (CHUNKED, HELLO),
+            (CHUNKED, "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"),
+            // A client that waited to be told to send, and sent anyway: one that has left by its
+            // body's end is not told either.
+            ("content-length: 11\r\nexpect: 100-continue\r\n", "hello world"),
+            ("transfer-encoding: chunked\r\nexpect: 100-continue\r\n", HELLO),
+            ("transfer-encoding: chunked\r\nexpect: 100-continue\r\n", "0\r\n\r\n"),
+        ] {
             let whole = format!("POST {path} HTTP/1.1\r\nhost: localhost\r\n{lines}\r\n{body}");
             let theirs = left_at_once(&pair.hyper, &whole).await;
             let ours = left_at_once(&pair.own, &whole).await;
@@ -894,6 +912,66 @@ async fn a_client_gone_by_its_bodys_end_is_written_no_more() {
         theirs.starts_with("HTTP/1.1 200 ") && theirs.ends_with("\r\n\r\n") && !theirs.contains("hello"),
         "hyper's: {theirs:?}"
     );
+}
+
+/// **Three differences from hyper, each from what hyper has read by a time and Corten's
+/// connection has not**, held here from both sides so that either changing is seen. hyper reads
+/// a piece of a body ahead of the app, and writes each answer to its client before it reads the
+/// next request; Corten's connection reads a body when the app asks, and sends the answers to
+/// requests that came together in one write.
+///
+/// 1. A handler holds its body while the rest arrives in two writes, and then drops it. hyper
+///    read the first of the two ahead, finds one more piece when the body is dropped, which is
+///    not the body's end, and closes. Corten's connection reads when the body is dropped, finds
+///    all of it there, reads past it and keeps the connection.
+/// 2. The same, with a client that leaves before the handler answers. hyper has not read the
+///    body's end, so it has not looked for its client's behind it, and answers. Corten's
+///    connection finds the body's end and then the client's as the handler drops the body, and
+///    writes nothing to a client that has left.
+/// 3. Over a pipe that holds 512 bytes, an answer made from its request's body, behind another
+///    answer, for a client that has left. hyper has sent the answer before, and what the pipe
+///    took of this one's head, when it reads the body's end and finds the client gone. On
+///    Corten's connection the head still waits behind the answer before it, and is taken back.
+///
+/// In none of them is anything answered twice, out of order, or from bytes that were not a
+/// request's: a body is read to the end its framing gives it, or its connection is closed.
+#[tokio::test(start_paused = true)]
+async fn a_body_held_or_given_back_is_cut_where_each_connection_has_read() {
+    let pair = pair();
+    let both = |writes: &[&str], closes: bool, pipe: usize| {
+        let stream = Stream { index: 0, writes: writes.iter().map(|write| write.as_bytes().to_vec()).collect(), closes, pipe };
+        let pair = &pair;
+        async move { (exchange(&pair.hyper, &stream).await, exchange(&pair.own, &stream).await) }
+    };
+    let head = format!("POST /first-held HTTP/1.1\r\nhost: localhost\r\n{CHUNKED}\r\n5\r\nhello\r\n");
+    let (theirs, ours) = both(&[&head, "6\r\n wo", "rld\r\n0\r\n\r\n"], false, WIDE).await;
+    assert_eq!(did(&theirs), (vec![(200, true)], false), "hyper's: {}", brief(&theirs));
+    assert_eq!(did(&ours), (vec![(200, true)], true), "{}", brief(&ours));
+    // The same bytes in one write: hyper has read the second chunk whole, and both keep.
+    let (theirs, ours) = both(&[&format!("{head}6\r\n world\r\n0\r\n\r\n")], false, WIDE).await;
+    assert_eq!(did(&theirs), (vec![(200, true)], true), "hyper's, in one write: {}", brief(&theirs));
+    assert_eq!(ours, theirs, "in one write");
+
+    let head = "POST /first-held-longer HTTP/1.1\r\nhost: localhost\r\ncontent-length: 11\r\n\r\nhello";
+    let (theirs, ours) = both(&[head, " wor", "ld"], true, WIDE).await;
+    assert_eq!(did(&theirs).0, [(200, true)], "hyper's: {}", brief(&theirs));
+    assert!(ours.before.0.is_empty() && ours.closed, "{}", brief(&ours));
+    // For a client that stays, the same answer from both.
+    let (theirs, ours) = both(&[head, " wor", "ld"], false, WIDE).await;
+    assert_eq!(did(&theirs), (vec![(200, true)], true), "hyper's, to a client that stays: {}", brief(&theirs));
+    assert_eq!(ours, theirs, "to a client that stays");
+
+    let held = "GET /first-held HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    let echo = format!("POST /echo-whole HTTP/1.1\r\nhost: localhost\r\n{CHUNKED}\r\n{HELLO}");
+    let (theirs, ours) = both(&[&format!("{held}{echo}")], true, 512).await;
+    assert_eq!(did(&ours).0, [(200, true)], "{}", brief(&ours));
+    let (more, fewer) = (&theirs.before.0, &ours.before.0);
+    assert!(more.len() > fewer.len() && more.starts_with(fewer), "hyper's: {theirs:?}\nown: {ours:?}");
+    assert!(find(&more[fewer.len()..], b"\r\n\r\n").is_none(), "hyper's sent no more than part of a head: {theirs:?}");
+    // Over a pipe that holds everything both send that head, and neither the body behind it.
+    let (theirs, ours) = both(&[&format!("{held}{echo}")], true, WIDE).await;
+    assert_eq!(did(&theirs).0.len(), 2, "hyper's, over a wide pipe: {}", brief(&theirs));
+    assert_eq!(ours, theirs, "over a wide pipe");
 }
 
 /// A body read by a task that outlives its handler, behind the handler's answer: the connection
