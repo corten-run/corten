@@ -236,7 +236,9 @@ jobs:
       # the runner (`npx playwright install --with-deps`) fetched about a hundred apt packages from
       # the Ubuntu mirror on every run, and when the mirror slowed to a few KB/s the step stalled
       # until it was cancelled. `--network host` reaches the example servers at localhost.
+      # The group that runs only `npm-check` uses no browser, so it pulls no image.
       - name: Playwright's image
+        if: env.PARTS != ' npm-check '
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
