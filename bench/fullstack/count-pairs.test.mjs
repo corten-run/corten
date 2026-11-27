@@ -17,7 +17,7 @@ const spread = (lo, hi, n = 100) => Array.from({ length: n }, (_, i) => lo + ((h
 const pairsOf = (changes) => changes.map((c, i) => ({ pair: i + 1, base: 100000, head: 100000 * (1 + c) }));
 const of = (lo, hi) => compare(pairsOf(spread(lo, hi)));
 const running = Object.fromEntries(Object.values(COUNTS).map((e) => [e, 100]));
-const goodRow = (over = {}) => ({ requests: 5000, failed: 0, userPerRequest: 75000, kernelPerRequest: 26000, userCyclesPerRequest: 100000, kernelCyclesPerRequest: 60000, userL1iMissesPerRequest: 5000, perfRunningPct: { ...running }, perfDiagnostics: {}, ...over });
+const goodRow = (over = {}) => ({ requests: 5000, failed: 0, kernelPass: { requests: 5000, failed: 0 }, userPerRequest: 75000, kernelPerRequest: 26000, userCyclesPerRequest: 100000, kernelCyclesPerRequest: 60000, userL1iMissesPerRequest: 5000, perfRunningPct: { ...running }, perfDiagnostics: {}, ...over });
 const notDecided = { verdict: "not decided: the count's A/A does not resolve the default band, so the change is read as one inside the band, neither held nor cleared", decided: false, holds: false, clears: false, failed: false };
 const aaFailed = "failed: the count's A/A has no bound, so the count does not pass until the maintainer decides";
 const changeFailed = "failed: the change's pairs have no bound, so the count does not pass until the maintainer decides";
@@ -83,6 +83,7 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
     const r = goodRow({ userCyclesPerRequest: Math.round((image === "sha256:head" ? 106000 : 100000) * (1 + 0.001 * ((n % 5) - 2))), kernelCyclesPerRequest: 0, ...row(round, image, target) });
     writeFileSync(join(dir, "instructions.json"), JSON.stringify({ [`corten/${target}`]: [r] }));
     writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
+    writeFileSync(join(dir, `count-corten-${target}-0-kernel.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
     writeFileSync(join(dir, "count-images.json"), JSON.stringify({ [`corten/${target}`]: { container: hex(1000 + n), image: launch(round) ?? image } }));
     return { status: rc(round) };
   };
@@ -124,9 +125,9 @@ test("a run is four invocations a pair and target, the A/A the change with the b
   assert.equal(plan[0].name, "p1-page-ab-000-head");
 });
 
-test("an invocation is valid only with a clean tag, exit 0, 5,000 requests, none failed, every count a number at 100%, its k6 checks and the side's image", () => {
+test("an invocation is valid only with a clean tag, exit 0, 5,000 requests in each of its two loads, none failed, every count a number at 100%, both loads' k6 checks and the side's image", () => {
   const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { row: [goodRow()], summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+  const ok = { row: [goodRow()], summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid(ok), []);
   assert.deepEqual(invalid({ ...ok, after: "sha256:b" }), ["the image counted was not the side's"]);
   assert.deepEqual(invalid({ ...ok, rc: 1 }), ["count.mjs exited 1"]);
@@ -140,6 +141,11 @@ test("an invocation is valid only with a clean tag, exit 0, 5,000 requests, none
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ perfRunningPct: undefined })] }), Object.values(COUNTS).map((e) => `perf's running percentage for ${e} is not recorded`));
   assert.deepEqual(invalid({ ...ok, row: { failed: "never answered" } }), ["count.mjs recorded failed: never answered"]);
   assert.deepEqual(invalid({ ...ok, summary: { metrics: { checks: { passes: 4999, fails: 1 } } } }), ["1 failed status checks", "4999 passed status checks, not 5000"]);
+  // Kernel instructions come from a second load (#2151): it must be whole too, by its row and its summary.
+  assert.deepEqual(invalid({ ...ok, kernelSummary: { metrics: { checks: { passes: 4999, fails: 1 } } } }), ["1 failed status checks in the kernel instructions' load", "4999 passed status checks in the kernel instructions' load, not 5000"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: undefined }), ["no k6 summary of the counted load in the kernel instructions' load"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: { requests: 4990, failed: 3 } })] }), ["4990 requests in the kernel instructions' load, not 5000", "3 failed requests in the kernel instructions' load"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: undefined })] }), ["undefined requests in the kernel instructions' load, not 5000", "undefined failed requests in the kernel instructions' load"]);
   assert.deepEqual(invalid({ ...ok, interrupted: true }), ["started and never ended; not run again"]);
 });
 
@@ -504,7 +510,7 @@ test("an invocation's row, summary and launched image are sealed when it ends: b
     assert.equal(first.targets.json.reading.verdict, "a miss");
     const counted = h.state.counted.length;
     const end = [...readFileSync(join(s.results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))].find((r) => r.name === "t1-json-ab-002-head" && r.ended != null);
-    assert.deepEqual(Object.keys(end.artifacts).sort(), ["count-corten-json-0.json", "count-images.json", "instructions.json"]);
+    assert.deepEqual(Object.keys(end.artifacts).sort(), ["count-corten-json-0-kernel.json", "count-corten-json-0.json", "count-images.json", "instructions.json"]);
     assert.match(end.artifacts["instructions.json"].sha256, /^[0-9a-f]{64}$/);
     // Every change's head row replaced by one at the base's level: a run that read them would clear the change.
     for (let pair = 1; pair <= 6; pair++) {
@@ -525,6 +531,11 @@ test("an invocation's row, summary and launched image are sealed when it ends: b
       const read = await runPairs(options(s2, h2));
       assert.equal(read.targets.json.aa.bound, null);
       assert.ok(read.targets.json.pairs.aa.find((p) => p.pair === 3).why.includes("its A/A, pair 3, side base: count-corten-json-0.json is gone since the invocation ended"));
+      // So is the kernel instructions' load's summary.
+      rmSync(join(s2.results, "t1-json-ab-004-head", "count-corten-json-0-kernel.json"));
+      const kernel = await runPairs(options(s2, h2));
+      assert.equal(kernel.targets.json.change.bound, null);
+      assert.ok(kernel.targets.json.pairs.ab.find((p) => p.pair === 4).why.includes("the change, pair 4, side head: count-corten-json-0-kernel.json is gone since the invocation ended"));
     } finally {
       s2.done();
     }
@@ -666,7 +677,7 @@ test("the band's ends are read exactly from the cycle counts: a bound at an end 
   assert.equal(reading(split, aa).verdict, "inside the default band: not decided");
   // A count that is not a whole number is not valid.
   const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+  const ok = { summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelCyclesPerRequest: 60000.5 })] }), ["kernelCyclesPerRequest is 60000.5, not a whole count"]);
 });
 
@@ -731,7 +742,7 @@ test("a replay reads each invocation against the image run.json pins for its slo
 
 test("user plus kernel cycles past 2^53 - 1 are not an exact count, so a sum that would round to the band's end is not valid rather than read inside it", async () => {
   const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+  const ok = { summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: 5216500000000000, kernelCyclesPerRequest: 5216500000000001 })] }), ["user plus kernel cycles a request is above 2^53 - 1, so not an exact count"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: Number.MAX_SAFE_INTEGER - 1, kernelCyclesPerRequest: 1 })] }), []);
   // 10433000000000001 / 10000000000000000 - 1 is past the band's high end less +1%; added as doubles it is 10433000000000000, at that end.
@@ -792,7 +803,8 @@ process.exit(status);
 const fakePerf = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const a = process.argv.slice(2);
-if (a.includes("sleep")) { process.stderr.write("1000,,instructions:u,1000000,100.00,,\\n"); process.exit(0); }
+// The probe (perf stat -e <set> -- sleep 1, no cgroup) answers on --log-fd 1 for each event it names.
+if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "probe.jsonl"), JSON.stringify(a) + "\\n"); process.stdout.write(a[a.indexOf("-e") + 1].split(",").map((e) => \`1000,,\${e},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); }
 fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
 const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
 process.on("SIGINT", () => { process.stdout.write(events.map((e) => \`500000000,,\${e},\${cgroup},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); });
@@ -836,7 +848,8 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       const perf = existsSync(join(dir, "perf.jsonl")) ? readFileSync(join(dir, "perf.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
       const row = JSON.parse(readFileSync(join(kit, "results", round, "instructions.json"), "utf8"))["corten/json"];
       const receipt = JSON.parse(readFileSync(join(kit, "results", round, "count-images.json"), "utf8"))["corten/json"];
-      return { code, docker, perf, row, receipt, log };
+      const probe = existsSync(join(dir, "probe.jsonl")) ? readFileSync(join(dir, "probe.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+      return { code, docker, perf, probe, row, receipt, log };
     };
     const first = "0".repeat(63) + "1";
     // Nothing replaced: perf counts that container's cgroup, the load is counted, and it is removed by its ID.
@@ -845,6 +858,14 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
     assert.equal(kept.receipt.container, first);
     assert.ok(kept.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)));
     assert.ok(Array.isArray(kept.row) && kept.row[0].requests === 5000 && kept.row[0].userPerRequest === 100000, JSON.stringify(kept.row));
+    // Kernel instructions over a load of their own, so no perf session, probe or count, holds both
+    // instructions:u and instructions:k (#2151); every set a count gives perf was probed first.
+    assert.deepEqual(kept.row[0].kernelPass, { requests: 5000, failed: 0 });
+    assert.equal(kept.row[0].kernelPerRequest, 100000);
+    const sets = (/** @type {string[][]} */ calls) => calls.map((args) => args[args.indexOf("-e") + 1]);
+    assert.deepEqual(sets(kept.perf), ["cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u", "instructions:k"]);
+    assert.deepEqual(sets(kept.probe), ["instructions:u", "instructions:k", "cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u"]);
+    for (const set of [...sets(kept.perf), ...sets(kept.probe)]) assert.ok(!(set.includes("instructions:u") && set.includes("instructions:k")), set);
     assert.deepEqual(kept.docker.calls.at(-1), ["rm", "-f", first]);
     // The ID is logged before perf attaches; in the counted window the log names the container.
     const lines = kept.log.split("\n");

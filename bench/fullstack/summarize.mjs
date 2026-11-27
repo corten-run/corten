@@ -42,7 +42,7 @@ summary.ssr = ssrOf(raw, Object.keys(apps));
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 for (const [key, runs] of Object.entries(read(join(dir, "instructions.json")) ?? {})) {
   if (!Array.isArray(runs)) { summary.instructions[key] = { failed: runs.failed }; continue; }
-  summary.instructions[key] = { user: median(runs.map((r) => r.userPerRequest)), kernel: median(runs.map((r) => r.kernelPerRequest)), runs: runs.length, failed: runs.reduce((n, r) => n + r.failed, 0) };
+  summary.instructions[key] = { user: median(runs.map((r) => r.userPerRequest)), kernel: median(runs.map((r) => r.kernelPerRequest)), runs: runs.length, failed: runs.reduce((n, r) => n + r.failed + (r.kernelPass?.failed ?? 0), 0) };
 }
 
 const rows = read(join(dir, "browser.json")) ?? [];

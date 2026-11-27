@@ -32,8 +32,8 @@
 // PATH and their versions, the kernel, Node and the k6 image; written before the first invocation,
 // and a run going on refuses if any differs or cannot be established) and `invocations.jsonl`
 // (each invocation as it starts and as it ends, with the SHA-256 and size of the row, the k6
-// summary and the launched image it is read from: a replay reads those bytes or none). No
-// invocation is run again: the command run again goes on from the first not started.
+// summaries of its two loads and the launched image it is read from: a replay reads those bytes
+// or none). No invocation is run again: the command run again goes on from the first not started.
 // `run.lock` in the ledger and, on the Docker daemon, a container named corten-count-pairs-lock
 // that only one runner can make and that runs while it is held, so a prune leaves it (the lock on
 // the daemon's `cb-corten` tag and the `fsw-corten` container count.mjs starts, whatever directory
@@ -84,7 +84,8 @@ export const DAEMON_LOCK = "corten-count-pairs-lock";
 const HOLDER = "run.corten.count-pairs.holder";
 /**
  * How long the daemon's lock runs, in seconds: seven days, an expiry and not a bound on a schedule
- * (999 pairs of both targets, 7,992 invocations, are about 77 hours at #2066's 34.8 s each, estimated;
+ * (999 pairs of both targets, 7,992 invocations, are about 77 hours at #2066's 34.8 s each, estimated, before
+ * #2151 gave each invocation a second load for kernel instructions, which adds an unmeasured time;
  * a slower run can outlast it, and then stops at its next check, as the lock is not running). It runs so that
  * `docker container prune`, which removes stopped containers, cannot remove it while a run goes on,
  * and exits by itself after this so one a killed runner left stops.
@@ -143,7 +144,7 @@ const isCount = (/** @type {unknown} */ x) => typeof x === "number" && Number.is
 
 /**
  * Why one invocation's row is not valid, or [] when it is.
- * @param {{ row?: any, summary?: any, launched?: any, want?: string, before?: string, after?: string, rc?: number | null,
+ * @param {{ row?: any, summary?: any, kernelSummary?: any, launched?: any, want?: string, before?: string, after?: string, rc?: number | null,
  *   signal?: string | null, tagRc?: number | null, fresh?: boolean, interrupted?: boolean, lost?: string[] }} inv
  */
 export function invalid(inv) {
@@ -163,6 +164,9 @@ export function invalid(inv) {
   const r = row[0];
   if (r.requests !== REQUESTS) why.push(`${r.requests} requests, not ${REQUESTS}`);
   if (r.failed !== 0) why.push(`${r.failed} failed requests`);
+  // Kernel instructions are counted over a second load of their own (count-perf.mjs, #2151).
+  if (r.kernelPass?.requests !== REQUESTS) why.push(`${r.kernelPass?.requests} requests in the kernel instructions' load, not ${REQUESTS}`);
+  if (r.kernelPass?.failed !== 0) why.push(`${r.kernelPass?.failed} failed requests in the kernel instructions' load`);
   for (const [field, event] of Object.entries(COUNTS)) {
     const v = r[field];
     // count-perf.mjs rounds each count a request to a whole number, so sums and ratios of them are exact.
@@ -177,11 +181,13 @@ export function invalid(inv) {
     // A sum past 2^53 - 1 is rounded, so the bound would not be read from the counts exactly.
     else if (Number.isSafeInteger(r.userCyclesPerRequest) && Number.isSafeInteger(r.kernelCyclesPerRequest) && !Number.isSafeInteger(cycles(r))) why.push("user plus kernel cycles a request is above 2^53 - 1, so not an exact count");
   }
-  const checks = inv.summary?.metrics?.checks;
-  if (!checks) why.push("no k6 summary of the counted load");
-  else {
-    if (checks.fails !== 0) why.push(`${checks.fails} failed status checks`);
-    if (checks.passes !== REQUESTS) why.push(`${checks.passes} passed status checks, not ${REQUESTS}`);
+  for (const [summary, load] of [[inv.summary, ""], [inv.kernelSummary, " in the kernel instructions' load"]]) {
+    const checks = summary?.metrics?.checks;
+    if (!checks) why.push(`no k6 summary of the counted load${load}`);
+    else {
+      if (checks.fails !== 0) why.push(`${checks.fails} failed status checks${load}`);
+      if (checks.passes !== REQUESTS) why.push(`${checks.passes} passed status checks${load}, not ${REQUESTS}`);
+    }
   }
   return why;
 }
@@ -298,7 +304,7 @@ const COMPARISON = { ab: "the change", aa: "its A/A" };
  * the image ID run.json pins for its slot's side, not the one its own record names.
  * @param {ReturnType<typeof schedule>} plan
  * @param {Map<string, any>} records invocation records by name
- * @param {(name: string, target: string, record: any) => { row?: any, summary?: any, launched?: any, why?: string[] }} load
+ * @param {(name: string, target: string, record: any) => { row?: any, summary?: any, kernelSummary?: any, launched?: any, why?: string[] }} load
  * @param {{ base?: string, head?: string }} [ids] the image IDs run.json pins
  */
 export function readRun(plan, records, load, ids = {}) {
@@ -539,7 +545,7 @@ export function daemonLock(exec, env, image, ledger) {
 }
 
 /** The outputs of one invocation that its reading is made from, sealed when it ends. */
-export const artifactsOf = (/** @type {string} */ target) => ["instructions.json", `count-corten-${target}-0.json`, "count-images.json"];
+export const artifactsOf = (/** @type {string} */ target) => ["instructions.json", `count-corten-${target}-0.json`, "count-images.json", `count-corten-${target}-0-kernel.json`];
 
 /** Each of an invocation's outputs as it is now: its SHA-256 and size, or null where it is not there. */
 export function seal(/** @type {string} */ dir, /** @type {string[]} */ names) {
@@ -690,8 +696,8 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
       if (bytes.length !== sealed.bytes || sha256(bytes) !== sealed.sha256) return void why.push(`${f} changed since the invocation ended`);
       try { return JSON.parse(bytes.toString("utf8")); } catch { return void why.push(`${f} is not JSON`); }
     };
-    const [rows, summary, images] = artifactsOf(target).map(at);
-    return { row: rows?.[`corten/${target}`], summary, launched: images?.[`corten/${target}`], why };
+    const [rows, summary, images, kernelSummary] = artifactsOf(target).map(at);
+    return { row: rows?.[`corten/${target}`], summary, kernelSummary, launched: images?.[`corten/${target}`], why };
   };
   const targets = readRun(plan, records, load, ids);
   const json = { prefix: o.prefix, images: o.images, ids, last: o.last, band: BAND, margin: MARGIN, targets };

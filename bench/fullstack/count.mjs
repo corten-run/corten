@@ -1,8 +1,11 @@
 // Counters per request: each app's container (items from memory), warmed up, then exactly
-// ITERATIONS requests while one `perf stat` counts its user and kernel instructions and cycles,
-// and user L1 instruction-cache misses. All counts require a reported 100% running percentage.
-// Unusable optional counts are null with a diagnostic; if instructions are unusable with
-// optional events enabled, repeat with instructions only unless the first load had failures.
+// ITERATIONS requests while one `perf stat` counts its user instructions, user and kernel cycles
+// and user L1 instruction-cache misses, then ITERATIONS more while another counts its kernel
+// instructions alone: no perf session counts user and kernel instructions together, which stops a
+// Xeon Platinum 8358 guest (#2151). All counts require a reported 100% running percentage.
+// Unusable optional counts are null with a diagnostic; if user instructions are unusable with
+// optional events enabled, the first load is repeated with them alone unless it had failures.
+// Before any load each event set is probed on the count's CPUs within a bound (PROBE_SETS).
 // Alternate one-repeat runs of the builds on a quiet host to compare cycles, which are noisier
 // than instructions.
 // Needs Linux with hardware counters (`perf`, root, cgroup v2): a bench host, not Docker Desktop.
@@ -10,11 +13,11 @@
 //   api: items fetched from the item API (BENCH_API_CONTAINER), so the count includes fetching and
 //   parsing its ~55 KB response; results are keyed <app>/<target>/api.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
-import { measurePerfCounts, perfCountArgs } from "./count-perf.mjs";
+import { GRACE_MS, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
@@ -80,15 +83,16 @@ function answersError(id, answer) {
 
 /**
  * Counts events in the cgroup of the container `docker run` gave this ID until `work` resolves:
- * by its ID, since the name can be another container's by then. `name` is what the log calls it.
+ * by its ID, since the name can be another container's by then. `name` is what the log calls it,
+ * `events` what perf counts.
  */
-async function counted(id, name, work, instructionsOnly) {
+async function counted(id, name, work, events) {
   if (!/^[0-9a-f]{64}$/.test(id)) throw new Error(`docker run gave ${JSON.stringify(id)}, not a container ID`);
   const cgroup = `system.slice/docker-${id}.scope`;
   // Timed lines in the round's log: when a step hangs the machine (#466), the log says whether
   // `perf` attached to the cgroup with no load yet or the load had started.
-  console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-G", id);
-  const perf = spawn("perf", perfCountArgs(countCpus, cgroup, instructionsOnly), { env: { ...process.env, LC_ALL: "C" } });
+  console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-e", events.join(","), "-G", id);
+  const perf = spawn("perf", perfCountArgs(countCpus, cgroup, events), { env: { ...process.env, LC_ALL: "C" } });
   let text = "";
   let said = "";
   let spawnError;
@@ -96,9 +100,19 @@ async function counted(id, name, work, instructionsOnly) {
   perf.stderr.on("data", (d) => (said += d));
   perf.on("error", (error) => { spawnError = error.message; });
   const closed = new Promise((resolve) => perf.on("close", (code, signal) => resolve({ code, signal })));
+  /** @type {{ code: number | null, signal: string | null } | null} */
+  let exit = null;
+  closed.then((e) => (exit = /** @type {any} */ (e)));
+  // Whether perf exits within ms; the timer is cleared when it does, so none outlives the count.
+  const within = (/** @type {number} */ ms) => new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    closed.then(() => { clearTimeout(timer); resolve(true); });
+  });
   const ready = await Promise.race([sleep(500).then(() => true), closed.then(() => false)]);
   let stopped = false;
-  // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup.
+  let hung = false;
+  // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup. One
+  // that does not exit once asked, nor once killed, is given up as no answer rather than waited out.
   try {
     if (ready) {
       console.log(new Date().toISOString(), "counting", name);
@@ -106,28 +120,47 @@ async function counted(id, name, work, instructionsOnly) {
     }
   } finally {
     if (ready) stopped = perf.kill("SIGINT");
-    await closed;
+    if (!(await within(PROBE_MS))) {
+      perf.kill("SIGKILL");
+      if (!(await within(GRACE_MS))) {
+        hung = true;
+        perf.unref();
+        perf.stdout.destroy();
+        perf.stderr.destroy();
+      }
+    }
   }
-  const { code, signal } = await closed;
-  const error = !stopped || (code !== 0 && signal !== "SIGINT")
+  const { code, signal } = exit ?? { code: null, signal: null };
+  const error = hung
+    ? `perf did not count the full load: no answer, it had not exited ${PROBE_MS / 1000} s after it was asked to stop nor ${GRACE_MS / 1000} s after it was killed`
+    : !stopped || (code !== 0 && signal !== "SIGINT")
     ? `perf did not count the full load: ${spawnError ?? (said.trim() || signal || `exit ${code}`)}`
     : null;
   return { text, error, ranLoad: ready };
 }
 
-// Before any load: the kernel this runs on, and `perf` counting an idle second on it, so a `perf`
-// that does not fit the running kernel or cannot count stops the step here with the reason. r8's
-// droplet locked up as counting started (#466); this probe has no `-G`, so it would not have
-// caught that, but the round's log now says how far counting got (`counted`).
+// Before any load: the kernel and CPU this runs on, and `perf` counting an idle second on the
+// count's CPUs with each event set a count gives it (PROBE_SETS), one at a time, each within a
+// bound, so a `perf` that does not fit the running kernel, cannot count a set or does not answer
+// stops the step here with the reason. Each set is written to count-kernel.txt before it runs, so
+// a host that stops as one runs leaves its name (#2151); a stopped host cannot refuse, and is the
+// watcher's to notice (droplet.mjs). r8's droplet locked up as counting started (#466); this probe
+// has no `-G`, so it would not have caught that, but the round's log says how far counting got.
 const kernel = spawnSync("uname", ["-r"], { encoding: "utf8" }).stdout.trim();
+const cpu = existsSync("/proc/cpuinfo") ? /^model name\s*:\s*(.+)$/m.exec(readFileSync("/proc/cpuinfo", "utf8"))?.[1]?.trim() ?? "unknown" : "unknown";
 const waiting = existsSync("/var/run/reboot-required.pkgs") ? readFileSync("/var/run/reboot-required.pkgs", "utf8").trim().split("\n").join(", ") : "";
 const pending = waiting ? ` (installed, waiting for a reboot: ${waiting})` : "";
-writeFileSync(join(dir, "count-kernel.txt"), `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\n`);
-console.log(`counting on kernel ${kernel}${pending}, perf stat ${countCpus.join(" ")}`);
-const probe = spawnSync("perf", ["stat", ...countCpus, "-x", ",", "-e", "instructions:u", "--", "sleep", "1"], { encoding: "utf8", timeout: 30_000 });
-// A counter the CPU or the VM does not expose prints `<not supported>` and still exits 0.
-if (probe.status !== 0 || !/^\d+,[^,]*,instructions:u/m.test(probe.stderr)) {
-  throw new Error(`perf cannot count on kernel ${kernel}: ${probe.error?.message ?? probe.stderr.trim()}`);
+const kernelFile = join(dir, "count-kernel.txt");
+writeFileSync(kernelFile, `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\ncpu ${cpu}\n`);
+console.log(`counting on kernel ${kernel}${pending}, cpu ${cpu}, perf stat ${countCpus.join(" ")}`);
+for (const names of PROBE_SETS) {
+  const line = `${new Date().toISOString()} probing perf stat ${countCpus.join(" ")} -e ${names.join(",")}`;
+  appendFileSync(kernelFile, `${line}\n`);
+  console.log(line);
+  const { refuse, note } = probeVerdict(names, await runBounded("perf", perfProbeArgs(countCpus, names), { env: { ...process.env, LC_ALL: "C" } }));
+  appendFileSync(kernelFile, `${new Date().toISOString()} ${refuse ? `refused: ${refuse}` : note ? `not counted: ${note}` : "counted"}\n`);
+  if (note) console.warn(`probe: ${note}`);
+  if (refuse) throw new Error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}`);
 }
 
 // Merged into the round's earlier counts, so one app can be counted again on its own.
@@ -177,15 +210,15 @@ for (const name of appsArg.split(",")) {
       for (let r = 0; r < Number(repeats); r += 1) {
         const stem = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}`;
         const row = await measurePerfCounts(
-          async (instructionsOnly) => {
-            const summary = `${stem}${instructionsOnly ? "-instructions-only" : ""}.json`;
+          async (pass, instructionsOnly) => {
+            const summary = `${stem}${pass === "kernel" ? "-kernel" : ""}${instructionsOnly ? "-instructions-only" : ""}.json`;
             const summaryFile = join(here, summary);
             rmSync(summaryFile, { force: true });
             // k6 reaches the app by its name, so the load is the counted container's only if that
             // name answers for it alone on the network, before perf attaches and once it stops.
             const before = answersError(container, `fsw-${name}`);
             if (before) throw new Error(`before the load: ${before}`);
-            const perf = await counted(container, `fsw-${name}`, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly);
+            const perf = await counted(container, `fsw-${name}`, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), passEvents(pass, instructionsOnly));
             const after = answersError(container, `fsw-${name}`);
             if (after) throw new Error(`after the load: ${after}`);
             return { ...perf, summary: perf.ranLoad ? JSON.parse(readFileSync(summaryFile, "utf8")) : undefined };

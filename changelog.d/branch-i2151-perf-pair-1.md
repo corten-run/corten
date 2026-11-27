@@ -1,0 +1,1 @@
+- The catalog count (`bench/fullstack/count.mjs`) counts kernel instructions over a load of their own, so no `perf` session counts user and kernel instructions together ([#2151 Two bench hosts on a Xeon Platinum 8358 stopped as a whole within 30 s of the lockup settings, software watchdog and Docker setup, and did not restart](https://github.com/corten-run/corten/issues/2151)).
