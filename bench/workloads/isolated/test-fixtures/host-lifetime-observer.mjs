@@ -136,7 +136,9 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     const normalized = String(path).replaceAll("\\", "/");
     if (!normalized.startsWith("/sys/fs/cgroup")) return original.lstatSync(path, ...args);
     const result = f.cgroupStat?.(normalized, args[0], path);
-    return result === null ? undefined : result ?? { isSymbolicLink: () => false };
+    return result === null ? undefined : result ?? {
+      isSymbolicLink: () => false, isDirectory: () => true, dev: 1, ino: 1,
+    };
   });
   t.mock.method(fs, "statSync", (path, ...args) => {
     if (!/^\/proc\/\d+\/exe$/.test(String(path)) || nativePids.includes(Number(String(path).split("/")[2]))) return original.statSync(path, ...args);

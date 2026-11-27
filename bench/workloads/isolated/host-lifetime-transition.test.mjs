@@ -13,8 +13,9 @@ const zero = "0001-01-01T00:00:00Z";
 
 async function exitTransition(t, { change = () => {}, path = "stat", code = "ENOENT",
   finishDelay = 0, wakeOffset = 0, inspectMs = 0, closing = false, census, censusRace = false,
-  censusEvents = "populated 0\nfrozen 0\n", lostCgroup, groupReturns = false, secondLookupError = false } = {}) {
-  let faults = 0, phase = 0, missingAt, pinsAfterExit, censuses = 0;
+  censusEvents = "populated 0\nfrozen 0\n", lostCgroup, groupReturns = false, secondLookupError = false,
+  lateAncestor, lookupMs = 0 } = {}) {
+  let faults = 0, phase = 0, missingAt, pinsAfterExit, censuses = 0, scopeRechecked = false;
   const procReads = [], inspections = [], waits = [];
   const f = await fixture(t, [], true, () => { faults++; });
   Atomics.wait.mock.mockImplementation((_array, _index, _value, ms) => {
@@ -40,8 +41,15 @@ async function exitTransition(t, { change = () => {}, path = "stat", code = "ENO
     return JSON.stringify((inspections.length > 1 ? change(row, inspections.length) : undefined) ?? [row]);
   };
   f.cgroupStat = (name, options, path) => {
-    if (phase !== 1 || !lostCgroup || name !== "/sys/fs/cgroup" + (lostCgroup === "parent" ? "/system.slice" : scope(id))) return;
+    if (phase !== 1 || !lostCgroup) return;
+    if (name === "/sys/fs/cgroup/system.slice" && options?.throwIfNoEntry === false) {
+      if (lateAncestor === "missing" || (lateAncestor === "after-leaf" && scopeRechecked)) return null;
+      if (lateAncestor === "replacement") return { isDirectory: () => true, dev: 1, ino: 2 };
+    }
+    if (name !== "/sys/fs/cgroup" + (lostCgroup === "parent" ? "/system.slice" : scope(id))) return;
     if (options?.throwIfNoEntry === false) {
+      scopeRechecked = true;
+      f.clock += lookupMs;
       if (secondLookupError) throw missing("EIO");
       return groupReturns ? undefined : null;
     }
@@ -125,6 +133,11 @@ for (const [reason, options, expectedInspects, operation, code] of [
   ["Docker no longer has the exact container", { change: () => [] }, 2, "cgroup-read", "ENOENT"],
   ["Docker reports a different generation", { change: (row) => { row.RestartCount++; } }, 2, "cgroup-read", "ENOENT"],
   ["the first confirmation would run at the deadline", { inspectMs: 75 }, 1, "cgroup-read", "ENOENT"],
+  ["the closing inspect reaches the deadline", { inspectMs: 40 }, 2, "cgroup-read", "ENOENT"],
+  ["the leaf lookup reaches the deadline", { lookupMs: 75 }, 2, "cgroup-read", "ENOENT"],
+  ["an opening ancestor is missing at confirmation", { lateAncestor: "missing" }, 2, "cgroup-read", "ENOENT"],
+  ["an opening ancestor is replaced at confirmation", { lateAncestor: "replacement" }, 2, "cgroup-read", "ENOENT"],
+  ["an opening ancestor disappears after the leaf check", { lateAncestor: "after-leaf" }, 2, "cgroup-read", "ENOENT"],
   ["a cgroup ancestor is missing", { lostCgroup: "parent" }, 1, undefined, "ENOENT"],
   ["the scope read is denied", { lostCgroup: "denied" }, 1, "cgroup-read", "EACCES"],
 ]) test("r110 exit: keeps the original gap when " + reason, async (t) => {

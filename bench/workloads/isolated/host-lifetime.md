@@ -114,9 +114,10 @@ after a failed census all leave a gap.
 If the census reports `ENOENT` for the container's exact cgroup directory
 after the opening PID and membership reads, the same exact-ID check can
 confirm its stopped generation. A second directory lookup must show the
-scope is still absent before the existing 75 ms bound. A missing ancestor
-or nested cgroup, a failed lookup, or a scope that still exists leaves the
-original gap.
+scope is still absent before the existing 75 ms bound. Its ancestor
+directories must still match the opening device and inode on both sides
+of the lookup. A missing ancestor or nested cgroup, a failed lookup, or
+a scope that still exists leaves the original gap.
 
 The closing Docker inspect can itself prove the same stopped transition after
 the kernel checks. The collector then discards the incomplete kernel census and

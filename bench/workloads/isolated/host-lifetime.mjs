@@ -45,9 +45,11 @@ function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
 }
-function readGroup(path, keys = fields) {
+function readGroup(path, keys = fields, directories) {
   const actual = join(root, path);
-  assert.ok(!lstatSync(actual).isSymbolicLink());
+  const directory = lstatSync(actual);
+  assert.ok(!directory.isSymbolicLink());
+  directories?.push([actual, directory.dev, directory.ino]);
   return { path, files: Object.fromEntries(keys.map((key) => {
     try { return [key, readFileSync(join(actual, key), "utf8")]; }
     catch (error) { if (error.code === "ENOENT") return [key, null]; throw error; }
@@ -90,9 +92,9 @@ export function requireNativeContainerCpuSet(info, cpuset) {
   assert.equal(readFileSync(membership, "utf8"), cgroup, "native container left its cgroup");
 }
 export { requireNativeCommandCpuSet as requireBrowserCommandCpuSet, requireNativeContainerCpuSet as requireBrowserContainerCpuSet };
-function parents(path) {
+function parents(path, directories) {
   const values = [];
-  for (;;) { values.push(readGroup(path)); if (path === "/") return values; path = posix.dirname(path); }
+  for (;;) { values.push(readGroup(path, fields, directories)); if (path === "/") return values; path = posix.dirname(path); }
 }
 function effectiveControls(files) {
   const cpu = files["cpu.max"], cpus = files[cpusetField], memory = files["memory.max"];
@@ -383,6 +385,18 @@ function confirmDockerExit(inspect, running, startedAt, began) {
     if (woke < exitRecheckTargetMs || woke >= exitRecheckDeadlineMs) return;
   }
 }
+function vanishedDockerScope(scope, directories, began) {
+  const withinBudget = () => performance.now() - began < exitRecheckDeadlineMs;
+  const sameAncestors = () => directories.every(([path, dev, ino]) => {
+    if (!withinBudget()) return false;
+    const directory = lstatSync(path, { throwIfNoEntry: false });
+    return directory?.isDirectory() && directory.dev === dev && directory.ino === ino;
+  });
+  try {
+    return sameAncestors() && withinBudget() && lstatSync(scope, { throwIfNoEntry: false }) === undefined
+      && sameAncestors() && withinBudget();
+  } catch { return false; } // Retain the original census fault.
+}
 function startupRecheck(record, bound, attempts) {
   try {
     const { state } = record.container;
@@ -429,7 +443,8 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
     participantGroup(path, id);
     stage = "kernel-census";
-    const ancestors = parents(posix.dirname(path));
+    const directories = exitRecheckBegan === undefined ? undefined : [];
+    const ancestors = parents(posix.dirname(path), directories);
     let observed;
     try { observed = snapshot(path, executables, pending); }
     catch (error) {
@@ -440,13 +455,8 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
         && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
         && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
         const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
-        if (stopped && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
-          let absent = false;
-          try { absent = lstatSync(scope, { throwIfNoEntry: false }) === undefined; }
-          catch { /* Retain the original census fault. */ }
-          if (absent && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs)
-            throw new ClosingDockerExit({ ...stopped, endedAt: Date.now() });
-        }
+        if (stopped && vanishedDockerScope(scope, directories, exitRecheckBegan))
+          throw new ClosingDockerExit({ ...stopped, endedAt: Date.now() });
       }
       throw error;
     }
