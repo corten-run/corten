@@ -1179,6 +1179,11 @@ mod tests {
             both(u64::from(n));
             both(-i64::from(n));
         }
+        // Three digits whose pair differs from itself turned about, and whose pair has a zero.
+        for n in [107_u16, 120, 345] {
+            both(n);
+            both(-i64::from(n));
+        }
     }
 
     /// The month styles, by their index in the cases after the other 14, and the day styles after
