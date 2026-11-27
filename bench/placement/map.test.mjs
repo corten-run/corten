@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -816,6 +816,24 @@ test("a shuffled placement, linked by LLD: each definition by its own map's inpu
   assert.equal(turned.status, 1, turned.stdout);
   assert.match(turned.stdout, /^1 shared names compared, 1 left out as ambiguous/);
   assert.match(turned.stderr, /only 1 of the 2 names both placements have are defined exactly once on each side, fewer than the 2 an order needs/);
+  // Run build.sh's refusal branch against the same links, without building a Cargo probe.
+  const build = readFileSync(new URL("./build.sh", import.meta.url), "utf8");
+  const refusal = build.match(/^refused\(\).*$/m)?.[0];
+  const alikeCheck = build.match(/^    if \[ "\$SHUFFLE" = 1 \] && \[ "\$1" = head \]; then\n[\s\S]*?^    fi$/m)?.[0];
+  assert.ok(refusal && alikeCheck, "build.sh has a shuffled head refusal branch");
+  for (const folder of ["bin/layout", "maps", "orders"]) mkdirSync(join(dir, folder), { recursive: true });
+  for (const [name, src] of [["base", "dups"], ["head", "dups"], ["base-p320", "dups-p"], ["head-p320", "dups-yx"]]) {
+    symlinkSync(join(dir, src), join(dir, "bin", name));
+    if (name.endsWith("320")) {
+      writeFileSync(join(dir, "maps", `${name}.map.gz`), gzipSync(readFileSync(join(dir, `${src}.map`))));
+      symlinkSync(join(dir, `${src}.order`), join(dir, "orders", `${name}.txt`));
+    } else symlinkSync(join(dir, `${src}.map`), join(dir, "maps", `${name}.map`));
+  }
+  const refused = spawnSync("sh", ["-ec", `${refusal}\nSHUFFLE=1 SECOND=0 WORK=. B=bin M=maps pl=head-p320 pl_order=orders/head-p320.txt KIT=$3\n${alikeCheck}`, "build.sh", "head", "320", fileURLToPath(new URL(".", import.meta.url))], { cwd: dir, encoding: "utf8" });
+  assert.equal(refused.status, 3, refused.stderr);
+  const receipt = readFileSync(join(dir, "bin", "refused.txt"), "utf8");
+  assert.match(receipt, /^REFUSED: head has no reading against base across shuffled placements: .*fewer than the 2 an order needs/);
+  assert.doesNotMatch(receipt, /different orders/);
   // A link of another file, dup's sections before a, read for this one is refused.
   ld("dups-y", [pad, y, a, x], named("dup", "a"));
   const away = shuffled("dups", "dups-y", "dups-p");

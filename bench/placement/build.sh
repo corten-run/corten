@@ -185,7 +185,7 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
         # shellcheck disable=SC2086
         if ! node "$KIT/layout.mjs" --alike "$B/base" "$B/base-p$2" "$WORK/orders/base-p$2.txt" "$M/base.map" "$M/base-p$2.map.gz" "$B/head" "$B/$pl" "$pl_order" "$M/head.map" "$M/$pl.map.gz" "$2" $pl_second >"$B/layout/$pl-alike.txt" 2>"$B/alike-$pl.txt"; then
             grep -q '^JSON {"ok":false' "$B/layout/$pl-alike.txt" || fail "$pl could not be checked against base-p$2: $(cat "$B/alike-$pl.txt")"
-            refused "head has no reading against base across shuffled placements: base-p$2 and $pl, linked in one index's order, lay the functions both have in different orders ($(sed 's/^layout.mjs: //' "$B/alike-$pl.txt" | paste -sd';' -))"
+            refused "head has no reading against base across shuffled placements: the order check of the names it compares in base-p$2 and $pl refused: $(sed 's/^layout.mjs: //' "$B/alike-$pl.txt" | paste -sd';' -)"
         fi
     fi
     sum "$pl" >/dev/null

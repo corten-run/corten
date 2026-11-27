@@ -10372,9 +10372,9 @@ rules something out.
     through a local name each defines (`init` in two objects), each also holding a name defined
     once, can lie in either order in either link, since LLD sorts by the key alone, and the check
     compares those names in the order each link laid them. On the probe of the
-    diagnosis above, relinked with six shuffled orders, that is 34 of 3,467 shared names, each
-    defined more than once on a side, against 3,433 compared. That is not the pinned layout turned away below, which gates one layout; it
-    samples many. Its cost is that each placement is a link no app builds, which may cost every
+    diagnosis above, relinked with six shuffled orders, 34 of 3,467 shared names were left out
+    and 3,433 compared. That is not the pinned layout turned away below, which gates one layout;
+    it samples many. Its cost is that each placement is a link no app builds, which may cost every
     placement cycles a default order does not, both sides alike, as the first version's shuffle
     could; unlike that one it gives base and head one order, partial only within those ties.
     Whether shuffled placements spread

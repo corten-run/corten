@@ -122,6 +122,7 @@ test("a shuffled workload is declared before the run, and one without the field 
   const { shuffle, ...rest } = r;
   assert.deepEqual(rest, plain);
   const line = declaration(r).find((l) => l.startsWith("inner layout: shuffled."));
+  assert.ok(line?.includes("every .text function of its side's unpadded build"), line);
   assert.ok(line && line.includes(`an order drawn from seed ${r.seed} and i (order.mjs), the same order for every binary at i, base and head and the A/A's two sides, and another at each i`), line);
   assert.deepEqual(declaration(r).filter((l) => !l.startsWith("inner layout")), declaration(plain));
   assert.equal(setupOf(shuffledPlan, shuffledPlan.workloads[0]).shuffle, true);
@@ -414,7 +415,7 @@ test("a shuffled run says so in its header and reads only placements linked in t
   const r = report(res);
   assert.equal(r.exit, 0, r.json.refused?.join(" | "));
   assert.equal(r.json.shuffle, true);
-  for (const word of ["Inner layout: shuffled. Each placement i was linked with its pad first", "That order is partial: input sections the file gives one key", "every function whose name (less a ThinLTO suffix) each side defines exactly once", "Each placement is a link no app builds.", "in the order of its ordering file"]) assert.ok(r.md.includes(word), word);
+  for (const word of ["Inner layout: shuffled. Each placement i was linked with its pad first and then every .text function", "That order is partial: input sections the file gives one key", "compared only names (less a ThinLTO suffix) it could identify unambiguously on both sides", "Names defined more than once or read otherwise by the symbol table or the map on either side were left out and counted", "Each placement is a link no app builds.", "in the order of its ordering file"]) assert.ok(r.md.includes(word), word);
   assert.ok(!r.md.includes("every function moved by exactly its pad"));
   assert.equal(report(shuffledRun({ align: 32 })).exit, 0);
   const refused = (opts, word) => { const x = report(shuffledRun(opts)); assert.equal(x.exit, 2, word); has(x.json.refused, word); };
@@ -428,10 +429,10 @@ test("a shuffled run says so in its header and reads only placements linked in t
   refused({ align: 32, touch: (res_, put) => put(join("layout", "base-p320-map.txt"), `JSON ${JSON.stringify({ ok: true, pad: 320, second: 48 })}\n`) }, "base-p320: no second pad's line with a passing map check");
   // resolved.json that drops the declaration.
   refused({ touch: (res_, put) => { const f = join("plan", "resolved.json"), j = JSON.parse(readFileSync(join(res_, f), "utf8")); delete j.shuffle; put(f, JSON.stringify(j)); } }, "resolved.json's shuffle is not what plan.mjs gives");
-  // A head placement without a passing check that it lays the functions it shares with base's at its index alike.
-  refused({ touch: (res_) => rmSync(join(res_, "layout", "head-p320-alike.txt")) }, "head-p320: no passing check that it lays the functions it has with base-p320 in one order with it");
-  refused({ alike: { ok: false } }, "no passing check that it lays the functions it has with base-p");
-  refused({ alike: { shuffled: undefined } }, "no passing check that it lays the functions it has with base-p");
+  // A head placement without a passing check of the order of its compared names.
+  refused({ touch: (res_) => rmSync(join(res_, "layout", "head-p320-alike.txt")) }, "head-p320: no passing check that the names it compares with base-p320 lie in the same order");
+  refused({ alike: { ok: false } }, "no passing check that the names it compares with base-p");
+  refused({ alike: { shuffled: undefined } }, "no passing check that the names it compares with base-p");
 });
 
 test("a shuffled run's checks are bound to the placement maps it kept and the ordering files it draws", () => {
@@ -443,11 +444,11 @@ test("a shuffled run's checks are bound to the placement maps it kept and the or
   // A check against base at the same pad that read other maps or ordering files than this run's,
   // or names none: its pad matches, its maps contradict the run's.
   for (const k of ["baseMap", "headMap", "baseOrder", "headOrder"]) {
-    refused({ alike: { [k]: mapSha("elsewhere") } }, "head-p320: no passing check that it lays the functions it has with base-p320 in one order with it, of the ordering files drawn for both and the placement maps kept for both");
-    refused({ alike: { [k]: undefined } }, "head-p320: no passing check that it lays the functions it has with base-p320");
+    refused({ alike: { [k]: mapSha("elsewhere") } }, "head-p320: no passing check that the names it compares with base-p320 lie in the same order, using the ordering files drawn for both and the placement maps kept for both");
+    refused({ alike: { [k]: undefined } }, "head-p320: no passing check that the names it compares with base-p320");
   }
   // Two placements' maps swapped in the alike check: each a map this run kept, neither the one for its side.
-  refused({ alike: { baseMap: mapSha("head-p320"), headMap: mapSha("base-p320") } }, "head-p320: no passing check that it lays the functions it has with base-p320");
+  refused({ alike: { baseMap: mapSha("head-p320"), headMap: mapSha("base-p320") } }, "head-p320: no passing check that the names it compares with base-p320");
 });
 
 test("build.sh and run.sh shuffle only when the plan says so, whatever SHUFFLE the caller's environment holds", { skip: process.platform !== "linux" && "runs the scripts' start under sh" }, () => {
