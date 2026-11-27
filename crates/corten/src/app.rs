@@ -2131,7 +2131,9 @@ where
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
         if let Some(head) = held.own {
             let own = OwnConnection { head, watch, bound, permit, alive, stop, http };
-            tokio::spawn(own.serve(async move { wrap(io).await.ok() }, connection));
+            // With the timer its requests' deadlines wait on, as hyper's connection below has
+            // one: the task's, so a connection handed to hyper keeps the one it had made.
+            tokio::spawn(crate::deadline::Keeps::new(own.serve(async move { wrap(io).await.ok() }, connection)));
             continue;
         }
         tokio::spawn(async move {
