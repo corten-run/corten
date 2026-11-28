@@ -23,7 +23,7 @@ use serde::Serialize;
 use crate::{
     cards::{self, Card, Refusal},
     text::Msg,
-    views::{self, Answer, DeckBuilderRefs, DeckVersion, SaveNote},
+    views::{self, Answer, DeckBuilderRefs, DeckLines, DeckVersion, SaveNote},
 };
 
 /// A card in the saved deck and its copies: the rows of the deck's feed.
@@ -303,8 +303,8 @@ fn deck_page(req: &Req, builder: &Builder, view: &DeckQuery, answer: &Answer, st
 }
 
 /// Saves the deck. An action answers with the save note and, for a successful form submit without
-/// the builder script, the next version. Without the runtime a saved deck goes back to the page
-/// and a refused one is the page with the reason.
+/// the builder script, the saved lines and their version. Without the runtime a saved deck goes
+/// back to the page and a refused one is the page with the reason.
 async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckInput>) -> HtmlResult {
     let outcome = match builder.posted(&input) {
         Ok(deck) => builder.save(&input.generation, input.version, deck, &input.submit, input.draft),
@@ -319,12 +319,16 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
     };
     if let Some(action) = req.action() {
         // The script supplies a nonzero draft and takes the version from the note, which also
-        // lets it reconcile a retried answer with its feed. The plain form needs its own field.
-        if let Answer::Saved { version, draft: 0 } = answer {
+        // lets it reconcile a retried answer with its feed. The plain form needs the lines
+        // and version from the same snapshot, even if another save followed this answer's write.
+        if let Answer::Saved { draft: 0, .. } = answer {
+            let (version, saved) = builder.saved();
+            let lines = views::deck_lines(&builder, &saved);
             return action.patch_with_status(
                 status,
                 html! {
                     <DeckVersion bundle={DeckBuilderRefs} version={version} />
+                    <DeckLines bundle={DeckBuilderRefs} lines={&lines} />
                     <SaveNote answer={&answer} />
                 },
             );
@@ -397,7 +401,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(note.contains(r#"<span id="save-note""#) && note.contains("Saved."), "{note}");
         assert!(note.contains(r#"save_note.answered($t,"Saved",1,1,false)"#), "{note}");
-        assert!(!note.contains("deck-version"), "{note}");
+        assert!(!note.contains("deck-version") && !note.contains("deck-lines"), "{note}");
         assert_eq!(builder.saved().1.get("salt-oracle"), Some(&1));
         // Sent again (its answer lost): the same answer, no second write.
         let res = saving(&app, 0, &deck, &key).field(f.draft, 1).mode(Mode::Action).await;
@@ -418,17 +422,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_form_save_patches_the_version_for_the_next_submit() {
+    async fn a_form_save_patches_the_saved_lines_and_version_for_the_next_submit() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
         let app = app(builder.clone()).test();
         let mut deck = starter();
         let gravel = deck.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap();
         gravel.1 = 2;
-        let first = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
+        let key = submit_key();
+        let f = DeckInput::FIELDS;
+        let first = saving(&app, 0, &deck, &key).field(f.add, "salt-oracle").mode(Mode::Action).await;
         let (status, patch) = read(&first);
         assert_eq!(status, StatusCode::OK);
         assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="1""#), "{patch}");
         assert!(patch.contains(r#""Saved",1,0,false)"#), "{patch}");
+        assert!(patch.contains(r#"id="deck-lines""#) && patch.contains(r#"name="card" value="salt-oracle""#), "{patch}");
 
         let gravel = deck.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap();
         gravel.1 = 1;
@@ -436,7 +443,16 @@ mod tests {
         let (status, patch) = read(&second);
         assert_eq!(status, StatusCode::OK);
         assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="2""#), "{patch}");
+        assert!(!patch.contains(r#"name="card" value="salt-oracle""#), "{patch}");
         assert_eq!((builder.deck.seq(), builder.saved().1.get("gravel-sprite")), (2, Some(&1)));
+
+        // A replay still acknowledges the first write, but redraws the current form and version.
+        let replay = saving(&app, 0, &starter(), &key).field(f.add, "salt-oracle").mode(Mode::Action).await;
+        let (status, patch) = read(&replay);
+        assert_eq!(status, StatusCode::OK);
+        assert!(patch.contains(r#""Saved",1,0,false)"#), "{patch}");
+        assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="2""#), "{patch}");
+        assert!(!patch.contains(r#"name="card" value="salt-oracle""#), "{patch}");
     }
 
     #[test]

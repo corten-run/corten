@@ -1,4 +1,7 @@
-use corten::prelude::*;
+use corten::{
+    prelude::*,
+    script::{RowsOf, view_id},
+};
 use corten_ui::CopyButton;
 
 use super::deck_preview::DeckPreviewChanged;
@@ -21,6 +24,33 @@ struct DeckVersionId;
 pub fn DeckVersion(bundle: DeckBuilderRefs, version: u64) -> impl Patch {
     let field = DeckInput::FIELDS.version;
     html! { <input ref={bundle.version_ref()} id={DeckVersionId} type="hidden" name={field} value={version}> }
+}
+
+#[derive(Id)]
+struct DeckLinesId;
+
+#[derive(Id)]
+struct DeckEmptyId;
+
+/// The posted card/count pairs, redrawn from the saved deck for a fallback submit.
+#[component(css = DeckBuilder)]
+pub fn DeckLines<'a>(bundle: DeckBuilderRefs, lines: &'a [Line<'a>]) -> impl Patch {
+    html! {
+        <ul id={DeckLinesId} ref={bundle.lines_ref()} class={Lines}>
+            for line in lines.iter() {
+                <DeckLine
+                    id={&line.card.id}
+                    name={&line.card.name}
+                    kind={line.card.kind.as_str()}
+                    cost={line.card.cost}
+                    count={line.count}
+                    owned={line.card.owned}
+                    bundle={bundle}
+                />
+            }
+        </ul>
+        <p id={DeckEmptyId} ref={bundle.empty()} class={Empty} hidden={!lines.is_empty()}>"Drag cards here, or press Add."</p>
+    }
 }
 
 /// What a grip's keys do, which every grip names (`aria-describedby`).
@@ -72,9 +102,13 @@ pub fn DeckBuilder<'a>(
     answer: &'a Answer,
 ) -> impl Render {
     let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
-    let (lines_ref, template, lift, copies, form, total, bars, tallies, kinds) = refs();
+    let (template, form, total, bars, tallies, kinds) = refs();
+    let lines_ref: Ref<el::HTMLUListElement, RowsOf<{ view_id("DeckLine") }>> = refs();
+    let lift: Ref<el::HTMLButtonElement> = refs();
+    let copies: Ref<el::HTMLInputElement> = refs();
+    let empty: Ref<el::HTMLParagraphElement> = refs();
     let version_ref: Ref<el::HTMLInputElement> = refs();
-    let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
+    let (undo, redo, status, conflict, list, announce, draft, generation_ref, keep) = refs();
     let (unsure, previews) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
@@ -316,33 +350,19 @@ pub fn DeckBuilder<'a>(
                     <input ref={draft} type="hidden" name={f.draft} value="0">
                     <input type="hidden" name={f.q} value={filter}>
                     if let Some(sort) = view.sort { <input type="hidden" name={f.sort} value={sort}> }
-                    <ul
-                        ref={lines_ref}
-                        class={Lines}
+                    <div
                         on:change={js::typed(copies.closest(), parts)}
                         on:dragstart={js::liftLine(event, lift.closest(), parts, carry)}
                         on:dragover={js::overLine(event, lines_ref)}
                         on:drop={js::dropLine(event, parts, carry)}
                         on:keydown={js::pickUpLine(event, lift.closest(), parts, carry)}
                     >
-                        for line in lines.iter() {
-                            <DeckLine
-                                id={&line.card.id}
-                                name={&line.card.name}
-                                kind={line.card.kind.as_str()}
-                                cost={line.card.cost}
-                                count={line.count}
-                                owned={line.card.owned}
-                                lift={lift}
-                                copies={copies}
-                            />
-                        }
-                    </ul>
-                    <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Drag cards here, or press Add."</p>
+                        <DeckLines bundle={DeckBuilderRefs} lines={lines} />
+                    </div>
                     <button on:click={js::saveNow(event, parts)}>"Save"</button>
                 </form>
                 <template ref={template}>
-                    <DeckLine id="" name="" kind="" cost={0} count={0} owned={0} lift={lift} copies={copies} />
+                    <DeckLine id="" name="" kind="" cost={0} count={0} owned={0} bundle={DeckBuilderRefs} />
                 </template>
                 <details class={Export}>
                     <summary>"Deck list"</summary>

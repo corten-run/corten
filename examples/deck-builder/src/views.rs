@@ -21,7 +21,7 @@ mod preview_export;
 mod save_note;
 
 pub use collection_row::CollectionRow;
-pub use deck_builder::{DeckBuilder, DeckBuilderRefs, DeckFormId, DeckVersion};
+pub use deck_builder::{DeckBuilder, DeckBuilderRefs, DeckFormId, DeckLines, DeckVersion};
 pub use deck_line::DeckLine;
 pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
 pub use draft_notes::DraftNotes;
@@ -135,20 +135,24 @@ pub fn screen<'a>(
         Some(Sort::Owned) => cards.sort_by_cached_key(|s| (std::cmp::Reverse(s.card.owned), s.card.name.to_lowercase())),
         None => {}
     }
-    let mut lines: Vec<Line> =
-        saved.iter().filter_map(|(id, &count)| builder.card(id).map(|card| Line { card, count })).collect();
-    lines.sort_by_cached_key(|l| (l.card.cost, l.card.name.to_lowercase()));
     html! {
         <DeckBuilder
             t={t}
             cards={cards}
-            lines={lines}
+            lines={deck_lines(builder, saved)}
             generation={builder.generation()}
             version={version}
             view={view}
             answer={answer}
         />
     }
+}
+
+/// The form's lines, in the same order on the page and after a fallback save.
+pub fn deck_lines<'a>(builder: &'a Builder, saved: &Deck) -> Vec<Line<'a>> {
+    let mut lines: Vec<_> = saved.iter().filter_map(|(id, &count)| builder.card(id).map(|card| Line { card, count })).collect();
+    lines.sort_by_cached_key(|l| (l.card.cost, l.card.name.to_lowercase()));
+    lines
 }
 
 /// Whether the filter's words find `card`: its name, set or kind, as the page's script filters.

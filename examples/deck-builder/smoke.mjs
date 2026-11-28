@@ -134,7 +134,6 @@ try {
   // Add: shown at once, then saved. The save is held, so the line is checked before any answer.
   let release = () => {};
   const loaded = Number(await version(page));
-  const firstSave = Promise.withResolvers();
   const heldSave = Promise.withResolvers();
   let holdingFirst = false;
   /** @type {URLSearchParams[]} */
@@ -145,33 +144,42 @@ try {
   await page.route("**/deck", async (route) => {
     if (!holdingFirst) {
       holdingFirst = true;
-      firstSave.resolve(undefined);
       await heldSave.promise;
     }
     await route.continue();
   });
-  await row(page, "pearl-diver").locator("button", { hasText: "Add" }).click();
-  check("Add shows the card in the deck at once, before the server answers", (await deck(page))["pearl-diver"] === 1 && (await status(page)).state === "saving");
-  const drawn = [await total(page), await page.textContent("figure ol li:nth-child(3) span"), await row(page, "pearl-diver").locator("td:nth-child(6) span").first().textContent()];
-  check("the count, the curve and the collection row follow", drawn.join() === "11,5,1", drawn.join());
-  check(
-    "a change marks the collection row and deck line for motion",
-    (await row(page, "pearl-diver").getAttribute("data-motion"))?.startsWith("card-") === true &&
-      (await page.locator('ul li[data-key="pearl-diver"]').getAttribute("data-motion"))?.startsWith("line-") === true,
-  );
-  const animations = await page.evaluate(() => [
-    getComputedStyle(document.querySelector('tbody tr[data-key="pearl-diver"]')).animationName,
-    getComputedStyle(document.querySelector('ul li[data-key="pearl-diver"]')).animationName,
-  ]);
-  check("the motion markers select the component animations", animations[0] !== "none" && animations[1] !== "none", animations.join(", "));
-  await page.waitForFunction(() => !document.querySelector('tbody tr[data-motion], ul li[data-motion]'));
-  check("motion markers clear after the animation", !(await page.locator("[data-motion]").count()));
-  await firstSave.promise;
   try {
+    const [, motion] = await Promise.all([
+      page.waitForRequest(isSave, { timeout: 5_000 }),
+      row(page, "pearl-diver").locator("button", { hasText: "Add" }).evaluate((button) => {
+        /** @type {HTMLButtonElement} */ (button).click();
+        // Read the markers in the same turn as Add, before an animation can finish.
+        return ['tbody tr[data-key="pearl-diver"]', 'ul li[data-key="pearl-diver"]'].map((selector) => {
+          const el = document.querySelector(selector);
+          return { marker: el?.getAttribute("data-motion"), animation: el && getComputedStyle(el).animationName };
+        });
+      }, undefined, { timeout: 5_000 }),
+    ]);
+    check("Add shows the card in the deck at once, before the server answers", (await deck(page))["pearl-diver"] === 1 && (await status(page)).state === "saving");
+    const drawn = [await total(page), await page.textContent("figure ol li:nth-child(3) span"), await row(page, "pearl-diver").locator("td:nth-child(6) span").first().textContent()];
+    check("the count, the curve and the collection row follow", drawn.join() === "11,5,1", drawn.join());
+    check(
+      "a change marks the collection row and deck line for motion",
+      motion[0].marker?.startsWith("card-") === true && motion[1].marker?.startsWith("line-") === true,
+    );
+    check("the motion markers select the component animations", motion.every(({ animation }) => animation && animation !== "none"),
+      motion.map(({ animation }) => animation).join(", "));
+    await page.waitForFunction(() => !document.querySelector('tbody tr[data-motion], ul li[data-motion]'), null, { timeout: 5_000 });
+    check("motion markers clear after the animation", !(await page.locator("[data-motion]").count()));
     await time(page, "Add (a change drawn while a save is held)", () => /** @type {HTMLElement} */ (document.querySelector('tbody tr[data-key="undertow-serpent"] td:last-child button')).click());
-    await page.click(saveButton);
-    check("Save during a save keeps the pending edit without sending in parallel", sent.length === 1 &&
-      (await deck(page))["undertow-serpent"] === 1 && (await status(page)).state === "saving", `${sent.length} POSTs before the answer`);
+    const clicked = await page.locator(saveButton).evaluate((button) => {
+      const save = /** @type {HTMLButtonElement} */ (button);
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      // The builder's Save handler must take this click while the first POST is still held.
+      return !save.dispatchEvent(click);
+    }, undefined, { timeout: 5_000 });
+    check("Save during a save takes the click and keeps the pending edit without sending in parallel", clicked && sent.length === 1 &&
+      (await deck(page))["undertow-serpent"] === 1 && (await status(page)).state === "saving", `click taken: ${clicked}; ${sent.length} POSTs before the answer`);
   } finally {
     heldSave.resolve(undefined);
   }
@@ -572,11 +580,12 @@ try {
   // With JavaScript but the builder's module never loading (every request for it, the runtime's
   // retries too, aborted), in each engine: `scripting` still matches `enabled`, so the Filter and
   // Save buttons must not depend on it to be drawn. The runtime (a module of its own) still sends
-  // both forms; the server filters the page and saves the counts as typed.
+  // both forms; the server filters the page and saves adds and counts as typed.
   for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
     const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
     const blockedContext = await (own ?? browser).newContext();
     const saveCase = `${name} with JavaScript and the builder's module not loading: the Save button saves twice without navigation`;
+    const addCase = `${name} with the builder's module not loading: Add followed by Save keeps the added card`;
     const filterCase = `${name} with JavaScript and the builder's module not loading: the Filter button is drawn and sends the GET the server filters`;
     const noteCase = `${name} with the builder's module not loading: the server's save note is drawn`;
     /** @type {string[]} */
@@ -611,21 +620,26 @@ try {
       const count = 'li[data-key="gravel-sprite"] input[type=number]';
       let navigations = 0;
       blocked.on("framenavigated", (frame) => { if (frame === blocked.mainFrame()) navigations += 1; });
+      const submit = async (button) => {
+        const [response] = await Promise.all([
+          blocked.waitForResponse((r) => isSave(r.request()), { timeout: 15_000 }),
+          button.click({ timeout: 15_000 }),
+        ]);
+        const body = await response.text();
+        await blocked.locator('form[method=post][aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
+        return { status: response.status(), fields: saveFields(response.request()), shown: await version(blocked),
+          saved: body.includes("Saved."), bytes: Buffer.byteLength(body) };
+      };
       if (!(await blocked.isVisible(saveButton))) {
         check(saveCase, false, `aborted ${aborted}; the Save button is not drawn`);
+        check(addCase, false, "the Save button is not drawn");
       } else {
         const startCount = await blocked.inputValue(count);
         const saves = [];
         for (const copies of [startCount === "2" ? "3" : "2", "1"]) {
           await blocked.fill(count, copies);
-          const [response] = await Promise.all([
-            blocked.waitForResponse((r) => isSave(r.request()), { timeout: 15_000 }),
-            blocked.click(saveButton),
-          ]);
-          const body = await response.text();
-          const fields = saveFields(response.request());
-          await blocked.locator('form[method=post][aria-busy="true"]').waitFor({ state: "hidden" });
-          saves.push({ status: response.status(), sent: fields.get("version"), shown: await version(blocked), key: fields.get("submit"), saved: body.includes("Saved.") });
+          const { status, fields, shown, saved } = await submit(blocked.locator(saveButton));
+          saves.push({ status, sent: fields.get("version"), shown, key: fields.get("submit"), saved });
           if (copies !== "1") {
             const note = await blocked.locator("#save-note").textContent();
             const drawn = await drawnKeys(blocked, "#save-note", "id");
@@ -636,7 +650,6 @@ try {
         await fresh.goto(base);
         const serverVersion = await version(fresh);
         const serverCount = await fresh.inputValue(count);
-        await fresh.close();
         const [first, second] = saves;
         check(
           saveCase,
@@ -645,6 +658,27 @@ try {
             !!first.key && !!second.key && first.key !== second.key && serverCount === "1" && Number(serverVersion) === loadedAt + 2,
           `aborted ${aborted}; ${saves.map((save) => `POST ${save.status} at ${save.sent}, page at ${save.shown}`).join("; ")}; ${navigations} navigations; saved count ${serverCount} at ${serverVersion}`,
         );
+
+        const beforeAdd = await deck(blocked);
+        const addedCard = (await drawnKeys(blocked, "tbody tr", "data-key")).find((id) => id && beforeAdd[id] === undefined);
+        if (!addedCard) throw new Error("no collection card outside the saved deck");
+        const add = await submit(row(blocked, addedCard).getByRole("button", { name: "Add", exact: true }));
+        const shownAfterAdd = await deck(blocked);
+        await fresh.reload();
+        const storedAfterAdd = await deck(fresh);
+        const save = await submit(blocked.locator(saveButton));
+        const cards = save.fields.getAll("card");
+        const savedCount = save.fields.getAll("count")[cards.indexOf(addedCard)];
+        await fresh.reload();
+        const storedAfterSave = await deck(fresh);
+        const finalVersion = await version(fresh);
+        await fresh.close();
+        check(addCase, aborted > 0 && ran === 1 && navigations === 0 && beforeAdd[addedCard] === undefined &&
+          add.status === 200 && add.saved && add.fields.get("add") === addedCard && add.fields.get("version") === serverVersion &&
+          Number(add.shown) === Number(serverVersion) + 1 && storedAfterAdd[addedCard] === 1 && sameDeck(shownAfterAdd, storedAfterAdd) &&
+          save.status === 200 && save.saved && save.fields.get("version") === add.shown && savedCount === "1" &&
+          sameDeck(storedAfterSave, storedAfterAdd) && save.shown === add.shown && finalVersion === add.shown,
+          `${addedCard}: Add ${add.status}, drawn ${shownAfterAdd[addedCard]}, stored ${storedAfterAdd[addedCard]} (${add.bytes} raw patch bytes); Save ${save.status}, posted ${savedCount}, stored ${storedAfterSave[addedCard]}; ${navigations} navigations`);
       }
       const button = "form[role=search] button";
       await blocked.fill("input[type=search]", "oracle");
