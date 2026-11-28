@@ -29,47 +29,43 @@ pub enum Answer {
 }
 
 /// What became of a save, as the builder's script compares it. A renamed variant fails the Rust
-/// build, then `tsc` where a script still compares the old name. `Loaded` is the page as loaded,
-/// before any save, for which the note tells the builder nothing.
+/// build, then `tsc` where a script still compares the old name.
 #[derive(Clone, Copy, ToJson)]
 pub enum SaveOutcome {
-    Loaded,
     Saved,
     Refused,
     Stale,
 }
 
 impl Answer {
-    /// What the script compares.
-    fn outcome(&self) -> SaveOutcome {
-        match self {
-            Answer::None | Answer::NativeSubmit => SaveOutcome::Loaded,
-            Answer::Saved { .. } => SaveOutcome::Saved,
-            Answer::Refused { .. } => SaveOutcome::Refused,
-            Answer::Stale { .. } => SaveOutcome::Stale,
+    /// The same notice on a whole page and in a patch.
+    pub fn words(&self) -> impl Render + '_ {
+        html! {
+            match self {
+                Answer::None => {}
+                Answer::Saved { .. } => { "Saved." }
+                Answer::Refused { message, .. } => { "Not saved: "{message} }
+                Answer::NativeSubmit => {
+                    "Not saved: This form already saved before autosave started. Review the saved deck below before making another change."
+                }
+                Answer::Stale { .. } => { "Not saved: this deck was changed in another tab." }
+            }
         }
     }
 
-    fn version(&self) -> u64 {
-        match self {
-            Answer::None | Answer::NativeSubmit => 0,
-            Answer::Saved { version, .. } | Answer::Refused { version, .. } | Answer::Stale { version, .. } => *version,
-        }
-    }
-
-    fn draft(&self) -> u64 {
-        match self {
-            Answer::Saved { draft, .. } => *draft,
-            _ => 0,
-        }
-    }
-
-    fn unsure(&self) -> bool {
-        matches!(self, Answer::Stale { unsure: true, .. })
+    /// Only a scripted save has a queue to notify.
+    pub fn patch(&self) -> Option<impl Patch + '_> {
+        let (outcome, version, draft, unsure) = match *self {
+            Answer::Saved { version, draft } => (SaveOutcome::Saved, version, draft, false),
+            Answer::Refused { version, .. } => (SaveOutcome::Refused, version, 0, false),
+            Answer::Stale { version, unsure } => (SaveOutcome::Stale, version, 0, unsure),
+            Answer::None | Answer::NativeSubmit => return None,
+        };
+        Some(SaveNote { answer: self, outcome, version, draft, unsure })
     }
 }
 
-/// A save's answer, told to the builder around the note: what became of it (never `Loaded`), the
+/// A save's answer, told to the builder around the note: what became of it, the
 /// deck's version after it, which send was saved, and, when stale, whether a save the server no
 /// longer remembers may have been it. It bubbles from the note.
 #[corten::script::event]
@@ -80,26 +76,12 @@ pub struct DeckAnswered {
     pub unsure: bool,
 }
 
-/// What became of the last save, in words, inside the builder's status line. Each save answers
-/// with this note as a patch; as it joins the page its script tells the builder the outcome (a
-/// `DeckAnswered` event), which then takes the version, rolls a refused change back, or looks
-/// for another tab's save. Without JavaScript it is part of the page a refused save answers with.
+/// An autosave patch displays the notice and tells the builder what became of its send.
 #[component(js)]
-pub fn SaveNote<'a>(answer: &'a Answer) -> impl Patch {
+pub fn SaveNote<'a>(answer: &'a Answer, outcome: SaveOutcome, version: u64, draft: u64, unsure: bool) -> impl Patch {
     html! {
-        <span
-            id={SaveNoteId}
-            on:connect={js::answered(target, answer.outcome(), answer.version(), answer.draft(), answer.unsure())}
-        >
-            match answer {
-                Answer::None => {}
-                Answer::Saved { .. } => { "Saved." }
-                Answer::Refused { message, .. } => { "Not saved: "{message} }
-                Answer::NativeSubmit => {
-                    "Not saved: This form already saved before autosave started. Review the saved deck below before making another change."
-                }
-                Answer::Stale { .. } => { "Not saved: this deck was changed in another tab." }
-            }
+        <span id={SaveNoteId} on:connect={js::answered(target, outcome, version, draft, unsure)}>
+            {answer.words()}
         </span>
     }
 }

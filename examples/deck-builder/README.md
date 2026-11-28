@@ -32,8 +32,10 @@ the count fields. If autosave starts on that same form and reuses
 the native save's key, the server refuses the write and draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
 started, that document keeps its fields, focus, and native Save. Selections made before startup
-stay checked and count toward Add selected. With the module running, Filter keeps the page,
-and a subsequent native Save returns to that filter.
+stay checked and count toward Add selected; the checkbox for selecting every visible card is
+disabled until the module can apply it. With the module running, Filter keeps the page, and a
+subsequent native Save returns to that filter. A refusal page displays the reason without
+notifying autosave. Only a patch answers a save that the queue sent.
 
 ## Run it
 
@@ -81,16 +83,16 @@ the builder requested the deck's live feed.
 
 | Bytes | Merge base | This change |
 |---|---:|---:|
-| Startup HTML | 164,146 | 161,230 |
-| `deck_builder.js` | 21,805 | 22,709 |
-| All 11 startup script bodies | 90,972 | 91,737 |
-| Native Save: POST, 303, redirected GET and its response | 169,454 | 166,538 |
+| Startup HTML | 164,146 | 161,100 |
+| `deck_builder.js` | 21,805 | 22,690 |
+| All startup script bodies (11 at base, 10 here) | 90,972 | 91,288 |
+| Native Save: POST, 303, redirected GET and its response | 169,454 | 166,408 |
 
 For native Save, JavaScript was off on both builds. From `/?q=oracle`, both posted Gravel
 Sprite's count from 3 to 2, then returned to the same one-row filter with the saved count.
 The total is HTTP request and response headers and bodies as reported by Playwright. Both
 POST bodies were 242 bytes and both 303 bodies were empty. The final GET returned 165,864
-versus 162,948 uncompressed HTML bytes. The total excludes the page open before Save,
+versus 162,818 uncompressed HTML bytes. The total excludes the page open before Save,
 subresources, and transport framing. These are real app bytes, not a fixture or a speed claim.
 
 ## Nested Preview

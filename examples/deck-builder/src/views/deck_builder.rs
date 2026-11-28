@@ -2,7 +2,8 @@ use corten::prelude::*;
 use corten_ui::CopyButton;
 
 use super::deck_preview::DeckPreviewChanged;
-use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, SaveNote, Shown, curve_cost, deck_list};
+use super::save_note::SaveNoteId;
+use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, Shown, curve_cost, deck_list};
 use crate::{
     app::{DeckInput, DeckQuery, Slot, Sort, url},
     cards::{DECK_SIZE, Kind, TOP_COST},
@@ -174,6 +175,7 @@ pub fn DeckBuilder<'a>(
                                     <input
                                         ref={all}
                                         type="checkbox"
+                                        disabled
                                         aria-label="Select every card shown"
                                         on:change={js::pickAll(browse)}
                                     >
@@ -260,7 +262,7 @@ pub fn DeckBuilder<'a>(
                 // note inside it, and the script shows one of the spans while it has something to
                 // say (`data-state`).
                 <div ref={status} class={Status} role="status" data-state="">
-                    <SaveNote answer={answer} />
+                    <span id={SaveNoteId}>{answer.words()}</span>
                     <span class={Saving}>"Saving…"</span>
                     <span class={Saved}>"Saved."</span>
                     <span class={Updated}>"Updated from another tab."</span>

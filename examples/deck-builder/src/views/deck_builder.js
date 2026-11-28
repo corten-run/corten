@@ -143,7 +143,8 @@ const names = new Intl.Collator(document.documentElement.lang || undefined);
  */
 export function start(parts, copies, browse, feed, signal) {
   // The server draws zero selected. Only tally if a control changed before startup.
-  if (browse.all.checked || browse.all.indeterminate || browse.cards.querySelector("input:checked")) tally(browse);
+  if (browse.cards.querySelector("input:checked")) tally(browse);
+  browse.all.disabled = false;
   if (copies.some((input) => input.value !== input.defaultValue || input.validity.badInput)) return;
   const s = kept();
   s.signal = signal;

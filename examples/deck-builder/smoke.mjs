@@ -369,6 +369,69 @@ async function delayedBuilder(scenario) {
   }
 }
 
+/** A refusal rendered as a new document has no autosave to acknowledge. */
+async function nativeRefusal(code) {
+  const context = await browser.newContext();
+  const resume = Promise.withResolvers();
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await context.route(builderModule, (route) => route.abort());
+    await page.goto(home);
+    const count = (p) => p.locator('li[data-key="gravel-sprite"] input[type=number]');
+    const original = await count(page).inputValue();
+    const edited = original === "2" ? "3" : "2";
+    if (code === 409) {
+      const other = await context.newPage();
+      await other.goto(home);
+      await count(other).fill(edited);
+      await Promise.all([other.waitForEvent("load"), other.locator(saveButton).click()]);
+      await other.close();
+    } else {
+      await count(page).fill("99");
+    }
+    await page.route(builderModule, async (route) => { await resume.promise; await route.continue(); }, { times: 1 });
+    const [refusal] = await Promise.all([
+      page.waitForResponse((r) => isSave(r.request())),
+      page.waitForRequest((r) => builderModule(new URL(r.url()))),
+      page.locator(saveButton).evaluate((el) => el.click()),
+    ]);
+    check(`native ${code}: the refusal is a full navigation with its reason`, refusal.status() === code &&
+      refusal.request().isNavigationRequest() && (await page.textContent("#save-note")).includes("Not saved:"));
+    const previous = Number(await version(page));
+    const intended = code === 409 ? original : edited;
+    if (code === 422) await count(page).fill(intended);
+    const before = await deck(page);
+    const loaded = page.waitForEvent("load");
+    resume.resolve();
+    await loaded;
+    const field = count(page);
+    if (code === 422) {
+      const kept = sameDeck(await deck(page), before) && await field.count() === 1 &&
+        await field.inputValue() === intended && await field.evaluate((el) => el === document.activeElement);
+      check("native 422: startup keeps the focused edit on the refusal page", kept);
+      if (!kept) return;
+    } else {
+      await page.waitForSelector("form[data-patch]");
+      await field.fill(intended);
+    }
+    const [next] = await Promise.all([
+      page.waitForResponse((r) => isSave(r.request()), { timeout: 5_000 }).catch((e) => {
+        if (e.name !== "TimeoutError") throw e;
+        return null;
+      }),
+      code === 422 ? page.locator(saveButton).click() : field.press("Tab"),
+    ]);
+    if (next && code === 409) await settled(page);
+    check(`native ${code}: the next edit saves by ${code === 409 ? "patch" : "native form"}`,
+      next?.status() === (code === 409 ? 200 : 303) && next.request().isNavigationRequest() === (code === 422) &&
+      postedGravel(next.request()) === intended && Number(await version(page)) === previous + 1 && await field.inputValue() === intended);
+  } finally {
+    resume.resolve();
+    await context.close();
+  }
+}
+
 /** Add can save before startup while all count controls still match the first draw. */
 async function nativeAddHandoff(selected) {
   const name = selected ? "Add selected" : "Add";
@@ -402,6 +465,7 @@ async function nativeAddHandoff(selected) {
     const pick = row(page, id).getByRole("checkbox");
     const button = selected ? page.getByRole("button", { name, exact: true }) : add;
     if (selected) {
+      check("only individual cards can be checked before startup", await selectAll(page).isDisabled() && await pick.isEnabled());
       const background = () => row(page, id).evaluate((el) => getComputedStyle(el).backgroundColor);
       const unselected = await background();
       await pick.check();
@@ -421,7 +485,7 @@ async function nativeAddHandoff(selected) {
     await started;
     if (selected) {
       check("startup keeps the checked card, selected count and mixed select-all state",
-        await pick.isChecked() && await selectedCount(page) === "1" &&
+        await selectAll(page).isEnabled() && await pick.isChecked() && await selectedCount(page) === "1" &&
         await selectAll(page).evaluate((box) => !box.checked && box.indeterminate));
     }
     const [reply] = await Promise.all([
@@ -493,6 +557,10 @@ async function smoke() {
   });
   const visible = await page.locator("tbody tr:not([hidden])").count();
   check("the filter shows the matching cards and how many", visible === 1 && (await page.textContent("[class$=__counts] output")) === "1 of 240 shown", `${visible}`);
+  await selectAll(page).check();
+  check("after startup select-all checks the matching card only", await selectedCount(page) === "1" &&
+    await row(page, "ashen-drake").getByRole("checkbox").isChecked());
+  await selectAll(page).uncheck();
   const filter = page.locator(filterButton);
   const save = page.locator(saveButton);
   let posts = 0;
@@ -902,6 +970,7 @@ try {
   if (!process.argv.includes("--handoff-only")) await smoke();
   for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
   for (const selected of [false, true]) await nativeAddHandoff(selected);
+  for (const code of [409, 422]) await nativeRefusal(code);
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those
   // answers.

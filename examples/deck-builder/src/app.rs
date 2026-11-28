@@ -23,7 +23,7 @@ use serde::Serialize;
 use crate::{
     cards::{self, Card, Refusal},
     text::Msg,
-    views::{self, Answer, SaveNote},
+    views::{self, Answer},
 };
 
 /// A card in the saved deck and its copies: the rows of the deck's feed.
@@ -354,10 +354,10 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
         Outcome::Stale { version, unsure } => (Answer::Stale { version: *version, unsure: *unsure }, StatusCode::CONFLICT),
     };
     if input.draft != 0
-        && !matches!(outcome, Outcome::NativeSubmit)
         && let Some(action) = req.action()
+        && let Some(note) = answer.patch()
     {
-        return action.patch_with_status(status, SaveNote { answer: &answer });
+        return action.patch_with_status(status, note);
     }
     let view = DeckQuery { q: input.q, sort: input.sort };
     match outcome {
@@ -714,9 +714,8 @@ mod tests {
             cards::STARTER.len() + 1,
             "every deck line is a DeckLine, and the template's"
         );
-        assert!(page.contains("/scripts/deck_builder.js\">") && page.contains("/scripts/save_note.js\">"), "{page}");
-        // The page as loaded has had no save answered: its note tells the builder nothing.
-        assert!(page.contains(r#"save_note.answered($t,"Loaded",0,0,false)"#), "{page}");
+        assert!(page.contains("/scripts/deck_builder.js\">") && !page.contains("/scripts/save_note.js\">"), "{page}");
+        assert!(!page.contains("save_note.answered("), "a whole page does not acknowledge an autosave");
         let view = DeckQuery { q: Some("drake".into()), sort: Some(Sort::Cost) };
         let res = app.get(&url::Home { view }).await;
         let page = res.text();
