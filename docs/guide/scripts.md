@@ -206,12 +206,9 @@ works: from the component's own handler, or on a state only the working componen
 part's link is hidden only while a read is on its way ([A slow part](live-data.md#a-slow-part)).
 There is no page-wide flag that says a script loaded.
 
-[Deck Builder](../../examples/deck-builder/smoke.mjs) keeps Filter, Add and Save usable when
-its builder module fails to load. Save leaves the submitted rows in place, so edits made while
-it was pending can still be sent. An identical retry does not apply the edit twice. If a retry
-under the same key changes the edit, or the deck has since moved on, the server returns a
-conflict and draws the saved deck. The app compares the edit itself: `corten_cluster::begin`
-checks which feed used the key, not what the write contained.
+In [Deck Builder](../../examples/deck-builder/README.md), Save stays drawn too. The builder's
+handler uses its autosave queue. If the module does not load, the button submits the form:
+a successful save redirects to the current deck, and a refusal draws the page with its reason.
 
 ### A value both sides compute
 

@@ -21,12 +21,9 @@ mod preview_export;
 mod save_note;
 
 pub use collection_row::CollectionRow;
-pub use deck_builder::{
-    CostCurve, DeckBuilder, DeckBuilderRefs, DeckEmpty, DeckExport, DeckFormId, DeckGeneration, DeckLines, DeckLinesId,
-    DeckTotal, DeckVersion, KindCounts, SavedLine,
-};
+pub use deck_builder::{DeckBuilder, DeckFormId};
 pub use deck_line::DeckLine;
-pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp, SavedCounts};
+pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
 pub use draft_notes::DraftNotes;
 pub use preview_export::PreviewExport;
 pub use save_note::{Answer, DeckAnswered, SaveNote};
@@ -138,24 +135,20 @@ pub fn screen<'a>(
         Some(Sort::Owned) => cards.sort_by_cached_key(|s| (std::cmp::Reverse(s.card.owned), s.card.name.to_lowercase())),
         None => {}
     }
+    let mut lines: Vec<Line> =
+        saved.iter().filter_map(|(id, &count)| builder.card(id).map(|card| Line { card, count })).collect();
+    lines.sort_by_cached_key(|l| (l.card.cost, l.card.name.to_lowercase()));
     html! {
         <DeckBuilder
             t={t}
             cards={cards}
-            lines={deck_lines(builder, saved)}
+            lines={lines}
             generation={builder.generation()}
             version={version}
             view={view}
             answer={answer}
         />
     }
-}
-
-/// The saved lines in the page's initial order, also used by the text export.
-pub fn deck_lines<'a>(builder: &'a Builder, saved: &Deck) -> Vec<Line<'a>> {
-    let mut lines: Vec<_> = saved.iter().filter_map(|(id, &count)| builder.card(id).map(|card| Line { card, count })).collect();
-    lines.sort_by_cached_key(|l| (l.card.cost, l.card.name.to_lowercase()));
-    lines
 }
 
 /// Whether the filter's words find `card`: its name, set or kind, as the page's script filters.

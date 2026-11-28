@@ -14,10 +14,6 @@ pub enum Answer {
         version: u64,
         draft: u64,
     },
-    KeyConflict {
-        version: u64,
-        draft: u64,
-    },
     Refused {
         version: u64,
         message: String,
@@ -26,10 +22,6 @@ pub enum Answer {
     Stale {
         version: u64,
         unsure: bool,
-    },
-    /// The fallback form's successful write was followed by a newer deck before it could be drawn.
-    Superseded {
-        version: u64,
     },
 }
 
@@ -40,7 +32,6 @@ pub enum Answer {
 pub enum SaveOutcome {
     Loaded,
     Saved,
-    KeyConflict,
     Refused,
     Stale,
 }
@@ -51,26 +42,21 @@ impl Answer {
         match self {
             Answer::None => SaveOutcome::Loaded,
             Answer::Saved { .. } => SaveOutcome::Saved,
-            Answer::KeyConflict { .. } => SaveOutcome::KeyConflict,
             Answer::Refused { .. } => SaveOutcome::Refused,
-            Answer::Stale { .. } | Answer::Superseded { .. } => SaveOutcome::Stale,
+            Answer::Stale { .. } => SaveOutcome::Stale,
         }
     }
 
     fn version(&self) -> u64 {
         match self {
             Answer::None => 0,
-            Answer::Saved { version, .. }
-            | Answer::KeyConflict { version, .. }
-            | Answer::Refused { version, .. }
-            | Answer::Stale { version, .. }
-            | Answer::Superseded { version } => *version,
+            Answer::Saved { version, .. } | Answer::Refused { version, .. } | Answer::Stale { version, .. } => *version,
         }
     }
 
     fn draft(&self) -> u64 {
         match self {
-            Answer::Saved { draft, .. } | Answer::KeyConflict { draft, .. } => *draft,
+            Answer::Saved { draft, .. } => *draft,
             _ => 0,
         }
     }
@@ -105,10 +91,8 @@ pub fn SaveNote<'a>(answer: &'a Answer) -> impl Patch {
             match answer {
                 Answer::None => {}
                 Answer::Saved { .. } => { "Saved." }
-                Answer::KeyConflict { .. } => { "Not saved: this submit key was already used for a different save." }
                 Answer::Refused { message, .. } => { "Not saved: "{message} }
                 Answer::Stale { .. } => { "Not saved: this deck was changed in another tab." }
-                Answer::Superseded { .. } => { "Saved, but the deck has since changed. The current saved deck is shown." }
             }
         </span>
     }

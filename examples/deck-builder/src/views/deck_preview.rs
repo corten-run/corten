@@ -1,9 +1,7 @@
 use corten::prelude::*;
 
-use crate::app::Deck;
-
 use super::{
-    DeckBuilderRefs, DraftNotes, PreviewExport,
+    DraftNotes, PreviewExport,
     draft_notes::{DraftEdited, DraftOpened},
     preview_export::ExportOpened,
 };
@@ -13,11 +11,6 @@ pub struct DeckPreviewChanged {
     pub total: u32,
     pub text: String,
 }
-
-/// Only a fallback patch carries a snapshot for the readouts already on the page.
-#[derive(ToJson)]
-#[serde(transparent)]
-pub struct SavedCounts(pub Option<Deck>);
 
 #[derive(Id)]
 struct PreviewEditorId<'a>(&'a str);
@@ -30,12 +23,12 @@ struct SummaryExportId<'a>(&'a str);
 
 /// The durable owner of one preview's mode and draft, above the replaceable branches.
 #[component(css, js)]
-pub fn DeckPreview(bundle: DeckBuilderRefs, instance: &str, label: &str, total: u32, text: &str) -> impl Render {
+pub fn DeckPreview(root: Ref<el::HTMLElement>, instance: &str, label: &str, total: u32, text: &str) -> impl Render {
     let (host, editor, summary, controls, edit_button, summary_button, exports) = refs();
     let parts = js::Parts { host, editor, summary, controls, edit_button, summary_button, exports };
     html! {
         <section
-            ref={bundle.previews()}
+            ref={root}
             class={Preview}
             aria-label={label}
             on:connect={js::start(parts, total, text)}

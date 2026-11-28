@@ -1,9 +1,8 @@
 // @ts-check
 import { keep } from "corten";
-import { CollectionRow, DeckEditor, DeckSummary, rows, view } from "corten/views";
-import { DeckPreviewChanged } from "corten/events";
+import { DeckEditor, DeckSummary, view } from "corten/views";
 /** @import { Holds } from "corten/views" */
-/** @import { DraftEdited, DraftOpened, ExportOpened } from "corten/events" */
+/** @import { DeckPreviewChanged, DraftEdited, DraftOpened, ExportOpened } from "corten/events" */
 
 /**
  * @typedef {object} Parts
@@ -58,21 +57,6 @@ export function changed(event, parts) {
   s.loaded = true;
   draw(parts);
   for (const field of parts.exports) field.value = s.text;
-}
-
-/** Refresh the readouts without replacing preview owners or the collection's filtered,
- * sorted, potentially checked rows. A card absent from the saved deck has zero copies.
- * @param {HTMLTextAreaElement} field @param {HTMLElement[]} previews @param {number} total
- * @param {Holds<CollectionRow, HTMLTableSectionElement>} cards
- * @param {import("../../types/app").SavedCounts} counts
- */
-export function refresh(field, previews, total, cards, counts) {
-  if (counts === null) return;
-  for (const row of rows(cards, CollectionRow)) {
-    const count = Object.hasOwn(counts, row.id) ? (counts[row.id] ?? 0) : 0;
-    if (row.in_deck !== count) row.in_deck = count;
-  }
-  for (const preview of previews) preview.dispatchEvent(new DeckPreviewChanged({ total, text: field.value }));
 }
 
 /** @param {DraftEdited} event */

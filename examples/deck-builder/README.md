@@ -23,16 +23,10 @@ Without JavaScript the same deck is built with forms: Add and Add selected post 
 cards added, Save posts the counts as typed, and the filter and the column headers are a `GET`
 form and links the server answers.
 
-If only the builder module fails to load, the runtime still enhances the form. Save keeps
-the submitted rows in place, including cleared counts that can be edited again before a reload.
-Add appends new lines or replaces just the lines it changes. The total, cost curve, kind counts,
-collection counts, main text export and both plan previews reflect the same saved snapshot.
-The export patch carries the saved counts once; its independent readout handler updates the
-collection rows in place, without replacing their checkboxes or adding an ID per count.
-An identical retry cannot add cards twice. If the deck has moved on, the conflict says the
-original write saved and shows the newer deck. A changed retry under the same key did not save.
-The receipt keeps the effective counts and additions as collection indices, so a Save and an
-Add that produce the same deck are still different writes.
+Filter and Save stay visible with scripting enabled. If the builder module does not load,
+the same forms still work: successful writes redirect to the saved deck, and a refusal draws
+the page with its reason. With the module running, Filter keeps the page and Save uses the
+autosave queue.
 
 ## Run it
 

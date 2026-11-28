@@ -1,6 +1,5 @@
 // Browser smoke test and timings for the deck builder: every move in the browser, autosave with
-// its refusals, another tab's edits, the same deck built without JavaScript, and filtered and saved
-// with JavaScript on but the builder's module not loading, in Chromium, Firefox and WebKit.
+// its refusals, another tab's edits, and the same forms with JavaScript off or the builder blocked.
 // Usage: node examples/deck-builder/smoke.mjs http://localhost:18487
 import http from "node:http";
 import { chromium, firefox, webkit } from "@playwright/test";
@@ -74,42 +73,94 @@ const row = (page, id) => page.locator(`tbody tr[data-key="${id}"]`);
 const version = (page) => page.inputValue("input[name=version]");
 const saveButton = 'form[method=post] button:text-is("Save")';
 const filterButton = "form[role=search] button";
-const countOf = (id) => `li[data-key="${id}"] input[type=number]`;
-/** @param {import("@playwright/test").Request} request */
-const isSave = (request) => request.method() === "POST" && new URL(request.url()).pathname === "/deck";
-/** @param {import("@playwright/test").Request} request */
-const saveFields = (request) => new URLSearchParams(request.postData() ?? "");
+const home = new URL("/", base).href;
+const deckUrl = new URL("deck", home).href;
+const isSave = (request) => request.method() === "POST" && request.url() === deckUrl;
 
-/** Fetch the real POST's answer, leaving its delivery to the test. */
-async function interceptSave(page, button) {
-  const fetched = Promise.withResolvers();
-  await page.route("**/deck", async (route) => {
-    try {
-      fetched.resolve({ route, response: await route.fetch({ timeout: 15_000 }) });
-    } catch (error) {
-      fetched.reject(error);
-      await route.abort().catch(() => {});
-    }
-  }, { times: 1 });
-  const [, result] = await Promise.all([
-    page.waitForRequest(isSave, { timeout: 15_000 }),
-    fetched.promise,
-    button.click({ timeout: 15_000 }),
-  ]);
-  return result;
+/** A box can still be invisible if it or an ancestor has zero opacity. */
+const drawn = (locator) => locator.evaluate((el) => {
+  const { width, height } = el.getBoundingClientRect();
+  if (!width || !height || getComputedStyle(el).visibility !== "visible") return false;
+  for (let at = el; at; at = at.parentElement) if (Number(getComputedStyle(at).opacity) === 0) return false;
+  return true;
+});
+
+/** Block only the app's builder. The rest of the runtime (including form submission) runs. */
+async function blockedBuilder(engine, name) {
+  const own = engine === chromium ? null : steady(await engine.launch({ timeout: 15_000 }), { gateInitialWebKitLoad: true });
+  const context = await (own ?? browser).newContext();
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(8_000);
+    let blocked = 0;
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.route((url) => url.pathname.endsWith("/deck_builder.js"), (route) => {
+      blocked += 1;
+      return route.abort();
+    });
+    await page.goto(home, { timeout: 12_000 });
+    check(`${name}: the builder module was requested and blocked`, blocked > 0);
+    const save = page.locator(saveButton);
+    const filter = page.locator(filterButton);
+    check(`${name}: Filter and Save are drawn with the builder blocked`, await drawn(filter) && await drawn(save));
+
+    const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
+    const write = async (button) => {
+      const previous = Number(await version(page));
+      const [post, get] = await Promise.all([
+        page.waitForResponse((r) => isSave(r.request())),
+        page.waitForResponse((r) => r.url() === home && r.request().method() === "GET"),
+        button.click(),
+      ]);
+      await page.waitForFunction((expected) =>
+        /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=version]"))?.value === expected,
+      String(previous + 1));
+      const fields = new URLSearchParams(post.request().postData() ?? "");
+      return post.status() === 204 && post.headers()["corten-location"] === "/" && get.status() === 200 &&
+        fields.get("draft") === "0" && fields.get("version") === String(previous);
+    };
+    const first = (await count.inputValue()) === "2" ? "3" : "2";
+    await count.fill(first);
+    const firstSaved = await write(save) && await count.inputValue() === first;
+    await count.fill("1");
+    check(`${name}: two successive fallback Saves redirect and show the saved count`,
+      await write(save) && firstSaved && await count.inputValue() === "1");
+
+    const before = await deck(page);
+    const id = (await page.locator("tbody tr[data-key]:not([hidden])").evaluateAll((rows) => rows.map((r) => r.getAttribute("data-key"))))
+      .find((id) => id && !(id in before));
+    if (!id) throw new Error("no card outside the saved deck");
+    const added = await write(row(page, id).getByRole("button", { name: "Add", exact: true })) && (await deck(page))[id] === 1;
+    await count.fill("2");
+    const afterSave = await write(save);
+    check(`${name}: fallback Add survives the next Save`, added && afterSave && (await deck(page))[id] === 1);
+
+    await count.fill("99");
+    const [refusal] = await Promise.all([page.waitForResponse((r) => isSave(r.request())), save.click()]);
+    const note = page.locator("#save-note").filter({ hasText: "Not saved:" });
+    await note.waitFor();
+    check(`${name}: fallback refusal draws the page's reason`, refusal.status() === 422 &&
+      (await refusal.text()).startsWith("<!DOCTYPE html>") && await drawn(note));
+
+    const all = await page.locator("tbody tr:not([hidden])").count();
+    await page.locator("input[type=search]").fill("oracle");
+    const typingKeptRows = all > 1 && await page.locator("tbody tr:not([hidden])").count() === all;
+    const [get] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === "GET" && new URL(r.url()).searchParams.get("q") === "oracle"),
+      filter.click(),
+    ]);
+    await page.waitForFunction(() => {
+      const rows = document.querySelectorAll("tbody tr:not([hidden])");
+      return rows.length === 1 && rows[0].getAttribute("data-key") === "salt-oracle";
+    });
+    check(`${name}: fallback Filter sends a GET and draws the matching row`, typingKeptRows && get.status() === 200 &&
+      new URL(page.url()).searchParams.get("q") === "oracle" && await drawn(row(page, "salt-oracle")));
+    check(`${name}: no uncaught errors with the builder blocked`, pageErrors.length === 0, pageErrors.join(" | "));
+  } finally {
+    try { await context.close(); } finally { await own?.close(); }
+  }
 }
-
-/** The keys of the elements drawn, including when an ancestor supplies the opacity. */
-const drawnKeys = (page, selector, attr) => page.locator(selector).evaluateAll((elements, attr) =>
-  elements.filter((el) => {
-    const { width, height } = el.getBoundingClientRect();
-    if (!width || !height || getComputedStyle(el).visibility !== "visible") return false;
-    for (let ancestor = el; ancestor; ancestor = ancestor.parentElement) {
-      if (Number(getComputedStyle(ancestor).opacity) === 0) return false;
-    }
-    return true;
-  }).map((el) => el.getAttribute(attr)), attr);
-const buttonDrawn = async (page, selector) => (await drawnKeys(page, selector, "id")).length === 1;
 
 /** Runs `act` in the page and times it: handlers run while the event is dispatched. */
 const time = (page, name, act) =>
@@ -143,6 +194,19 @@ try {
   });
   const visible = await page.locator("tbody tr:not([hidden])").count();
   check("the filter shows the matching cards and how many", visible === 1 && (await page.textContent("[class$=__counts] output")) === "1 of 240 shown", `${visible}`);
+  const filter = page.locator(filterButton);
+  const save = page.locator(saveButton);
+  let posts = 0;
+  const recordSave = (request) => { if (isSave(request)) posts += 1; };
+  page.on("request", recordSave);
+  const buttonsDrawn = await drawn(filter) && await drawn(save);
+  if (buttonsDrawn) {
+    await filter.click({ timeout: 5_000 });
+    await save.click({ timeout: 5_000 });
+  }
+  page.off("request", recordSave);
+  check("with the builder running, the drawn Filter and idle Save buttons keep the page",
+    buttonsDrawn && page.url() === home && await page.locator("tbody tr:not([hidden])").count() === 1 && posts === 0);
   await page.fill("input[type=search]", "");
   await page.dispatchEvent("input[type=search]", "input");
   await time(page, "sort 240 rows by cost", () => /** @type {HTMLElement} */ (document.querySelector("thead th:nth-child(4) a")).click());
@@ -154,71 +218,41 @@ try {
   await page.click("thead th:nth-child(3) a");
 
   // Add: shown at once, then saved. The save is held, so the line is checked before any answer.
-  let release = () => {};
-  const loaded = Number(await version(page));
   const heldSave = Promise.withResolvers();
-  let holdingFirst = false;
-  /** @type {URLSearchParams[]} */
-  const sent = [];
-  /** @param {import("@playwright/test").Request} request */
-  const recordSave = (request) => { if (isSave(request)) sent.push(saveFields(request)); };
-  page.on("request", recordSave);
+  const loaded = Number(await version(page));
   await page.route("**/deck", async (route) => {
-    if (!holdingFirst) {
-      holdingFirst = true;
-      await heldSave.promise;
-    }
+    await heldSave.promise;
     await route.continue();
-  });
-  try {
-    const [, motion] = await Promise.all([
-      page.waitForRequest(isSave, { timeout: 5_000 }),
-      row(page, "pearl-diver").locator("button", { hasText: "Add" }).evaluate((button) => {
+  }, { times: 1 });
+  const answered = page.waitForResponse((r) => isSave(r.request()), { timeout: 10_000 });
+  const painted = (async () => {
+    try {
+      // Read the animation markers in the same turn as the click, before they clear.
+      const motion = await row(page, "pearl-diver").getByRole("button", { name: "Add", exact: true }).evaluate((button) => {
         /** @type {HTMLButtonElement} */ (button).click();
-        // Read the markers in the same turn as Add, before an animation can finish.
         return ['tbody tr[data-key="pearl-diver"]', 'ul li[data-key="pearl-diver"]'].map((selector) => {
           const el = document.querySelector(selector);
-          return { marker: el?.getAttribute("data-motion"), animation: el && getComputedStyle(el).animationName };
+          return [el?.getAttribute("data-motion"), el && getComputedStyle(el).animationName];
         });
-      }, undefined, { timeout: 5_000 }),
-    ]);
-    check("Add shows the card in the deck at once, before the server answers", (await deck(page))["pearl-diver"] === 1 && (await status(page)).state === "saving");
-    const drawn = [await total(page), await page.textContent("figure ol li:nth-child(3) span"), await row(page, "pearl-diver").locator("td:nth-child(6) span").first().textContent()];
-    check("the count, the curve and the collection row follow", drawn.join() === "11,5,1", drawn.join());
-    check(
-      "a change marks the collection row and deck line for motion",
-      motion[0].marker?.startsWith("card-") === true && motion[1].marker?.startsWith("line-") === true,
-    );
-    check("the motion markers select the component animations", motion.every(({ animation }) => animation && animation !== "none"),
-      motion.map(({ animation }) => animation).join(", "));
-    await page.waitForFunction(() => !document.querySelector('tbody tr[data-motion], ul li[data-motion]'), null, { timeout: 5_000 });
-    check("motion markers clear after the animation", !(await page.locator("[data-motion]").count()));
-    await time(page, "Add (a change drawn while a save is held)", () => /** @type {HTMLElement} */ (document.querySelector('tbody tr[data-key="undertow-serpent"] td:last-child button')).click());
-    const clicked = await page.locator(saveButton).evaluate((button) => {
-      const save = /** @type {HTMLButtonElement} */ (button);
-      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-      // The builder's Save handler must take this click while the first POST is still held.
-      return !save.dispatchEvent(click);
-    }, undefined, { timeout: 5_000 });
-    check("Save during a save takes the click and keeps the pending edit without sending in parallel", clicked && sent.length === 1 &&
-      (await deck(page))["undertow-serpent"] === 1 && (await status(page)).state === "saving", `click taken: ${clicked}; ${sent.length} POSTs before the answer`);
-  } finally {
-    heldSave.resolve(undefined);
-  }
-  const savedQueue = await page.waitForFunction((expected) =>
-    Number(/** @type {HTMLInputElement} */ (document.querySelector("input[name=version]")).value) === expected &&
-    document.querySelector("[role=status][data-state=''] #save-note")?.textContent === "Saved.", loaded + 2, { timeout: 5_000 }).then(() => true, () => false);
-  await page.unroute("**/deck");
-  page.off("request", recordSave);
-  const sentVersions = sent.map((fields) => fields.get("version"));
-  const [firstKey, secondKey] = sent.map((fields) => fields.get("submit"));
-  check("the queued edit saves once with the next version and a new submit key", savedQueue && sent.length === 2 &&
-    sentVersions.join() === `${loaded},${loaded + 1}` && firstKey && secondKey && firstKey !== secondKey &&
-    !sent[0].getAll("card").includes("undertow-serpent") && sent[1].getAll("card").includes("undertow-serpent") &&
-    page.url() === `${base}/`, `POST versions ${sentVersions.join()}; page at ${await version(page)}`);
-  const cloned = page.locator('ul li:is([data-key="pearl-diver"], [data-key="undertow-serpent"])');
-  check("client-cloned rows have no fixed template ID",
-    (await cloned.count()) === 2 && (await cloned.locator("xpath=self::*[@id]").count()) === 0);
+      }, undefined, { timeout: 5_000 });
+      check("Add shows the card in the deck at once, before the server answers", (await deck(page))["pearl-diver"] === 1 && (await status(page)).state === "saving");
+      const readouts = [await total(page), await page.textContent("figure ol li:nth-child(3) span"), await row(page, "pearl-diver").locator("td:nth-child(6) span").first().textContent()];
+      check("the count, the curve and the collection row follow", readouts.join() === "11,5,1", readouts.join());
+      check("a change marks the collection row and deck line for motion",
+        motion[0][0]?.startsWith("card-") === true && motion[1][0]?.startsWith("line-") === true);
+      const animations = motion.map(([, animation]) => animation);
+      check("the motion markers select the component animations", animations.every((name) => name && name !== "none"), animations.join(", "));
+      await page.waitForFunction(() => !document.querySelector('tbody tr[data-motion], ul li[data-motion]'), null, { timeout: 5_000 });
+      check("motion markers clear after the animation", !(await page.locator("[data-motion]").count()));
+    } finally {
+      heldSave.resolve(undefined);
+    }
+  })();
+  await Promise.all([answered, painted]);
+  await settled(page);
+  check("the save is answered and the page takes the next version", Number(await version(page)) === loaded + 1, `${loaded} then ${await version(page)}`);
+  await time(page, "Add (a change drawn and sent)", () => /** @type {HTMLElement} */ (document.querySelector('tbody tr[data-key="undertow-serpent"] td:last-child button')).click());
+  await settled(page);
 
   // Undo and redo: buttons and keys, each saved.
   await page.click("button:has-text('Undo')");
@@ -234,29 +268,6 @@ try {
   await page.keyboard.press("Control+Shift+z");
   check("Ctrl+Shift+Z redoes", (await deck(page))["undertow-serpent"] === 1);
   await settled(page);
-
-  // The Filter and Save buttons stay drawn with JavaScript (a page whose builder module did not
-  // load needs them, below); with the module, both keep the page: the rows are already filtered as
-  // typed, and the deck already saved.
-  await page.fill("input[type=search]", "drake");
-  const typedRows = await page.locator("tbody tr:not([hidden])").count();
-  const drawnWithScripts = [await buttonDrawn(page, filterButton), await buttonDrawn(page, saveButton)];
-  const savedVersion = await version(page);
-  let posted = 0;
-  /** @param {import("@playwright/test").Request} r */
-  const countPost = (r) => r.method() === "POST" && new URL(r.url()).pathname === "/deck" && (posted += 1);
-  page.on("request", countPost);
-  if (drawnWithScripts[0]) await page.click("form[role=search] button");
-  if (drawnWithScripts[1]) await page.click(saveButton);
-  await page.waitForTimeout(300);
-  page.off("request", countPost);
-  const kept = { url: page.url(), rows: await page.locator("tbody tr:not([hidden])").count(), version: await version(page), state: (await status(page)).state };
-  check(
-    "with JavaScript the Filter and Save buttons are drawn and keep the page, filtered and saved",
-    drawnWithScripts.every(Boolean) && kept.url === `${base}/` && kept.rows === typedRows && typedRows === 1 && posted === 0 && kept.version === savedVersion && kept.state === "",
-    `drawn: ${drawnWithScripts.join()}; ${kept.url}; ${kept.rows} of ${typedRows} rows; ${posted} saves sent; version ${savedVersion} then ${kept.version}; state "${kept.state}"`,
-  );
-  await page.fill("input[type=search]", "");
 
   // Select several and add them.
   await row(page, "lantern-warden").locator("input[type=checkbox]").check();
@@ -294,9 +305,7 @@ try {
   check("a count of 0 takes the card out", (await deck(page))["pearl-diver"] === undefined);
   await settled(page);
 
-  // Drag and drop, both ways. With its Save button drawn, the deck's middle is over its lines, and a
-  // drag Playwright aims there reached the page with no drag events at all; the drop aims at the
-  // deck's heading.
+  // Drag and drop, both ways.
   await row(page, "salt-oracle").locator("td:nth-child(2) button").dragTo(page.locator("section[class$=__deck]"), { targetPosition: { x: 40, y: 24 } });
   check("dragging a card onto the deck adds it", (await deck(page))["salt-oracle"] === 1);
   await settled(page);
@@ -380,24 +389,15 @@ try {
   const theirs = await deck(page);
   check("taking the other tab's deck drops this page's change", theirs["undertow-serpent"] === 1 && theirs["lantern-warden"] === 3 && sameDeck(theirs, await deck(other)), JSON.stringify(theirs));
 
-  // The server cannot be reached: nothing is lost, and Save works like Try again.
-  /** @type {(string | null)[]} */
-  const offlineKeys = [];
-  /** @param {import("@playwright/test").Request} request */
-  const recordOfflineSave = (request) => { if (isSave(request)) offlineKeys.push(saveFields(request).get("submit")); };
-  page.on("request", recordOfflineSave);
+  // The server cannot be reached: nothing is lost, and Save retries through autosave.
   await page.route("**/deck", (route) => route.abort());
   await row(page, "pearl-diver").locator("button", { hasText: "Add" }).click();
   await page.waitForFunction(() => /** @type {HTMLElement} */ (document.querySelector("[role=status][data-state]")).dataset.state === "offline");
   check("an unreachable server keeps the change and says it is not saved", (await deck(page))["pearl-diver"] === 2 && (await page.isVisible("button:has-text('Try again')")));
   await page.unroute("**/deck");
-  const offlineVersion = Number(await version(page));
-  await page.click(saveButton);
+  await save.click({ timeout: 5_000 });
   await settled(page);
-  page.off("request", recordOfflineSave);
-  check("Save while offline retries once with the same submit key", offlineKeys.length === 2 &&
-    !!offlineKeys[0] && offlineKeys[0] === offlineKeys[1] && Number(await version(page)) === offlineVersion + 1 &&
-    (await deck(page))["pearl-diver"] === 2 && page.url() === `${base}/`, `${offlineKeys.length} POSTs; version ${offlineVersion} then ${await version(page)}`);
+  check("Save retries the pending edit", (await status(page)).note.startsWith("Saved.") && (await deck(page))["pearl-diver"] === 2);
   check("the other tab sees the retried save", await comesToShow(other, "pearl-diver", 2));
 
   // The server saves but its answer is lost, and another tab saves before Try again: the change
@@ -602,308 +602,8 @@ try {
   check("reduced motion keeps the change without animation markers", !(await reduced.locator("[data-motion]").count()));
   await reducedContext.close();
 
-  // With JavaScript but the builder's module never loading (every request for it, the runtime's
-  // retries too, aborted), in each engine: `scripting` still matches `enabled`, so the Filter and
-  // Save buttons must not depend on it to be drawn. The runtime (a module of its own) still sends
-  // both forms; the server filters the page and saves adds and counts as typed.
-  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
-    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
-    const blockedContext = await (own ?? browser).newContext();
-    const saveCase = `${name} with JavaScript and the builder's module not loading: the Save button saves twice without navigation`;
-    const addCase = `${name} with the builder's module not loading: Add followed by Save keeps the added card`;
-    const filterCase = `${name} with JavaScript and the builder's module not loading: the Filter button is drawn and sends the GET the server filters`;
-    const noteCase = `${name} with the builder's module not loading: the server's save note is drawn`;
-    /** @type {string[]} */
-    const blockedErrors = [];
-    try {
-      const blocked = await blockedContext.newPage();
-      let aborted = 0;
-      const moduleUrls = new Set();
-      blocked.on("console", (m) => {
-        if (m.type() !== "error") return;
-        const message = m.text();
-        // Only the browser's aborted resource and the runtime's report for this exact module
-        // are expected. In particular, no uncaught page error (even from this URL) is ignored.
-        if (moduleUrls.has(m.location().url) && /^Failed to load resource: net::ERR_FAILED\b/.test(message)) return;
-        // The dropped-response controls below deliberately fail their browser POST; a key
-        // conflict is also an expected HTTP response, not a script or patch error.
-        if (m.location().url === `${base}/deck` && /^Failed to load resource: (net::ERR_FAILED\b|the server responded with a status of 409\b)/.test(message)) return;
-        if ([...moduleUrls].some((url) => message.startsWith(`corten: script module ${new URL(url).pathname} did not load (is its component in App::components?)`))) return;
-        blockedErrors.push(message);
-      });
-      blocked.on("pageerror", (e) => blockedErrors.push(e.message));
-      await blocked.route((url) => url.pathname.endsWith("/deck_builder.js"), (route) => {
-        aborted += 1;
-        moduleUrls.add(route.request().url());
-        return route.abort();
-      });
-      await blocked.goto(base);
-      // The runtime ran, and it found no builder module to hand events to.
-      const ran = await blocked.evaluate(async () => {
-        const { ready } = await import("corten");
-        await ready;
-        return document.querySelectorAll('script[type="module"][src$="/deck_builder.js"]').length;
-      });
-      const loadedAt = Number(await version(blocked));
-      const count = countOf("gravel-sprite");
-      let navigations = 0;
-      blocked.on("framenavigated", (frame) => { if (frame === blocked.mainFrame()) navigations += 1; });
-      const submit = async (button) => {
-        const [response] = await Promise.all([
-          blocked.waitForResponse((r) => isSave(r.request()), { timeout: 15_000 }),
-          button.click({ timeout: 15_000 }),
-        ]);
-        const body = await response.text();
-        await blocked.locator('form[method=post][aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
-        return { status: response.status(), fields: saveFields(response.request()), shown: await version(blocked),
-          saved: body.includes("Saved."), bytes: Buffer.byteLength(body) };
-      };
-      if (!(await buttonDrawn(blocked, saveButton))) {
-        check(saveCase, false, `aborted ${aborted}; the Save button is not drawn`);
-        check(addCase, false, "the Save button is not drawn");
-      } else {
-        const startCount = await blocked.inputValue(count);
-        const saves = [];
-        for (const copies of [startCount === "2" ? "3" : "2", "1"]) {
-          await blocked.fill(count, copies);
-          const { status, fields, shown, saved, bytes } = await submit(blocked.locator(saveButton));
-          saves.push({ status, sent: fields.get("version"), shown, key: fields.get("submit"), saved, bytes });
-          if (copies !== "1") {
-            const note = await blocked.locator("#save-note").textContent();
-            const drawn = await drawnKeys(blocked, "#save-note", "id");
-            check(noteCase, note === "Saved." && drawn.length === 1, `note: ${note}; drawn: ${drawn.length}`);
-          }
-        }
-        const fresh = await blockedContext.newPage();
-        await fresh.goto(base);
-        const serverVersion = await version(fresh);
-        const serverCount = await fresh.inputValue(count);
-        const [first, second] = saves;
-        check(
-          saveCase,
-          aborted > 0 && ran === 1 && navigations === 0 &&
-            saves.every((save, i) => save.status === 200 && save.saved && save.sent === String(loadedAt + i) && save.shown === String(loadedAt + i + 1)) &&
-            !!first.key && !!second.key && first.key !== second.key && serverCount === "1" && Number(serverVersion) === loadedAt + 2,
-          `aborted ${aborted}; ${saves.map((save) => `POST ${save.status} at ${save.sent}, page at ${save.shown} (${save.bytes} raw patch bytes)`).join("; ")}; ${navigations} navigations; saved count ${serverCount} at ${serverVersion}`,
-        );
-
-        const beforeAdd = await deck(blocked);
-        const addedCard = (await drawnKeys(blocked, "tbody tr", "data-key")).find((id) => id && beforeAdd[id] === undefined);
-        if (!addedCard) throw new Error("no collection card outside the saved deck");
-        const selection = row(blocked, addedCard).getByRole("checkbox");
-        await selection.check();
-        await blocked.getByText("Deck list", { exact: true }).click();
-        const plan = blocked.getByRole("region", { name: "Plan A" });
-        await plan.getByRole("textbox", { name: "Notes" }).fill("Keep this draft");
-        await plan.getByRole("button", { name: "Summary" }).click();
-        const add = await submit(row(blocked, addedCard).getByRole("button", { name: "Add", exact: true }));
-        const shownAfterAdd = await deck(blocked);
-        await fresh.reload();
-        const storedAfterAdd = await deck(fresh);
-        const readouts = (page) => page.evaluate(() => ({
-          total: document.querySelector("p[class$=__total] output")?.textContent,
-          export: /** @type {HTMLTextAreaElement} */ (document.querySelector("#deck-list")).value,
-          curve: [...document.querySelectorAll("figure ol li span")].map((el) => el.textContent),
-          bars: [...document.querySelectorAll("figure svg rect")].map((el) => [el.getAttribute("y"), el.getAttribute("height")]),
-          kinds: [...document.querySelectorAll("dl[class$=__kinds] output")].map((el) => el.textContent),
-          collection: Object.fromEntries([...document.querySelectorAll("tbody tr[data-key]")].map((el) =>
-            [el.getAttribute("data-key"), el.querySelector("td:nth-child(6) span")?.textContent])),
-          previews: ["Plan A", "Plan B"].map((label) => {
-            const plan = document.querySelector(`section[aria-label="${label}"]`);
-            return [plan?.querySelector("p strong")?.textContent, plan?.querySelector("textarea[readonly]")?.value];
-          }),
-        }));
-        const [shownReadouts, savedReadouts] = await Promise.all([readouts(blocked), readouts(fresh)]);
-        const stale = Object.keys(savedReadouts).filter((key) => JSON.stringify(shownReadouts[key]) !== JSON.stringify(savedReadouts[key]));
-        const total = savedReadouts.total;
-        const complete = !!total && !!savedReadouts.export && savedReadouts.curve.length === 8 && savedReadouts.bars.length === 8 &&
-          savedReadouts.kinds.length === 3 && savedReadouts.collection[addedCard] === "1" &&
-          savedReadouts.previews.every(([count, text]) => count === total && text === savedReadouts.export);
-        check(`${name} fallback Add draws the same deck readouts as a fresh GET`, complete && stale.length === 0,
-          `In deck for ${addedCard}: ${shownReadouts.collection[addedCard]} vs ${savedReadouts.collection[addedCard]}; stale: ${stale.join(", ") || "none"}`);
-        const summaryKept = await plan.getByRole("button", { name: "Summary" }).getAttribute("aria-pressed");
-        await plan.getByRole("button", { name: "Edit draft" }).click();
-        check(`${name} fallback Add keeps the preview's mode and draft note`,
-          summaryKept === "true" && (await plan.getByRole("textbox", { name: "Notes" }).inputValue()) === "Keep this draft");
-        check(`${name} fallback Add keeps the collection selection`, await selection.isChecked());
-        const save = await submit(blocked.locator(saveButton));
-        const cards = save.fields.getAll("card");
-        const savedCount = save.fields.getAll("count")[cards.indexOf(addedCard)];
-        await fresh.reload();
-        const storedAfterSave = await deck(fresh);
-        const finalVersion = await version(fresh);
-        check(addCase, aborted > 0 && ran === 1 && navigations === 0 && beforeAdd[addedCard] === undefined &&
-          add.status === 200 && add.saved && add.fields.get("add") === addedCard && add.fields.get("version") === serverVersion &&
-          Number(add.shown) === Number(serverVersion) + 1 && storedAfterAdd[addedCard] === 1 && sameDeck(shownAfterAdd, storedAfterAdd) &&
-          save.status === 200 && save.saved && save.fields.get("version") === add.shown && savedCount === "1" &&
-          sameDeck(storedAfterSave, storedAfterAdd) && save.shown === add.shown && finalVersion === add.shown,
-          `${addedCard}: Add ${add.status}, drawn ${shownAfterAdd[addedCard]}, stored ${storedAfterAdd[addedCard]} (${add.bytes} raw patch bytes); Save ${save.status}, posted ${savedCount}, stored ${storedAfterSave[addedCard]} (${save.bytes} raw patch bytes); ${navigations} navigations`);
-
-        // The first save has already deleted Gravel Sprite at the server. Put it back and
-        // edit another row before that answer is drawn. Save again while the form is busy.
-        const otherCount = countOf("moth-court-herald");
-        const otherCopies = (await blocked.inputValue(otherCount)) === "1" ? "2" : "1";
-        await blocked.fill(count, "");
-        const held = await interceptSave(blocked, blocked.locator(saveButton));
-        let queued;
-        try {
-          if (held.response.status() !== 200) throw new Error("the held removal did not succeed");
-          await fresh.reload();
-          if ((await deck(fresh))["gravel-sprite"] !== undefined) throw new Error("the server did not remove the held card");
-          await blocked.fill(count, "1");
-          await blocked.fill(otherCount, otherCopies);
-          [queued] = await Promise.all([
-            blocked.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("version") === String(Number(finalVersion) + 1), { timeout: 5_000 }),
-            blocked.click(saveButton).then(() => held.route.fulfill({ response: held.response })),
-          ]);
-        } finally {
-          if (!queued) await held.route.abort().catch(() => {});
-        }
-        await blocked.locator('form[aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
-        const queuedFields = saveFields(queued.request());
-        const posted = (fields, id) => fields.getAll("count")[fields.getAll("card").indexOf(id)];
-        await fresh.reload();
-        const stored = await deck(fresh);
-        check(`${name} fallback Save keeps both edits queued behind a committed removal`,
-          queued.status() === 200 && posted(queuedFields, "gravel-sprite") === "1" &&
-          posted(queuedFields, "moth-court-herald") === otherCopies &&
-          stored["gravel-sprite"] === 1 && stored["moth-court-herald"] === Number(otherCopies),
-          `queued POST ${queued.status()}; sent ${posted(queuedFields, "gravel-sprite")}, ${posted(queuedFields, "moth-court-herald")}; stored ${stored["gravel-sprite"]}, ${stored["moth-court-herald"]}`);
-
-        await blocked.fill(countOf(addedCard), "");
-        const cleared = await submit(blocked.locator(saveButton));
-        const afterClear = await readouts(blocked);
-        check(`${name} fallback Save clears the collection count and keeps the editable row and selection`,
-          cleared.status === 200 && afterClear.collection[addedCard] === "0" &&
-          await blocked.inputValue(countOf(addedCard)) === "" && await selection.isChecked());
-
-        // Drop committed Add answers. An identical retry must be safe; a changed one (even
-        // with a malformed count) is a conflict and must not write over the already saved deck.
-        for (const kind of ["identical", "changed", "malformed"]) {
-          const changed = kind !== "identical";
-          await blocked.reload();
-          const before = await deck(blocked);
-          const id = (await drawnKeys(blocked, "tbody tr", "data-key")).find((id) => id && before[id] === undefined);
-          if (!id) throw new Error("no card to add before dropping an answer");
-          const button = row(blocked, id).getByRole("button", { name: "Add", exact: true });
-          const lost = await interceptSave(blocked, button);
-          const first = { status: lost.response.status(), fields: saveFields(lost.route.request()) };
-          await lost.route.abort();
-          await blocked.locator('form[aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
-          const corrected = (await blocked.inputValue(otherCount)) === "1" ? "2" : "1";
-          if (changed) await blocked.fill(otherCount, kind === "malformed" ? "0.5" : corrected);
-          const retry = await submit(button);
-          const note = await blocked.locator("#save-note").textContent();
-          await fresh.reload();
-          const stored = await deck(fresh);
-          check(`${name} fallback ${changed ? `${kind} retry reports a conflict` : "identical retry saves only once"} after a dropped Add answer`,
-            first.status === 200 && first.fields.get("submit") === retry.fields.get("submit") &&
-            (kind !== "malformed" || posted(retry.fields, "moth-court-herald") === "0.5") &&
-            retry.status === (changed ? 409 : 200) && retry.saved === !changed &&
-            (changed ? note?.startsWith("Not saved:") : note === "Saved.") &&
-            (await drawnKeys(blocked, "#save-note", "id")).length === 1 &&
-            (await version(fresh)) === String(Number(first.fields.get("version")) + 1) &&
-            await version(blocked) === await version(fresh) && stored[id] === 1 &&
-            stored["moth-court-herald"] === before["moth-court-herald"] && sameDeck(await deck(blocked), stored),
-            `same key: ${first.fields.get("submit") === retry.fields.get("submit")}; HTTP ${retry.status}; ${note}`);
-          if (kind === "malformed") {
-            await blocked.fill(otherCount, corrected);
-            const next = await submit(blocked.locator(saveButton));
-            await fresh.reload();
-            const saved = await deck(fresh);
-            check(`${name} fallback correction after a malformed retry saves at the reconciled version`,
-              next.status === 200 && next.saved && next.fields.get("submit") !== retry.fields.get("submit") &&
-              next.fields.get("version") === retry.shown && saved["moth-court-herald"] === Number(corrected) && saved[id] === 1);
-          }
-        }
-        await fresh.close();
-      }
-      // Playwright's isVisible alone accepts opacity: 0. Exercise the same predicate used by
-      // both button checks, leaving the controls unchanged for the real actions.
-      for (const selector of [saveButton, filterButton]) {
-        const opaque = await buttonDrawn(blocked, selector);
-        await blocked.locator(selector).evaluate((el) => { el.parentElement.style.opacity = "0"; });
-        const transparent = await buttonDrawn(blocked, selector);
-        await blocked.locator(selector).evaluate((el) => { el.parentElement.style.removeProperty("opacity"); });
-        check(`${name} blocked-module button check rejects zero opacity for ${selector}`, opaque && !transparent);
-      }
-      await blocked.fill("input[type=search]", "oracle");
-      // Typing filtered nothing: no builder handler ran.
-      const before = await drawnKeys(blocked, "tbody tr", "data-key");
-      const all = await blocked.locator("tbody tr").count();
-      if (!(await buttonDrawn(blocked, filterButton))) {
-        check(filterCase, false, `aborted ${aborted}; the Filter button is not drawn`);
-      } else {
-        // The runtime sends a GET form itself (a client navigation), so the answer may be a fetch
-        // rather than a document load: either is the server's filter.
-        const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "oracle", { timeout: 15_000 });
-        const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=oracle/), blocked.click(filterButton)]);
-        // The server's own answer first: of its collection rows, only those that match are shown.
-        const rowsAnswered = Array.from((await response.text()).matchAll(/<tr\b([^>]*)>/g), ([, attrs]) => ({
-          key: /data-key="([^"]+)"/.exec(attrs)?.[1] ?? "",
-          hidden: /\shidden(?=[\s=>]|$)/.test(attrs),
-        })).filter((r) => r.key !== "");
-        const shownAnswered = rowsAnswered.filter((r) => !r.hidden).map((r) => r.key);
-        const answerFiltered = rowsAnswered.length === all && shownAnswered.join() === "salt-oracle";
-        // Then the page: a client navigation draws the answer after its response; give it a
-        // moment, then read it.
-        await blocked.waitForFunction(() => document.querySelectorAll("tbody tr:not([hidden])").length === 1, null, { timeout: 5_000 }).catch(() => {});
-        const shownRows = await drawnKeys(blocked, "tbody tr", "data-key");
-        check(
-          filterCase,
-          aborted > 0 && ran === 1 && before.length === all && response.request().method() === "GET" && response.status() === 200 && answerFiltered && shownRows.join() === "salt-oracle",
-          `aborted ${aborted}; ${before.length} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; answered ${shownAnswered.join()} of ${rowsAnswered.length} rows; drawn: ${shownRows.join()}; ${blocked.url()}`,
-        );
-      }
-    } catch (error) {
-      check(`${name} with JavaScript and the builder's module not loading`, false, String(error));
-    } finally {
-      await blockedContext.close();
-      await own?.close();
-      check(`${name} with the builder's module not loading: no unexpected page or console errors`, blockedErrors.length === 0, blockedErrors.join(" | "));
-    }
-  }
-
-  // A scripted retry can carry a newer local edit as well. Hold the feed so only the 409
-  // receipt can identify the first write, and watch the script send the newer edit afresh.
-  const editing = await context.newPage();
-  const watching = Promise.withResolvers();
-  const resume = Promise.withResolvers();
-  editing.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-  editing.on("pageerror", (e) => errors.push(e.message));
-  await editing.route("**/feed/deck/live**", async (route) => {
-    watching.resolve(undefined);
-    await resume.promise;
-    await route.abort().catch(() => {});
-  });
-  try {
-    await editing.goto(base);
-    await watching.promise;
-    const before = await deck(editing);
-    const [firstId, nextId] = (await drawnKeys(editing, "tbody tr", "data-key")).filter((id) => id && before[id] === undefined);
-    const firstButton = row(editing, firstId).getByRole("button", { name: "Add", exact: true });
-    const nextButton = row(editing, nextId).getByRole("button", { name: "Add", exact: true });
-    const lost = editing.waitForRequest(isSave, { timeout: 5_000 });
-    await editing.route("**/deck", async (route) => {
-      await route.fetch();
-      await route.abort();
-    }, { times: 1 });
-    await firstButton.click();
-    await editing.getByRole("button", { name: "Try again" }).waitFor({ timeout: 5_000 });
-    const first = saveFields(await lost);
-    const conflict = editing.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("submit") === first.get("submit"), { timeout: 5_000 });
-    const saved = editing.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("submit") !== first.get("submit"), { timeout: 5_000 });
-    await nextButton.click();
-    const [reused, followUp] = await Promise.all([conflict, saved]);
-    await settled(editing);
-    const shown = await deck(editing);
-    check("the builder resolves a changed retry's conflict and writes the newer edit under a new key",
-      reused.status() === 409 && followUp.status() === 200 && shown[firstId] === 1 && shown[nextId] === 1 &&
-      (await comesToShow(other, nextId, 1)) && (await deck(other))[firstId] === 1,
-      `HTTP ${reused.status()}, ${followUp.status()}; shown ${shown[firstId]}, ${shown[nextId]}`);
-  } finally {
-    resume.resolve(undefined);
-    await editing.close();
+  for (const [engine, name] of [[chromium, "Chromium"], [firefox, "Firefox"], [webkit, "WebKit"]]) {
+    await blockedBuilder(engine, name);
   }
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those

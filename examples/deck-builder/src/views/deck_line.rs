@@ -1,11 +1,7 @@
 use corten::prelude::*;
 
-use super::deck_builder::{DeckBuilderRefs, MoveHelpId};
+use super::deck_builder::MoveHelpId;
 use crate::app::DeckInput;
-
-/// Stable patch identity: every line has a count field with the same name.
-#[derive(Id)]
-struct DeckLineId<'a>(&'a str);
 
 /// A card in the deck and its copies. `view` makes `DeckLine` in `corten/views`: the builder's
 /// script makes and orders these from the deck it shows (`rows(lines, DeckLine, template).replace`),
@@ -14,8 +10,9 @@ struct DeckLineId<'a>(&'a str);
 ///
 /// The count is a number input named `count` beside the hidden `card`, so the deck's form posts
 /// each line as `card` and `count`: without JavaScript a player types a count and saves, and a
-/// cleared count takes the card out. The builder's refs identify the grip for drag and keyboard
-/// moves and the count input for its change handler.
+/// cleared count takes the card out. `lift` is the grip a pointer drags and a keyboard picks up,
+/// to take the card out of the deck; `copies` lets the builder's one change handler on the list
+/// get the input that changed.
 #[component(view)]
 pub fn DeckLine<'a>(
     id: &'a str,
@@ -24,21 +21,18 @@ pub fn DeckLine<'a>(
     cost: u32,
     count: u32,
     owned: u32,
-    bundle: DeckBuilderRefs,
-) -> impl Patch {
+    lift: Ref<el::HTMLButtonElement>,
+    copies: Ref<el::HTMLInputElement>,
+) -> impl Render {
     let f = DeckInput::FIELDS;
-    // The server's patch anchor is fixed. The view's key must stay a writable hole for rows().
-    let patch_id = DeckLineId(id);
     html! {
-        <li key={id} id={patch_id} data-kind={kind}>
+        <li key={id} data-kind={kind}>
             <input type="hidden" name={f.card} value={id}>
-            <button ref={bundle.lift()} type="button" draggable="true" aria-label={name} aria-describedby={MoveHelpId}>
-                "⠿"
-            </button>
+            <button ref={lift} type="button" draggable="true" aria-label={name} aria-describedby={MoveHelpId}>"⠿"</button>
             <span>{cost}</span>
             <span>{name}</span>
             <small>{kind}</small>
-            <input ref={bundle.copies()} type="number" name={f.count} value={count} min="0" inputmode="numeric" aria-label={name}>
+            <input ref={copies} type="number" name={f.count} value={count} min="0" inputmode="numeric" aria-label={name}>
             <small>"of "<span>{owned}</span></small>
         </li>
     }
