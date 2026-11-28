@@ -17,6 +17,8 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
     { move: "round trip", visits: "nav /dest, nav /home", away: true },
     { move: "server redirect", visits: "nav /redirect, nav /dest", away: true },
     { move: "write redirect", visits: "action /go, page /dest", away: true },
+    { move: "visit draws before write answers", visits: "nav /dest", away: true, overlap: true },
+    { move: "press on the new page", visits: "nav /dest", retry: true, overlap: true, layout: true },
     { move: "same-address visit", visits: "nav /redirect, nav /home", retry: true, redraw: true },
     { move: "patch", retry: true, redraw: true },
     { move: "fragment", retry: true },
@@ -33,6 +35,8 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
     const visits = [];
     let answerFirst = () => {};
     const hold = new Promise((resolve) => (answerFirst = () => resolve(undefined)));
+    let releaseVisit = () => {};
+    const holdVisit = new Promise((resolve) => (releaseVisit = () => resolve(undefined)));
     try {
       await p.route(`${origin}/**`, async (route) => {
         const request = route.request();
@@ -53,11 +57,12 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
           return route.fulfill({ status: 204 });
         }
         if (mode) visits.push(`${mode} ${url.pathname}${url.search}`);
+        if (test.overlap && mode === "nav" && url.pathname === "/dest") await holdVisit;
         if (url.pathname === "/redirect") return route.fulfill({ status: 204, headers: { "corten-location": move === "same-address visit" ? "/home" : "/dest" } });
         const side = url.pathname === "/dest" || url.search ? "dest" : "home";
         const value = mode && move === "same-address visit" ? "home2" : side;
-        const body = `<h1>${side}</h1>${form(side, value)}<a id="home" href="/home">Home</a><a id="dest" href="/dest">Destination</a><a id="query" href="/home?view=other">Other view</a><a id="redirect" href="/redirect">Redirect</a><a id="fragment" href="#save">Fragment</a><form id="go" data-patch method="post" action="/go"><button>Go</button></form>`;
-        const document = `<!doctype html><title>Submit queue fixture</title><meta name="corten-shell" content="fixture"><script type="module" src="/runtime.js"></script><main>${body}</main>`;
+        const body = `<h1>${side}</h1>${test.layout ? "" : form(side, value)}<a id="home" href="/home">Home</a><a id="dest" href="/dest">Destination</a><a id="query" href="/home?view=other">Other view</a><a id="redirect" href="/redirect">Redirect</a><a id="fragment" href="#save">Fragment</a><form id="go" data-patch method="post" action="/go"><button>Go</button></form>`;
+        const document = `<!doctype html><title>Submit queue fixture</title><meta name="corten-shell" content="fixture"><script type="module" src="/runtime.js"></script>${test.layout ? form("home") : ""}<main>${body}</main>`;
         return route.fulfill({
           contentType: "text/html",
           headers: mode === "page" ? { "corten-shell": "fixture" } : mode ? { "corten-page": "1" } : {},
@@ -83,6 +88,11 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
       }
       visits.length = 0;
 
+      // Start the visit first, so it cannot abort the write at admission. Release its draw
+      // on either side of the waiting press, before giving the write its response.
+      if (test.overlap) {
+        await Promise.all([p.waitForRequest((r) => r.headers().corten === "nav" && new URL(r.url()).pathname === "/dest", { timeout: 6000 }), click("#dest")]);
+      }
       await p.evaluate(() => {
         const w = /** @type {any} */ (window);
         w.presses = 0;
@@ -110,10 +120,18 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
         w.formBefore = document.getElementById("save");
       });
       await Promise.all([p.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/save-home", { timeout: 6000 }), click("#save button")]);
+      if (test.layout) {
+        releaseVisit();
+        await drawn("dest");
+      }
       await p.evaluate(() => {
         document.querySelector("#save input").value = "home2";
         document.querySelector("#save button").click();
       });
+      if (test.overlap && !test.layout) {
+        releaseVisit();
+        await drawn("dest");
+      }
       answerFirst();
       await p.waitForFunction(() => typeof window.releaseRetry === "function", undefined, { timeout: 6000 });
       const before = posts.join(", ");
@@ -167,6 +185,7 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
       );
     } finally {
       answerFirst();
+      releaseVisit();
       await p.close();
     }
   }

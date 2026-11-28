@@ -3248,7 +3248,7 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextTurn?: number, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
@@ -3332,6 +3332,8 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
     previous.nextWithin = within;
+    // A form in the layout can be pressed after a visit, while an earlier write is still out.
+    previous.nextTurn = turn;
     if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
@@ -3512,14 +3514,17 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   } finally {
     // Cleared when this submit ends, but not those a newer submit of the form or the page a
     // redirect sends the browser to marked again (theirs, cleared when they end).
-    const current = submits.get(form)?.controller === controller;
+    const current = submits.get(form);
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
-    if (current) {
+    if (current?.controller === controller) {
       submits.delete(form);
       // After the answer is drawn, in a task of its own. A visit can draw another page before
       // this task runs, even though the write is no longer pending for the visit to abort.
-      const { next, nextWithin } = pending;
-      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && turn === turns && sendAgain(form, next, nextWithin));
+      const { next, nextWithin } = current;
+      if (next !== undefined && !signal.aborted) {
+        const { nextTurn } = current;
+        setTimeout(() => left === leftAt && nextTurn === turns && sendAgain(form, next, nextWithin));
+      }
     }
   }
 }
