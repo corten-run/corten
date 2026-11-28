@@ -12354,7 +12354,13 @@ rules something out.
     46060985339 on `969ac34e4`, whose two probes printed one checksum and whose reading before
     any byte was 16,384 bytes over base's with 16,384 allowed, and `job.sh` and `build.sh` read
     at `969ac34e4` for what a checksum covers: the probe's binary alone, built from each side's
-    crates in one directory, the scripts that run it being the checkout's for both sides.
+    crates in one directory, the scripts that run it being the checkout's for both sides;
+    2026-11-27, for the allocator observer, the kit's page at `cb6cce8d3` and the control reported in
+    [#2272 Report allocator live bytes beside resident growth in the request-cost idle reading](https://github.com/corten-run/corten/pull/2272):
+    six alternating local runs of one release binary over 5,000 connections, three per mode.
+    Resident growth with the observer off was 62,820,352, 62,816,256 and 62,828,544 bytes.
+    With it on, it was 62,812,160, 62,812,160 and 62,816,256 bytes. That is 1 to 3 pages lower
+    (8,192 bytes by the medians), not evidence that the shift is equal across builds.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

@@ -40,12 +40,13 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
   const closed = new AbortController();
   samples?.once("close", () => closed.abort());
   let said = "";
+  let late;
   child.stderr.setEncoding("latin1");
   const ready = new Promise((resolve, reject) => {
-    const late = setTimeout(() => reject(new Error(`the probe did not say READY in 120 s:\n${said}`)), 120_000);
+    late = setTimeout(() => reject(new Error(`the probe did not say READY in 120 s:\n${said}`)), 120_000);
     child.stderr.on("data", (text) => {
       said += text;
-      if (/^READY /m.test(said)) resolve(clearTimeout(late));
+      if (/^READY /m.test(said)) resolve(undefined);
     });
     child.on("error", reject);
     child.on("exit", () => reject(new Error(`the probe stopped before it was ready:\n${said}`)));
@@ -55,6 +56,8 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
   } catch (error) {
     child.kill("SIGKILL");
     throw error;
+  } finally {
+    clearTimeout(late);
   }
   return {
     pid: /** @type {number} */ (child.pid),

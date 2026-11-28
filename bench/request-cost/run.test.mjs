@@ -134,6 +134,42 @@ async function running(script, args, asked = {}, { preload = true } = {}) {
   }
 }
 
+test("probe startup leaves no readiness timer after READY or an early child exit", { skip }, () => {
+  const stand = standIns();
+  try {
+    const script = `
+      import { start } from ${JSON.stringify(new URL("./probe.mjs", import.meta.url).href)};
+      try {
+        const probe = await start(process.argv[1], "api", { cpu: "3", port: 0, idleMemory: true });
+        await probe.stop();
+        console.log("stopped after READY");
+      } catch (error) {
+        console.error(error);
+        process.exitCode = 1;
+      }
+    `;
+    const run = () => spawnSync(process.execPath, ["--input-type=module", "-e", script, stand.probe], {
+      env: stand.env, encoding: "utf8", timeout: 5000,
+    });
+
+    // A real child that stays alive for stop(), with its own bound if the caller fails.
+    writeFileSync(stand.probe, "#!/bin/sh\nprintf 'READY fixture\\n' >&2\nexec sleep 2\n");
+    const ready = run();
+    assert.ifError(ready.error);
+    assert.equal(ready.status, 0, ready.stderr);
+    assert.equal(ready.stdout.trim(), "stopped after READY");
+
+    writeFileSync(stand.probe, "#!/bin/sh\nprintf 'observer startup refused\\n' >&2\nexit 42\n");
+    const failed = run();
+    assert.match(failed.stderr, /Error: the probe stopped before it was ready:[\s\S]*observer startup refused/);
+    assert.ifError(failed.error);
+    assert.equal(failed.status, 1, failed.stderr);
+    assert.equal(failed.stdout, "");
+  } finally {
+    stand.remove();
+  }
+});
+
 test("a count is the first thread's dump of the 1,000 requests after the 240, on the one connection, before it closes", { skip }, async () => {
   const { window, started, parts, taskset } = await counting("get", 1);
   // 1,000 requests at the stand-in's 1,000 instructions each and its 600: no connection opened or
