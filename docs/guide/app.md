@@ -1372,6 +1372,10 @@ any `*-cache-control` header and the other caching headers a CDN reads first tha
 visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
 staged answer does: another app of Corten's whose staged middleware relays it inline and takes
 the cookie off still sends it as that visitor's ([Caching](#caching)).
+Each declared unstaged handler is watched for a form's new submit key, as a staged handler is.
+Its answer, whatever type it returns, goes out as one that sets a cookie does when the watch
+sees a key ([Caching](#caching)). It carries that mark to an app that relays it inline and also
+loses any tag (`ETag`) it was given.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1547,7 +1551,7 @@ but an unstaged one):
 | a full document, no `Cookie` or `Authorization`, nothing read a caller | as asked, plus `Vary: cookie` |
 | a request with a `Cookie` or `Authorization`, or one whose handler or middleware read a caller | `private, no-cache` |
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
-| a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
+| a response that sets a cookie, HTML with the request's nonce, a page that draws a form's new submit key (`SubmitKey::field`), or a `Public` answer (or an answer type of the app's own) whose handler drew one, however it rendered it | `private, no-cache`, logged under `corten dev` |
 
 An answer Corten knows is personal goes out without the caching headers a CDN or proxy reads
 before `Cache-Control` that a middleware wrote, whatever its own `Cache-Control` says (none, a
@@ -1573,16 +1577,37 @@ whatever a middleware made of their `Cache-Control` (a `NoStore` one still goes 
 names `no-store` anywhere: `must-understand`, a second line, or `no-store=1` beside a plain
 `private` included). Those names, matched
 exactly, are the whole list (a `Public` answer cannot set one either); any other answer keeps the
-ones a middleware wrote.
+ones a middleware wrote. An answer that draws a submit key loses a tag (`ETag`) too, not only
+the one Corten would make: one the app (`Public::header`), a middleware or a relayed upstream
+gave it names a body whose key the browser may already have sent, and a `304` to it would keep
+that body.
 
 Keeping a personal answer out of a shared cache by any other means is the deployment's: a name
 its CDN is configured to read (RFC 9213 allows any), a layer around the app (`App::layer`, which
 runs after Corten settles the answer), and an edge rule that caches whatever the origin says. A
 submit key marks the answer it is rendered for: a page, a patch, the layout's reads, and a
-`Rendered` placed in one. A live stream's fragments are text rendered
-after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
-says `Cache-Control: private` itself and carries none of those headers
-([live data](live-data.md)).
+`Rendered` placed in one; one made with `req.rendered` marks the request's answer wherever it is
+placed (in text or `Json<T>` too). Every declared handler, staged or `unstaged`, is also watched
+for a key drawn during its polls, regardless of its answer type. A key drawn into JSON, text, a
+file or relay the handler made, or a page as `raw` markup makes the answer go out as a page that
+draws one does, in every build and with or without kept answers. The
+stages keep the mark past the app's middleware for an answer that comes back through the `next`
+of the request they gave it: a middleware that makes a new response of that answer does not take
+the mark away, nor one that also gives `next` a request rebuilt without the first one's
+extensions or with a signal of its own (a key `req.rendered` drew into text or `Json<T>`
+included), on whatever thread it calls or polls `next`. A middleware that asks another router
+for an answer of its own (a router it holds, called on its own) and makes a new response of that
+one must keep the response's extensions (`Response::from_parts` with the parts it was given):
+without them this app may tag that answer, keep it, or keep a lifetime a middleware gives it. The watch
+sees what the handler draws itself, before it returns: a key a bare render (`to_html()`) draws in
+a task it spawned, a blocking task or a thread of its own is not seen, nor is one drawn as a
+body is sent after the handler returned (`Media::stream`, a relay's body, a live stream's
+fragments), nor one already in bytes the app relays or in a feed's rows. A render that marks the
+answer itself (a page's, a patch's, one made with `req.rendered`) does not rely on the watch and is
+seen on whatever thread it runs. So a `Public` handler
+draws its forms itself, an answer whose body may draw a key later is not `Public`, says
+`Cache-Control: private` itself and carries none of those headers ([live data](live-data.md)),
+and a per-visitor key never goes in a feed's rows, snapshot or replay.
 
 A `Public` answer cannot set a cookie the way a private one does: the page inside
 `Public<HtmlResult>` is made for everyone (`HtmlResponse<ForAll>`), and `with_cookie` on it does
@@ -1774,7 +1799,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
+| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one a bare `to_html()` draws in a task it spawned, a blocking task or a thread of its own is not seen; one `req.rendered` or a page's render draws is seen on any thread), a `Vary` of the app's own |
 
 Nothing is kept under `corten dev`, so the log says instead what a release build does with a
 `Public` route's answer to a `GET`: that it would keep it, and for how long, while its store has

@@ -2732,7 +2732,7 @@ impl<H: Clone, O> Clone for Endpoint<H, O> {
 
 /// A JSON route's failure marked as one, which the stages leave as it is.
 #[inline]
-fn marked<O: Answer>(mut res: Response) -> Response {
+fn mark<O: Answer>(res: &mut Response) {
     // A constant: an HTML route's check compiles away.
     if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
         res.extensions_mut().insert(Answered);
@@ -2743,7 +2743,51 @@ fn marked<O: Answer>(mut res: Response) -> Response {
     if !O::PAGE && res.extensions().get::<crate::layout::Pending>().is_some() {
         res.extensions_mut().insert(crate::layout::NotAPageAnswer);
     }
-    res
+}
+
+pin_project_lite::pin_project! {
+    /// A route's answer as its handler makes it, [`mark`]ed. The handler's polls are
+    /// watched for a form's new submit key however it was rendered
+    /// (into JSON or text, into a file, or to a string placed in a page as markup)
+    /// ([`crate::form::KeyWatch`]): an answer whose handler drew one is the request's alone
+    /// ([`crate::cache::Unrepeatable`]), so no cache gives it to another visitor and the app does
+    /// not keep it. A page's render marks a key it drew itself; this sees the rest. The answer is
+    /// marked where it is polled to, and the watch is held beside the handler's work, so neither
+    /// is moved again. The answer alone is marked: it comes back to the stages past the route's
+    /// side of the chain (`middleware::Keyed`), which marks the signal they hold
+    /// ([`crate::Signal::mark_key_drawn`]) before any middleware sees the answer, so a middleware
+    /// that makes a new response of this one does not take the mark away.
+    pub(crate) struct Made<F, O> {
+        #[pin]
+        made: F,
+        watch: crate::form::KeyWatch,
+        answer: PhantomData<fn() -> O>,
+    }
+}
+
+impl<F: Future<Output = Response>, O: Answer> Made<F, O> {
+    /// `made` as the route's answer.
+    #[inline]
+    fn new(made: F) -> Self {
+        Made { made, watch: Default::default(), answer: PhantomData }
+    }
+}
+
+impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O> {
+    type Output = Response;
+
+    #[inline]
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
+        let this = self.project();
+        let mut polled = this.watch.poll(this.made, cx);
+        if let std::task::Poll::Ready(res) = &mut polled {
+            mark::<O>(res);
+            if this.watch.drew() {
+                crate::cache::unrepeatable(res);
+            }
+        }
+        polled
+    }
 }
 
 impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
@@ -2803,10 +2847,10 @@ where
             // Boxed, so every other request's future stays the size it was.
             futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
                 crate::layout::at_late_route(&req),
-                futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>),
+                Made::<_, O>::new(self.handler.call(req, state)),
             )) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
         } else {
-            futures_util::future::Either::Left(futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>))
+            futures_util::future::Either::Left(Made::<_, O>::new(self.handler.call(req, state)))
         }
     }
 }

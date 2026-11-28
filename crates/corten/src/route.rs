@@ -4568,9 +4568,11 @@ fn written_checked<R: Route + ?Sized>() {
 /// caching header, so no shared cache hands one visitor's cookie to another, and is marked as that
 /// visitor's, as a staged one is, for an app that relays it inline. A handler that panics
 /// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
-/// the connection. Under an API's prefix a failure after the host check is the API's JSON, as
-/// every failure there is. It wraps the handler's boxed future in one box of its own ([`laned`]);
-/// only a failure under an API boxes the JSON it writes.
+/// the connection. The handler is watched for a form's new submit key
+/// ([`Watched`]), and an answer whose handler drew one is shared with no cache either. Under an
+/// API's prefix a failure after the host check is the API's JSON, as every failure there is. It
+/// wraps the handler's boxed future in one box of its own ([`laned`]); only a failure under an API
+/// boxes the JSON it writes.
 pub(crate) struct Lane {
     pub(crate) hosts: crate::security::HostCheck,
     /// Under an API's prefix: how the API writes a failure, and whether the app runs under
@@ -4639,28 +4641,93 @@ fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Resp
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
     if kept_out || cookie {
-        let no_store = kept_out
-            || headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
-        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
-        // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a
-        // [`crate::Public`] answer may not set, and the others Corten names
-        // ([`crate::cache::CDN_CACHING`]).
-        let cdn: Vec<header::HeaderName> = headers
-            .keys()
-            .filter(|name| {
-                let name = name.as_str();
-                (name.ends_with("cache-control") && name != "cache-control") || crate::cache::CDN_CACHING.contains(&name)
-            })
-            .cloned()
-            .collect();
-        for name in cdn {
-            headers.remove(name);
-        }
+        unshared(headers, kept_out);
     }
     if cookie {
         res.extensions_mut().insert(crate::cache::Personal);
     }
     res
+}
+
+/// `headers` of an answer no shared cache may keep: `Cache-Control: private, no-cache`, or
+/// `private, no-store` when it names `no-store` or is kept out of every cache (`no_store`, a
+/// [`crate::NoStore`] answer whatever its header says), and none of the caching headers a CDN
+/// reads first.
+fn unshared(headers: &mut http::HeaderMap, no_store: bool) {
+    use http::header;
+    let no_store =
+        no_store || headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
+    headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
+    // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a [`crate::Public`]
+    // answer may not set, and the others Corten names ([`crate::cache::CDN_CACHING`]).
+    let cdn: Vec<header::HeaderName> = headers
+        .keys()
+        .filter(|name| {
+            let name = name.as_str();
+            (name.ends_with("cache-control") && name != "cache-control") || crate::cache::CDN_CACHING.contains(&name)
+        })
+        .cloned()
+        .collect();
+    for name in cdn {
+        headers.remove(name);
+    }
+}
+
+/// An unstaged route's handler, watched for a form's new submit key in its polls as a staged one
+/// is (`answer::Made`). No stage settles an unstaged answer's caching, so one whose handler drew
+/// a key is made private here: `private, no-cache` (`private, no-store` where it names `no-store`),
+/// with no caching header a CDN reads first and no tag.
+#[derive(Clone)]
+pub(crate) struct Watched<H>(pub(crate) H);
+
+impl<H: crate::handler::Handler<T, S>, T, S> crate::handler::Handler<T, S> for Watched<H> {
+    #[inline]
+    fn call(
+        self,
+        req: crate::handler::Request,
+        state: S,
+    ) -> impl std::future::Future<Output = crate::response::Response> + Send + 'static {
+        WatchedAnswer { made: self.0.call(req, state), watch: crate::form::KeyWatch::default() }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// [`Watched`]'s answer as its handler makes it.
+    struct WatchedAnswer<F> {
+        #[pin]
+        made: F,
+        watch: crate::form::KeyWatch,
+    }
+}
+
+impl<F: std::future::Future<Output = crate::response::Response>> std::future::Future for WatchedAnswer<F> {
+    type Output = crate::response::Response;
+
+    #[inline]
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let this = self.project();
+        let mut polled = this.watch.poll(this.made, cx);
+        if let std::task::Poll::Ready(res) = &mut polled {
+            if this.watch.drew() {
+                drew_key(res);
+            }
+        }
+        polled
+    }
+}
+
+/// An unstaged answer whose handler drew a form's new submit key, made the browser's alone, with
+/// no tag it was given (`crate::cache::drop_keyed_reuse`), and marked so
+/// ([`crate::cache::Unrepeatable`]), as a staged one is, for an app that relays it inline: that
+/// app's stages keep it from shared caches whatever its middleware writes on it, as they do one
+/// that sets a cookie.
+#[cold]
+#[inline(never)]
+fn drew_key(res: &mut crate::response::Response) {
+    let headers = res.headers_mut();
+    unshared(headers, false);
+    headers.remove(http::header::ETAG);
+    crate::cache::unrepeatable(res);
 }
 
 /// The crate's tests build routes by hand, to test what `App` does with any response.
@@ -4776,7 +4843,8 @@ pub mod __private {
         }
     }
 
-    /// An unstaged route's `get`, its only method.
+    /// An unstaged route's `get`, its only method. The handler is watched for a form's new
+    /// submit key ([`super::Watched`]).
     #[inline]
     pub fn unstaged_get<H, T, S, P, J>(handler: H) -> UnstagedMethods<S>
     where
@@ -4786,7 +4854,7 @@ pub mod __private {
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        UnstagedMethods(crate::router::get(handler.into_handler()))
+        UnstagedMethods(crate::router::get(super::Watched(handler.into_handler())))
     }
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names

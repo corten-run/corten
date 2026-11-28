@@ -413,7 +413,7 @@ pub trait ToJson {
     const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
 
     /// The response [`Json`] sends, before its headers: the value written into a new vector, or
-    /// for [`Raw`] the bytes it holds. Not a public API.
+    /// for [`Raw`] the bytes it holds. Not a public API, but retains its 0.3.0 signature.
     #[doc(hidden)]
     fn __into_response(self) -> Response
     where

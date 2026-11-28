@@ -2489,11 +2489,12 @@ fn staged<S: Steps>(table: Table, layer: Layer<S>) -> Router {
 }
 
 /// The rest of the request under the deadline and the panic catch: the app's middleware, then the
-/// area's or API's, then the route and its handler.
+/// area's or API's, then the route and its handler, with the stages' signal for its answer
+/// ([`crate::middleware::Ends`]).
 pub(crate) struct Next<'a, S: Steps> {
     steps: &'a S,
     scope: S::Scope<'a>,
-    route: Option<Route>,
+    ends: &'a crate::middleware::Ends<'a>,
 }
 
 impl<'a, S: Steps> Next<'a, S> {
@@ -2502,13 +2503,13 @@ impl<'a, S: Steps> Next<'a, S> {
     }
 
     pub(crate) fn route_can_answer_action_page(&self) -> bool {
-        !self.route.as_ref().is_some_and(|route| route.action_patches())
+        !self.ends.route.as_ref().is_some_and(|route| route.action_patches())
     }
 
     // Not an `async fn`: a layer of its own would move the request once more.
     #[inline]
     pub(crate) fn run(self, req: Request) -> impl Future<Output = Response> + Send + 'a {
-        self.steps.run(req, self.route, self.scope)
+        self.steps.run(req, self.ends, self.scope)
     }
 }
 
@@ -2526,7 +2527,7 @@ pub(crate) trait Steps: Send + Sync + 'static {
     fn run<'a>(
         &'a self,
         req: Request,
-        route: Option<Route>,
+        ends: &'a crate::middleware::Ends<'a>,
         scope: Self::Scope<'a>,
     ) -> impl Future<Output = Response> + Send + 'a;
 }
@@ -2545,8 +2546,13 @@ impl<M: Middleware> Steps for Plain<M> {
     }
 
     #[inline]
-    fn run<'a>(&'a self, req: Request, route: Option<Route>, (): ()) -> impl Future<Output = Response> + Send + 'a {
-        self.0.call(req, crate::middleware::Handle(route))
+    fn run<'a>(
+        &'a self,
+        req: Request,
+        ends: &'a crate::middleware::Ends<'a>,
+        (): (),
+    ) -> impl Future<Output = Response> + Send + 'a {
+        self.0.call(req, crate::middleware::Handle(ends))
     }
 }
 
@@ -2569,13 +2575,13 @@ impl<M: Middleware> Steps for Scoped<M> {
     fn run<'a>(
         &'a self,
         req: Request,
-        route: Option<Route>,
+        ends: &'a crate::middleware::Ends<'a>,
         stack: Self::Scope<'a>,
     ) -> impl Future<Output = Response> + Send + 'a {
         use futures_util::future::Either;
         match stack {
-            [] => Either::Left(self.0.call(req, crate::middleware::Handle(route))),
-            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route })),
+            [] => Either::Left(self.0.call(req, crate::middleware::Handle(ends))),
+            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, ends })),
         }
     }
 }
@@ -2636,8 +2642,6 @@ impl<S: Steps> Layer<S> {
         }
         // The body limit, the same way, carried by the request's signal.
         let body_limit = scope.body_limit;
-        // The middleware of the area or API the request is in, where one has some.
-        let steps = self.steps.scope(scope);
         let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
         if let Some(mount) = mount {
             if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
@@ -2724,11 +2728,23 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let next = Next { steps: &self.steps, scope: steps, route };
+        // The route and the stages' signal, which the route's answer marks as it comes back past
+        // the middleware when it drew a form's new submit key, from whatever thread polled it.
+        let ends = crate::middleware::Ends { route, signal: &watch.0 };
+        // The middleware of the area or API the request is in, where one has some. Taken after
+        // the signal, so it is dropped before it: `Next` holds both for one lifetime.
+        let steps = self.steps.scope(scope);
+        let next = Next { steps: &self.steps, scope: steps, ends: &ends };
         // The signal ends when this future is dropped, then when the response is dropped.
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        drop(ends);
         let caller = watch.0.is_personal();
         let asked = watch.0.asked_language();
+        // Held by the stages' signal, which the route's answer marks as it comes back past the
+        // middleware too (`crate::middleware::Ends`), so a middleware's new response in place of
+        // the one it was given, to a request it may have rebuilt, on whatever thread it polled
+        // `next`, still goes out as an answer that drew a form's new submit key.
+        let drew_key = watch.0.key_drawn();
         let mut res = signal::follow(res, watch, self.zoned());
         // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
         // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
@@ -2765,10 +2781,13 @@ impl<S: Steps> Layer<S> {
             nonce: nonced,
             dev: self.shared.dev,
         };
+        if drew_key {
+            cache::unrepeatable(&mut res);
+        }
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
         if !ready {
-            cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+            cache::settle_drawn(&mut res, seen, path.as_deref().unwrap_or(""), drew_key);
         }
         // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
         // when its headers as sent let a shared cache keep it.

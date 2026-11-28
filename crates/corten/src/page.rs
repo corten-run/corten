@@ -1302,6 +1302,7 @@ impl Action<'_> {
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
+            self.0.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
@@ -1565,6 +1566,15 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
     }
 }
 
+/// The signal of a request a middleware passed on without one ([`crate::signal::Detached`]),
+/// shared by every `Req` of it and read as its answer comes back, or a signal of the `Req`'s own
+/// where there is none (a bare router in a test).
+#[cold]
+#[inline(never)]
+fn detached(extensions: &Extensions) -> crate::Signal {
+    extensions.get::<crate::signal::Detached>().map_or_else(crate::Signal::default, |detached| detached.0.clone())
+}
+
 impl Req {
     /// `notice`: read the request's notice (its answer then removes it). Only a write's `Origin`
     /// is looked at for the plain cookie; a `GET` looks up one header more, the notice a page
@@ -1583,7 +1593,7 @@ impl Req {
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
         let whole_action =
             mode == Mode::Action && write && signal.map_or_else(|| prefers_whole(headers), |signal| signal.draws_whole(headers));
-        let signal = signal.cloned().unwrap_or_default();
+        let signal = signal.cloned().unwrap_or_else(|| detached(extensions));
         Req {
             mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
@@ -1902,6 +1912,7 @@ impl Req {
         }
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
+            self.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
@@ -2043,10 +2054,16 @@ impl Req {
 
     /// Renders `view` once, as the page would (in the visitor's time zone under
     /// [`crate::App::zoned_dates`]), to place in several answers: see [`crate::Rendered`].
+    /// One that draws a form's new submit key keeps this request's answer out of shared caches,
+    /// as a page whose render drew one is, wherever it is placed.
     pub fn rendered(&self, view: impl Render) -> crate::Rendered {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
-        crate::Rendered::new(view)
+        let rendered = crate::Rendered::new(view);
+        if rendered.drew_key() {
+            self.signal.mark_key_drawn();
+        }
+        rendered
     }
 
     /// This request's CSP nonce, for the layout's own inline scripts. Empty without a policy.
