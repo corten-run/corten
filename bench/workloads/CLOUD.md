@@ -780,7 +780,10 @@ native readiness, independent review and operator approval requirements apply.
 If prepare or detach refuses before writing intent, `fleet-operation-failed`
 can name the failing stage: `continuation-admission`, `prepare-reservation`,
 `initial-plan` or `locked-plan` (including exact approval checks), or
-`final-pre-intent-recheck`. Admission adds a fixed label: `lock-busy` means the
+`final-pre-intent-recheck`. On independent detach, `attempt-lock` names the
+exclusive creation of the attempt's `.fleet-operation.lock` after initial approval.
+It does not establish who owns that lock or authorize removing it or retrying.
+Admission adds a fixed label: `lock-busy` means the
 continuation lock exists (not that its owner is live); `lock-check` means some
 other lock operation failed. `batch-owner` means the indexed fleet's batch
 owner could not be shown to have stopped. `custody-replay` means the selected
