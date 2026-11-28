@@ -41,11 +41,11 @@
 // (`declared`); with no such line, or more than one, it declares nothing. Exit status
 // 1 when the rule does not hold and the description does not say `measured`, and when the probe
 // did not build against head: a change declared measured is reported and never failed on its
-// figures, and one that declares nothing fails only when the rule does not hold. A head build
-// that did not end in its time, as job.sh words it (`STOPPED`), compared nothing and says so:
-// the job fails, and the change is not named as the reason. Exit status 0 for one binary. Exit
-// status 2 for arguments that are not these.
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+// figures, and one that declares nothing fails only when the rule does not hold. If a build on
+// either side ends with status 124 or 137 (`STOPPED`), the job fails and reports that nothing
+// was compared, without attributing a cause. An ordinary head build failure takes precedence.
+// Exit status 0 for one binary. Exit status 2 for arguments that are not these.
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -63,19 +63,23 @@ const IDLE = [
   { name: "silent", what: "before any byte", options: ["--silent"], of: { case: "pipeline", requests: 0 } },
 ];
 const SIDES = /** @type {const} */ (["base", "head"]);
-/** What job.sh leaves in `unbuilt` for a build stopped at its time. */
-export const STOPPED = /^the build did not end in \d+ s$/;
+/** What job.sh leaves in `unbuilt` when timeout returns an ambiguous status. */
+export const STOPPED = /^the build ended with status (124|137) after \d+ s \(limit \d+ s\)$/;
 
 /**
- * A built build's probe's SHA-256, as job.sh writes it, or undefined: a file that is not 64
- * lowercase hex digits and a line feed is no checksum, so it is never taken for a match.
+ * A built build's probe's SHA-256, as job.sh writes it, or undefined: anything other than a
+ * readable file of 64 lowercase hex digits and a line feed is no checksum.
  * @param {string} directory
  */
 function checksum(directory) {
   const at = join(directory, "sha256");
-  if (!existsSync(at)) return undefined;
-  const text = readFileSync(at, "utf8");
-  return /^[0-9a-f]{64}\n$/.test(text) ? text.slice(0, 64) : undefined;
+  try {
+    if (!statSync(at, { throwIfNoEntry: false })?.isFile()) return undefined;
+    const text = readFileSync(at, "utf8");
+    return /^[0-9a-f]{64}\n$/.test(text) ? text.slice(0, 64) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -350,22 +354,26 @@ export function compare(base, head, { description = "", names = { base: "base", 
     status = 1;
     verdict = `**Does not pass as counted:** ${why}. ${read} By ${rule} such a change is measured: say \`Request path: measured\` on ${line}, and give what the measured way asks.`;
   }
-  if (unbuilt.head !== undefined && STOPPED.test(unbuilt.head)) {
-    status = 1;
-    verdict = `**Nothing compared:** the probe's build against head did not end in its time (${code(unbuilt.head)}), which says nothing of the change. ${read} The job fails whatever the description says, and may be run again: a run that compared nothing is not a count taken again (README.md, The hosted job).`;
-  } else if (unbuilt.head !== undefined) {
+  const stopped = SIDES.flatMap((side) => {
+    const reason = unbuilt[side];
+    return reason !== undefined && STOPPED.test(reason) ? [`${side} (${code(reason)})`] : [];
+  });
+  if (unbuilt.head !== undefined && !STOPPED.test(unbuilt.head)) {
     status = 1;
     verdict += " The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.";
+  } else if (stopped.length > 0) {
+    status = 1;
+    verdict = `**Nothing compared:** no probe from ${stopped.join(" or ")}. GNU \`timeout\` returns 124 when it stops a command at its limit and 137 when it has to kill it. A command's own exit 124 or an unrelated KILL can give the same statuses. The elapsed seconds beside the limit give context, not proof of the cause; this verdict does not say the change broke the probe. ${read} The job fails whatever the description says and may be run again (README.md, The hosted job).`;
   }
   if (oneBinary !== undefined) {
     status = 0;
-    verdict = `**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 ${code(oneBinary)}), so no figure below can be the change's: they are one binary read twice, the runner's, and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ${holds ? "pass" : `not pass: ${why}`}. ${read}`;
+    verdict = `**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 ${code(oneBinary)}), so any figures below are the runner's readings of one binary and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ${holds ? "pass" : `not pass: ${why}`}. ${read}`;
   }
 
   const markdown = [
     `## What a request costs: ${code(short(names.head))} against ${code(short(names.base))}`,
     verdict,
-    ...(oneBinary === undefined ? [] : ["The tables below show readings of one binary taken twice, not a comparison of two binaries."]),
+    ...(oneBinary === undefined ? [] : ["The tables below show the available readings from two runs of one binary, not a comparison of two binaries."]),
     answered,
     "### Instructions a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's counts", "Head's counts", "Rule"], instructions),

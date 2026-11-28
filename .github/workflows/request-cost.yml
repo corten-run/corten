@@ -67,9 +67,9 @@ jobs:
       # The checkout is the pull request's merge with its base. The kit, and so the probe's source
       # and job.sh, is the checkout's for both builds. The builds' directory is outside the
       # checkout and any git repository, as build.sh requires, and one for both: where a crate is
-      # built is part of the binary. A build that fails, or does not end in seven minutes, leaves
-      # why for the table, which is written either way; one that builds leaves its probe's
-      # checksum, and two builds that are one binary are compared in nothing (the kit's page).
+      # built is part of the binary. An unsuccessful build leaves its error or timeout's status
+      # and timing for the table; a successful one leaves its probe's checksum. Two builds that
+      # are one binary are compared in nothing (the kit's page).
       - name: Build the probe against the merge base, then against the head, in one directory
         if: steps.scope.outputs.run == 'true'
         shell: bash

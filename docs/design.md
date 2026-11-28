@@ -11783,14 +11783,15 @@ rules something out.
     one. The job
     [#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
     asked for now reads it: the `Request Cost` workflow counts a pull request against its merge
-    base when it changes what the probe is built from or counted with. The line tells the job
-    what to do with a miss ([The hosted job](../bench/request-cost/README.md#the-hosted-job)).
+    base when it changes what the probe is built from or counted with. The line is optional:
+    `measured` makes a miss report-only, so it decides nothing, and the job verifies no
+    measurement ([The hosted job](../bench/request-cost/README.md#the-hosted-job)).
     The job cannot tell from a diff a lock, a wake or a structure's layout, the kinds a count
     cannot judge, so the way is still the author's to say and the review's to accept. Its green
     check is counts of the pull request's own tree by its own kit, for a reviewer to read, not
     an attestation by anything apart from the change. That check, `request-cost`, is required on
     `main` from the merge of
-    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and do not blame the change when a build times out](https://github.com/corten-run/corten/pull/2245),
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and report ambiguous build exits](https://github.com/corten-run/corten/pull/2245),
     by the maintainer's decision, which its description gives as it was asked and answered:
     asked when the hosted job becomes a required check, the maintainer answered "After the idle
     floor lands". The floor landed on 2026-11-27, in merge commit `456d8fd68`
@@ -11814,7 +11815,7 @@ rules something out.
 
     The required check's rulings. On 2026-11-27 the maintainer answered four questions about
     the required check, each by choosing one of the answers offered; the description of
-    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and do not blame the change when a build times out](https://github.com/corten-run/corten/pull/2245)
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and report ambiguous build exits](https://github.com/corten-run/corten/pull/2245)
     gives each question as it was put, with its choices. How a pull request goes on that the
     job counts, that changes only documents and that fails on the runner between two builds of
     one binary: "Pass when one binary (Recommended)", so where base's and head's probes have
@@ -11945,7 +11946,7 @@ rules something out.
     check's rulings fails no job where they are one binary, the verdict saying what the rule
     would have read, and so shows the runner reading more than the floor allows, which a change
     of two binaries is held to (the first run of
-    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and do not blame the change when a build times out](https://github.com/corten-run/corten/pull/2245),
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and report ambiguous build exits](https://github.com/corten-run/corten/pull/2245),
     of one binary, read before any byte 16,384 bytes over base's with 16,384 allowed, at the
     floor and not over it, so it did not meet this; three runs a build drawn from one
     distribution read a rise in about one comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by

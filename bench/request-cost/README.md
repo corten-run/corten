@@ -342,10 +342,10 @@ On one runner it does what [Running it](#running-it) says, the first three by
 1. Builds the probe against the merge base and then against the head, in one directory, with
    the kit of the pull request's merge, so the probe's source is the same for both. The head
    is counted against the commit where it left the base's branch, not as merged: what the
-   base gained since is in neither build. A build that fails or does not end in 7 minutes
-   leaves what it said; that build is then not run at all, whatever it left, and the table is
-   written without its figures. A build that builds leaves its probe's SHA-256, which the log
-   prints (`the probe built against base: sha256 ...`).
+   base gained since is in neither build. The build limit is 420 seconds. An unsuccessful
+   build leaves its error or `timeout`'s status and timing, as below. That build is not run at
+   all, whatever it left, and the table is written without its figures. A successful build
+   leaves its probe's SHA-256, which the log prints (`the probe built against base: sha256 ...`).
 2. Writes both builds' answers (`count.mjs --answers`).
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
    `--json`, on base and then on head, a case a run: each case's instructions, three counts
@@ -355,8 +355,8 @@ On one runner it does what [Running it](#running-it) says, the first three by
    table, a reserve in name and not a guarantee, since a run stopped at its time can take 10
    seconds more to end. The checkout, the toolchain and the two builds are not held to those 24: a job
    they take past its 30 minutes ends there with no table. A reading that fails or is stopped
-   is taken again once within the same job if time remains. The job keeps why for each failed
-   attempt (the deadline, else the kit's error, the last thing it said, or its exit status).
+   is taken again once within the same job if time remains. The job keeps the status and timing
+   for statuses 124 and 137, and otherwise the kit's error, its last line or its exit status.
    A reading is never taken again for its figure.
 4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
    writes what it prints to the job's summary: for each case base, head, the difference and
@@ -415,7 +415,7 @@ answer, and the review weighs a count of two different jobs.
 same binary, byte for byte, and the kit that runs them is the checkout's for both, so nothing
 the job reads can differ by the change. The verdict is then
 `One binary: nothing compared.`, with the checksum, and the job passes whatever the
-description declares. The tables are labelled as readings of one binary taken twice. The
+description declares. The tables show the available readings from two runs of one binary. The
 verdict says what the rule would have read of them as two builds: they are an A/A of the
 runner and decide nothing. [Design Choice 76](../../docs/design.md#choice-counted-or-measured)
 records the maintainer's ruling and why these readings are kept as evidence for the idle
@@ -433,24 +433,32 @@ edit starts no run, since it would count the same commits again and so draw them
 red check on a pull request that has since declared `measured` stands, with its reason in its
 summary, until such a run: a maintainer reads the summary and the description as it now is,
 and the check's color only for the commit and description it ran with. The check is required
-on `main`, so that pull request merges only once such a run has read the line;
-under `measured` the figures decide nothing, so that run is not a count taken again for its
-result. Each push counts again, so two heads can read differently: the run on the commit being
-merged decides, and a push made only to draw a new count is a count taken again for its
-result, which the review catches (the maintainer's ruling of 2026-11-27).
+on `main`, so unless the maintainer bypasses it with a written reason, that pull request does
+not merge until such a run has read the line and passed. Under `measured` the figures decide
+nothing. Two heads can read differently: the run on the commit being merged decides.
 
-A job that failed or was interrupted without comparing anything may be run again. A failed
-setup step, no merge base, or a scope that said neither leaves no table in the summary. A job
-whose verdict starts `Nothing compared:` also decided nothing: it says the head build
-`did not end in its time` (`the build did not end in 420 s`), not that the change broke the
-probe. A base build stopped at its deadline records the same reason, leaving the base without
-figures. A job that was cancelled or hit its 30-minute
-limit may be run again if it left no table. If a table was written and some rows were compared,
-those rows stand, including any miss. Do not run the job again to replace them.
+**Build and reading exits.** GNU `timeout` returns 124 when it stops a command at its limit
+and 137 when it has to kill it. A command that exits 124 on its own or is killed by something
+else can give the same status. An early exit can look late if the calling shell does not run
+again until after the limit, so status and elapsed time cannot prove what stopped the command.
+The job reports both without classifying the cause, for example
+`the build ended with status 124 after 420 s (limit 420 s)`. The seconds are rounded down and
+include time spent waiting for the command to exit after a signal. Such an exit on either side
+leaves no pair to compare: `Nothing compared:` names the side and records what happened. The
+job exits 1, regardless of the declaration, without saying the change broke the probe. An
+ordinary head build failure keeps its verdict even if the base returned 124 or 137.
 
-A missing reading is not a reason to repeat the whole job. The job already tries a failed or
-stopped reading once more if time remains. A row still missing a figure says `no figure`, and
-**Runs that gave no figure** lists why, for example `did not end in <n> s` or
+**Running the job again.** This is the pull request's reading of the maintainer's ruling of
+2026-11-27, not a further ruling: a job in which no pair of readings was compared and decided
+may be run again, whether it left no table or a table with no decided row. This includes a
+`Nothing compared:` verdict, whatever stopped the build. Where at least one row was decided,
+those rows stand, including any miss. Do not replace them by rerunning, pushing or reopening
+just to draw a new count. A missing reading in a table with decided rows does not make those
+rows replaceable.
+
+The job already tries a failed reading once more if time remains. A row still missing a
+figure says `no figure`, and **Runs that gave no figure** lists why, for example
+`the reading ended with status 137 after 130 s (limit 120 s)` or
 `not attempted, the job's time for readings was spent`. A refusal that did give a figure on its
 second attempt is marked `taken again, and counted`. Other compared rows still decide as they
 would in a full table.
@@ -473,12 +481,12 @@ node bench/request-cost/compare.mjs <base's directory> <head's directory> --desc
 
 For a local one-binary verdict, start with fresh results directories. For each side, take
 all readings and answers with one unchanged executable and write that exact file's hash in
-its results directory (`sha256sum <probe> | cut -c 1-64 > <directory>/sha256`, 64 lowercase
-hex digits and a line feed). Do not reuse a hash from an earlier build or replace a probe
-while taking its readings. The hashes are the caller's evidence: `compare.mjs` reads the
-files but does not verify them against a binary. Omit them if you cannot tie them to the
-readings. If either hash is missing or malformed, or the two hashes differ, the regular
-comparison applies.
+its results directory (`sha256sum < "$probe" | cut -c 1-64 > "$results/sha256"`, with `probe`
+and `results` set to those paths; 64 lowercase hex digits and a line feed). Do not reuse a hash
+from an earlier build or replace a probe while taking its readings. The hashes are the caller's
+evidence: `compare.mjs` reads the files but does not verify them against a binary. Omit them if
+you cannot tie them to the readings. If either hash is missing, unreadable or malformed, or
+the two hashes differ, the regular comparison applies.
 
 What hosted runners gave, in the job's first four runs, for the pull request that added it
 ([#2124 Count what a request costs for a pull request against its base in a hosted job](https://github.com/corten-run/corten/pull/2124)):
@@ -633,11 +641,12 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one to four pages over base's agreeing three passing, five pages failing, a span of base's over four pages governing and more than it failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, a head build stopped at its time, answers missing, empty, cut short or with more after them, which lines declare, what each declaration does with the verdict, one binary passing under each declaration whatever its figures, and two checksums, one missing or one that is not a checksum compared as two binaries |
-| `job.test.mjs` | `job.sh` with stand-ins in a checkout made for it: no merge base, both probes' checksums, failures and deadlines (including a command that needs KILL), real comparison of the recorded reasons, and readings retried once or not at all |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one to four pages over base's agreeing three passing, five pages failing, a span of base's over four pages governing and more than it failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, either build ending with status 124 or 137, answers missing, empty, cut short or with more after them, which lines declare, what each declaration does with the verdict, one binary passing under each declaration whatever its figures, and missing, unusable or different checksums compared as two binaries |
+| `job.test.mjs` | `job.sh` with stand-ins in a checkout made for it: no merge base, both probes' checksums, ordinary failures, `timeout` statuses and timings (including TERM, KILL, and early exits), real comparison of the records, and readings retried once or not at all |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
-with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 52 of the 83 tests run.
+with `sh` or `bash` and `git`, and are skipped elsewhere. The unreadable-checksum test needs
+unprivileged Linux.
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).
