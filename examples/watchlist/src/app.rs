@@ -54,11 +54,11 @@ pub struct Shared {
 /// The app: its routes, areas and the task that moves the market. Every page brings its
 /// document, `Layout` with the page in it. Everything else is Corten's defaults.
 pub fn app(market: Market) -> App {
-    app_with(market, AlertStore::new(alerts::LAG))
+    app_with(market, AlertStore::new(alerts::LAG), for_the_smoke())
 }
 
 /// The app with an alert store of the caller's: a test's lands its writes at once.
-pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
+pub(crate) fn app_with(market: Market, alerts: AlertStore, smoke: bool) -> App {
     let trading = market.clone();
     let shared = Shared {
         market,
@@ -69,13 +69,12 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         readers: Readers::default(),
     };
     let app = App::new(url::router(shared.clone()))
-        .policy(policy())
+        .policy(policy(smoke))
         .assets(crate::layout::Static)
         .components(&[TOKENS, home::LivePrices, home::WatchForm, home::PicksLoading, account::PictureUpload])
         .area(|area| news::url::area(area, shared.clone()).components(news::COMPONENTS))
         .area(|area| account::url::area(area, shared.clone()));
-    let app =
-        if for_the_smoke() { app.area(|area| smoke::url::area(area, shared.clone()).components(smoke::COMPONENTS)) } else { app };
+    let app = if smoke { app.area(|area| smoke::url::area(area, shared.clone()).components(smoke::COMPONENTS)) } else { app };
     // The error page shows who is asking, with their picture, so it has the app's state too.
     app.error_page(error_page, shared)
         // Started by `serve` once it listens, stopped at shutdown; a test's `app.test()` starts
@@ -94,9 +93,9 @@ fn for_the_smoke() -> bool {
 /// Trusted Types refuses from a string, so it runs the app with `SMOKE_TRUSTED_TYPES=1`, which
 /// allows the test's policy, `smoke`; scripts may also load from `http://scripts.test`, which the
 /// test serves as a payment SDK's host would.
-fn policy() -> corten::security::Policy {
+fn policy(smoke: bool) -> corten::security::Policy {
     let policy = corten::security::Policy::new();
-    if for_the_smoke() { policy.trusted_types_policy("smoke").script_src("http://scripts.test") } else { policy }
+    if smoke { policy.trusted_types_policy("smoke").script_src("http://scripts.test") } else { policy }
 }
 
 /// The page for a failed request, in the layout, for who is asking: a signed-in user who mistypes

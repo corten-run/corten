@@ -2,7 +2,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { firefox } from "@playwright/test";
-import { askingInPlace, captureAlertsDraw } from "./page-refresh.mjs";
+import { askingInPlace, captureAlertsDraw, pageRefresh } from "./page-refresh.mjs";
+
+test("a cleanup failure does not replace the original alerts failure", async (t) => {
+  const first = new Error("navigation failed");
+  const cleanup = new Error("unroute failed");
+  const logged = t.mock.method(console, "error", () => {});
+  const page = {
+    evaluate: async () => "/alerts?saved=1", on() {}, off() {}, route() {},
+    goto: async () => { throw first; }, unroute: async () => { throw cleanup; },
+  };
+  await assert.rejects(pageRefresh(page, false, false, [], false), (error) => error === first);
+  assert.ok(logged.mock.calls.some(({ arguments: args }) => args.includes(cleanup)));
+});
 
 test("only the asking tag drawn into the original slot counts", { timeout: 30_000 }, async (t) => {
   const browser = await firefox.launch();

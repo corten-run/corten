@@ -327,6 +327,9 @@ jobs:
           docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
           docker run -d --name corten-watchlist -p 18480:8080 -e SMOKE_TRUSTED_TYPES=1 corten-watchlist
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18480/; do sleep 1; done'
+          if [ "$engine" = firefox ]; then
+            $PLAYWRIGHT node --test scripts/smoke/alerts-tag.test.mjs
+          fi
           $PLAYWRIGHT npm run smoke -- http://localhost:18480 $engine
           docker rm -f corten-watchlist
           echo "watchlist-$engine" >> "$RUNNER_TEMP/ran"

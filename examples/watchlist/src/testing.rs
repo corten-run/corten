@@ -18,7 +18,7 @@ pub(crate) fn client() -> Client {
 /// The app with an alert store whose writes land `lag` after they are made: at once for a test
 /// that reads one back, after the test for one that reads while they land.
 pub(crate) fn client_with_lag(lag: std::time::Duration) -> Client {
-    app_with(Market::new(), AlertStore::new(lag)).test()
+    app_with(Market::new(), AlertStore::new(lag), false).test()
 }
 
 /// Signs in on `app` and gives the token of the new session, the `session` cookie's value.

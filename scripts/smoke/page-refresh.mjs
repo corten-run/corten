@@ -106,6 +106,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       };
       page.on("request", onPart);
       let before, regionStayed;
+      let failed = false;
       try {
         await step(() => page.route(url, saving));
         await step(() => page.goto(url));
@@ -151,6 +152,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         })));
         check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
       } catch (error) {
+        failed = true;
         page.off("request", onPart);
         throw error;
       } finally {
@@ -160,7 +162,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           () => within(3000, "unroute the first alerts part", page.unroute(url, saving)),
           () => regionStayed && within(3000, "release the alerts live-region check", regionStayed()),
           () => before && within(3000, "release the original alerts DOM handle", before.dispose()),
-        );
+        ).catch((error) => {
+          if (!failed) {
+            page.off("request", onPart);
+            throw error;
+          }
+          console.error("Alerts cleanup also failed:", error);
+        });
       }
       const settled = parts.length;
       await page.waitForTimeout(2200);

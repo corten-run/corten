@@ -801,7 +801,7 @@ mod tests {
     /// `<details>` open. The runtime's request still gets the patch.
     #[tokio::test]
     async fn the_smokes_patches_answer_a_plain_request_with_a_page_or_a_redirect() {
-        let app = crate::app::app(Market::new()).area(|area| url::area(area).components(super::COMPONENTS)).test();
+        let app = crate::app::app_with(Market::new(), crate::alerts::AlertStore::new(crate::alerts::LAG), true).test();
         let plain = app.post(&url::Styled).await;
         assert_eq!(plain.status(), 303, "{}", plain.text());
         assert_eq!(plain.headers()["location"], "/");
