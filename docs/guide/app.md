@@ -224,10 +224,10 @@ socket.
 
 A request's body is read as hyper reads one. A `Content-Length` is that many bytes, and a
 `Transfer-Encoding` that ends in `chunked` is chunks, with their extensions passed over and
-their trailers given to the handler as a frame of their own. A head that says both is read as
-chunks, loses its `Content-Length` and closes the connection behind its answer. A head is
-refused with 400 for two lengths that differ, a length that is anything but digits (a sign, a
-space, a list), a coding that does not end in `chunked`, or any `Transfer-Encoding` on HTTP/1.0.
+their trailers given to the handler as a frame of their own. A head is refused with 400 for
+two lengths that differ, a length that is anything but digits (a sign, a space, a list), a
+coding that does not end in `chunked`, any `Transfer-Encoding` on HTTP/1.0, or both a
+`Content-Length` and a `Transfer-Encoding`, which hyper reads as chunks (item 13 below).
 A body that is not framed as its head said (a chunk size that is not hexadecimal or does not
 fit 64 bits, a line that does not end in CR and LF, extensions of 16 KiB or more together,
 trailers as long together as `max_request_head` or more than 100 of them), or whose client
@@ -344,8 +344,9 @@ answers any other ([below](#host-names)). What differs:
    closed behind its answer. hyper takes that line feed for a byte of a trailer and goes on
    reading trailers, through whatever the client sends next, to the next empty line that ends
    in CR and LF: the request sent behind the body is read as trailers and never answered. This
-   is the one place where Corten's connection is stricter than hyper's in what it takes for a
-   body, and it is so on purpose. A proxy in front that takes a bare line feed for a line's
+   is one of the two places where Corten's connection is stricter than hyper's in what it takes
+   for a body (the other is item 13), and it is so on purpose. A proxy in front that takes a
+   bare line feed for a line's
    end, as many parsers do, sees the body end where hyper does not, and would send another
    client's request where hyper is still reading trailers. No client that follows HTTP sends
    such a body.
@@ -370,6 +371,15 @@ answers any other ([below](#host-names)). What differs:
     on or off, hyper may cut its refusal of the next head short, and at another byte where
     requests with bodies were answered before it, since Corten's connection had sent those
     answers sooner. What one sends is the beginning of what the other sends.
+13. A head with both a `Content-Length` and a `Transfer-Encoding` line. Corten's connection
+    refuses it with 400 and closes the connection, reading nothing behind the head. hyper reads
+    the body by its chunks, takes the `Content-Length` out of the headers the handler is given
+    and closes the connection behind the answer. HTTP allows either, and closing keeps a proxy
+    that framed the request by its length from having anything behind the chunks read as a
+    request; it does not keep the other way round. Where the length is shorter than the chunks,
+    such a proxy sends the next client's request behind it, and hyper reads that request into
+    this one's body, for this request's handler: another client's cookies, say, in a comment
+    the first one posts. No client that follows HTTP sends both.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
 connection, at `3bf27fe3c`): the shortest request the counting kit sends, to a route that says

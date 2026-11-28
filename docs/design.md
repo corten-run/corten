@@ -12795,13 +12795,9 @@ rules something out.
     else: a sign, a space inside it, a list (`5, 5`), hexadecimal, a fraction, an empty value
     and a number past 64 bits are each a 400, and the two largest numbers of 64 bits, which
     hyper keeps for meanings of its own, a 431. Several `Content-Length` lines that say the
-    same number are one, and the app is given the first; two that differ are a 400. With both
-    a `Transfer-Encoding` and a `Content-Length` the chunks frame the body, the length is not
-    given to the app, and the connection is closed behind the answer, which is what RFC 9112
-    6.3 asks of a server that does not refuse such a request: a proxy in front that took the
-    length for the frame has nothing behind the body read as a request here. A
-    `Content-Length` line behind a `Transfer-Encoding` line is not read at all, so one that is
-    no number is not refused there, where one before it is. The head frames a body and its
+    same number are one, and the app is given the first; two that differ are a 400. A head with
+    both a `Transfer-Encoding` and a `Content-Length` is a 400 here and is not on hyper's
+    connection (below). The head frames a body and its
     method does not: one is read on `GET`, `DELETE`, `OPTIONS` and `HEAD` as on `POST`. An
     HTTP/1.0 request with a `Content-Length` is read, and is its connection's last. Each of
     these is a case of `a_bodys_framing_is_read_from_its_head_as_hyper_reads_it` or
@@ -12843,8 +12839,8 @@ rules something out.
     sends them without end is one whose body does not end, which the app's deadline cuts
     where it has one.
 
-    One rule is stricter here than hyper's, on purpose: **an LF with no CR before it among a
-    body's trailers fails the body.** hyper reads a trailer to the next CR, so an LF inside
+    Two rules are stricter here than hyper's, on purpose. The first: **an LF with no CR before
+    it among a body's trailers fails the body.** hyper reads a trailer to the next CR, so an LF inside
     one is a byte of it, and hands what it gathered to `httparse`, which takes a bare LF for a
     line's end. So `0\r\na: b\n\r\n` is not a whole body to hyper: it reads on through
     whatever is sent next, to the next empty line that ends in CR and LF, and gives the app
@@ -12862,6 +12858,30 @@ rules something out.
     one trailer. It is the gate's second listed class (below). What hyper does there it does
     on every connection of an app that has not asked for the switch, and on one handed to
     hyper; it is recorded here and has not been reported to hyper.
+
+    The second: **a head with both a `Content-Length` and a `Transfer-Encoding` line is a
+    400**, in either order and whatever either says, and the connection is closed with nothing
+    behind the head read (`head::build`). hyper reads such a body by its chunks, takes the
+    length out of the headers the app is given and closes the connection behind the answer.
+    RFC 9112 6.3 allows both: a server may refuse such a request, or frame it by the chunks
+    and close behind it, and it says such a message ought to be handled as an error. Closing
+    keeps a proxy in front that took the length for the frame from having anything behind
+    the chunks read as a request, which is the case of a length longer than the chunks. It
+    does not keep the case of a length shorter than the chunks: such a proxy ends the request
+    at its length and sends the next client's request behind it on the same connection, and
+    hyper reads that request's bytes into this one's body, for this request's handler, and
+    the next client is never answered. This was hyper's rule on this branch until a read of it
+    against the RFC for this change found that case, under the rule this change was given (be
+    as strict as the RFC wherever a proxy in front could disagree about where a request ends),
+    and it was changed in a commit of its own. RFC 9112 6.2 has no sender send both, so no
+    client that follows HTTP is refused for it.
+    `a_head_with_a_length_and_chunks_is_refused_where_hyper_reads_the_chunks` holds both sides:
+    hyper's connection answers four such heads with the app's answer to the chunks and closes,
+    and gives a route the 52 bytes of a request sent behind a length of 4 and a chunk of
+    `0x34`, and this connection refuses each with 400 (written first and run against the code
+    before the change, where it failed at this connection's answer). A head whose
+    `Content-Length` before the `Transfer-Encoding` is no number is a 400 from both, for the
+    length. It is the gate's third listed class (below).
 
     The app is given what hyper gives it (`body::Coming`, inside the `Body` a handler has
     today): the same pieces, a piece being what one read brought of the body up to its end or
@@ -13131,11 +13151,12 @@ rules something out.
     hyper refused), on a difference in any byte that is not on the list, on a panic and
     on a hang, which the test's own thread tells by the clock when no stream has finished in two
     minutes (time on a run's thread is paused, and a server that never stops working would keep
-    it from passing). The list has two classes. The second is the one rule a body is read by
-    more strictly here: a stream in which Corten's connection refused a body for an LF with no
-    CR before it among its trailers, by the connection's own count of those, closed, and had
+    it from passing). The list has three classes. The second and third are the two rules a
+    request is read by more strictly here: a stream in which Corten's connection refused a
+    body for an LF with no CR before it among its trailers, or a head for a `Content-Length`
+    and a `Transfer-Encoding` together, by the connection's own count of each, closed, and had
     answered every request before the last it answered as hyper did; a stream in which it is
-    the laxer is never of that class (`the_judge_names_each_kind_of_difference` holds the
+    the laxer is never of either class (`the_judge_names_each_kind_of_difference` holds the
     judge to both). The first: a head that reaches the app's limit unfinished and is
     malformed further on is refused by both, with 400 by one and 431 by the other, since which of
     the two hyper answers depends on where its reads ended, and Corten's connection reads a head
@@ -13371,7 +13392,7 @@ rules something out.
     elsewhere, as one test fixes, which only changes whether the requests behind it are
     answered or the connection closed; no difference from hyper listed above has a request
     begin at a byte its framing does not give: a body is read to the end its head frames, by
-    hyper's rules or the one stricter rule, or its connection is closed, so the differences
+    hyper's rules or the two stricter ones, or its connection is closed, so the differences
     are in whether a connection is kept and in how much of an answer a client that has left
     is sent, and in none does this connection take for a request bytes hyper would not);
     reasoned (the extra instructions with the switch off are likely not code the change runs for
@@ -13395,7 +13416,8 @@ rules something out.
     hyper changes how it reads a head, writes one, frames or reads a body, answers an `Expect`,
     cuts an unread body or flushes (a new hyper is read against `crates/corten/src/h1/head.rs`
     and `crates/corten/src/h1/body.rs`, and the gate run on it); hyper refuses a bare LF among
-    a body's trailers, which takes the gate's second class off its list; `httparse` in hyper's
+    a body's trailers, or a head with both a `Content-Length` and a `Transfer-Encoding`, which
+    takes the gate's second or third class off its list; `httparse` in hyper's
     tree and Corten's part versions; a switch of protocols on this connection is proposed, or
     hyper offers a constructor for `Upgraded`, either of which reopens the handoff; reading a
     body ahead of the app is proposed, which reopens what a connection holds for a body no
