@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       base:
-        description: Earlier commit SHA to check bench/ against
+        description: Full SHA of a verified earlier ancestor of main
         required: true
         type: string
   workflow_call:
@@ -257,14 +257,14 @@ jobs:
               base=$(git rev-parse 'HEAD^1') ;;
             push)
               if [ "$GITHUB_REF" = refs/heads/main ]; then
-                base=$(node scripts/benchmark-scope.mjs ci-base) || exit 1
+                base=$(node scripts/benchmark-scope.mjs ci-base-cumulative-v1) || exit 1
               else
                 base=$PUSH_BEFORE
               fi ;;
             workflow_dispatch)
-              if [[ ! "$DISPATCH_BASE" =~ ^[0-9a-f]{40}$ || "$DISPATCH_BASE" = "$GITHUB_SHA" ]] ||
+              if [[ "$GITHUB_REF" != refs/heads/main || ! "$DISPATCH_BASE" =~ ^[0-9a-f]{40}$ || "$DISPATCH_BASE" = "$GITHUB_SHA" ]] ||
                   ! git merge-base --is-ancestor "$DISPATCH_BASE" "$GITHUB_SHA" 2>/dev/null; then
-                echo "::error::Give CI a full commit SHA that is an earlier ancestor of the commit to check."
+                echo "::error::Dispatch CI on main with a full commit SHA that is a verified earlier ancestor."
                 exit 1
               fi
               base=$DISPATCH_BASE ;;

@@ -32,6 +32,7 @@ const requestCostInputs = [".node-version", ".github/workflows/request-cost.yml"
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
 const sha = /^[0-9a-f]{40}$/;
 const scopeWorkflows = { catalog: "catalog.yml", evidence: "benchmark-evidence.yml", "ci-base": "ci.yml" };
+const cumulativeVersion = "-cumulative-v1";
 const mainRunLimit = 100;
 
 export function selectScope(allApps, paths) {
@@ -80,21 +81,34 @@ export function selectRequestCost(paths) {
 function changedPaths(base, head, cwd, env, everyCommit = false) {
   const diffFlags = ["--name-only", "--no-renames", "--ignore-submodules=none", "-z"];
   // Keep both sides of a move and don't hide gitlinks from source-custody checks.
-  const args = everyCommit
-    ? ["log", "--format=", "--diff-merges=separate", ...diffFlags, `${base}..${head}`, "--"]
-    : ["diff", ...diffFlags, base, head, "--"];
-  const paths = execFileSync("git", args, {
+  const read = args => execFileSync("git", args, {
     cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env,
   }).split("\0").filter(Boolean);
-  return everyCommit ? [...new Set(paths)].sort() : paths;
+  if (!everyCommit) return read(["diff", ...diffFlags, base, head, "--"]);
+  const range = [...diffFlags, `${base}..${head}`, "--"];
+  // Topic commits count, but a topic merge importing an already checked parent does not
+  // introduce that parent's paths. Count its own resolutions, plus all mainline merge changes
+  // against the previous main tree (including a resolution that takes a parent's version).
+  return [...new Set([
+    ...read(["log", "--format=", "--diff-merges=combined", ...range]),
+    ...read(["log", "--format=", "--first-parent", "--merges", "--diff-merges=first-parent", ...range]),
+  ])].sort();
 }
 
-function isEarlierCommit(base, head, cwd, env) {
-  return typeof base === "string" && sha.test(base) && base !== head &&
-    spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd, stdio: "ignore", env }).status === 0;
+function checkedAncestor(base, head, workflow, cwd, env) {
+  if (typeof base !== "string" || !sha.test(base) || base === head) return false;
+  if (spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd, stdio: "ignore", env }).status !== 0) return false;
+  // A green legacy workflow covered only its own push. Recognize the active versioned
+  // command in the candidate's workflow, not the date or ancestry of the rollout commit.
+  const command = `node scripts/benchmark-scope.mjs ${workflow}${cumulativeVersion}`;
+  const invocation = workflow === "ci-base" ? `base=$(${command}) || exit 1` : `run: ${command}`;
+  const source = spawnSync("git", ["show", `${base}:.github/workflows/${scopeWorkflows[workflow]}`], {
+    cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  });
+  return source.status === 0 && source.stdout.split(/\r?\n/).some(line => line.trim() === invocation);
 }
 
-async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN }, workflow, fetchRuns, isEarlier) {
+async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN }, workflow, fetchRuns, checked) {
   const url = new URL(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs`);
   const allowsDispatch = workflow === "ci.yml";
   url.search = new URLSearchParams({ branch: "main", status: "success", per_page: String(mainRunLimit) });
@@ -111,9 +125,9 @@ async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TO
   for (const run of runs.slice(0, mainRunLimit)) {
     if ((run?.event === "push" || (allowsDispatch && run?.event === "workflow_dispatch")) &&
         run.head_branch === "main" && run.status === "completed" && run.conclusion === "success" &&
-        isEarlier(run.head_sha)) return { base: run.head_sha };
+        checked(run.head_sha)) return { base: run.head_sha };
   }
-  return { reason: `none of the most recent ${mainRunLimit} successful main runs is an available earlier ancestor` };
+  return { reason: `none of the most recent ${mainRunLimit} successful main runs is an available earlier ancestor with cumulative coverage` };
 }
 
 // Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR.
@@ -128,7 +142,7 @@ export async function mainPushBase(event, cwd, env = process.env, { workflow, fe
   // A usable success proves coverage through its commit even if the previous tip was rewritten.
   // The previous tip itself proves no coverage: that run may have stopped or failed.
   try {
-    return await successfulMainBase(event, file, fetchRuns, base => isEarlierCommit(base, GITHUB_SHA, cwd, env));
+    return await successfulMainBase(event, file, fetchRuns, base => checkedAncestor(base, GITHUB_SHA, workflow, cwd, env));
   } catch {
     // Do not print the response or error from an authenticated request.
     return { reason: "the GitHub Actions workflow-runs request failed or timed out" };
@@ -156,7 +170,11 @@ export async function eventPaths(event, cwd, env = process.env, options) {
 
 if (import.meta.main) {
   const { GITHUB_OUTPUT, PARITY_APPS } = process.env;
-  const workflow = process.argv[2];
+  const command = process.argv[2];
+  const workflow = command?.endsWith(cumulativeVersion) ? command.slice(0, -cumulativeVersion.length) : command;
+  if (command !== "request-cost" && !(Object.hasOwn(scopeWorkflows, workflow) && command === workflow + cumulativeVersion)) {
+    throw new Error("Expected catalog-cumulative-v1, evidence-cumulative-v1, request-cost or ci-base-cumulative-v1");
+  }
   const options = { workflow };
   if (workflow === "ci-base") {
     const result = await mainPushBase(process.env, undefined, process.env, options);
@@ -164,7 +182,7 @@ if (import.meta.main) {
       console.log(result.base);
     } else {
       const reason = result?.reason ?? "this is not a direct push to main";
-      console.error(`::error::Could not find a successful main CI base: ${reason}. Rerun CI or dispatch it on main (workflow_dispatch) with an explicit base.`);
+      console.error(`::error::Could not find a cumulative main CI base: ${reason}. Rerun after a transient lookup failure, or dispatch CI on main with an explicitly verified ancestor as base.`);
       process.exitCode = 1;
     }
   } else {
@@ -176,8 +194,6 @@ if (import.meta.main) {
       appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
     } else if (workflow === "request-cost") {
       appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(paths)}\n`);
-    } else {
-      throw new Error("Expected catalog, evidence, request-cost or ci-base");
     }
   }
 }

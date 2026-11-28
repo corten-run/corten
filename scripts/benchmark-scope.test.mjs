@@ -94,7 +94,7 @@ test("the Actions lookup gets a read-only token in the benchmark scope jobs and 
     assert.deepEqual(jobs.scope.permissions, { contents: "read", actions: "read" });
     assert.equal(jobs.scope.if, undefined);
     assert.equal(jobs.scope.steps.find(step => step.uses?.startsWith("actions/checkout")).with["fetch-depth"], 0);
-    const step = jobs.scope.steps.find(step => step.run === `node scripts/benchmark-scope.mjs ${mode}`);
+    const step = jobs.scope.steps.find(step => step.run === `node scripts/benchmark-scope.mjs ${mode}-cumulative-v1`);
     assert.deepEqual(step.env, { GITHUB_TOKEN: "${{ github.event_name == 'push' && github.token || '' }}" });
   }
   const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
@@ -111,7 +111,7 @@ test("the Actions lookup gets a read-only token in the benchmark scope jobs and 
     DISPATCH_BASE: "${{ inputs.base }}",
     GITHUB_TOKEN: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.token || '' }}" });
   assert.match(step.run, /base=\$\(git rev-parse 'HEAD\^1'\) ;;/);
-  assert.match(step.run, /if \[ "\$GITHUB_REF" = refs\/heads\/main \]; then\s+base=\$\(node scripts\/benchmark-scope.mjs ci-base\) \|\| exit 1\s+else\s+base=\$PUSH_BEFORE/);
+  assert.match(step.run, /if \[ "\$GITHUB_REF" = refs\/heads\/main \]; then\s+base=\$\(node scripts\/benchmark-scope.mjs ci-base-cumulative-v1\) \|\| exit 1\s+else\s+base=\$PUSH_BEFORE/);
   assert.match(step.run, /workflow_dispatch\)[^]*git merge-base --is-ancestor "\$DISPATCH_BASE" "\$GITHUB_SHA"[^]*base=\$DISPATCH_BASE ;;/);
 });
 
@@ -212,12 +212,38 @@ test("the main-tip Bash step checks the newer push and stops the older push even
   }
 });
 
-test("the main-scope rollout selects every Catalog and Evidence job from an older successful base", () => {
-  // The first range crossing this change must cover any gaps left by the old push-only diff.
-  const paths = ["scripts/benchmark-scope.mjs"];
-  assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
-  assert.equal(selectEvidence(paths), true);
-  assert.equal(selectKernel(paths), true);
+test("CI dispatch validates its explicit ancestor and Release keeps the original tag base", {
+  skip: process.platform === "win32" && "requires Linux Bash",
+}, t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  const ancestor = commit();
+  write("on-main");
+  const head = commit();
+  git("switch", "--quiet", "--detach", ancestor);
+  write("off-main");
+  const unrelated = commit();
+  git("switch", "--quiet", "main");
+  const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
+  const { run } = ci.jobs.smoke.steps.find(step => step.name === "The bench size check's base");
+  const zero = "0".repeat(40);
+  for (const [event, ref, base, expected] of [
+    ["workflow_dispatch", "refs/heads/main", ancestor, ancestor],
+    ["workflow_dispatch", "refs/heads/main", unrelated],
+    ["workflow_dispatch", "refs/heads/main", head],
+    ["workflow_dispatch", "refs/heads/main", "not-a-sha"],
+    ["workflow_dispatch", "refs/tags/main", ancestor],
+    ["push", "refs/tags/v1.0.0", zero, zero],
+  ]) {
+    const output = join(cwd, "github-env");
+    write("github-env", "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", run], {
+      cwd, env: { ...env, GITHUB_ENV: output, GITHUB_EVENT_NAME: event, GITHUB_REF: ref,
+        GITHUB_SHA: head, DISPATCH_BASE: base, PUSH_BEFORE: base },
+      encoding: "utf8", timeout: 25_000,
+    });
+    assert.equal(result.status, expected ? 0 : 1, result.error ?? result.stderr);
+    assert.equal(readFileSync(output, "utf8"), expected ? `CORTEN_BENCH_SIZE_BASE=${expected}\n` : "");
+  }
 });
 
 async function localImports(entries) {
@@ -448,7 +474,12 @@ test("every local module used by native kernel controls selects the kernel job",
   assert.deepEqual(inputs.filter(input => !selectKernel([input])).sort(), [], "unselected native kernel inputs");
 });
 
-function fixture(t) {
+function writeWorkflow(write, file) {
+  const path = `.github/workflows/${file}`;
+  write(path, readFileSync(new URL(path, root), "utf8"));
+}
+
+function fixture(t, { cumulative = true } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "corten-benchmark-scope-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   // Git's environment for the fixture, in process and for the scope script: the caller's GIT_DIR and the like would
@@ -464,6 +495,7 @@ function fixture(t) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, text);
   };
+  if (cumulative) for (const file of ["ci.yml", "catalog.yml", "benchmark-evidence.yml"]) writeWorkflow(write, file);
   const commit = () => {
     git("add", ".");
     git("commit", "-qm", "fixture");
@@ -608,6 +640,25 @@ const successfulPush = head_sha => ({ event: "push", head_branch: "main", status
 const successfulDispatch = head_sha => ({ ...successfulPush(head_sha), event: "workflow_dispatch" });
 const workflowRuns = (...runs) => Response.json({ workflow_runs: runs });
 
+test("the main-scope rollout selects every Catalog and Evidence job despite legacy green pushes", async t => {
+  const { cwd, env, write, commit } = fixture(t, { cumulative: false });
+  for (const [mode, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    write(`.github/workflows/${file}`, `# Legacy scope\n        run: node scripts/benchmark-scope.mjs ${mode}\n`);
+  }
+  const legacy = commit();
+  for (const file of ["catalog.yml", "benchmark-evidence.yml"]) writeWorkflow(write, file);
+  const head = commit();
+  for (const [workflow, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    const paths = await eventPaths(pushEvent(head, file, legacy), cwd, env, {
+      workflow, fetchRuns: () => workflowRuns(successfulPush(legacy)),
+    });
+    assert.equal(paths, undefined);
+    assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
+    assert.equal(selectEvidence(paths), true);
+    assert.equal(selectKernel(paths), true);
+  }
+});
+
 test("CI checks a deleted oversized blob since its last successful main push", async t => {
   const { cwd, env, git, write, commit } = fixture(t);
   write(LIST, "# grandfathered\n");
@@ -645,16 +696,39 @@ test("CI base lookup failure emits one actionable error and no base, even with a
   for (const [extra, reason, response] of [
     [{ GITHUB_TOKEN: "" }, "the GitHub Actions API token is missing", forbidden],
     [{}, "the GitHub Actions API returned HTTP 403", forbidden],
-    [{}, "none of the most recent 100 successful main runs is an available earlier ancestor", '() => Response.json({ workflow_runs: [] })'],
+    [{}, "none of the most recent 100 successful main runs is an available earlier ancestor with cumulative coverage", '() => Response.json({ workflow_runs: [] })'],
   ]) {
-    const result = spawnSync(process.execPath, [mock(response), script, "ci-base"], {
+    const result = spawnSync(process.execPath, [mock(response), script, "ci-base-cumulative-v1"], {
       cwd, env: { ...env, ...event, ...extra }, encoding: "utf8",
     });
     assert.equal(result.status, 1, result.stderr);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr.trim(),
-      `::error::Could not find a successful main CI base: ${reason}. Rerun CI or dispatch it on main (workflow_dispatch) with an explicit base.`);
+      `::error::Could not find a cumulative main CI base: ${reason}. Rerun after a transient lookup failure, or dispatch CI on main with an explicitly verified ancestor as base.`);
   }
+});
+
+test("a legacy-green CI push cannot hide a deleted blob from an earlier unchecked push", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write(LIST, "# grandfathered\n");
+  const checked = commit();
+  const path = "bench/r2/run.log";
+  write(path, Buffer.alloc(LIMIT + 1, 97));
+  const added = commit();
+  git("rm", path);
+  const cancelled = commit();
+  write(".github/workflows/ci.yml", "          # base=$(node scripts/benchmark-scope.mjs ci-base-cumulative-v1) || exit 1\n          base=$PUSH_BEFORE\n");
+  const legacy = commit();
+  writeWorkflow(write, "ci.yml");
+  const head = commit();
+  const event = pushEvent(head, "ci.yml", legacy);
+  const lookup = (...runs) => mainPushBase(event, cwd, env, { workflow: "ci-base", fetchRuns: () => workflowRuns(...runs) });
+  const failed = { ...successfulPush(cancelled), conclusion: "cancelled" };
+  assert.match((await lookup(successfulPush(legacy), failed)).reason, /with cumulative coverage/);
+  assert.deepEqual(checkBenchSize(cwd, { head: legacy, base: cancelled, env }).problems, []);
+  const { base } = await lookup(successfulPush(legacy), failed, successfulPush(checked));
+  assert.equal(base, checked);
+  assert.match(checkBenchSize(cwd, { head, base, env }).problems[0], new RegExp(`bench/r2/run\\.log: .* from commit ${added},`));
 });
 
 test("a push to main scopes Catalog and Evidence from each last successful run, including superseded paths", async t => {
@@ -717,20 +791,22 @@ test("a missing, failed or non-ancestor main run lookup selects everything", asy
 });
 
 test("CI can use a successful dispatch on the rewritten main line as the next push base", async t => {
-  const { cwd, env, git, write, commit } = fixture(t);
+  const { cwd, env, git, write, commit } = fixture(t, { cumulative: false });
   write("initial");
   const fork = commit();
   write("old-tip");
   const oldTip = commit();
   git("switch", "--quiet", "--detach", fork);
   write("new-line");
+  const legacy = commit();
+  writeWorkflow(write, "ci.yml");
   const dispatched = commit();
   write("after-dispatch");
   const head = commit();
   const event = pushEvent(head, "ci.yml", dispatched);
   const workflow = "ci-base";
   const unavailable = await mainPushBase(event, cwd, env, { workflow, fetchRuns: () => workflowRuns(
-    successfulPush(oldTip), { ...successfulDispatch(dispatched), head_branch: "topic" },
+    successfulPush(oldTip), successfulPush(legacy), { ...successfulDispatch(dispatched), head_branch: "topic" },
     { ...successfulDispatch(dispatched), conclusion: "failure" },
   ) });
   assert.match(unavailable.reason, /none of the most recent 100/);
@@ -802,6 +878,30 @@ test("the main-push union includes a restored app path and a path introduced onl
   });
   assert.deepEqual(paths, [resolution, app, "topic"]);
   assert.deepEqual(selectScope(allApps, paths), { apps: ["rails", "express"], json: false });
+});
+
+test("stale topics and their merges do not rescope main paths already in the checked base", async t => {
+  const { cwd, env, git, write, commit, merge } = fixture(t);
+  write("initial");
+  const fork = commit();
+  const imported = "bench/catalog/already-checked.mjs";
+  write(imported);
+  const main = commit();
+  const notImported = "bench/json-api/also-already-checked.mjs";
+  write(notImported);
+  const base = commit();
+  git("switch", "--quiet", "-c", "topic", fork);
+  write("docs/topic.md");
+  commit();
+  git("merge", "--quiet", "--no-ff", "--no-commit", main);
+  const resolution = "bench/fullstack/apps/rails/merge-only.rb";
+  write(resolution);
+  const head = merge(commit());
+  const paths = await eventPaths(pushEvent(head, "catalog.yml", base), cwd, env, {
+    workflow: "catalog", fetchRuns: () => workflowRuns(successfulPush(base)),
+  });
+  assert.deepEqual(paths, [resolution, "docs/topic.md"]);
+  assert.deepEqual(selectScope(allApps, paths), { apps: ["rails"], json: false });
 });
 
 test("manual and called workflows do not look up a main push base", async t => {

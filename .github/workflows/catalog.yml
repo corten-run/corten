@@ -54,7 +54,7 @@ jobs:
       - id: scope
         env:
           GITHUB_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
-        run: node scripts/benchmark-scope.mjs catalog
+        run: node scripts/benchmark-scope.mjs catalog-cumulative-v1
 
   harness:
     needs: scope

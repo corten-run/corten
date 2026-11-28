@@ -157,15 +157,24 @@ differs, the run stops with a notice and a non-success status so it cannot be us
 If the tip cannot be read, the run checks its original commit. Work already admitted is not
 cancelled by another push, and a rerun checks its original commit without the tip check.
 
-On `main`, each scope job and CI's bench size check use the newest of up to 100 successful
-runs of that workflow whose commit is a strict ancestor of the push's commit. Scope includes
-every path touched in that range, even one restored before the tip. Catalog and Evidence use
-push successes only and select every job when no base is usable. CI instead fails the bench
-size base step and reports why, without guessing a range. If a rewrite leaves no checked CI
-ancestor in the lookup, dispatch CI on `main` with `base` set to the full SHA of an earlier
-ancestor known to be checked, so the explicit range covers the outstanding commits. CI
-validates the base; a successful dispatch on `main` then supplies a base for later pushes.
-If a lookup failed for a transient reason, a rerun can also recover.
+On `main`, each scope job and CI's bench size check look at up to 100 successful runs of that
+workflow. A base must be a strict ancestor of the push and use the cumulative workflow command
+at that commit. A legacy green run checked only its own push and is not a coverage base.
+Scope includes changed and restored paths, mainline merges against their first parent, and
+topic merge resolutions, without counting the older main paths a topic merely imported.
+Catalog and Evidence use push successes only. The first cumulative push, or any push without
+a usable base, runs every job in that workflow.
+
+CI instead fails the bench size base step without guessing. To bootstrap after rollout, or
+recover when a rewrite or the bounded lookup leaves no cumulative ancestor, first verify
+bench size history through an earlier commit that is an ancestor of the current `main`. Then
+dispatch CI on `main` with that exact full SHA as `base` (`gh workflow run ci.yml --ref main -f
+base=VERIFIED_ANCESTOR_SHA`). CI validates the ancestry and checks every outstanding commit;
+the supplied base is the operator's assertion of prior coverage. If the dispatch fails or
+the anchor is no longer an ancestor, it establishes no coverage. A successful dispatch checks
+its exact commit and supplies a base for **later** pushes, not a rerun at the same SHA. Rerun a
+failed push after a transient lookup error only when an eligible ancestor exists. These CI
+checks establish no Catalog or Evidence coverage.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
