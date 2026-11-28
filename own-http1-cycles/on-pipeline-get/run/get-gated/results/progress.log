@@ -1,0 +1,66 @@
+== run 453ebd2f-365f-4c0c-a590-f751e3db12ff: gated get, plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3; verify start 23:34:23
+verify: 90 placements answer as their unpadded binary
+== turns start 23:36:02; 60 placements to run
+1 aa-get p027 ok 23:37:19
+2 change-get p027 ok 23:38:35
+3 change-get p021 ok 23:39:52
+4 aa-get p021 ok 23:41:08
+5 aa-get p017 ok 23:42:25
+6 change-get p017 ok 23:43:42
+7 change-get p004 ok 23:44:58
+8 aa-get p004 ok 23:46:15
+9 aa-get p020 ok 23:47:31
+10 change-get p020 ok 23:48:48
+11 change-get p008 ok 23:50:05
+12 aa-get p008 ok 23:51:21
+13 aa-get p001 ok 23:52:38
+14 change-get p001 ok 23:53:55
+15 change-get p016 ok 23:55:11
+16 aa-get p016 ok 23:56:28
+17 aa-get p022 ok 23:57:44
+18 change-get p022 ok 23:59:01
+19 change-get p014 ok 00:00:18
+20 aa-get p014 ok 00:01:34
+21 aa-get p007 ok 00:02:51
+22 change-get p007 ok 00:04:07
+23 change-get p002 ok 00:05:24
+24 aa-get p002 ok 00:06:41
+25 aa-get p015 ok 00:07:57
+26 change-get p015 ok 00:09:14
+27 change-get p023 ok 00:10:30
+28 aa-get p023 ok 00:11:47
+29 aa-get p012 ok 00:13:04
+30 change-get p012 ok 00:14:21
+31 change-get p019 ok 00:15:37
+32 aa-get p019 ok 00:16:54
+33 aa-get p029 ok 00:18:10
+34 change-get p029 ok 00:19:27
+35 change-get p018 ok 00:20:44
+36 aa-get p018 ok 00:22:00
+37 aa-get p006 ok 00:23:17
+38 change-get p006 ok 00:24:34
+39 change-get p010 ok 00:25:50
+40 aa-get p010 ok 00:27:07
+41 aa-get p005 ok 00:28:23
+42 change-get p005 ok 00:29:40
+43 change-get p011 ok 00:30:57
+44 aa-get p011 ok 00:32:13
+45 aa-get p003 ok 00:33:30
+46 change-get p003 ok 00:34:47
+47 change-get p028 ok 00:36:03
+48 aa-get p028 ok 00:37:20
+49 aa-get p013 ok 00:38:37
+50 change-get p013 ok 00:39:54
+51 change-get p030 ok 00:41:10
+52 aa-get p030 ok 00:42:27
+53 aa-get p024 ok 00:43:44
+54 change-get p024 ok 00:45:00
+55 change-get p025 ok 00:46:17
+56 aa-get p025 ok 00:47:34
+57 aa-get p026 ok 00:48:50
+58 change-get p026 ok 00:50:07
+59 change-get p009 ok 00:51:23
+60 aa-get p009 ok 00:52:40
+failed (their comparison has no bound; nothing is run again): none
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

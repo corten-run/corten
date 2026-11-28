@@ -1,0 +1,8 @@
+comparison pilot-pipeline placement 85 workload pipeline
+A base-p9280 ae10893ad8e4b7bf5256f2277cd25c1ca9cc93b8e652e0eec289e2fb605c212c
+B base-p18192 fad54aa675228d7bbae137b5623bcd141a2249f71b4fcf25a0ff65872d29e91c
+run e9c4450b-8d60-4058-b547-6d7d88ea6e44
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 9
+started 2026-11-27T17:39:51Z
+ended 2026-11-27T17:41:08Z

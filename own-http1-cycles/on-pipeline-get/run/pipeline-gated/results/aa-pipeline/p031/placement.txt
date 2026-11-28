@@ -1,0 +1,8 @@
+comparison aa-pipeline placement 31 workload pipeline
+A base-p1504 15ebf5ad0cb8cec82ead188e7cd8ab46dd9a2d790c12abe934ac3ebcbf829835
+B base-p20528 5d32520d7de9594d884f4f954effce12fb289e20cb9bcdc9e36f38201562cd7e
+run 6b14817f-9a23-40a8-a0c4-df083896ead9
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 37
+started 2026-11-27T20:28:55Z
+ended 2026-11-27T20:30:12Z

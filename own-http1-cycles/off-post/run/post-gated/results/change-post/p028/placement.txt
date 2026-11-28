@@ -1,0 +1,8 @@
+comparison change-post placement 28 workload post
+A base-p6320 ad6dfcd80af3aff17e90a7711d38475ad1dd779ed87a80675f7509b7e8ea6a22
+B head-p6320 d0a9e674d8bed926eb9747cdaec7bae9cf0790bcd05b815b4da28f07bade69da
+run c2f0e030-b230-4c4c-92f8-eb30ee7c9c34
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 38
+started 2026-11-27T20:28:47Z
+ended 2026-11-27T20:30:04Z

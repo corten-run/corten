@@ -1,0 +1,8 @@
+comparison change-pipeline placement 24 workload pipeline
+A base-p37296 c2809ca4202d9b7152fa967b64f21aeef20addc546b7e54e6adf5fd7c159a7ac
+B head-p37296 b11c039a3ac3a0d4d9f9b4e43cec4666ead462a7d918160ab97d0c76ad96bb93
+run 6b14817f-9a23-40a8-a0c4-df083896ead9
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 59
+started 2026-11-27T20:57:01Z
+ended 2026-11-27T20:58:17Z

@@ -1,0 +1,158 @@
+{
+  "plan": 1,
+  "name": "own-http1-on",
+  "base": "2f8984ddce025c92bade4a6fafd21f4863d25085",
+  "head": "0bcb3138c69f69dab997486c9af87a3660eb0ed4",
+  "probe": {
+    "dir": "probe",
+    "tree": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "README.md",
+      "crates",
+      "docs"
+    ],
+    "toolchain": "1.100.0",
+    "env": {
+      "ZSTD_SYS_USE_PKG_CONFIG": "1"
+    },
+    "build": "cargo build --release",
+    "binary": "release/probe",
+    "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT api"
+  },
+  "host": {
+    "cpuModel": "Xeon(R) Platinum 8168",
+    "cpus": {
+      "server": 2,
+      "load": [
+        4,
+        5
+      ],
+      "driver": 7
+    }
+  },
+  "load": {
+    "threads": 2,
+    "connections": 64,
+    "seconds": 3
+  },
+  "R": 8,
+  "placementSeconds": 600,
+  "pilot": {
+    "K": 100
+  },
+  "workloads": [
+    {
+      "name": "pipeline",
+      "declared": "GET /pipeline to the probe's configuration api, no request header of its own: a route that says unstaged and answers 2 bytes, the shortest request the probe answers. Touched: with the switch on its connection is Corten's own from the first byte to the last. Read for a reduction of 3%, the smallest reduction worth having, not a forecast, and held to +1% with no floor.",
+      "request": {
+        "path": "/pipeline",
+        "headers": []
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112711,
+      "reads": [
+        "margin",
+        "reduction"
+      ],
+      "reduction": 0.03,
+      "recordsSpread": true
+    },
+    {
+      "name": "get",
+      "declared": "GET /baseline11?a=1&b=2 to the probe's configuration api, no request header of its own: a staged API route, typed query parameters in and a short answer out. Touched: with the switch on its connection is Corten's own. Read for a reduction of 3%, the smallest reduction worth having, not a forecast, and held to +1% with no floor.",
+      "request": {
+        "path": "/baseline11?a=1&b=2",
+        "headers": []
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112712,
+      "reads": [
+        "margin",
+        "reduction"
+      ],
+      "reduction": 0.03,
+      "recordsSpread": true
+    },
+    {
+      "name": "deep",
+      "declared": "GET /pipeline to the probe's configuration api, 16 requests written at a time on each connection (deep.lua). Touched: with the switch on the answers to requests that arrived together leave in one write, where hyper flushes each. Read for a reduction of 3%, the smallest reduction worth having, not a forecast, and held to +1% with no floor. The answers the kit compares are those to one GET of this path sent alone; the answers to the 16 written together are held only to wrk's count of failed requests, which must be zero in every turn.",
+      "request": {
+        "path": "/pipeline",
+        "headers": [],
+        "script": "deep.lua"
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112713,
+      "reads": [
+        "margin",
+        "reduction"
+      ],
+      "reduction": 0.03,
+      "recordsSpread": true
+    },
+    {
+      "name": "long",
+      "declared": "GET /unstaged11?a=1&b=2 to the probe's configuration api started with HOSTS=* (an app that answers to any host), with a Host line whose name is 4,095 a and one _ and has no port: a route that says unstaged, with a head longer than the 2,560 bytes of the own connection's first read and shorter than the 8,192 of hyper's. Touched, and declared as expected to cost more with the switch on: bench/request-cost counts 8.0% more instructions on its case unstaged-any-long (design Choice 78), which this request is but for the port after the name. Read for the margin, +1% with no floor, so that the run shows what that cost is in cycles; a miss on it is a known cost of the opt-in and not a surprise. No reduction is declared.",
+      "request": {
+        "path": "/unstaged11?a=1&b=2",
+        "headers": [
+          "Host: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_"
+        ]
+      },
+      "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc HOSTS='*' $BIN $PORT api",
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112714,
+      "reads": [
+        "margin"
+      ],
+      "reduction": null,
+      "recordsSpread": true
+    },
+    {
+      "name": "post",
+      "declared": "POST /baseline11?a=1&b=2 with the 2-byte text/plain body 20 to the probe's configuration api (post.lua): a request with a body. Touched: with the switch on its connection is handed to hyper at its first request and stays hyper's, so this reads whether a handed connection costs what hyper's own does. Held to +1% with no floor; no reduction is declared. The kit captures the answers it compares with a GET, so the answers compared are those to a GET of this path; the POST's own answers are held only to wrk's count of failed requests, which must be zero in every turn.",
+      "request": {
+        "path": "/baseline11?a=1&b=2",
+        "headers": [],
+        "script": "post.lua"
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112715,
+      "reads": [
+        "margin"
+      ],
+      "reduction": null,
+      "recordsSpread": true
+    },
+    {
+      "name": "page",
+      "declared": "GET /page to the probe's configuration pages, no request header of its own: a staged page of about 12 KB, not compressed. Touched: with the switch on its connection is Corten's own, which is a small share of this request. Read for a reduction of 1%, the smallest reduction worth having, not a forecast, and held to +1% with no floor.",
+      "request": {
+        "path": "/page",
+        "headers": []
+      },
+      "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT pages",
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112716,
+      "reads": [
+        "margin",
+        "reduction"
+      ],
+      "reduction": 0.01,
+      "recordsSpread": true
+    }
+  ]
+}

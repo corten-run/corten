@@ -1,0 +1,8 @@
+comparison change-post placement 14 workload post
+A base-p36880 da3285a1cbdf2777b297ada7d06a8b215f73cfacf3e2505ac654f78497ee5e89
+B head-p36880 125b4945eddfb7a7a0c6ab9e00bcced79893d44d40495659b03e3dba1176ffa4
+run c2f0e030-b230-4c4c-92f8-eb30ee7c9c34
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 82
+started 2026-11-27T21:24:53Z
+ended 2026-11-27T21:26:09Z

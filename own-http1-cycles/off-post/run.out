@@ -1,0 +1,11 @@
+== drive: plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225, kit at 2f8984ddce025c92bade4a6fafd21f4863d25085, DRYRUN=0, workloads post 2026-11-27T17:18:23Z
+== post pilot: plan.mjs 2026-11-27T17:18:23Z
+== post pilot: build.sh 2026-11-27T17:18:23Z
+== post pilot: run.sh 2026-11-27T17:20:32Z
+== post pilot: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-27T19:33:32Z
+== post gated: plan.mjs 2026-11-27T19:33:32Z
+== post gated: build.sh 2026-11-27T19:35:26Z
+== post gated: run.sh 2026-11-27T19:38:21Z
+== post gated: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-27T22:14:35Z
+== post: both parts ended with status 0
+DRIVE-ENDED 0 2026-11-27T22:14:35Z

@@ -1,0 +1,8 @@
+comparison change-get placement 11 workload get
+A base-p736 db46c2dce235c6f138b7a80382fd79dfdf456981bd95d736e60dfcab1f7fb298
+B head-p736 3a25394ff4a2dc2bab9d8d02430f55c6a7b2266b6a54c79220cc4c6bcf32fd29
+run 453ebd2f-365f-4c0c-a590-f751e3db12ff
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 43
+started 2026-11-28T00:29:40Z
+ended 2026-11-28T00:30:57Z

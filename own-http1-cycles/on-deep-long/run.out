@@ -1,0 +1,20 @@
+== drive: plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3, kit at 2f8984ddce025c92bade4a6fafd21f4863d25085, DRYRUN=0, workloads deep long 2026-11-27T17:17:18Z
+== deep pilot: plan.mjs 2026-11-27T17:17:18Z
+== deep pilot: build.sh 2026-11-27T17:17:18Z
+== deep pilot: run.sh 2026-11-27T17:19:36Z
+== deep pilot: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-27T19:35:43Z
+== deep gated: plan.mjs 2026-11-27T19:35:43Z
+== deep gated: build.sh 2026-11-27T19:39:27Z
+== deep gated: run.sh 2026-11-27T19:43:03Z
+== deep gated: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-27T23:19:02Z
+== deep: both parts ended with status 0
+== long pilot: plan.mjs 2026-11-27T23:19:02Z
+== long pilot: build.sh 2026-11-27T23:19:02Z
+== long pilot: run.sh 2026-11-27T23:21:24Z
+== long pilot: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-28T01:34:41Z
+== long gated: plan.mjs 2026-11-28T01:34:41Z
+== long gated: build.sh 2026-11-28T01:35:23Z
+== long gated: run.sh 2026-11-28T01:38:05Z
+== long gated: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-28T03:15:29Z
+== long: both parts ended with status 0
+DRIVE-ENDED 0 2026-11-28T03:15:29Z

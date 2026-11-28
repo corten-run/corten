@@ -1,0 +1,8 @@
+comparison change-post placement 44 workload post
+A base-p38064 4fbdb11d97cdbfe921b98fafd74054fb81b7fa34f5016280c630a014ffbd11cd
+B head-p38064 8e998490e4709c8827a531f85bb521d0cd1f6ea3882b6d3d3d4b84e2c49bc1d7
+run c2f0e030-b230-4c4c-92f8-eb30ee7c9c34
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 58
+started 2026-11-27T20:54:17Z
+ended 2026-11-27T20:55:33Z

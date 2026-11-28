@@ -1,0 +1,8 @@
+comparison change-deep placement 40 workload deep
+A base-p32176 423afce3a108b0f254ac4ddaf6907cafabfd9e2a353eec0d4cb9f227cfc34cf9
+B head-p32176 530affc13957892b05a97ee16b470f4125dc1c8e4c03d8d894567cb665ce19da
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 151
+started 2026-11-27T23:01:00Z
+ended 2026-11-27T23:02:18Z

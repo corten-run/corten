@@ -1,0 +1,8 @@
+comparison change-pipeline placement 17 workload pipeline
+A base-p36160 bafb20baae98924a27b7d2a63f53b83fbcf3ef860abd371543f03fac1c903b6c
+B head-p36160 f88296eddd87a52e69410fca4b4feb15ecd628336473c54ad26cbec30584e706
+run 6b14817f-9a23-40a8-a0c4-df083896ead9
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 14
+started 2026-11-27T19:59:32Z
+ended 2026-11-27T20:00:49Z

@@ -1,0 +1,8 @@
+comparison pilot-get placement 79 workload get
+A base-p18912 d439e22c4bce8a4cbbb455a26dacb4a971e764aaf4f575acabd40f6fcb0097e2
+B base-p5360 4268d1891ebb871cd1c30af24d689fc9664f4acc8658d7a2aff6529cac144342
+run bb9f3a45-a359-402d-9fa3-1100dfc6230f
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 79
+started 2026-11-27T19:04:35Z
+ended 2026-11-27T19:05:52Z

@@ -1,0 +1,8 @@
+comparison change-pipeline placement 15 workload pipeline
+A base-p10720 ea214df76628186c12d1fd51454755b222cdf546fbe9db31e7c9f41d85bac035
+B head-p10720 ccd9a96a05ced546fecc324c0882e4358f427b5c60f129d76b2c3fbb82b95bf4
+run c64e4983-d84e-4bb4-9bc9-d5c232101f39
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 27
+started 2026-11-27T20:15:26Z
+ended 2026-11-27T20:16:42Z

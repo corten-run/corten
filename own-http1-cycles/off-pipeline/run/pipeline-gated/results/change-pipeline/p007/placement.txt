@@ -1,0 +1,8 @@
+comparison change-pipeline placement 7 workload pipeline
+A base-p35808 48e5c17636ed6e74faec0dfbca318b30e954d9fc3a9e58cf22d5d6c799426cf9
+B head-p35808 662f84039b8e81992d3adb29f12aee01d327dbea846625d731c5ab7617615f78
+run c64e4983-d84e-4bb4-9bc9-d5c232101f39
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 51
+started 2026-11-27T20:46:04Z
+ended 2026-11-27T20:47:21Z

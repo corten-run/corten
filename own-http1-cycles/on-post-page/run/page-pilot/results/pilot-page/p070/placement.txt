@@ -1,0 +1,8 @@
+comparison pilot-page placement 70 workload page
+A base-p29200 bf444f07cb3f00aaed3e73bce09ecba12f093ac697aa2aa1834f372891d7be91
+B base-p35216 c89e5cca19efb46e978d611d42ffa3050d59938a0ba481298cf158d1eea7f25c
+run a6871fd2-4ad8-4b4e-b957-c4349ff9159c
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 53
+started 2026-11-27T23:53:18Z
+ended 2026-11-27T23:54:35Z

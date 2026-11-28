@@ -1,0 +1,76 @@
+Fri Nov 27 19:43:04 UTC 2026
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           40 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz
+CPU family:                              6
+Model:                                   85
+Thread(s) per core:                      1
+Core(s) per socket:                      8
+Socket(s):                               1
+Stepping:                                4
+BogoMIPS:                                5387.36
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault pti ssbd ibrs ibpb tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap clflushopt clwb avx512cd avx512bw avx512vl xsaveopt xsavec xgetbv1 arat vnmi pku ospke md_clear
+Virtualization:                          VT-x
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               256 KiB (8 instances)
+L1i cache:                               256 KiB (8 instances)
+L2 cache:                                32 MiB (8 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-7
+Vulnerability Gather data sampling:      Unknown: Dependent on hypervisor status
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Mitigation; PTE Inversion; VMX conditional cache flushes, SMT disabled
+Vulnerability Mds:                       Mitigation; Clear CPU buffers; SMT Host state unknown
+Vulnerability Meltdown:                  Mitigation; PTI
+Vulnerability Mmio stale data:           Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; IBRS; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:1
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:7
+
+perf_event_paranoid -1 nmi_watchdog 0 randomize_va_space 2 (runs as root)
+os: Debian GNU/Linux 13 (trixie); kernel 6.12.117+deb13-amd64
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: x86_64-unknown-linux-gnu
+release: 1.100.0
+LLVM version: 23.1.5
+perf version 6.12.118
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+GNU assembler (GNU Binutils for Debian) 2.44
+cc (Debian 14.2.0-19) 14.2.0
+curl 8.14.1 (x86_64-pc-linux-gnu) libcurl/8.14.1 OpenSSL/3.5.7 zlib/1.3.1 brotli/1.1.0 zstd/1.5.7 libidn2/2.3.8 libpsl/0.21.2 libssh2/1.11.1 nghttp2/1.64.0 nghttp3/1.8.0 librtmp/2.3 OpenLDAP/2.6.10
+v20.19.2
+base .comment: GCC: (Debian 14.2.0-19) 14.2.0;Linker: LLD 23.1.5 (/checkout/src/llvm-project/llvm 0a5579eb649d3634a9c30ac873300cc2944fa070);rustc version 1.100.0 (0ef1bc386 2026-11-09)
+base 2f8984ddce025c92bade4a6fafd21f4863d25085
+head 0bcb3138c69f69dab997486c9af87a3660eb0ed4
+started as: env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT api
+every server's environment is PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin, HOME=/root, PORT and BIN alone (env -i), with what that command sets (verify/server-env.txt); each build's is build-<side>.env
+cargo's config files outside the probe, as they are now (cargo reads them in a build; the kit neither lists nor checks them): none
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3, inputs f0a71d4d02f5556d4dfea7ad195720558d6c43d7984867db48da98280dcca0a6: part gated, workload deep, K=82 placements, R=8 recorded pairs each after 1 unrecorded, 3 s turns, wrk -t2 -c64, cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u
+every turn on a fresh start; server CPU 2, wrk CPUs 4,5, driver and perf CPU 7; a placement's time limit 600 s
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e

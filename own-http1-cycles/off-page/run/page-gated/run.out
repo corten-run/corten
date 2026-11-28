@@ -1,0 +1,62 @@
+== run 6d92b172-19be-4d30-830a-0c99bd89b990: gated page, plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225; verify start 19:39:49
+verify: 84 placements answer as their unpadded binary
+== turns start 19:41:21; 56 placements to run
+1 aa-page p013 ok 19:42:37
+2 change-page p013 ok 19:43:53
+3 change-page p015 ok 19:45:10
+4 aa-page p015 ok 19:46:26
+5 aa-page p012 ok 19:47:42
+6 change-page p012 ok 19:48:59
+7 change-page p014 ok 19:50:15
+8 aa-page p014 ok 19:51:31
+9 aa-page p009 ok 19:52:48
+10 change-page p009 ok 19:54:04
+11 change-page p020 ok 19:55:20
+12 aa-page p020 ok 19:56:37
+13 aa-page p010 ok 19:57:53
+14 change-page p010 ok 19:59:09
+15 change-page p025 ok 20:00:25
+16 aa-page p025 ok 20:01:42
+17 aa-page p022 ok 20:02:58
+18 change-page p022 ok 20:04:15
+19 change-page p028 ok 20:05:31
+20 aa-page p028 ok 20:06:48
+21 aa-page p002 ok 20:08:04
+22 change-page p002 ok 20:09:20
+23 change-page p004 ok 20:10:37
+24 aa-page p004 ok 20:11:53
+25 aa-page p024 ok 20:13:09
+26 change-page p024 ok 20:14:26
+27 change-page p026 ok 20:15:42
+28 aa-page p026 ok 20:16:59
+29 aa-page p019 ok 20:18:15
+30 change-page p019 ok 20:19:31
+31 change-page p001 ok 20:20:48
+32 aa-page p001 ok 20:22:04
+33 aa-page p023 ok 20:23:20
+34 change-page p023 ok 20:24:36
+35 change-page p006 ok 20:25:53
+36 aa-page p006 ok 20:27:09
+37 aa-page p003 ok 20:28:25
+38 change-page p003 ok 20:29:42
+39 change-page p027 ok 20:30:58
+40 aa-page p027 ok 20:32:14
+41 aa-page p011 ok 20:33:31
+42 change-page p011 ok 20:34:47
+43 change-page p007 ok 20:36:04
+44 aa-page p007 ok 20:37:20
+45 aa-page p008 ok 20:38:37
+46 change-page p008 ok 20:39:53
+47 change-page p005 ok 20:41:09
+48 aa-page p005 ok 20:42:26
+49 aa-page p021 ok 20:43:42
+50 change-page p021 ok 20:44:58
+51 change-page p017 ok 20:46:15
+52 aa-page p017 ok 20:47:31
+53 aa-page p018 ok 20:48:47
+54 change-page p018 ok 20:50:04
+55 change-page p016 ok 20:51:20
+56 aa-page p016 ok 20:52:37
+failed (their comparison has no bound; nothing is run again): none
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

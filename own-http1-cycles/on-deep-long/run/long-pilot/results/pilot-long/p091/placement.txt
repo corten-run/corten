@@ -1,0 +1,8 @@
+comparison pilot-long placement 91 workload long
+A base-p3808 0ef5d04c5b287f3d90937079d78595bf1fd00a6eb69932c48cbeede4e94faa01
+B base-p22752 302f26c0bb11d40e78cc3bdd117c8ebde34d801f800e664dbfcc249fae0caa2b
+run b8674708-1d5c-4d47-a95e-ff004518ca6a
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 53
+started 2026-11-28T00:32:13Z
+ended 2026-11-28T00:33:31Z

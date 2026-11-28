@@ -1,0 +1,20 @@
+== drive: plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3, kit at 2f8984ddce025c92bade4a6fafd21f4863d25085, DRYRUN=0, workloads pipeline get 2026-11-27T17:22:57Z
+== pipeline pilot: plan.mjs 2026-11-27T17:22:57Z
+== pipeline pilot: build.sh 2026-11-27T17:22:57Z
+== pipeline pilot: run.sh 2026-11-27T17:25:12Z
+== pipeline pilot: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-27T19:37:34Z
+== pipeline gated: plan.mjs 2026-11-27T19:37:34Z
+== pipeline gated: build.sh 2026-11-27T19:38:15Z
+== pipeline gated: run.sh 2026-11-27T19:40:51Z
+== pipeline gated: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-27T21:17:27Z
+== pipeline: both parts ended with status 0
+== get pilot: plan.mjs 2026-11-27T21:17:27Z
+== get pilot: build.sh 2026-11-27T21:17:27Z
+== get pilot: run.sh 2026-11-27T21:19:40Z
+== get pilot: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-27T23:31:29Z
+== get gated: plan.mjs 2026-11-27T23:31:29Z
+== get gated: build.sh 2026-11-27T23:31:56Z
+== get gated: run.sh 2026-11-27T23:34:22Z
+== get gated: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 2026-11-28T00:52:40Z
+== get: both parts ended with status 0
+DRIVE-ENDED 0 2026-11-28T00:52:40Z

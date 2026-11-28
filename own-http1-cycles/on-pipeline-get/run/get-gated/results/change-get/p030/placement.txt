@@ -1,0 +1,8 @@
+comparison change-get placement 30 workload get
+A base-p31760 47d69df2c0bfaf7aea2a32bf54c151734e5ad17bf30204686f661005e6faaeaf
+B head-p31760 ed93807728113954f462427219e421295e74f6eca3eecb4dbdfae85be3de42bd
+run 453ebd2f-365f-4c0c-a590-f751e3db12ff
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 51
+started 2026-11-28T00:39:54Z
+ended 2026-11-28T00:41:10Z

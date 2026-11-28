@@ -1,0 +1,8 @@
+comparison change-deep placement 58 workload deep
+A base-p7440 7e7adefb79eb03f55984d38cc531afa5fc0cb8e02203bde8b164b81e66b28ffe
+B head-p7440 da3122454a5e545ddf6eaa9307eaf80cefc1ebf31bb518f40e1229782975209b
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 31
+started 2026-11-27T20:26:21Z
+ended 2026-11-27T20:27:38Z

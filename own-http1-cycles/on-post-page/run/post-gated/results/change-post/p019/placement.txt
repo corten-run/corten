@@ -1,0 +1,8 @@
+comparison change-post placement 19 workload post
+A base-p16608 9e4ae97d18d10163cadbfc35fa3c0d3a008d77bb13599674d06e34ef06e3ed06
+B head-p16608 be10b494d6599c85c834d272d4ad8bf71b9625cce8577b5fddd8f72bdfc8c25e
+run a43df35b-22de-4be1-bd02-a773cc139fd4
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 134
+started 2026-11-27T22:34:19Z
+ended 2026-11-27T22:35:36Z

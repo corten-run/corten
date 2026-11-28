@@ -1,0 +1,8 @@
+comparison change-get placement 8 workload get
+A base-p5552 499c60e4b1173be5c2a5ae8c68ccbd761f6ea1c10615090f2077ab0037f38bbe
+B head-p5552 0eca75129055e9cf60de6b5c6ac1e1c6df9528a67e0fd0ab5de4a3955ca21a7b
+run 453ebd2f-365f-4c0c-a590-f751e3db12ff
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 11
+started 2026-11-27T23:48:48Z
+ended 2026-11-27T23:50:05Z

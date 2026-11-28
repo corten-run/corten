@@ -1,0 +1,71 @@
+plan own-http1-off, sha256 f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225: base e733f3d888450707c049a17cd6100c891966bc87, head 2f8984ddce025c92bade4a6fafd21f4863d25085
+sizing: K = 5: normal 195400 (the 5th), smoothed 195978 (the 5th) failing draws of 200000, against at most 10000
+sizing: K = 6: normal 197867 (the 6th), smoothed 198081 (the 6th) failing draws of 200000, against at most 10000
+sizing: K = 7: normal 198983 (the 7th), smoothed 199137 (the 7th) failing draws of 200000, against at most 10000
+sizing: K = 8: normal 186687 (the 7th), smoothed 188414 (the 7th) failing draws of 200000, against at most 10000
+sizing: K = 9: normal 192296 (the 8th), smoothed 193540 (the 8th) failing draws of 200000, against at most 10000
+sizing: K = 10: normal 195619 (the 9th), smoothed 196308 (the 9th) failing draws of 200000, against at most 10000
+sizing: K = 11: normal 177385 (the 9th), smoothed 179926 (the 9th) failing draws of 200000, against at most 10000
+sizing: K = 12: normal 185192 (the 10th), smoothed 187256 (the 10th) failing draws of 200000, against at most 10000
+sizing: K = 13: normal 154868 (the 10th), smoothed 159581 (the 10th) failing draws of 200000, against at most 10000
+sizing: K = 14: normal 167668 (the 11th), smoothed 171556 (the 11th) failing draws of 200000, against at most 10000
+sizing: K = 15: normal 177135 (the 12th), smoothed 180352 (the 12th) failing draws of 200000, against at most 10000
+sizing: K = 16: normal 145278 (the 12th), smoothed 150999 (the 12th) failing draws of 200000, against at most 10000
+sizing: K = 17: normal 158484 (the 13th), smoothed 163518 (the 13th) failing draws of 200000, against at most 10000
+sizing: K = 18: normal 122128 (the 13th), smoothed 128184 (the 13th) failing draws of 200000, against at most 10000
+sizing: K = 19: normal 136755 (the 14th), smoothed 142995 (the 14th) failing draws of 200000, against at most 10000
+sizing: K = 20: normal 149773 (the 15th), smoothed 155718 (the 15th) failing draws of 200000, against at most 10000
+sizing: K = 21: normal 114345 (the 15th), smoothed 121565 (the 15th) failing draws of 200000, against at most 10000
+sizing: K = 22: normal 128686 (the 16th), smoothed 135916 (the 16th) failing draws of 200000, against at most 10000
+sizing: K = 23: normal 93612 (the 16th), smoothed 101019 (the 16th) failing draws of 200000, against at most 10000
+sizing: K = 24: normal 107945 (the 17th), smoothed 115679 (the 17th) failing draws of 200000, against at most 10000
+sizing: K = 25: normal 121588 (the 18th), smoothed 129127 (the 18th) failing draws of 200000, against at most 10000
+sizing: K = 26: normal 88633 (the 18th), smoothed 96307 (the 18th) failing draws of 200000, against at most 10000
+sizing: K = 27: normal 101821 (the 19th), smoothed 110252 (the 19th) failing draws of 200000, against at most 10000
+sizing: K = 28: normal 71601 (the 19th), smoothed 79212 (the 19th) failing draws of 200000, against at most 10000
+sizing: K = 29: normal 83576 (the 20th), smoothed 92023 (the 20th) failing draws of 200000, against at most 10000
+sizing: K = 30: normal 57348 (the 20th), smoothed 64429 (the 20th) failing draws of 200000, against at most 10000
+sizing: K = 31: normal 67881 (the 21st), smoothed 75860 (the 21st) failing draws of 200000, against at most 10000
+sizing: K = 32: normal 78962 (the 22nd), smoothed 87804 (the 22nd) failing draws of 200000, against at most 10000
+sizing: K = 33: normal 54597 (the 22nd), smoothed 61861 (the 22nd) failing draws of 200000, against at most 10000
+sizing: K = 34: normal 64738 (the 23rd), smoothed 72653 (the 23rd) failing draws of 200000, against at most 10000
+sizing: K = 35: normal 43484 (the 23rd), smoothed 50213 (the 23rd) failing draws of 200000, against at most 10000
+sizing: K = 36: normal 52150 (the 24th), smoothed 59792 (the 24th) failing draws of 200000, against at most 10000
+sizing: K = 37: normal 34703 (the 24th), smoothed 40354 (the 24th) failing draws of 200000, against at most 10000
+sizing: K = 38: normal 41714 (the 25th), smoothed 48320 (the 25th) failing draws of 200000, against at most 10000
+sizing: K = 39: normal 49898 (the 26th), smoothed 57206 (the 26th) failing draws of 200000, against at most 10000
+sizing: K = 40: normal 33279 (the 26th), smoothed 39262 (the 26th) failing draws of 200000, against at most 10000
+sizing: K = 41: normal 40089 (the 27th), smoothed 46881 (the 27th) failing draws of 200000, against at most 10000
+sizing: K = 42: normal 26317 (the 27th), smoothed 31631 (the 27th) failing draws of 200000, against at most 10000
+sizing: K = 43: normal 32279 (the 28th), smoothed 38139 (the 28th) failing draws of 200000, against at most 10000
+sizing: K = 44: normal 20837 (the 28th), smoothed 25689 (the 28th) failing draws of 200000, against at most 10000
+sizing: K = 45: normal 25659 (the 29th), smoothed 30990 (the 29th) failing draws of 200000, against at most 10000
+sizing: K = 46: normal 30746 (the 30th), smoothed 37408 (the 30th) failing draws of 200000, against at most 10000
+sizing: K = 47: normal 20296 (the 30th), smoothed 24844 (the 30th) failing draws of 200000, against at most 10000
+sizing: K = 48: normal 24486 (the 31st), smoothed 30230 (the 31st) failing draws of 200000, against at most 10000
+sizing: K = 49: normal 16076 (the 31st), smoothed 20291 (the 31st) failing draws of 200000, against at most 10000
+sizing: K = 50: normal 19580 (the 32nd), smoothed 24412 (the 32nd) failing draws of 200000, against at most 10000
+sizing: K = 51: normal 12794 (the 32nd), smoothed 16101 (the 32nd) failing draws of 200000, against at most 10000
+sizing: K = 52: normal 15621 (the 33rd), smoothed 19769 (the 33rd) failing draws of 200000, against at most 10000
+sizing: K = 53: normal 9965 (the 33rd), smoothed 12997 (the 33rd) failing draws of 200000, against at most 10000
+sizing: K = 54: normal 12459 (the 34th), smoothed 15925 (the 34th) failing draws of 200000, against at most 10000
+sizing: K = 55: normal 15214 (the 35th), smoothed 19329 (the 35th) failing draws of 200000, against at most 10000
+sizing: K = 56: normal 9946 (the 35th), smoothed 12799 (the 35th) failing draws of 200000, against at most 10000
+sizing: K = 57: normal 12154 (the 36th), smoothed 15732 (the 36th) failing draws of 200000, against at most 10000
+sizing: K = 58: normal 7845 (the 36th), smoothed 10313 (the 36th) failing draws of 200000, against at most 10000
+sizing: K = 59: normal 9638 (the 37th), smoothed 12746 (the 37th) failing draws of 200000, against at most 10000
+sizing: K = 60: normal 6173 (the 37th), smoothed 8332 (the 37th) failing draws of 200000, against at most 10000
+sizing from pilot-post of run ed2bb6ac-a558-4d07-b7a7-76bf87308b48 (plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225): 100 of 100 placements read, R = 8
+eligible: yes (every placement read with all its pairs: yes; lag-1 autocorrelation r1 -7.1e-2, p 0.545; Spearman's correlation with run order rho 0.063, p 0.532; zero inside -0.83% to +0.09%, the 42nd to the 59th sorted median: yes)
+placement medians: standard deviation 1.59%; Shapiro-Wilk p 0.955, Anderson-Darling p 0.827; models kept: normal and smoothed
+K = 60, the smallest from 5 to 254 at which every kept model's count of failing draws is at most 10000 of 200000 (seed 1983): normal 6173 (the 37th), smoothed 8332 (the 37th); at the K's before it: 57: normal 12154 (the 36th), smoothed 15732 (the 36th); 58: normal 7845 (the 36th), smoothed 10313 (the 36th); 59: normal 9638 (the 37th), smoothed 12746 (the 37th)
+gated post: K = 60 placements (from the pilot, by the sizing rule), R = 8 recorded pairs each after one that is not, 3 s turns; comparisons aa-post and change-post
+thresholds: the margin (+1%, no floor): read by this run
+the A/A records a placement spread for the workload, if it is complete and resolves
+the bound is the 37th smallest of the 60 placement medians, the lower bound the 24th; the order is drawn from seed 2026112704
+pads p (base and head in the change, the A/A's first side): 320 15120 25824 40624 10304 21008 35808 5552 20288 30992 736 15536 26176 36880 10720 21424 36160 5904 16608 31408 1088 15888 26592 37296 11072 21776 36576 6320 16960 31760 1504 16304 26944 37648 11488 22192 32832 6672 17376 32176 1856 12560 27360 38064 11840 22544 33248 7088 17728 32528 2272 12976 27712 38416 12256 22960 33600 7440 18144 28848
+pads q (the A/A's second side): 22848 12160 38336 27648 12880 2192 32464 17680 7008 33184 22496 11808 38000 27312 12528 1840 32064 17280 6592 32768 22096 11408 37584 26896 16224 1440 31712 16928 6256 36528 20528 12080 39424 27008 14400 832 29200 16656 7248 35664 23072 9504 37920 25440 12848 3376 31856 19312 5696 34240 21632 16256 40592 27984 14480 1936 30304 16736 4192 36768
+120 distinct sizes from 320 to 40624 bytes; p by 64-byte-line phase (0, 16, 32, 48): 15, 15, 15, 15, by quarter of a page: 16, 14, 15, 15; q: 16, 16, 16, 12 and 15, 14, 15, 16
+the pairs: 16 ordered combinations of the line phases of p and q; q - p mod 4096 takes 60 distinct values, 15, 15, 15, 15 by quarter of a page (at least 7 asked in each)
+inputs: sha256 bc3ae620f69f9361d583acec6c205837fb977df427c23640313db3914582f065 over the 3 files the plan names by path (the probe's, the request script), each listed with its own
+written: /root/run/post-gated/plan

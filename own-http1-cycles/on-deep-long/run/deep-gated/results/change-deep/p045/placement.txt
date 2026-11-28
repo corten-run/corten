@@ -1,0 +1,8 @@
+comparison change-deep placement 45 workload deep
+A base-p11840 cc76291dbb869b707d900bc919cf0134ffebf595ad8db5cb0e472a46011ed0ae
+B head-p11840 750cc7706fd95cef607d9a4bad88bd20550e1e39619ce8909dceffc253d0c8a0
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 58
+started 2026-11-27T21:01:08Z
+ended 2026-11-27T21:02:26Z

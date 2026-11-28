@@ -1,0 +1,8 @@
+comparison change-deep placement 18 workload deep
+A base-p5904 ecdc71c9687d9d140eff9783032cdf1f3221b719f0cfecfeec1180ba6a4a00e6
+B head-p5904 a4fdd440b03d880009312fbdab697ff9301310c9365ef0c6f7562f1f2aa3ac18
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 78
+started 2026-11-27T21:26:55Z
+ended 2026-11-27T21:28:12Z

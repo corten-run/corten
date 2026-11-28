@@ -1,0 +1,8 @@
+comparison aa-long placement 13 workload long
+A base-p26176 57180f006f9959ec3fae8e0b42fd3cb05f4e622ee87ca67dfda98222cce6daf3
+B base-p38000 b1fd4cb3cef91a178925caeec4170905cdd8e1ba229bd63d3a1c56efe20cc46c
+run b8c929fc-2533-4c26-897d-a705ba2aae43
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 13
+started 2026-11-28T01:55:40Z
+ended 2026-11-28T01:56:57Z

@@ -1,0 +1,933 @@
+{
+ "name": "own-http1-off",
+ "part": "pilot",
+ "workload": "page",
+ "dry": null,
+ "K": 100,
+ "declaredK": 100,
+ "sizedFrom": null,
+ "R": 8,
+ "seconds": 3,
+ "seed": 2026112703,
+ "rank": 59,
+ "lowerRank": 42,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008,
+  35808,
+  5552,
+  20288,
+  30992,
+  736,
+  15536,
+  26176,
+  36880,
+  10720,
+  21424,
+  36160,
+  5904,
+  16608,
+  31408,
+  1088,
+  15888,
+  26592,
+  37296,
+  11072,
+  21776,
+  36576,
+  6320,
+  16960,
+  31760,
+  1504,
+  16304,
+  26944,
+  37648,
+  11488,
+  22192,
+  32832,
+  6672,
+  17376,
+  32176,
+  1856,
+  12560,
+  27360,
+  38064,
+  11840,
+  22544,
+  33248,
+  7088,
+  17728,
+  32528,
+  2272,
+  12976,
+  27712,
+  38416,
+  12256,
+  22960,
+  33600,
+  7440,
+  18144,
+  28848,
+  2624,
+  13328,
+  28128,
+  38832,
+  8512,
+  23312,
+  34016,
+  7856,
+  18496,
+  29200,
+  3040,
+  13744,
+  28480,
+  39184,
+  8928,
+  23728,
+  34368,
+  4112,
+  18912,
+  29616,
+  3392,
+  14096,
+  24800,
+  39600,
+  9280,
+  24080,
+  34784,
+  4528,
+  19264,
+  29968,
+  3808,
+  14512,
+  25152,
+  39952,
+  9696,
+  24496,
+  35136,
+  4880,
+  19680,
+  30384
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192,
+  32464,
+  17680,
+  7008,
+  33184,
+  22496,
+  11808,
+  38000,
+  27312,
+  12528,
+  1840,
+  32064,
+  17280,
+  6592,
+  32768,
+  22096,
+  11408,
+  37584,
+  26896,
+  16224,
+  1440,
+  31712,
+  16928,
+  6256,
+  36528,
+  20528,
+  12080,
+  39424,
+  27008,
+  14400,
+  832,
+  33296,
+  16656,
+  7248,
+  35664,
+  23072,
+  9504,
+  37920,
+  25440,
+  12848,
+  3376,
+  31856,
+  19312,
+  5696,
+  34240,
+  21632,
+  16256,
+  40592,
+  27984,
+  14480,
+  1936,
+  30304,
+  16736,
+  4192,
+  36768,
+  23152,
+  10608,
+  39088,
+  25520,
+  12928,
+  512,
+  28864,
+  19392,
+  6864,
+  35216,
+  21712,
+  9168,
+  37536,
+  28064,
+  15520,
+  7136,
+  34480,
+  17840,
+  5360,
+  36848,
+  24256,
+  15936,
+  39168,
+  26688,
+  18192,
+  1488,
+  28944,
+  16400,
+  7904,
+  35296,
+  22752,
+  10272,
+  37616,
+  25072,
+  12592,
+  3120,
+  31488,
+  19072,
+  5440,
+  33920
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    25,
+    25,
+    25,
+    25
+   ],
+   "pageQuarters": [
+    25,
+    25,
+    25,
+    25
+   ],
+   "pages": [
+    10,
+    10,
+    10,
+    10,
+    10,
+    10,
+    10,
+    10,
+    10,
+    10
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    28,
+    24,
+    24,
+    24
+   ],
+   "pageQuarters": [
+    26,
+    22,
+    29,
+    23
+   ],
+   "pages": [
+    9,
+    11,
+    8,
+    11,
+    11,
+    10,
+    10,
+    8,
+    12,
+    10
+   ],
+   "min": 512,
+   "max": 40592
+  },
+  "linePairCombos": 16,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664,
+   752,
+   3936,
+   3104,
+   2192,
+   1280,
+   368,
+   3632,
+   2720,
+   1808,
+   896,
+   0,
+   3184,
+   2272,
+   1360,
+   528,
+   3712,
+   2800,
+   1888,
+   1056,
+   144,
+   3328,
+   2416,
+   1584,
+   672,
+   2640,
+   3968,
+   192,
+   1648,
+   2912,
+   3216,
+   464,
+   1792,
+   2160,
+   3488,
+   736,
+   1040,
+   2368,
+   3760,
+   1008,
+   1312,
+   2704,
+   4032,
+   256,
+   1712,
+   2976,
+   3280,
+   592,
+   1856,
+   2224,
+   3552,
+   800,
+   1104,
+   2432,
+   3824,
+   48,
+   1376,
+   2768,
+   3072,
+   320,
+   1776,
+   3040,
+   3344,
+   656,
+   1920,
+   2288,
+   3616,
+   864,
+   1168,
+   2496,
+   3888,
+   112,
+   1440,
+   2832,
+   3136,
+   384,
+   1840,
+   2080,
+   3472,
+   720,
+   1984,
+   2352,
+   3680,
+   928,
+   1232,
+   2560,
+   3952,
+   176,
+   1504,
+   2896,
+   3200,
+   448,
+   1904,
+   2144,
+   3536
+  ],
+  "distinctDiffs": 100,
+  "diffQuarters": [
+   25,
+   25,
+   25,
+   25
+  ]
+ },
+ "sides": [
+  "base"
+ ],
+ "comparisons": [
+  "pilot-page"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "pilot-page",
+   "i": 23
+  },
+  {
+   "seq": 2,
+   "comparison": "pilot-page",
+   "i": 89
+  },
+  {
+   "seq": 3,
+   "comparison": "pilot-page",
+   "i": 30
+  },
+  {
+   "seq": 4,
+   "comparison": "pilot-page",
+   "i": 88
+  },
+  {
+   "seq": 5,
+   "comparison": "pilot-page",
+   "i": 48
+  },
+  {
+   "seq": 6,
+   "comparison": "pilot-page",
+   "i": 10
+  },
+  {
+   "seq": 7,
+   "comparison": "pilot-page",
+   "i": 60
+  },
+  {
+   "seq": 8,
+   "comparison": "pilot-page",
+   "i": 72
+  },
+  {
+   "seq": 9,
+   "comparison": "pilot-page",
+   "i": 71
+  },
+  {
+   "seq": 10,
+   "comparison": "pilot-page",
+   "i": 68
+  },
+  {
+   "seq": 11,
+   "comparison": "pilot-page",
+   "i": 55
+  },
+  {
+   "seq": 12,
+   "comparison": "pilot-page",
+   "i": 12
+  },
+  {
+   "seq": 13,
+   "comparison": "pilot-page",
+   "i": 25
+  },
+  {
+   "seq": 14,
+   "comparison": "pilot-page",
+   "i": 100
+  },
+  {
+   "seq": 15,
+   "comparison": "pilot-page",
+   "i": 29
+  },
+  {
+   "seq": 16,
+   "comparison": "pilot-page",
+   "i": 75
+  },
+  {
+   "seq": 17,
+   "comparison": "pilot-page",
+   "i": 37
+  },
+  {
+   "seq": 18,
+   "comparison": "pilot-page",
+   "i": 42
+  },
+  {
+   "seq": 19,
+   "comparison": "pilot-page",
+   "i": 86
+  },
+  {
+   "seq": 20,
+   "comparison": "pilot-page",
+   "i": 65
+  },
+  {
+   "seq": 21,
+   "comparison": "pilot-page",
+   "i": 21
+  },
+  {
+   "seq": 22,
+   "comparison": "pilot-page",
+   "i": 38
+  },
+  {
+   "seq": 23,
+   "comparison": "pilot-page",
+   "i": 47
+  },
+  {
+   "seq": 24,
+   "comparison": "pilot-page",
+   "i": 83
+  },
+  {
+   "seq": 25,
+   "comparison": "pilot-page",
+   "i": 50
+  },
+  {
+   "seq": 26,
+   "comparison": "pilot-page",
+   "i": 73
+  },
+  {
+   "seq": 27,
+   "comparison": "pilot-page",
+   "i": 79
+  },
+  {
+   "seq": 28,
+   "comparison": "pilot-page",
+   "i": 76
+  },
+  {
+   "seq": 29,
+   "comparison": "pilot-page",
+   "i": 28
+  },
+  {
+   "seq": 30,
+   "comparison": "pilot-page",
+   "i": 54
+  },
+  {
+   "seq": 31,
+   "comparison": "pilot-page",
+   "i": 64
+  },
+  {
+   "seq": 32,
+   "comparison": "pilot-page",
+   "i": 3
+  },
+  {
+   "seq": 33,
+   "comparison": "pilot-page",
+   "i": 34
+  },
+  {
+   "seq": 34,
+   "comparison": "pilot-page",
+   "i": 78
+  },
+  {
+   "seq": 35,
+   "comparison": "pilot-page",
+   "i": 5
+  },
+  {
+   "seq": 36,
+   "comparison": "pilot-page",
+   "i": 18
+  },
+  {
+   "seq": 37,
+   "comparison": "pilot-page",
+   "i": 53
+  },
+  {
+   "seq": 38,
+   "comparison": "pilot-page",
+   "i": 6
+  },
+  {
+   "seq": 39,
+   "comparison": "pilot-page",
+   "i": 35
+  },
+  {
+   "seq": 40,
+   "comparison": "pilot-page",
+   "i": 24
+  },
+  {
+   "seq": 41,
+   "comparison": "pilot-page",
+   "i": 51
+  },
+  {
+   "seq": 42,
+   "comparison": "pilot-page",
+   "i": 36
+  },
+  {
+   "seq": 43,
+   "comparison": "pilot-page",
+   "i": 63
+  },
+  {
+   "seq": 44,
+   "comparison": "pilot-page",
+   "i": 82
+  },
+  {
+   "seq": 45,
+   "comparison": "pilot-page",
+   "i": 93
+  },
+  {
+   "seq": 46,
+   "comparison": "pilot-page",
+   "i": 67
+  },
+  {
+   "seq": 47,
+   "comparison": "pilot-page",
+   "i": 45
+  },
+  {
+   "seq": 48,
+   "comparison": "pilot-page",
+   "i": 14
+  },
+  {
+   "seq": 49,
+   "comparison": "pilot-page",
+   "i": 77
+  },
+  {
+   "seq": 50,
+   "comparison": "pilot-page",
+   "i": 85
+  },
+  {
+   "seq": 51,
+   "comparison": "pilot-page",
+   "i": 32
+  },
+  {
+   "seq": 52,
+   "comparison": "pilot-page",
+   "i": 84
+  },
+  {
+   "seq": 53,
+   "comparison": "pilot-page",
+   "i": 22
+  },
+  {
+   "seq": 54,
+   "comparison": "pilot-page",
+   "i": 8
+  },
+  {
+   "seq": 55,
+   "comparison": "pilot-page",
+   "i": 52
+  },
+  {
+   "seq": 56,
+   "comparison": "pilot-page",
+   "i": 9
+  },
+  {
+   "seq": 57,
+   "comparison": "pilot-page",
+   "i": 31
+  },
+  {
+   "seq": 58,
+   "comparison": "pilot-page",
+   "i": 62
+  },
+  {
+   "seq": 59,
+   "comparison": "pilot-page",
+   "i": 15
+  },
+  {
+   "seq": 60,
+   "comparison": "pilot-page",
+   "i": 70
+  },
+  {
+   "seq": 61,
+   "comparison": "pilot-page",
+   "i": 69
+  },
+  {
+   "seq": 62,
+   "comparison": "pilot-page",
+   "i": 17
+  },
+  {
+   "seq": 63,
+   "comparison": "pilot-page",
+   "i": 49
+  },
+  {
+   "seq": 64,
+   "comparison": "pilot-page",
+   "i": 97
+  },
+  {
+   "seq": 65,
+   "comparison": "pilot-page",
+   "i": 16
+  },
+  {
+   "seq": 66,
+   "comparison": "pilot-page",
+   "i": 92
+  },
+  {
+   "seq": 67,
+   "comparison": "pilot-page",
+   "i": 99
+  },
+  {
+   "seq": 68,
+   "comparison": "pilot-page",
+   "i": 57
+  },
+  {
+   "seq": 69,
+   "comparison": "pilot-page",
+   "i": 2
+  },
+  {
+   "seq": 70,
+   "comparison": "pilot-page",
+   "i": 95
+  },
+  {
+   "seq": 71,
+   "comparison": "pilot-page",
+   "i": 39
+  },
+  {
+   "seq": 72,
+   "comparison": "pilot-page",
+   "i": 58
+  },
+  {
+   "seq": 73,
+   "comparison": "pilot-page",
+   "i": 59
+  },
+  {
+   "seq": 74,
+   "comparison": "pilot-page",
+   "i": 43
+  },
+  {
+   "seq": 75,
+   "comparison": "pilot-page",
+   "i": 40
+  },
+  {
+   "seq": 76,
+   "comparison": "pilot-page",
+   "i": 20
+  },
+  {
+   "seq": 77,
+   "comparison": "pilot-page",
+   "i": 87
+  },
+  {
+   "seq": 78,
+   "comparison": "pilot-page",
+   "i": 74
+  },
+  {
+   "seq": 79,
+   "comparison": "pilot-page",
+   "i": 7
+  },
+  {
+   "seq": 80,
+   "comparison": "pilot-page",
+   "i": 96
+  },
+  {
+   "seq": 81,
+   "comparison": "pilot-page",
+   "i": 98
+  },
+  {
+   "seq": 82,
+   "comparison": "pilot-page",
+   "i": 1
+  },
+  {
+   "seq": 83,
+   "comparison": "pilot-page",
+   "i": 91
+  },
+  {
+   "seq": 84,
+   "comparison": "pilot-page",
+   "i": 90
+  },
+  {
+   "seq": 85,
+   "comparison": "pilot-page",
+   "i": 27
+  },
+  {
+   "seq": 86,
+   "comparison": "pilot-page",
+   "i": 44
+  },
+  {
+   "seq": 87,
+   "comparison": "pilot-page",
+   "i": 13
+  },
+  {
+   "seq": 88,
+   "comparison": "pilot-page",
+   "i": 4
+  },
+  {
+   "seq": 89,
+   "comparison": "pilot-page",
+   "i": 41
+  },
+  {
+   "seq": 90,
+   "comparison": "pilot-page",
+   "i": 94
+  },
+  {
+   "seq": 91,
+   "comparison": "pilot-page",
+   "i": 11
+  },
+  {
+   "seq": 92,
+   "comparison": "pilot-page",
+   "i": 81
+  },
+  {
+   "seq": 93,
+   "comparison": "pilot-page",
+   "i": 46
+  },
+  {
+   "seq": 94,
+   "comparison": "pilot-page",
+   "i": 26
+  },
+  {
+   "seq": 95,
+   "comparison": "pilot-page",
+   "i": 33
+  },
+  {
+   "seq": 96,
+   "comparison": "pilot-page",
+   "i": 19
+  },
+  {
+   "seq": 97,
+   "comparison": "pilot-page",
+   "i": 80
+  },
+  {
+   "seq": 98,
+   "comparison": "pilot-page",
+   "i": 61
+  },
+  {
+   "seq": 99,
+   "comparison": "pilot-page",
+   "i": 66
+  },
+  {
+   "seq": 100,
+   "comparison": "pilot-page",
+   "i": 56
+  }
+ ],
+ "base": "e733f3d888450707c049a17cd6100c891966bc87",
+ "head": "2f8984ddce025c92bade4a6fafd21f4863d25085",
+ "reduction": null,
+ "reads": [
+  "margin"
+ ],
+ "recordsSpread": true,
+ "declared": "GET /page to the probe's configuration pages, no request header of its own: a staged page of about 12 KB, not compressed. Touched: with the switch off a connection takes one more branch when it is accepted and a request takes the same path through hyper, but the compiled program is not the same (design Choice 78), so every request runs code this change compiles differently. Held to +1% with no floor; no reduction is declared. Named for the catalog's page target: both are a staged page through the same connection, service and router future, which is the code this change compiles differently.",
+ "plan": "f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225",
+ "inputs": "9fe6c0b6df86cb921c828b773dd7be1e7f92dd091616cdbfe8e9093884355787",
+ "sized": null,
+ "request": {
+  "path": "/page",
+  "headers": []
+ },
+ "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT pages",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "mask": [],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": "Xeon(R) Platinum 8168",
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

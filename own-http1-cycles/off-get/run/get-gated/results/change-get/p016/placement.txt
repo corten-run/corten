@@ -1,0 +1,8 @@
+comparison change-get placement 16 workload get
+A base-p21424 e8ad6c63bdcaba8a1cce135b14f5a4eb1781e197ff1835e0aa39e73b9507b7fd
+B head-p21424 f9794c0bb0fb9bd075d5c632899c450f4a305f4425ff873ba778c4c648d4a9a3
+run 5c12c6b1-6067-41f3-920a-baa28e6e792f
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 31
+started 2026-11-27T20:16:42Z
+ended 2026-11-27T20:17:58Z

@@ -1,0 +1,2 @@
+functions in both: 3447; names defined more than once in a binary, left out of the shift and the order: 34; moved by exactly the pad: 3447; neighbours kept: 3374 of 3374; only in the placement: corten_layout_pad
+JSON {"ok":true,"why":[],"pad":13744,"second":false,"functions":3447,"repeated":34,"exact":3447,"neighbours":3374,"neighboursKept":3374,"onlyA":0,"onlyB":["corten_layout_pad"]}

@@ -1,0 +1,1223 @@
+{
+ "name": "own-http1-on",
+ "part": "gated",
+ "workload": "deep",
+ "dry": null,
+ "K": 82,
+ "declaredK": "pilot",
+ "sizedFrom": null,
+ "R": 8,
+ "seconds": 3,
+ "seed": 2026112713,
+ "rank": 49,
+ "lowerRank": 34,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008,
+  35808,
+  5552,
+  20288,
+  30992,
+  736,
+  15536,
+  26176,
+  36880,
+  10720,
+  21424,
+  36160,
+  5904,
+  16608,
+  31408,
+  1088,
+  15888,
+  26592,
+  37296,
+  11072,
+  21776,
+  36576,
+  6320,
+  16960,
+  31760,
+  1504,
+  16304,
+  26944,
+  37648,
+  11488,
+  22192,
+  32832,
+  6672,
+  17376,
+  32176,
+  1856,
+  12560,
+  27360,
+  38064,
+  11840,
+  22544,
+  33248,
+  7088,
+  17728,
+  32528,
+  2272,
+  12976,
+  27712,
+  38416,
+  12256,
+  22960,
+  33600,
+  7440,
+  18144,
+  28848,
+  2624,
+  13328,
+  28128,
+  38832,
+  8512,
+  23312,
+  34016,
+  7856,
+  18496,
+  29200,
+  3040,
+  13744,
+  28480,
+  39184,
+  8928,
+  23728,
+  34368,
+  4112,
+  18912,
+  29616,
+  3392,
+  14096
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192,
+  32464,
+  17680,
+  7008,
+  33184,
+  22496,
+  11808,
+  38000,
+  27312,
+  12528,
+  1840,
+  32064,
+  17280,
+  6592,
+  32768,
+  22096,
+  11408,
+  37584,
+  26896,
+  16224,
+  1440,
+  31712,
+  16928,
+  6256,
+  36528,
+  20528,
+  12080,
+  39424,
+  27008,
+  14400,
+  832,
+  33296,
+  16656,
+  7248,
+  35664,
+  23072,
+  9504,
+  37920,
+  25440,
+  12848,
+  3376,
+  31856,
+  19312,
+  5696,
+  34240,
+  21632,
+  16256,
+  40592,
+  27984,
+  14480,
+  1936,
+  30304,
+  16736,
+  4192,
+  36768,
+  23152,
+  10608,
+  39088,
+  25520,
+  12928,
+  512,
+  28864,
+  19392,
+  6864,
+  35216,
+  21712,
+  9168,
+  37536,
+  28064,
+  15520,
+  7136,
+  30384,
+  17840,
+  5360,
+  36848,
+  24256,
+  15936
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    21,
+    21,
+    20,
+    20
+   ],
+   "pageQuarters": [
+    21,
+    20,
+    21,
+    20
+   ],
+   "pages": [
+    9,
+    8,
+    8,
+    9,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    22,
+    20,
+    20,
+    20
+   ],
+   "pageQuarters": [
+    21,
+    18,
+    22,
+    21
+   ],
+   "pages": [
+    7,
+    9,
+    7,
+    10,
+    8,
+    9,
+    8,
+    7,
+    9,
+    8
+   ],
+   "min": 512,
+   "max": 40592
+  },
+  "linePairCombos": 16,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664,
+   752,
+   3936,
+   3104,
+   2192,
+   1280,
+   368,
+   3632,
+   2720,
+   1808,
+   896,
+   0,
+   3184,
+   2272,
+   1360,
+   528,
+   3712,
+   2800,
+   1888,
+   1056,
+   144,
+   3328,
+   2416,
+   1584,
+   672,
+   2640,
+   3968,
+   192,
+   1648,
+   2912,
+   3216,
+   464,
+   1792,
+   2160,
+   3488,
+   736,
+   1040,
+   2368,
+   3760,
+   1008,
+   1312,
+   2704,
+   4032,
+   256,
+   1712,
+   2976,
+   3280,
+   592,
+   1856,
+   2224,
+   3552,
+   800,
+   1104,
+   2432,
+   3824,
+   48,
+   1376,
+   2768,
+   3072,
+   320,
+   1776,
+   3040,
+   3344,
+   656,
+   1920,
+   2288,
+   3616,
+   864,
+   1168,
+   2496,
+   3888,
+   112,
+   1440,
+   2832,
+   3136,
+   384,
+   1840
+  ],
+  "distinctDiffs": 82,
+  "diffQuarters": [
+   21,
+   21,
+   20,
+   20
+  ]
+ },
+ "sides": [
+  "base",
+  "head"
+ ],
+ "comparisons": [
+  "aa-deep",
+  "change-deep"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "aa-deep",
+   "i": 65
+  },
+  {
+   "seq": 2,
+   "comparison": "change-deep",
+   "i": 65
+  },
+  {
+   "seq": 3,
+   "comparison": "change-deep",
+   "i": 13
+  },
+  {
+   "seq": 4,
+   "comparison": "aa-deep",
+   "i": 13
+  },
+  {
+   "seq": 5,
+   "comparison": "aa-deep",
+   "i": 31
+  },
+  {
+   "seq": 6,
+   "comparison": "change-deep",
+   "i": 31
+  },
+  {
+   "seq": 7,
+   "comparison": "change-deep",
+   "i": 29
+  },
+  {
+   "seq": 8,
+   "comparison": "aa-deep",
+   "i": 29
+  },
+  {
+   "seq": 9,
+   "comparison": "aa-deep",
+   "i": 80
+  },
+  {
+   "seq": 10,
+   "comparison": "change-deep",
+   "i": 80
+  },
+  {
+   "seq": 11,
+   "comparison": "change-deep",
+   "i": 26
+  },
+  {
+   "seq": 12,
+   "comparison": "aa-deep",
+   "i": 26
+  },
+  {
+   "seq": 13,
+   "comparison": "aa-deep",
+   "i": 4
+  },
+  {
+   "seq": 14,
+   "comparison": "change-deep",
+   "i": 4
+  },
+  {
+   "seq": 15,
+   "comparison": "change-deep",
+   "i": 59
+  },
+  {
+   "seq": 16,
+   "comparison": "aa-deep",
+   "i": 59
+  },
+  {
+   "seq": 17,
+   "comparison": "aa-deep",
+   "i": 10
+  },
+  {
+   "seq": 18,
+   "comparison": "change-deep",
+   "i": 10
+  },
+  {
+   "seq": 19,
+   "comparison": "change-deep",
+   "i": 77
+  },
+  {
+   "seq": 20,
+   "comparison": "aa-deep",
+   "i": 77
+  },
+  {
+   "seq": 21,
+   "comparison": "aa-deep",
+   "i": 51
+  },
+  {
+   "seq": 22,
+   "comparison": "change-deep",
+   "i": 51
+  },
+  {
+   "seq": 23,
+   "comparison": "change-deep",
+   "i": 55
+  },
+  {
+   "seq": 24,
+   "comparison": "aa-deep",
+   "i": 55
+  },
+  {
+   "seq": 25,
+   "comparison": "aa-deep",
+   "i": 56
+  },
+  {
+   "seq": 26,
+   "comparison": "change-deep",
+   "i": 56
+  },
+  {
+   "seq": 27,
+   "comparison": "change-deep",
+   "i": 68
+  },
+  {
+   "seq": 28,
+   "comparison": "aa-deep",
+   "i": 68
+  },
+  {
+   "seq": 29,
+   "comparison": "aa-deep",
+   "i": 5
+  },
+  {
+   "seq": 30,
+   "comparison": "change-deep",
+   "i": 5
+  },
+  {
+   "seq": 31,
+   "comparison": "change-deep",
+   "i": 58
+  },
+  {
+   "seq": 32,
+   "comparison": "aa-deep",
+   "i": 58
+  },
+  {
+   "seq": 33,
+   "comparison": "aa-deep",
+   "i": 61
+  },
+  {
+   "seq": 34,
+   "comparison": "change-deep",
+   "i": 61
+  },
+  {
+   "seq": 35,
+   "comparison": "change-deep",
+   "i": 41
+  },
+  {
+   "seq": 36,
+   "comparison": "aa-deep",
+   "i": 41
+  },
+  {
+   "seq": 37,
+   "comparison": "aa-deep",
+   "i": 23
+  },
+  {
+   "seq": 38,
+   "comparison": "change-deep",
+   "i": 23
+  },
+  {
+   "seq": 39,
+   "comparison": "change-deep",
+   "i": 16
+  },
+  {
+   "seq": 40,
+   "comparison": "aa-deep",
+   "i": 16
+  },
+  {
+   "seq": 41,
+   "comparison": "aa-deep",
+   "i": 38
+  },
+  {
+   "seq": 42,
+   "comparison": "change-deep",
+   "i": 38
+  },
+  {
+   "seq": 43,
+   "comparison": "change-deep",
+   "i": 34
+  },
+  {
+   "seq": 44,
+   "comparison": "aa-deep",
+   "i": 34
+  },
+  {
+   "seq": 45,
+   "comparison": "aa-deep",
+   "i": 47
+  },
+  {
+   "seq": 46,
+   "comparison": "change-deep",
+   "i": 47
+  },
+  {
+   "seq": 47,
+   "comparison": "change-deep",
+   "i": 19
+  },
+  {
+   "seq": 48,
+   "comparison": "aa-deep",
+   "i": 19
+  },
+  {
+   "seq": 49,
+   "comparison": "aa-deep",
+   "i": 42
+  },
+  {
+   "seq": 50,
+   "comparison": "change-deep",
+   "i": 42
+  },
+  {
+   "seq": 51,
+   "comparison": "change-deep",
+   "i": 39
+  },
+  {
+   "seq": 52,
+   "comparison": "aa-deep",
+   "i": 39
+  },
+  {
+   "seq": 53,
+   "comparison": "aa-deep",
+   "i": 48
+  },
+  {
+   "seq": 54,
+   "comparison": "change-deep",
+   "i": 48
+  },
+  {
+   "seq": 55,
+   "comparison": "change-deep",
+   "i": 50
+  },
+  {
+   "seq": 56,
+   "comparison": "aa-deep",
+   "i": 50
+  },
+  {
+   "seq": 57,
+   "comparison": "aa-deep",
+   "i": 45
+  },
+  {
+   "seq": 58,
+   "comparison": "change-deep",
+   "i": 45
+  },
+  {
+   "seq": 59,
+   "comparison": "change-deep",
+   "i": 7
+  },
+  {
+   "seq": 60,
+   "comparison": "aa-deep",
+   "i": 7
+  },
+  {
+   "seq": 61,
+   "comparison": "aa-deep",
+   "i": 14
+  },
+  {
+   "seq": 62,
+   "comparison": "change-deep",
+   "i": 14
+  },
+  {
+   "seq": 63,
+   "comparison": "change-deep",
+   "i": 74
+  },
+  {
+   "seq": 64,
+   "comparison": "aa-deep",
+   "i": 74
+  },
+  {
+   "seq": 65,
+   "comparison": "aa-deep",
+   "i": 49
+  },
+  {
+   "seq": 66,
+   "comparison": "change-deep",
+   "i": 49
+  },
+  {
+   "seq": 67,
+   "comparison": "change-deep",
+   "i": 35
+  },
+  {
+   "seq": 68,
+   "comparison": "aa-deep",
+   "i": 35
+  },
+  {
+   "seq": 69,
+   "comparison": "aa-deep",
+   "i": 72
+  },
+  {
+   "seq": 70,
+   "comparison": "change-deep",
+   "i": 72
+  },
+  {
+   "seq": 71,
+   "comparison": "change-deep",
+   "i": 28
+  },
+  {
+   "seq": 72,
+   "comparison": "aa-deep",
+   "i": 28
+  },
+  {
+   "seq": 73,
+   "comparison": "aa-deep",
+   "i": 24
+  },
+  {
+   "seq": 74,
+   "comparison": "change-deep",
+   "i": 24
+  },
+  {
+   "seq": 75,
+   "comparison": "change-deep",
+   "i": 32
+  },
+  {
+   "seq": 76,
+   "comparison": "aa-deep",
+   "i": 32
+  },
+  {
+   "seq": 77,
+   "comparison": "aa-deep",
+   "i": 18
+  },
+  {
+   "seq": 78,
+   "comparison": "change-deep",
+   "i": 18
+  },
+  {
+   "seq": 79,
+   "comparison": "change-deep",
+   "i": 33
+  },
+  {
+   "seq": 80,
+   "comparison": "aa-deep",
+   "i": 33
+  },
+  {
+   "seq": 81,
+   "comparison": "aa-deep",
+   "i": 82
+  },
+  {
+   "seq": 82,
+   "comparison": "change-deep",
+   "i": 82
+  },
+  {
+   "seq": 83,
+   "comparison": "change-deep",
+   "i": 12
+  },
+  {
+   "seq": 84,
+   "comparison": "aa-deep",
+   "i": 12
+  },
+  {
+   "seq": 85,
+   "comparison": "aa-deep",
+   "i": 30
+  },
+  {
+   "seq": 86,
+   "comparison": "change-deep",
+   "i": 30
+  },
+  {
+   "seq": 87,
+   "comparison": "change-deep",
+   "i": 9
+  },
+  {
+   "seq": 88,
+   "comparison": "aa-deep",
+   "i": 9
+  },
+  {
+   "seq": 89,
+   "comparison": "aa-deep",
+   "i": 64
+  },
+  {
+   "seq": 90,
+   "comparison": "change-deep",
+   "i": 64
+  },
+  {
+   "seq": 91,
+   "comparison": "change-deep",
+   "i": 79
+  },
+  {
+   "seq": 92,
+   "comparison": "aa-deep",
+   "i": 79
+  },
+  {
+   "seq": 93,
+   "comparison": "aa-deep",
+   "i": 22
+  },
+  {
+   "seq": 94,
+   "comparison": "change-deep",
+   "i": 22
+  },
+  {
+   "seq": 95,
+   "comparison": "change-deep",
+   "i": 6
+  },
+  {
+   "seq": 96,
+   "comparison": "aa-deep",
+   "i": 6
+  },
+  {
+   "seq": 97,
+   "comparison": "aa-deep",
+   "i": 46
+  },
+  {
+   "seq": 98,
+   "comparison": "change-deep",
+   "i": 46
+  },
+  {
+   "seq": 99,
+   "comparison": "change-deep",
+   "i": 20
+  },
+  {
+   "seq": 100,
+   "comparison": "aa-deep",
+   "i": 20
+  },
+  {
+   "seq": 101,
+   "comparison": "aa-deep",
+   "i": 73
+  },
+  {
+   "seq": 102,
+   "comparison": "change-deep",
+   "i": 73
+  },
+  {
+   "seq": 103,
+   "comparison": "change-deep",
+   "i": 71
+  },
+  {
+   "seq": 104,
+   "comparison": "aa-deep",
+   "i": 71
+  },
+  {
+   "seq": 105,
+   "comparison": "aa-deep",
+   "i": 62
+  },
+  {
+   "seq": 106,
+   "comparison": "change-deep",
+   "i": 62
+  },
+  {
+   "seq": 107,
+   "comparison": "change-deep",
+   "i": 21
+  },
+  {
+   "seq": 108,
+   "comparison": "aa-deep",
+   "i": 21
+  },
+  {
+   "seq": 109,
+   "comparison": "aa-deep",
+   "i": 52
+  },
+  {
+   "seq": 110,
+   "comparison": "change-deep",
+   "i": 52
+  },
+  {
+   "seq": 111,
+   "comparison": "change-deep",
+   "i": 27
+  },
+  {
+   "seq": 112,
+   "comparison": "aa-deep",
+   "i": 27
+  },
+  {
+   "seq": 113,
+   "comparison": "aa-deep",
+   "i": 70
+  },
+  {
+   "seq": 114,
+   "comparison": "change-deep",
+   "i": 70
+  },
+  {
+   "seq": 115,
+   "comparison": "change-deep",
+   "i": 75
+  },
+  {
+   "seq": 116,
+   "comparison": "aa-deep",
+   "i": 75
+  },
+  {
+   "seq": 117,
+   "comparison": "aa-deep",
+   "i": 66
+  },
+  {
+   "seq": 118,
+   "comparison": "change-deep",
+   "i": 66
+  },
+  {
+   "seq": 119,
+   "comparison": "change-deep",
+   "i": 81
+  },
+  {
+   "seq": 120,
+   "comparison": "aa-deep",
+   "i": 81
+  },
+  {
+   "seq": 121,
+   "comparison": "aa-deep",
+   "i": 69
+  },
+  {
+   "seq": 122,
+   "comparison": "change-deep",
+   "i": 69
+  },
+  {
+   "seq": 123,
+   "comparison": "change-deep",
+   "i": 11
+  },
+  {
+   "seq": 124,
+   "comparison": "aa-deep",
+   "i": 11
+  },
+  {
+   "seq": 125,
+   "comparison": "aa-deep",
+   "i": 60
+  },
+  {
+   "seq": 126,
+   "comparison": "change-deep",
+   "i": 60
+  },
+  {
+   "seq": 127,
+   "comparison": "change-deep",
+   "i": 76
+  },
+  {
+   "seq": 128,
+   "comparison": "aa-deep",
+   "i": 76
+  },
+  {
+   "seq": 129,
+   "comparison": "aa-deep",
+   "i": 44
+  },
+  {
+   "seq": 130,
+   "comparison": "change-deep",
+   "i": 44
+  },
+  {
+   "seq": 131,
+   "comparison": "change-deep",
+   "i": 57
+  },
+  {
+   "seq": 132,
+   "comparison": "aa-deep",
+   "i": 57
+  },
+  {
+   "seq": 133,
+   "comparison": "aa-deep",
+   "i": 2
+  },
+  {
+   "seq": 134,
+   "comparison": "change-deep",
+   "i": 2
+  },
+  {
+   "seq": 135,
+   "comparison": "change-deep",
+   "i": 1
+  },
+  {
+   "seq": 136,
+   "comparison": "aa-deep",
+   "i": 1
+  },
+  {
+   "seq": 137,
+   "comparison": "aa-deep",
+   "i": 15
+  },
+  {
+   "seq": 138,
+   "comparison": "change-deep",
+   "i": 15
+  },
+  {
+   "seq": 139,
+   "comparison": "change-deep",
+   "i": 78
+  },
+  {
+   "seq": 140,
+   "comparison": "aa-deep",
+   "i": 78
+  },
+  {
+   "seq": 141,
+   "comparison": "aa-deep",
+   "i": 17
+  },
+  {
+   "seq": 142,
+   "comparison": "change-deep",
+   "i": 17
+  },
+  {
+   "seq": 143,
+   "comparison": "change-deep",
+   "i": 53
+  },
+  {
+   "seq": 144,
+   "comparison": "aa-deep",
+   "i": 53
+  },
+  {
+   "seq": 145,
+   "comparison": "aa-deep",
+   "i": 54
+  },
+  {
+   "seq": 146,
+   "comparison": "change-deep",
+   "i": 54
+  },
+  {
+   "seq": 147,
+   "comparison": "change-deep",
+   "i": 8
+  },
+  {
+   "seq": 148,
+   "comparison": "aa-deep",
+   "i": 8
+  },
+  {
+   "seq": 149,
+   "comparison": "aa-deep",
+   "i": 67
+  },
+  {
+   "seq": 150,
+   "comparison": "change-deep",
+   "i": 67
+  },
+  {
+   "seq": 151,
+   "comparison": "change-deep",
+   "i": 40
+  },
+  {
+   "seq": 152,
+   "comparison": "aa-deep",
+   "i": 40
+  },
+  {
+   "seq": 153,
+   "comparison": "aa-deep",
+   "i": 63
+  },
+  {
+   "seq": 154,
+   "comparison": "change-deep",
+   "i": 63
+  },
+  {
+   "seq": 155,
+   "comparison": "change-deep",
+   "i": 25
+  },
+  {
+   "seq": 156,
+   "comparison": "aa-deep",
+   "i": 25
+  },
+  {
+   "seq": 157,
+   "comparison": "aa-deep",
+   "i": 3
+  },
+  {
+   "seq": 158,
+   "comparison": "change-deep",
+   "i": 3
+  },
+  {
+   "seq": 159,
+   "comparison": "change-deep",
+   "i": 36
+  },
+  {
+   "seq": 160,
+   "comparison": "aa-deep",
+   "i": 36
+  },
+  {
+   "seq": 161,
+   "comparison": "aa-deep",
+   "i": 37
+  },
+  {
+   "seq": 162,
+   "comparison": "change-deep",
+   "i": 37
+  },
+  {
+   "seq": 163,
+   "comparison": "change-deep",
+   "i": 43
+  },
+  {
+   "seq": 164,
+   "comparison": "aa-deep",
+   "i": 43
+  }
+ ],
+ "base": "2f8984ddce025c92bade4a6fafd21f4863d25085",
+ "head": "0bcb3138c69f69dab997486c9af87a3660eb0ed4",
+ "reduction": 0.03,
+ "reads": [
+  "margin",
+  "reduction"
+ ],
+ "recordsSpread": true,
+ "declared": "GET /pipeline to the probe's configuration api, 16 requests written at a time on each connection (deep.lua). Touched: with the switch on the answers to requests that arrived together leave in one write, where hyper flushes each. Read for a reduction of 3%, the smallest reduction worth having, not a forecast, and held to +1% with no floor. The answers the kit compares are those to one GET of this path sent alone; the answers to the 16 written together are held only to wrk's count of failed requests, which must be zero in every turn.",
+ "plan": "3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3",
+ "inputs": "f0a71d4d02f5556d4dfea7ad195720558d6c43d7984867db48da98280dcca0a6",
+ "sized": {
+  "from": "d3b8bd81-f93d-4d31-bd59-9674fdddbce6",
+  "K": 82,
+  "models": [
+   "normal",
+   "smoothed"
+  ],
+  "counts": [
+   {
+    "model": "normal",
+    "failing": 5207,
+    "rank": 49
+   },
+   {
+    "model": "smoothed",
+    "failing": 9088,
+    "rank": 49
+   }
+  ],
+  "model": "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz"
+ },
+ "request": {
+  "path": "/pipeline",
+  "headers": [],
+  "script": "deep.lua"
+ },
+ "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT api",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "mask": [],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": "Xeon(R) Platinum 8168",
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

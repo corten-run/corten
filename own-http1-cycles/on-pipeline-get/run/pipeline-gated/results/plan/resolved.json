@@ -1,0 +1,637 @@
+{
+ "name": "own-http1-on",
+ "part": "gated",
+ "workload": "pipeline",
+ "dry": null,
+ "K": 37,
+ "declaredK": "pilot",
+ "sizedFrom": null,
+ "R": 8,
+ "seconds": 3,
+ "seed": 2026112711,
+ "rank": 24,
+ "lowerRank": 14,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008,
+  35808,
+  5552,
+  20288,
+  30992,
+  736,
+  15536,
+  26176,
+  36880,
+  10720,
+  21424,
+  36160,
+  5904,
+  16608,
+  31408,
+  1088,
+  15888,
+  26592,
+  37296,
+  11072,
+  21776,
+  36576,
+  6320,
+  16960,
+  31760,
+  1504,
+  16304,
+  26944,
+  37648,
+  11488,
+  22192,
+  32832
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192,
+  32464,
+  17680,
+  7008,
+  33184,
+  22496,
+  11808,
+  38000,
+  27312,
+  12528,
+  1840,
+  32064,
+  17280,
+  6592,
+  32768,
+  22096,
+  11408,
+  37584,
+  26896,
+  16224,
+  1440,
+  31712,
+  16928,
+  6256,
+  36528,
+  20528,
+  12080,
+  39424,
+  27008,
+  14400,
+  832,
+  29200
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    10,
+    9,
+    9,
+    9
+   ],
+   "pageQuarters": [
+    10,
+    9,
+    9,
+    9
+   ],
+   "pages": [
+    4,
+    3,
+    4,
+    4,
+    3,
+    4,
+    4,
+    3,
+    4,
+    4
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    12,
+    9,
+    8,
+    8
+   ],
+   "pageQuarters": [
+    10,
+    7,
+    11,
+    9
+   ],
+   "pages": [
+    4,
+    3,
+    4,
+    4,
+    3,
+    4,
+    4,
+    4,
+    3,
+    4
+   ],
+   "min": 832,
+   "max": 39424
+  },
+  "linePairCombos": 16,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664,
+   752,
+   3936,
+   3104,
+   2192,
+   1280,
+   368,
+   3632,
+   2720,
+   1808,
+   896,
+   0,
+   3184,
+   2272,
+   1360,
+   528,
+   3712,
+   2800,
+   1888,
+   1056,
+   144,
+   3328,
+   2416,
+   1584,
+   672,
+   2640,
+   3968,
+   192,
+   1648,
+   2912,
+   3216,
+   464
+  ],
+  "distinctDiffs": 37,
+  "diffQuarters": [
+   10,
+   9,
+   9,
+   9
+  ]
+ },
+ "sides": [
+  "base",
+  "head"
+ ],
+ "comparisons": [
+  "aa-pipeline",
+  "change-pipeline"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "aa-pipeline",
+   "i": 11
+  },
+  {
+   "seq": 2,
+   "comparison": "change-pipeline",
+   "i": 11
+  },
+  {
+   "seq": 3,
+   "comparison": "change-pipeline",
+   "i": 6
+  },
+  {
+   "seq": 4,
+   "comparison": "aa-pipeline",
+   "i": 6
+  },
+  {
+   "seq": 5,
+   "comparison": "aa-pipeline",
+   "i": 36
+  },
+  {
+   "seq": 6,
+   "comparison": "change-pipeline",
+   "i": 36
+  },
+  {
+   "seq": 7,
+   "comparison": "change-pipeline",
+   "i": 13
+  },
+  {
+   "seq": 8,
+   "comparison": "aa-pipeline",
+   "i": 13
+  },
+  {
+   "seq": 9,
+   "comparison": "aa-pipeline",
+   "i": 37
+  },
+  {
+   "seq": 10,
+   "comparison": "change-pipeline",
+   "i": 37
+  },
+  {
+   "seq": 11,
+   "comparison": "change-pipeline",
+   "i": 26
+  },
+  {
+   "seq": 12,
+   "comparison": "aa-pipeline",
+   "i": 26
+  },
+  {
+   "seq": 13,
+   "comparison": "aa-pipeline",
+   "i": 17
+  },
+  {
+   "seq": 14,
+   "comparison": "change-pipeline",
+   "i": 17
+  },
+  {
+   "seq": 15,
+   "comparison": "change-pipeline",
+   "i": 10
+  },
+  {
+   "seq": 16,
+   "comparison": "aa-pipeline",
+   "i": 10
+  },
+  {
+   "seq": 17,
+   "comparison": "aa-pipeline",
+   "i": 12
+  },
+  {
+   "seq": 18,
+   "comparison": "change-pipeline",
+   "i": 12
+  },
+  {
+   "seq": 19,
+   "comparison": "change-pipeline",
+   "i": 28
+  },
+  {
+   "seq": 20,
+   "comparison": "aa-pipeline",
+   "i": 28
+  },
+  {
+   "seq": 21,
+   "comparison": "aa-pipeline",
+   "i": 5
+  },
+  {
+   "seq": 22,
+   "comparison": "change-pipeline",
+   "i": 5
+  },
+  {
+   "seq": 23,
+   "comparison": "change-pipeline",
+   "i": 20
+  },
+  {
+   "seq": 24,
+   "comparison": "aa-pipeline",
+   "i": 20
+  },
+  {
+   "seq": 25,
+   "comparison": "aa-pipeline",
+   "i": 30
+  },
+  {
+   "seq": 26,
+   "comparison": "change-pipeline",
+   "i": 30
+  },
+  {
+   "seq": 27,
+   "comparison": "change-pipeline",
+   "i": 35
+  },
+  {
+   "seq": 28,
+   "comparison": "aa-pipeline",
+   "i": 35
+  },
+  {
+   "seq": 29,
+   "comparison": "aa-pipeline",
+   "i": 34
+  },
+  {
+   "seq": 30,
+   "comparison": "change-pipeline",
+   "i": 34
+  },
+  {
+   "seq": 31,
+   "comparison": "change-pipeline",
+   "i": 33
+  },
+  {
+   "seq": 32,
+   "comparison": "aa-pipeline",
+   "i": 33
+  },
+  {
+   "seq": 33,
+   "comparison": "aa-pipeline",
+   "i": 25
+  },
+  {
+   "seq": 34,
+   "comparison": "change-pipeline",
+   "i": 25
+  },
+  {
+   "seq": 35,
+   "comparison": "change-pipeline",
+   "i": 19
+  },
+  {
+   "seq": 36,
+   "comparison": "aa-pipeline",
+   "i": 19
+  },
+  {
+   "seq": 37,
+   "comparison": "aa-pipeline",
+   "i": 31
+  },
+  {
+   "seq": 38,
+   "comparison": "change-pipeline",
+   "i": 31
+  },
+  {
+   "seq": 39,
+   "comparison": "change-pipeline",
+   "i": 21
+  },
+  {
+   "seq": 40,
+   "comparison": "aa-pipeline",
+   "i": 21
+  },
+  {
+   "seq": 41,
+   "comparison": "aa-pipeline",
+   "i": 29
+  },
+  {
+   "seq": 42,
+   "comparison": "change-pipeline",
+   "i": 29
+  },
+  {
+   "seq": 43,
+   "comparison": "change-pipeline",
+   "i": 4
+  },
+  {
+   "seq": 44,
+   "comparison": "aa-pipeline",
+   "i": 4
+  },
+  {
+   "seq": 45,
+   "comparison": "aa-pipeline",
+   "i": 23
+  },
+  {
+   "seq": 46,
+   "comparison": "change-pipeline",
+   "i": 23
+  },
+  {
+   "seq": 47,
+   "comparison": "change-pipeline",
+   "i": 7
+  },
+  {
+   "seq": 48,
+   "comparison": "aa-pipeline",
+   "i": 7
+  },
+  {
+   "seq": 49,
+   "comparison": "aa-pipeline",
+   "i": 22
+  },
+  {
+   "seq": 50,
+   "comparison": "change-pipeline",
+   "i": 22
+  },
+  {
+   "seq": 51,
+   "comparison": "change-pipeline",
+   "i": 1
+  },
+  {
+   "seq": 52,
+   "comparison": "aa-pipeline",
+   "i": 1
+  },
+  {
+   "seq": 53,
+   "comparison": "aa-pipeline",
+   "i": 27
+  },
+  {
+   "seq": 54,
+   "comparison": "change-pipeline",
+   "i": 27
+  },
+  {
+   "seq": 55,
+   "comparison": "change-pipeline",
+   "i": 2
+  },
+  {
+   "seq": 56,
+   "comparison": "aa-pipeline",
+   "i": 2
+  },
+  {
+   "seq": 57,
+   "comparison": "aa-pipeline",
+   "i": 9
+  },
+  {
+   "seq": 58,
+   "comparison": "change-pipeline",
+   "i": 9
+  },
+  {
+   "seq": 59,
+   "comparison": "change-pipeline",
+   "i": 24
+  },
+  {
+   "seq": 60,
+   "comparison": "aa-pipeline",
+   "i": 24
+  },
+  {
+   "seq": 61,
+   "comparison": "aa-pipeline",
+   "i": 18
+  },
+  {
+   "seq": 62,
+   "comparison": "change-pipeline",
+   "i": 18
+  },
+  {
+   "seq": 63,
+   "comparison": "change-pipeline",
+   "i": 15
+  },
+  {
+   "seq": 64,
+   "comparison": "aa-pipeline",
+   "i": 15
+  },
+  {
+   "seq": 65,
+   "comparison": "aa-pipeline",
+   "i": 16
+  },
+  {
+   "seq": 66,
+   "comparison": "change-pipeline",
+   "i": 16
+  },
+  {
+   "seq": 67,
+   "comparison": "change-pipeline",
+   "i": 14
+  },
+  {
+   "seq": 68,
+   "comparison": "aa-pipeline",
+   "i": 14
+  },
+  {
+   "seq": 69,
+   "comparison": "aa-pipeline",
+   "i": 3
+  },
+  {
+   "seq": 70,
+   "comparison": "change-pipeline",
+   "i": 3
+  },
+  {
+   "seq": 71,
+   "comparison": "change-pipeline",
+   "i": 32
+  },
+  {
+   "seq": 72,
+   "comparison": "aa-pipeline",
+   "i": 32
+  },
+  {
+   "seq": 73,
+   "comparison": "aa-pipeline",
+   "i": 8
+  },
+  {
+   "seq": 74,
+   "comparison": "change-pipeline",
+   "i": 8
+  }
+ ],
+ "base": "2f8984ddce025c92bade4a6fafd21f4863d25085",
+ "head": "0bcb3138c69f69dab997486c9af87a3660eb0ed4",
+ "reduction": 0.03,
+ "reads": [
+  "margin",
+  "reduction"
+ ],
+ "recordsSpread": true,
+ "declared": "GET /pipeline to the probe's configuration api, no request header of its own: a route that says unstaged and answers 2 bytes, the shortest request the probe answers. Touched: with the switch on its connection is Corten's own from the first byte to the last. Read for a reduction of 3%, the smallest reduction worth having, not a forecast, and held to +1% with no floor.",
+ "plan": "3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3",
+ "inputs": "9fe6c0b6df86cb921c828b773dd7be1e7f92dd091616cdbfe8e9093884355787",
+ "sized": {
+  "from": "b133026c-cf8a-46de-9ba2-b48719b8089c",
+  "K": 37,
+  "models": [
+   "normal",
+   "smoothed"
+  ],
+  "counts": [
+   {
+    "model": "normal",
+    "failing": 5706,
+    "rank": 24
+   },
+   {
+    "model": "smoothed",
+    "failing": 8862,
+    "rank": 24
+   }
+  ],
+  "model": "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz"
+ },
+ "request": {
+  "path": "/pipeline",
+  "headers": []
+ },
+ "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT api",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "mask": [],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": "Xeon(R) Platinum 8168",
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

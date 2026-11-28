@@ -1,0 +1,8 @@
+comparison aa-deep placement 13 workload deep
+A base-p26176 e5cd6b2b38dbc3d1ca0cfb9f723b3163bbae8e2b31ed9da638dbea5fd0c06861
+B base-p38000 955ac438da363da7b17aaf305a64b14b5622e6d6f11d1d6e0425c771a69ff159
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 4
+started 2026-11-27T19:51:35Z
+ended 2026-11-27T19:52:52Z

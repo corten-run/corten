@@ -1,0 +1,116 @@
+{
+  "plan": 1,
+  "name": "own-http1-off",
+  "base": "e733f3d888450707c049a17cd6100c891966bc87",
+  "head": "2f8984ddce025c92bade4a6fafd21f4863d25085",
+  "probe": {
+    "dir": "probe",
+    "tree": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "README.md",
+      "crates",
+      "docs"
+    ],
+    "toolchain": "1.100.0",
+    "env": {
+      "ZSTD_SYS_USE_PKG_CONFIG": "1"
+    },
+    "build": "cargo build --release",
+    "binary": "release/probe",
+    "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT api"
+  },
+  "host": {
+    "cpuModel": "Xeon(R) Platinum 8168",
+    "cpus": {
+      "server": 2,
+      "load": [
+        4,
+        5
+      ],
+      "driver": 7
+    }
+  },
+  "load": {
+    "threads": 2,
+    "connections": 64,
+    "seconds": 3
+  },
+  "R": 8,
+  "placementSeconds": 600,
+  "pilot": {
+    "K": 100
+  },
+  "workloads": [
+    {
+      "name": "pipeline",
+      "declared": "GET /pipeline to the probe's configuration api, no request header of its own: a route that says unstaged and answers 2 bytes, the shortest request the probe answers, so the connection's code is the largest share of it. Touched: with the switch off a connection takes one more branch when it is accepted and a request takes the same path through hyper, but the compiled program is not the same (design Choice 78), so every request runs code this change compiles differently. Held to +1% with no floor; no reduction is declared.",
+      "request": {
+        "path": "/pipeline",
+        "headers": []
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112701,
+      "reads": [
+        "margin"
+      ],
+      "reduction": null,
+      "recordsSpread": true
+    },
+    {
+      "name": "get",
+      "declared": "GET /baseline11?a=1&b=2 to the probe's configuration api, no request header of its own: a staged API route, typed query parameters in and a short answer out. Touched: with the switch off a connection takes one more branch when it is accepted and a request takes the same path through hyper, but the compiled program is not the same (design Choice 78), so every request runs code this change compiles differently. Held to +1% with no floor; no reduction is declared. Named for the catalog's json target: both are a staged API route's short answer through the same connection, service and router future, which is the code this change compiles differently.",
+      "request": {
+        "path": "/baseline11?a=1&b=2",
+        "headers": []
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112702,
+      "reads": [
+        "margin"
+      ],
+      "reduction": null,
+      "recordsSpread": true
+    },
+    {
+      "name": "page",
+      "declared": "GET /page to the probe's configuration pages, no request header of its own: a staged page of about 12 KB, not compressed. Touched: with the switch off a connection takes one more branch when it is accepted and a request takes the same path through hyper, but the compiled program is not the same (design Choice 78), so every request runs code this change compiles differently. Held to +1% with no floor; no reduction is declared. Named for the catalog's page target: both are a staged page through the same connection, service and router future, which is the code this change compiles differently.",
+      "request": {
+        "path": "/page",
+        "headers": []
+      },
+      "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT pages",
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112703,
+      "reads": [
+        "margin"
+      ],
+      "reduction": null,
+      "recordsSpread": true
+    },
+    {
+      "name": "post",
+      "declared": "POST /baseline11?a=1&b=2 with the 2-byte text/plain body 20 to the probe's configuration api (post.lua): a request with a body, which hyper reads. Touched: with the switch off a connection takes one more branch when it is accepted and a request takes the same path through hyper, but the compiled program is not the same (design Choice 78), so every request runs code this change compiles differently. Held to +1% with no floor; no reduction is declared. The kit captures the answers it compares with a GET, so the answers compared are those to a GET of this path; the POST's own answers are held only to wrk's count of failed requests, which must be zero in every turn.",
+      "request": {
+        "path": "/baseline11?a=1&b=2",
+        "headers": [],
+        "script": "post.lua"
+      },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112704,
+      "reads": [
+        "margin"
+      ],
+      "reduction": null,
+      "recordsSpread": true
+    }
+  ]
+}

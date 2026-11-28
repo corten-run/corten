@@ -1,0 +1,8 @@
+comparison aa-get placement 16 workload get
+A base-p21424 e8ad6c63bdcaba8a1cce135b14f5a4eb1781e197ff1835e0aa39e73b9507b7fd
+B base-p1840 0dfb2f8d18e929d8abc865d887f9a57de416dfb31f02ad2b0fbb6a498f161673
+run 5c12c6b1-6067-41f3-920a-baa28e6e792f
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 32
+started 2026-11-27T20:17:58Z
+ended 2026-11-27T20:19:16Z

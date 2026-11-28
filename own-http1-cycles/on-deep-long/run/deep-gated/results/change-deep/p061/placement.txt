@@ -1,0 +1,8 @@
+comparison change-deep placement 61 workload deep
+A base-p2624 fff83a9ac0be13d929a95e49f938fb5b4598b33644d7ff0c7ef39bf01c623c77
+B head-p2624 358adc95bdce10f8ca746d2d92a61a42d4aa81fb39f3566dc99e5f9d4bdf0f02
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 34
+started 2026-11-27T20:30:13Z
+ended 2026-11-27T20:31:30Z

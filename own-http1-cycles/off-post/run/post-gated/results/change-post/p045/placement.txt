@@ -1,0 +1,8 @@
+comparison change-post placement 45 workload post
+A base-p11840 d3e4c2638f6a5e98e051fefeeaa6d0cf6bf93162f99969d06e3cfe9e2beac3b4
+B head-p11840 a998f4ece90e45e5c982fe099652df09a717929e7171be7abf918e4ef0630871
+run c2f0e030-b230-4c4c-92f8-eb30ee7c9c34
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 110
+started 2026-11-27T22:00:34Z
+ended 2026-11-27T22:01:50Z

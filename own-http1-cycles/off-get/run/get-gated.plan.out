@@ -1,0 +1,48 @@
+plan own-http1-off, sha256 f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225: base e733f3d888450707c049a17cd6100c891966bc87, head 2f8984ddce025c92bade4a6fafd21f4863d25085
+sizing: K = 5: smoothed 187967 (the 5th) failing draws of 200000, against at most 10000
+sizing: K = 6: smoothed 193237 (the 6th) failing draws of 200000, against at most 10000
+sizing: K = 7: smoothed 196138 (the 7th) failing draws of 200000, against at most 10000
+sizing: K = 8: smoothed 166895 (the 7th) failing draws of 200000, against at most 10000
+sizing: K = 9: smoothed 177471 (the 8th) failing draws of 200000, against at most 10000
+sizing: K = 10: smoothed 184720 (the 9th) failing draws of 200000, against at most 10000
+sizing: K = 11: smoothed 145542 (the 9th) failing draws of 200000, against at most 10000
+sizing: K = 12: smoothed 158562 (the 10th) failing draws of 200000, against at most 10000
+sizing: K = 13: smoothed 110026 (the 10th) failing draws of 200000, against at most 10000
+sizing: K = 14: smoothed 125638 (the 11th) failing draws of 200000, against at most 10000
+sizing: K = 15: smoothed 139716 (the 12th) failing draws of 200000, against at most 10000
+sizing: K = 16: smoothed 94571 (the 12th) failing draws of 200000, against at most 10000
+sizing: K = 17: smoothed 108843 (the 13th) failing draws of 200000, against at most 10000
+sizing: K = 18: smoothed 68005 (the 13th) failing draws of 200000, against at most 10000
+sizing: K = 19: smoothed 81223 (the 14th) failing draws of 200000, against at most 10000
+sizing: K = 20: smoothed 94256 (the 15th) failing draws of 200000, against at most 10000
+sizing: K = 21: smoothed 58465 (the 15th) failing draws of 200000, against at most 10000
+sizing: K = 22: smoothed 69800 (the 16th) failing draws of 200000, against at most 10000
+sizing: K = 23: smoothed 41607 (the 16th) failing draws of 200000, against at most 10000
+sizing: K = 24: smoothed 50532 (the 17th) failing draws of 200000, against at most 10000
+sizing: K = 25: smoothed 60403 (the 18th) failing draws of 200000, against at most 10000
+sizing: K = 26: smoothed 35994 (the 18th) failing draws of 200000, against at most 10000
+sizing: K = 27: smoothed 43657 (the 19th) failing draws of 200000, against at most 10000
+sizing: K = 28: smoothed 25523 (the 19th) failing draws of 200000, against at most 10000
+sizing: K = 29: smoothed 31353 (the 20th) failing draws of 200000, against at most 10000
+sizing: K = 30: smoothed 18010 (the 20th) failing draws of 200000, against at most 10000
+sizing: K = 31: smoothed 22329 (the 21st) failing draws of 200000, against at most 10000
+sizing: K = 32: smoothed 27556 (the 22nd) failing draws of 200000, against at most 10000
+sizing: K = 33: smoothed 15794 (the 22nd) failing draws of 200000, against at most 10000
+sizing: K = 34: smoothed 19556 (the 23rd) failing draws of 200000, against at most 10000
+sizing: K = 35: smoothed 11219 (the 23rd) failing draws of 200000, against at most 10000
+sizing: K = 36: smoothed 13894 (the 24th) failing draws of 200000, against at most 10000
+sizing: K = 37: smoothed 7866 (the 24th) failing draws of 200000, against at most 10000
+sizing from pilot-get of run bb9f3a45-a359-402d-9fa3-1100dfc6230f (plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225): 100 of 100 placements read, R = 8
+eligible: yes (every placement read with all its pairs: yes; lag-1 autocorrelation r1 0.010, p 0.837; Spearman's correlation with run order rho -1.8e-2, p 0.856; zero inside -0.13% to +0.27%, the 42nd to the 59th sorted median: yes)
+placement medians: standard deviation 1.44%; Shapiro-Wilk p 6.1e-4, Anderson-Darling p 0.002; models kept: smoothed
+K = 37, the smallest from 5 to 254 at which every kept model's count of failing draws is at most 10000 of 200000 (seed 1983): smoothed 7866 (the 24th); at the K's before it: 34: smoothed 19556 (the 23rd); 35: smoothed 11219 (the 23rd); 36: smoothed 13894 (the 24th)
+gated get: K = 37 placements (from the pilot, by the sizing rule), R = 8 recorded pairs each after one that is not, 3 s turns; comparisons aa-get and change-get
+thresholds: the margin (+1%, no floor): read by this run
+the A/A records a placement spread for the workload, if it is complete and resolves
+the bound is the 24th smallest of the 37 placement medians, the lower bound the 14th; the order is drawn from seed 2026112702
+pads p (base and head in the change, the A/A's first side): 320 15120 25824 40624 10304 21008 35808 5552 20288 30992 736 15536 26176 36880 10720 21424 36160 5904 16608 31408 1088 15888 26592 37296 11072 21776 36576 6320 16960 31760 1504 16304 26944 37648 11488 22192 32832
+pads q (the A/A's second side): 22848 12160 38336 27648 12880 2192 32464 17680 7008 33184 22496 11808 38000 27312 12528 1840 32064 17280 6592 32768 22096 11408 37584 26896 16224 1440 31712 16928 6256 36528 20528 12080 39424 27008 14400 832 29200
+74 distinct sizes from 320 to 40624 bytes; p by 64-byte-line phase (0, 16, 32, 48): 10, 9, 9, 9, by quarter of a page: 10, 9, 9, 9; q: 12, 9, 8, 8 and 10, 7, 11, 9
+the pairs: 16 ordered combinations of the line phases of p and q; q - p mod 4096 takes 37 distinct values, 10, 9, 9, 9 by quarter of a page (at least 4 asked in each)
+inputs: sha256 9fe6c0b6df86cb921c828b773dd7be1e7f92dd091616cdbfe8e9093884355787 over the 3 files the plan names by path (the probe's, the request script), each listed with its own
+written: /root/run/get-gated/plan

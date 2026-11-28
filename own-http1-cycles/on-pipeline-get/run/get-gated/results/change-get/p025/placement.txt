@@ -1,0 +1,8 @@
+comparison change-get placement 25 workload get
+A base-p11072 f3cd8b199a6988c3cad24f591cb49047ab87d938a7b43b5a1a10c3dc53f0bc9b
+B head-p11072 f05cb01dff88d9a412859b2cc79b9d1b505bec0ed5850d123ccb40d542e9a20c
+run 453ebd2f-365f-4c0c-a590-f751e3db12ff
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 55
+started 2026-11-28T00:45:00Z
+ended 2026-11-28T00:46:17Z

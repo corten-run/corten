@@ -1,0 +1,66 @@
+== run c64e4983-d84e-4bb4-9bc9-d5c232101f39: gated pipeline, plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225; verify start 19:40:33
+verify: 90 placements answer as their unpadded binary
+== turns start 19:42:12; 60 placements to run
+1 aa-pipeline p003 ok 19:43:29
+2 change-pipeline p003 ok 19:44:45
+3 change-pipeline p021 ok 19:46:02
+4 aa-pipeline p021 ok 19:47:19
+5 aa-pipeline p024 ok 19:48:36
+6 change-pipeline p024 ok 19:49:52
+7 change-pipeline p009 ok 19:51:09
+8 aa-pipeline p009 ok 19:52:26
+9 aa-pipeline p017 ok 19:53:42
+10 change-pipeline p017 ok 19:54:59
+11 change-pipeline p025 ok 19:56:16
+12 aa-pipeline p025 ok 19:57:33
+13 aa-pipeline p022 ok 19:58:49
+14 change-pipeline p022 ok 20:00:06
+15 change-pipeline p013 ok 20:01:23
+16 aa-pipeline p013 ok 20:02:40
+17 aa-pipeline p029 ok 20:03:56
+18 change-pipeline p029 ok 20:05:13
+19 change-pipeline p016 ok 20:06:30
+20 aa-pipeline p016 ok 20:07:46
+21 aa-pipeline p030 ok 20:09:03
+22 change-pipeline p030 ok 20:10:19
+23 change-pipeline p018 ok 20:11:36
+24 aa-pipeline p018 ok 20:12:52
+25 aa-pipeline p019 ok 20:14:09
+26 change-pipeline p019 ok 20:15:26
+27 change-pipeline p015 ok 20:16:42
+28 aa-pipeline p015 ok 20:17:59
+29 aa-pipeline p005 ok 20:19:15
+30 change-pipeline p005 ok 20:20:32
+31 change-pipeline p023 ok 20:21:49
+32 aa-pipeline p023 ok 20:23:05
+33 aa-pipeline p010 ok 20:24:22
+34 change-pipeline p010 ok 20:25:38
+35 change-pipeline p001 ok 20:26:55
+36 aa-pipeline p001 ok 20:28:12
+37 aa-pipeline p008 ok 20:29:28
+38 change-pipeline p008 ok 20:30:45
+39 change-pipeline p004 ok 20:32:01
+40 aa-pipeline p004 ok 20:33:18
+41 aa-pipeline p012 ok 20:34:35
+42 change-pipeline p012 ok 20:35:51
+43 change-pipeline p027 ok 20:37:08
+44 aa-pipeline p027 ok 20:38:25
+45 aa-pipeline p014 ok 20:39:41
+46 change-pipeline p014 ok 20:40:58
+47 change-pipeline p011 ok 20:42:14
+48 aa-pipeline p011 ok 20:43:31
+49 aa-pipeline p020 ok 20:44:48
+50 change-pipeline p020 ok 20:46:04
+51 change-pipeline p007 ok 20:47:21
+52 aa-pipeline p007 ok 20:48:37
+53 aa-pipeline p026 ok 20:49:54
+54 change-pipeline p026 ok 20:51:11
+55 change-pipeline p002 ok 20:52:27
+56 aa-pipeline p002 ok 20:53:44
+57 aa-pipeline p028 ok 20:55:01
+58 change-pipeline p028 ok 20:56:18
+59 change-pipeline p006 ok 20:57:34
+60 aa-pipeline p006 ok 20:58:51
+failed (their comparison has no bound; nothing is run again): none
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

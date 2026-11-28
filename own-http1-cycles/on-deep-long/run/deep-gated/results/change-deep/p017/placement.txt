@@ -1,0 +1,8 @@
+comparison change-deep placement 17 workload deep
+A base-p36160 02bae2c2a5d50ce9ced0a65fd98108cbecb79ef0dddbfc3eec90912a5722f366
+B head-p36160 4ad6b8d89eb1b9447a5f2852796cee0a6516a9486e8fb0ed1fedbbf62e08b6be
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 142
+started 2026-11-27T22:49:24Z
+ended 2026-11-27T22:50:41Z

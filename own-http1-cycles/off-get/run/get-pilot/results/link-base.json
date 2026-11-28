@@ -1,0 +1,621 @@
+{
+ "cwd": "/root/run/get-pilot/probe",
+ "out": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe",
+ "original": [
+  "-m64",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.addr2line-7b0f6e97825481e2.addr2line.4ea420ee1a475331-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.adler2-e2ce665ff67b57c0.adler2.f6b3626e7ec053e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.alloc-85247acc020adff6.alloc.2a0ada2ddd1fabff-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.alloc_no_stdlib-4d84569577255d27.alloc_no_stdlib.bab1f586c99f2326-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.alloc_stdlib-6f87e45e01cc825f.alloc_stdlib.3c138993e8e212c0-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.atomic_waker-b52dfbb23c1796ba.atomic_waker.9a28cba40df8aeaa-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.brotli-2fdcffd3822c2c24.brotli.77424775a4b1e7c2-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.brotli_decompressor-df1b0d08f781aeb5.brotli_decompressor.ecf151bccb9beb3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.bytes-ba0e06f2774a2f68.bytes.4b3d6f1360ace4da-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.cfg_if-9c6f2168fa87763d.cfg_if.2159ec556571b6b8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.cfg_if-bd7fdbdc4037e2fb.cfg_if.f4499222bf087f7b-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.core-5cc9b44b3cc93987.core.62e902411887be45-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.corten-d66f11b68a7615b1.corten.42f80ee63f9779b-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.crc32fast-16e2818af43fe438.crc32fast.4f3def26bffe342c-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.errno-15051303ffd3a5d3.errno.95ab9479f963a378-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.f1qzbkkdatjgzhmoe3iglu310.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.flate2-26b557655d99b47c.flate2.f22144b0564c7956-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.form_urlencoded-36e98a87b2e6471a.form_urlencoded.13bd040b1c66d203-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.futures_core-5bbbe673fe3342dc.futures_core.547917ad886689bd-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.futures_task-52e81024991683e2.futures_task.60fb3894a8a05eaa-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.futures_util-2689b293f6e0f398.futures_util.337bc0a2a85eb656-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.getrandom-e77b8bb6f6df07de.getrandom.8b2cc6f154938d2c-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.gimli-1a6fc8b0208bb8fc.gimli.c7f8e159c3bad807-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.hashbrown-4ff56eecd226607f.hashbrown.ee4ff39ba1229c30-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.http-d8110a0f9bcbd8c5.http.9e15aed4fae434b3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.http_body-e36b8d506541e4f9.http_body.39161dbc0adf3b4a-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.httparse-b15ada4231c40b00.httparse.dbc5776573448471-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.httpdate-fb68fddda084cbd9.httpdate.f69255628b8a10f-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.hyper-9f0f42b606fa4b7b.hyper.81c08e38cf23deef-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.hyper_util-ee114c961cd63cb1.hyper_util.3352b600302e1269-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.itoa-207a3ae8ebba783e.itoa.da8997cdec7ba649-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.libc-7d5a06a231119d28.libc.e1392e6067150d71-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.libc-87a1e107234efbf6.libc.42b0cc5deb3011c3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.matchit-c21af1666ba9c8ee.matchit.63eaddb19163bf68-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.memchr-1ba61398ed2c734a.memchr.34ca8a1f818233b0-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.memchr-6a0d2fe03da054b8.memchr.3e0224a1cf67740a-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.miniz_oxide-8452adbefd08d7ac.miniz_oxide.f9f8b656ff25e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.miniz_oxide-a7264d6b6be47ce0.miniz_oxide.7221af6dc846185e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.mio-d5c0e56476822798.mio.bcc8d457690668b3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.object-a7ba6115ade4b705.object.2c5e907fb041bf2e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.once_cell-f98df6828fb8c784.once_cell.f2dc2156d6b13cad-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.panic_unwind-ff93ac03b0a682c8.panic_unwind.15375af19791c208-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.percent_encoding-58dfa8358527717b.percent_encoding.7ce73d5c47a46044-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.pin_project_lite-84102d01ff3b4511.pin_project_lite.7b77b0f2ba42e1c8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.probe.2e5179df8a601ef1-cgu.0.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.rustc_demangle-472a59a7b73a19f5.rustc_demangle.41ae64fbea28afc8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.rustc_std_workspace_alloc-d8ea523cfa8887c8.rustc_std_workspace_alloc.5bd15fa1e1f313dc-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.rustc_std_workspace_core-dfb2205f94d45e38.rustc_std_workspace_core.a13ca11aa9d14eb5-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde-2b2819e44e7a9541.serde.c1905d2c9b01cf71-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde_core-3cb61e261b513758.serde_core.ed5b38372ae3e8a4-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde_json-54dac4fa5e5e05c8.serde_json.4a4b0ca31d1d939a-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde_path_to_error-ca70b3ead2b6a81b.serde_path_to_error.ed3bd8ac250ea796-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.signal_hook_registry-f3431b9aeb463196.signal_hook_registry.8b436cf9f0f74017-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.simd_adler32-029050cbd29ea4fe.simd_adler32.6bc3d57a1a1f423e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.smallvec-72e84b815d37dfd6.smallvec.cdfa5930dcb498c8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.socket2-3bafb62eb1169176.socket2.bc249510c5b76024-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.std-7d3c8b3343c9c95a.std.c60ef17cbf7de79f-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.std_detect-401278cbbb34fdda.std_detect.7d37319dd681d769-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tokio-60a6f19a127da5c6.tokio.28c9fc4ab956746e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tower_layer-791e9918001a1d9c.tower_layer.e91d2974682d895-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tower_service-30ca7d41a1f2947d.tower_service.43efe63f4f8c738f-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tracing-2d9c652526c9acd7.tracing.71786321e09cd31b-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tracing_core-3b2338dc196689a7.tracing_core.9adcf279ecf8c06c-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.unwind-340d0bf6f5821f74.unwind.497a908001b28871-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zmij-833b7f9373aafbd7.zmij.caafc2e21337dff2-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zstd-78586b7ef1313fb1.zstd.4120fb95eafce88d-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zstd_safe-a9d7e9147e78aaef.zstd_safe.3c3a1f1c876734a5-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zstd_sys-31bb7a5c63c22fe1.zstd_sys.fc68cd22f8300862-cgu.0.rcgu.o.rcgu.o",
+  "-Wl,--as-needed",
+  "-Wl,-Bstatic",
+  "/root/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib",
+  "-Wl,-Bdynamic",
+  "-lzstd",
+  "-lgcc_s",
+  "-lutil",
+  "-lrt",
+  "-lpthread",
+  "-lm",
+  "-ldl",
+  "-lc",
+  "-L",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/rustcrXDPgy/raw-dylibs",
+  "-B/root/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld",
+  "-fuse-ld=lld",
+  "-Wl,--eh-frame-hdr",
+  "-Wl,-z,noexecstack",
+  "-L",
+  "/usr/lib/x86_64-linux-gnu",
+  "-L",
+  "/root/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib",
+  "-o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe",
+  "-Wl,--gc-sections",
+  "-pie",
+  "-Wl,-z,relro,-z,now",
+  "-Wl,-O1",
+  "-Wl,--strip-debug",
+  "-nodefaultlibs"
+ ],
+ "recorded": [
+  "-m64",
+  "/root/run/get-pilot/capture/base/in/001-probe.addr2line-7b0f6e97825481e2.addr2line.4ea420ee1a475331-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/002-probe.adler2-e2ce665ff67b57c0.adler2.f6b3626e7ec053e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/003-probe.alloc-85247acc020adff6.alloc.2a0ada2ddd1fabff-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/004-probe.alloc_no_stdlib-4d84569577255d27.alloc_no_stdlib.bab1f586c99f2326-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/005-probe.alloc_stdlib-6f87e45e01cc825f.alloc_stdlib.3c138993e8e212c0-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/006-probe.atomic_waker-b52dfbb23c1796ba.atomic_waker.9a28cba40df8aeaa-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/007-probe.brotli-2fdcffd3822c2c24.brotli.77424775a4b1e7c2-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/008-probe.brotli_decompressor-df1b0d08f781aeb5.brotli_decompressor.ecf151bccb9beb3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/009-probe.bytes-ba0e06f2774a2f68.bytes.4b3d6f1360ace4da-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/010-probe.cfg_if-9c6f2168fa87763d.cfg_if.2159ec556571b6b8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/011-probe.cfg_if-bd7fdbdc4037e2fb.cfg_if.f4499222bf087f7b-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/012-probe.core-5cc9b44b3cc93987.core.62e902411887be45-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/013-probe.corten-d66f11b68a7615b1.corten.42f80ee63f9779b-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/014-probe.crc32fast-16e2818af43fe438.crc32fast.4f3def26bffe342c-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/015-probe.errno-15051303ffd3a5d3.errno.95ab9479f963a378-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/016-probe.f1qzbkkdatjgzhmoe3iglu310.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/017-probe.flate2-26b557655d99b47c.flate2.f22144b0564c7956-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/018-probe.form_urlencoded-36e98a87b2e6471a.form_urlencoded.13bd040b1c66d203-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/019-probe.futures_core-5bbbe673fe3342dc.futures_core.547917ad886689bd-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/020-probe.futures_task-52e81024991683e2.futures_task.60fb3894a8a05eaa-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/021-probe.futures_util-2689b293f6e0f398.futures_util.337bc0a2a85eb656-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/022-probe.getrandom-e77b8bb6f6df07de.getrandom.8b2cc6f154938d2c-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/023-probe.gimli-1a6fc8b0208bb8fc.gimli.c7f8e159c3bad807-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/024-probe.hashbrown-4ff56eecd226607f.hashbrown.ee4ff39ba1229c30-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/025-probe.http-d8110a0f9bcbd8c5.http.9e15aed4fae434b3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/026-probe.http_body-e36b8d506541e4f9.http_body.39161dbc0adf3b4a-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/027-probe.httparse-b15ada4231c40b00.httparse.dbc5776573448471-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/028-probe.httpdate-fb68fddda084cbd9.httpdate.f69255628b8a10f-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/029-probe.hyper-9f0f42b606fa4b7b.hyper.81c08e38cf23deef-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/030-probe.hyper_util-ee114c961cd63cb1.hyper_util.3352b600302e1269-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/031-probe.itoa-207a3ae8ebba783e.itoa.da8997cdec7ba649-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/032-probe.libc-7d5a06a231119d28.libc.e1392e6067150d71-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/033-probe.libc-87a1e107234efbf6.libc.42b0cc5deb3011c3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/034-probe.matchit-c21af1666ba9c8ee.matchit.63eaddb19163bf68-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/035-probe.memchr-1ba61398ed2c734a.memchr.34ca8a1f818233b0-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/036-probe.memchr-6a0d2fe03da054b8.memchr.3e0224a1cf67740a-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/037-probe.miniz_oxide-8452adbefd08d7ac.miniz_oxide.f9f8b656ff25e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/038-probe.miniz_oxide-a7264d6b6be47ce0.miniz_oxide.7221af6dc846185e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/039-probe.mio-d5c0e56476822798.mio.bcc8d457690668b3-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/040-probe.object-a7ba6115ade4b705.object.2c5e907fb041bf2e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/041-probe.once_cell-f98df6828fb8c784.once_cell.f2dc2156d6b13cad-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/042-probe.panic_unwind-ff93ac03b0a682c8.panic_unwind.15375af19791c208-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/043-probe.percent_encoding-58dfa8358527717b.percent_encoding.7ce73d5c47a46044-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/044-probe.pin_project_lite-84102d01ff3b4511.pin_project_lite.7b77b0f2ba42e1c8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/045-probe.probe.2e5179df8a601ef1-cgu.0.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/046-probe.rustc_demangle-472a59a7b73a19f5.rustc_demangle.41ae64fbea28afc8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/047-probe.rustc_std_workspace_alloc-d8ea523cfa8887c8.rustc_std_workspace_alloc.5bd15fa1e1f313dc-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/048-probe.rustc_std_workspace_core-dfb2205f94d45e38.rustc_std_workspace_core.a13ca11aa9d14eb5-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/049-probe.serde-2b2819e44e7a9541.serde.c1905d2c9b01cf71-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/050-probe.serde_core-3cb61e261b513758.serde_core.ed5b38372ae3e8a4-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/051-probe.serde_json-54dac4fa5e5e05c8.serde_json.4a4b0ca31d1d939a-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/052-probe.serde_path_to_error-ca70b3ead2b6a81b.serde_path_to_error.ed3bd8ac250ea796-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/053-probe.signal_hook_registry-f3431b9aeb463196.signal_hook_registry.8b436cf9f0f74017-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/054-probe.simd_adler32-029050cbd29ea4fe.simd_adler32.6bc3d57a1a1f423e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/055-probe.smallvec-72e84b815d37dfd6.smallvec.cdfa5930dcb498c8-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/056-probe.socket2-3bafb62eb1169176.socket2.bc249510c5b76024-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/057-probe.std-7d3c8b3343c9c95a.std.c60ef17cbf7de79f-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/058-probe.std_detect-401278cbbb34fdda.std_detect.7d37319dd681d769-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/059-probe.tokio-60a6f19a127da5c6.tokio.28c9fc4ab956746e-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/060-probe.tower_layer-791e9918001a1d9c.tower_layer.e91d2974682d895-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/061-probe.tower_service-30ca7d41a1f2947d.tower_service.43efe63f4f8c738f-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/062-probe.tracing-2d9c652526c9acd7.tracing.71786321e09cd31b-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/063-probe.tracing_core-3b2338dc196689a7.tracing_core.9adcf279ecf8c06c-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/064-probe.unwind-340d0bf6f5821f74.unwind.497a908001b28871-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/065-probe.zmij-833b7f9373aafbd7.zmij.caafc2e21337dff2-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/066-probe.zstd-78586b7ef1313fb1.zstd.4120fb95eafce88d-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/067-probe.zstd_safe-a9d7e9147e78aaef.zstd_safe.3c3a1f1c876734a5-cgu.0.rcgu.o.rcgu.o",
+  "/root/run/get-pilot/capture/base/in/068-probe.zstd_sys-31bb7a5c63c22fe1.zstd_sys.fc68cd22f8300862-cgu.0.rcgu.o.rcgu.o",
+  "-Wl,--as-needed",
+  "-Wl,-Bstatic",
+  "/root/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-ea8da5fbd1b77660.rlib",
+  "-Wl,-Bdynamic",
+  "-lzstd",
+  "-lgcc_s",
+  "-lutil",
+  "-lrt",
+  "-lpthread",
+  "-lm",
+  "-ldl",
+  "-lc",
+  "-L",
+  "/root/run/get-pilot/capture/base/in/tmp0/raw-dylibs",
+  "-B/root/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld",
+  "-fuse-ld=lld",
+  "-Wl,--eh-frame-hdr",
+  "-Wl,-z,noexecstack",
+  "-L",
+  "/usr/lib/x86_64-linux-gnu",
+  "-L",
+  "/root/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib",
+  "-o",
+  "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe",
+  "-Wl,--gc-sections",
+  "-pie",
+  "-Wl,-z,relro,-z,now",
+  "-Wl,-O1",
+  "-Wl,--strip-debug",
+  "-nodefaultlibs"
+ ],
+ "copied": [
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/rustcrXDPgy",
+   "to": "/root/run/get-pilot/capture/base/in/tmp0",
+   "kind": "rustc temporary directory"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.addr2line-7b0f6e97825481e2.addr2line.4ea420ee1a475331-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/001-probe.addr2line-7b0f6e97825481e2.addr2line.4ea420ee1a475331-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "2a0a6e6418d7af682a8c8fc159a0bb9c27ee93a443b758a515822cf8b98cdbf1"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.adler2-e2ce665ff67b57c0.adler2.f6b3626e7ec053e-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/002-probe.adler2-e2ce665ff67b57c0.adler2.f6b3626e7ec053e-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "10c7f2f14ba354ac3df0c00c3246cc8556f67372d5633f85a79271b0c295f366"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.alloc-85247acc020adff6.alloc.2a0ada2ddd1fabff-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/003-probe.alloc-85247acc020adff6.alloc.2a0ada2ddd1fabff-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "16543e386897d64ba9705e50e118b60861abc67a625106ac17e5117cc39fc1c5"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.alloc_no_stdlib-4d84569577255d27.alloc_no_stdlib.bab1f586c99f2326-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/004-probe.alloc_no_stdlib-4d84569577255d27.alloc_no_stdlib.bab1f586c99f2326-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "a3f82e95992e30fc1d19243c8f67dcebaf8a1afae1095c956313dec946e9cea2"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.alloc_stdlib-6f87e45e01cc825f.alloc_stdlib.3c138993e8e212c0-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/005-probe.alloc_stdlib-6f87e45e01cc825f.alloc_stdlib.3c138993e8e212c0-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "dd3dff9142b45dbd161b3cb6ac997362231a1fda874f4f7c0d04d2219f879cf9"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.atomic_waker-b52dfbb23c1796ba.atomic_waker.9a28cba40df8aeaa-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/006-probe.atomic_waker-b52dfbb23c1796ba.atomic_waker.9a28cba40df8aeaa-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "6f14044b4ed58927fc753a298cc913eeb6b59bee485d28b8b6304e5bd86d4e3e"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.brotli-2fdcffd3822c2c24.brotli.77424775a4b1e7c2-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/007-probe.brotli-2fdcffd3822c2c24.brotli.77424775a4b1e7c2-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "999b8bd1498847d9393606b51ff456bb14696c53e7dcbe5b20fad6bf60ea642e"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.brotli_decompressor-df1b0d08f781aeb5.brotli_decompressor.ecf151bccb9beb3-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/008-probe.brotli_decompressor-df1b0d08f781aeb5.brotli_decompressor.ecf151bccb9beb3-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "2ee57cd42dfe214b7e4b49c49627f4392be6e7e466380c7e1313e21109193e18"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.bytes-ba0e06f2774a2f68.bytes.4b3d6f1360ace4da-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/009-probe.bytes-ba0e06f2774a2f68.bytes.4b3d6f1360ace4da-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "5620e202c9358f9ef760468b3e4c9a404efe7828dac4666f4414a7a95a4ef0dd"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.cfg_if-9c6f2168fa87763d.cfg_if.2159ec556571b6b8-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/010-probe.cfg_if-9c6f2168fa87763d.cfg_if.2159ec556571b6b8-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "adc7bf3922899097301bfecfa96bf9ea74f6e9c32d0a73d7c263a61ebce32179"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.cfg_if-bd7fdbdc4037e2fb.cfg_if.f4499222bf087f7b-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/011-probe.cfg_if-bd7fdbdc4037e2fb.cfg_if.f4499222bf087f7b-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "365ea27d60dbaf423d477fab1eb6311f4b1b30c8c4d7b434249b5966e0a171e6"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.core-5cc9b44b3cc93987.core.62e902411887be45-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/012-probe.core-5cc9b44b3cc93987.core.62e902411887be45-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "c97f9b3cdd73c6e70cb577c3fcf05dff2977d811a42c5733f18799a47e1c29df"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.corten-d66f11b68a7615b1.corten.42f80ee63f9779b-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/013-probe.corten-d66f11b68a7615b1.corten.42f80ee63f9779b-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "64c8bc17f18e5aa4c9586bb4617b4dd99e6d87c3bf25cac1951fca83441ab6af"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.crc32fast-16e2818af43fe438.crc32fast.4f3def26bffe342c-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/014-probe.crc32fast-16e2818af43fe438.crc32fast.4f3def26bffe342c-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "58ef7afc99ad4e1857d975a2562c858c4fdf36562d1007f8f66a9c1a0ed0e8ef"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.errno-15051303ffd3a5d3.errno.95ab9479f963a378-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/015-probe.errno-15051303ffd3a5d3.errno.95ab9479f963a378-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "9ffc818a9a3eeddab636950286f9f7fae39a23fc3f04f222be44474ae37ba328"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.f1qzbkkdatjgzhmoe3iglu310.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/016-probe.f1qzbkkdatjgzhmoe3iglu310.rcgu.o",
+   "kind": "target file",
+   "sha256": "26c281db710dd0b305f751bec13f0adba36963623309ca066de8b0d3348d9281"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.flate2-26b557655d99b47c.flate2.f22144b0564c7956-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/017-probe.flate2-26b557655d99b47c.flate2.f22144b0564c7956-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "aa8f4244ce479d8b4c4fb76c7a451d1e6a49c457487126315ea7b9347eb94a23"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.form_urlencoded-36e98a87b2e6471a.form_urlencoded.13bd040b1c66d203-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/018-probe.form_urlencoded-36e98a87b2e6471a.form_urlencoded.13bd040b1c66d203-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "5335471e62c7487440c456956cd31998883dc095619fc1a97b6b0fdaf982b70c"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.futures_core-5bbbe673fe3342dc.futures_core.547917ad886689bd-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/019-probe.futures_core-5bbbe673fe3342dc.futures_core.547917ad886689bd-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "415c2445a1b6f0392c66ba72d0ca92e00a1b78a23c68f7f39eef70de7551c24e"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.futures_task-52e81024991683e2.futures_task.60fb3894a8a05eaa-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/020-probe.futures_task-52e81024991683e2.futures_task.60fb3894a8a05eaa-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "56db5d5a24e67a049b9a04afc796f3908d931c73861f9669f74d1591eafa72e9"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.futures_util-2689b293f6e0f398.futures_util.337bc0a2a85eb656-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/021-probe.futures_util-2689b293f6e0f398.futures_util.337bc0a2a85eb656-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "f4c716192b30b25b7eee3491f64d838ddb99ed276f2ce0417cc7599c1681f9ae"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.getrandom-e77b8bb6f6df07de.getrandom.8b2cc6f154938d2c-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/022-probe.getrandom-e77b8bb6f6df07de.getrandom.8b2cc6f154938d2c-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "9cbe888c47fa89a8782f34ad469a8a41dc4c895c1fb59739977fc884ee86a920"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.gimli-1a6fc8b0208bb8fc.gimli.c7f8e159c3bad807-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/023-probe.gimli-1a6fc8b0208bb8fc.gimli.c7f8e159c3bad807-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "bf4fb206500180104b91efc2925c4f2c9e53f72afdb1d68a46a51226a0ee5567"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.hashbrown-4ff56eecd226607f.hashbrown.ee4ff39ba1229c30-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/024-probe.hashbrown-4ff56eecd226607f.hashbrown.ee4ff39ba1229c30-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "1436d95c57d3b516aa98ef6f4551889b211a5876e0e54fe20ffa7fd8115d4bf2"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.http-d8110a0f9bcbd8c5.http.9e15aed4fae434b3-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/025-probe.http-d8110a0f9bcbd8c5.http.9e15aed4fae434b3-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "c3c7c09f80a6ff30ba3bec3a2a681e5450006b9e5e4b36dc053c5f63e940551b"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.http_body-e36b8d506541e4f9.http_body.39161dbc0adf3b4a-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/026-probe.http_body-e36b8d506541e4f9.http_body.39161dbc0adf3b4a-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "662c65fb21fc66ea564c12afd0f80da0c4e58cbbc4940d66f5cf4dfabacf998b"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.httparse-b15ada4231c40b00.httparse.dbc5776573448471-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/027-probe.httparse-b15ada4231c40b00.httparse.dbc5776573448471-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "28cbc0024d78b356e74b65b95f73992c016b27200be2375207903e3913f550ab"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.httpdate-fb68fddda084cbd9.httpdate.f69255628b8a10f-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/028-probe.httpdate-fb68fddda084cbd9.httpdate.f69255628b8a10f-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "cef90ab20723cfbb39ec73a745ffba3bb91e7bb6248c20d7b599e8f3605d243f"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.hyper-9f0f42b606fa4b7b.hyper.81c08e38cf23deef-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/029-probe.hyper-9f0f42b606fa4b7b.hyper.81c08e38cf23deef-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "7a9e68faf2921eaef2b1bed46cf41ba88ab0fe6d91ed39d04523b6ed0fe25129"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.hyper_util-ee114c961cd63cb1.hyper_util.3352b600302e1269-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/030-probe.hyper_util-ee114c961cd63cb1.hyper_util.3352b600302e1269-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "bf2c06e84fa8435d57ffe72637d855963ce83d496081a06b67ebfabab5fa4153"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.itoa-207a3ae8ebba783e.itoa.da8997cdec7ba649-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/031-probe.itoa-207a3ae8ebba783e.itoa.da8997cdec7ba649-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "e4de4d8da21a273870e6b4c8fa87b7393b8a5f8018aadcfb0e1c7adcb8f0a44f"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.libc-7d5a06a231119d28.libc.e1392e6067150d71-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/032-probe.libc-7d5a06a231119d28.libc.e1392e6067150d71-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "1e1f6578655eee75d527c03a792e5f8437cfce411fc926a89473f2c186e7be33"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.libc-87a1e107234efbf6.libc.42b0cc5deb3011c3-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/033-probe.libc-87a1e107234efbf6.libc.42b0cc5deb3011c3-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "504392a468d640ade739e25e946012137d6325448cae280a1bd249ed82cae3b9"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.matchit-c21af1666ba9c8ee.matchit.63eaddb19163bf68-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/034-probe.matchit-c21af1666ba9c8ee.matchit.63eaddb19163bf68-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "eeaeb46c91c0db4b3d611a6ed062fccda3abd9f65d1676072d0130d3db584eb4"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.memchr-1ba61398ed2c734a.memchr.34ca8a1f818233b0-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/035-probe.memchr-1ba61398ed2c734a.memchr.34ca8a1f818233b0-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "0e50ffcb25c05d050ad81e2a2185e1c38fecc498e4660c7345a2b355174f34ed"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.memchr-6a0d2fe03da054b8.memchr.3e0224a1cf67740a-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/036-probe.memchr-6a0d2fe03da054b8.memchr.3e0224a1cf67740a-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "fb20ae8d8cb03b29b0f942a5035f7a418943821ba4c901287e1da2b41cbcbab4"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.miniz_oxide-8452adbefd08d7ac.miniz_oxide.f9f8b656ff25e-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/037-probe.miniz_oxide-8452adbefd08d7ac.miniz_oxide.f9f8b656ff25e-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "9af2ff8a3ab7b5d8324595368cb892b84c97da2b3054c082aabd4eab7a86b372"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.miniz_oxide-a7264d6b6be47ce0.miniz_oxide.7221af6dc846185e-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/038-probe.miniz_oxide-a7264d6b6be47ce0.miniz_oxide.7221af6dc846185e-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "ac991d982d67c473ceb5114b5115add5cf97becef9645a3db1cbd815ed13b284"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.mio-d5c0e56476822798.mio.bcc8d457690668b3-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/039-probe.mio-d5c0e56476822798.mio.bcc8d457690668b3-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "9d2c9a5005bbf382479e62c9b11b234aacbcba9135bd0ebdee4704874e3b6af9"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.object-a7ba6115ade4b705.object.2c5e907fb041bf2e-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/040-probe.object-a7ba6115ade4b705.object.2c5e907fb041bf2e-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "2d31eb95f033756733485ce2b216c529254ca0720bb71c242c83a4a021e32457"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.once_cell-f98df6828fb8c784.once_cell.f2dc2156d6b13cad-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/041-probe.once_cell-f98df6828fb8c784.once_cell.f2dc2156d6b13cad-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "2e16bfc95d913879848a642896c09c4775930b7cd60f60935a64ce4d83d4e9bf"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.panic_unwind-ff93ac03b0a682c8.panic_unwind.15375af19791c208-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/042-probe.panic_unwind-ff93ac03b0a682c8.panic_unwind.15375af19791c208-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "a1bdab959044a6fbd11d06a8b38b93f67be0555af40f60fb5258b11ff1fef9dd"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.percent_encoding-58dfa8358527717b.percent_encoding.7ce73d5c47a46044-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/043-probe.percent_encoding-58dfa8358527717b.percent_encoding.7ce73d5c47a46044-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "33b2ce0c477af58c15e6a539494546a5e6f4af48ae0a01f1e8c7306345860a42"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.pin_project_lite-84102d01ff3b4511.pin_project_lite.7b77b0f2ba42e1c8-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/044-probe.pin_project_lite-84102d01ff3b4511.pin_project_lite.7b77b0f2ba42e1c8-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "941ee31767e00d3b984e9de00601161f206c1797efcecf392079519034f00078"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.probe.2e5179df8a601ef1-cgu.0.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/045-probe.probe.2e5179df8a601ef1-cgu.0.rcgu.o",
+   "kind": "target file",
+   "sha256": "750642b79f21eb227b048ac031645f43e9f7c9912faaaaa988dcd48448ebbf2c"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.rustc_demangle-472a59a7b73a19f5.rustc_demangle.41ae64fbea28afc8-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/046-probe.rustc_demangle-472a59a7b73a19f5.rustc_demangle.41ae64fbea28afc8-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "ed75011d58a769d1bc520c6e5e339b6da4b0acebe50f515ad0927438863e7d53"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.rustc_std_workspace_alloc-d8ea523cfa8887c8.rustc_std_workspace_alloc.5bd15fa1e1f313dc-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/047-probe.rustc_std_workspace_alloc-d8ea523cfa8887c8.rustc_std_workspace_alloc.5bd15fa1e1f313dc-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "fdca55f87c17d1e29cb2004bccf8b6a953744b08693f9de35dc2cca0f2a69184"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.rustc_std_workspace_core-dfb2205f94d45e38.rustc_std_workspace_core.a13ca11aa9d14eb5-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/048-probe.rustc_std_workspace_core-dfb2205f94d45e38.rustc_std_workspace_core.a13ca11aa9d14eb5-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "ab095980808e015674934e13e6b88cf3ae307a5dd5145ffc3bdd032cae044679"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde-2b2819e44e7a9541.serde.c1905d2c9b01cf71-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/049-probe.serde-2b2819e44e7a9541.serde.c1905d2c9b01cf71-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "0da9f1ec5c316299da4577521760e3a1e775db3aeb287163bdb6a343daf66ba3"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde_core-3cb61e261b513758.serde_core.ed5b38372ae3e8a4-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/050-probe.serde_core-3cb61e261b513758.serde_core.ed5b38372ae3e8a4-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "3ca5c7afde934943a8c6880de3170f9b517ff2b2b39a63a0a95527886a206d9d"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde_json-54dac4fa5e5e05c8.serde_json.4a4b0ca31d1d939a-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/051-probe.serde_json-54dac4fa5e5e05c8.serde_json.4a4b0ca31d1d939a-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "8addffeb46d4882a3be98c7838e277d1e49d90409a27528d72958534cb8445f8"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.serde_path_to_error-ca70b3ead2b6a81b.serde_path_to_error.ed3bd8ac250ea796-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/052-probe.serde_path_to_error-ca70b3ead2b6a81b.serde_path_to_error.ed3bd8ac250ea796-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "7181a1bbbb9586ea81e8ae3b8260c302cd53903631f94a269e301300cdd5ef4a"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.signal_hook_registry-f3431b9aeb463196.signal_hook_registry.8b436cf9f0f74017-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/053-probe.signal_hook_registry-f3431b9aeb463196.signal_hook_registry.8b436cf9f0f74017-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "ca2f3ee8d8d52e03448d9ff3f15673575a081321ec541a917e88d582e9255a46"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.simd_adler32-029050cbd29ea4fe.simd_adler32.6bc3d57a1a1f423e-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/054-probe.simd_adler32-029050cbd29ea4fe.simd_adler32.6bc3d57a1a1f423e-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "a027e68d4e82b269ecc940272dde578963ef2b1709af113f8a920398f4b5298c"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.smallvec-72e84b815d37dfd6.smallvec.cdfa5930dcb498c8-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/055-probe.smallvec-72e84b815d37dfd6.smallvec.cdfa5930dcb498c8-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "dbd0d8ce5658381f3da40465b7de14b3831cb3fd5256dddf9360cba5b33d6620"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.socket2-3bafb62eb1169176.socket2.bc249510c5b76024-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/056-probe.socket2-3bafb62eb1169176.socket2.bc249510c5b76024-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "adc73bae1dfec8ff0679adcca94e58fe6cd5abe2e8c0faafec43bb77e69a865f"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.std-7d3c8b3343c9c95a.std.c60ef17cbf7de79f-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/057-probe.std-7d3c8b3343c9c95a.std.c60ef17cbf7de79f-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "b30e8d2cd2ed6a7c134c721761117650b54a1df4ceefd609838b449c2c283cd6"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.std_detect-401278cbbb34fdda.std_detect.7d37319dd681d769-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/058-probe.std_detect-401278cbbb34fdda.std_detect.7d37319dd681d769-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "7864846b3fb7aabca1cda57cbb503ee01148f87592c9ae39569ec9f4e63c7cdd"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tokio-60a6f19a127da5c6.tokio.28c9fc4ab956746e-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/059-probe.tokio-60a6f19a127da5c6.tokio.28c9fc4ab956746e-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "9e1218059639476f8409e31843e0943a16ba863ac344f7588e3403016754a6c0"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tower_layer-791e9918001a1d9c.tower_layer.e91d2974682d895-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/060-probe.tower_layer-791e9918001a1d9c.tower_layer.e91d2974682d895-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "44fc1973d0beb4f1bf785578b4b3c790a41698253a1072f5e974f05382dd675b"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tower_service-30ca7d41a1f2947d.tower_service.43efe63f4f8c738f-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/061-probe.tower_service-30ca7d41a1f2947d.tower_service.43efe63f4f8c738f-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "eeaad07d9b6c39d76ad39eb67580ed559cd676b020e3cdc2098af209516eef4a"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tracing-2d9c652526c9acd7.tracing.71786321e09cd31b-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/062-probe.tracing-2d9c652526c9acd7.tracing.71786321e09cd31b-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "6e7482c02826c7c06161127d0a01ed3bc55501922b28fd66a31635f7e0ac4d0d"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.tracing_core-3b2338dc196689a7.tracing_core.9adcf279ecf8c06c-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/063-probe.tracing_core-3b2338dc196689a7.tracing_core.9adcf279ecf8c06c-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "c7f3e38536aeed1da9874787d950db8518f1701aec0412ca183d612b4ee6eeb6"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.unwind-340d0bf6f5821f74.unwind.497a908001b28871-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/064-probe.unwind-340d0bf6f5821f74.unwind.497a908001b28871-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "e109765f9abf1252a8eda4e0c17f033b70b64b68d48d93e07a72258455fb7cd5"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zmij-833b7f9373aafbd7.zmij.caafc2e21337dff2-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/065-probe.zmij-833b7f9373aafbd7.zmij.caafc2e21337dff2-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "3129eb3b8319f5f4eff1575581a63b7b1966c764844bacf54352ffa91c55f1e0"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zstd-78586b7ef1313fb1.zstd.4120fb95eafce88d-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/066-probe.zstd-78586b7ef1313fb1.zstd.4120fb95eafce88d-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "6d4fa781f231099aa99324372b4a2d336b85359ff9aae2e6a1dd2dfea68337b2"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zstd_safe-a9d7e9147e78aaef.zstd_safe.3c3a1f1c876734a5-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/067-probe.zstd_safe-a9d7e9147e78aaef.zstd_safe.3c3a1f1c876734a5-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "32b5a734806f9667d8ae621523bea9e64601173a163e160691250cce455b111d"
+  },
+  {
+   "from": "/root/run/get-pilot/target-base/release/build/request-cost-probe/4801716228ee5fd6/out/probe.zstd_sys-31bb7a5c63c22fe1.zstd_sys.fc68cd22f8300862-cgu.0.rcgu.o.rcgu.o",
+   "to": "/root/run/get-pilot/capture/base/in/068-probe.zstd_sys-31bb7a5c63c22fe1.zstd_sys.fc68cd22f8300862-cgu.0.rcgu.o.rcgu.o",
+   "kind": "target file",
+   "sha256": "3a739dcbf93f8d475433d0fe72c6a43f4dab12dc6431e08648ed48e5d66cfe47"
+  }
+ ]
+}

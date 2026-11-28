@@ -1,0 +1,15 @@
+HTTP/1.1 200 OK
+content-type: text/html; charset=utf-8
+vary: corten, accept
+vary: accept-encoding
+corten-shell: c227390c33da0bd7
+content-security-policy: default-src 'self'; script-src 'self' 'sha256-wrRGJXZcjWCJAx6O63tIvTNndMctLpy43268JO3YBrk='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+x-content-type-options: nosniff
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+cross-origin-opener-policy: same-origin
+permissions-policy: accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()
+cache-control: private, no-cache
+content-length: 12166
+date: Sat, 28 Nov 2026 00:58:57 GMT
+

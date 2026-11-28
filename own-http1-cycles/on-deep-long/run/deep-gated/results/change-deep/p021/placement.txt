@@ -1,0 +1,8 @@
+comparison change-deep placement 21 workload deep
+A base-p1088 fcb8da9a06cf4b15172ac239dcdf1a3aaef169eafefa021bf911adb3449bc6b9
+B head-p1088 d8011277aeeb0fd1fb6ef92e77159064de4acb63697f7be27ed45ee3087dec38
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 107
+started 2026-11-27T22:04:16Z
+ended 2026-11-27T22:05:34Z

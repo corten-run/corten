@@ -1,0 +1,8 @@
+comparison pilot-deep placement 18 workload deep
+A base-p5904 8fad80d1f0cfc6d79605f27bb1f914361a50438465af13779a6238bdaf8f5ac0
+B base-p17280 a61c89d5cfbcfab4e2acecbdbfef9192b0dbddf77a5f3d36015dcc03e3c59548
+run d3b8bd81-f93d-4d31-bd59-9674fdddbce6
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 10
+started 2026-11-27T17:34:56Z
+ended 2026-11-27T17:36:13Z

@@ -1,0 +1,8 @@
+comparison change-long placement 28 workload long
+A base-p6320 ad7067a03fc75d8321ae82e2ddc6e94b5d69932e7a02b77b8b6eaba7d6d8c9fa
+B head-p6320 08c539be68ea4d89542c290e972deacd83572decd461b87dab5ff352dce114d4
+run b8c929fc-2533-4c26-897d-a705ba2aae43
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 18
+started 2026-11-28T02:02:05Z
+ended 2026-11-28T02:03:23Z

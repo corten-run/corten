@@ -1,0 +1,936 @@
+{
+ "name": "own-http1-off",
+ "part": "gated",
+ "workload": "post",
+ "dry": null,
+ "K": 60,
+ "declaredK": "pilot",
+ "sizedFrom": null,
+ "R": 8,
+ "seconds": 3,
+ "seed": 2026112704,
+ "rank": 37,
+ "lowerRank": 24,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008,
+  35808,
+  5552,
+  20288,
+  30992,
+  736,
+  15536,
+  26176,
+  36880,
+  10720,
+  21424,
+  36160,
+  5904,
+  16608,
+  31408,
+  1088,
+  15888,
+  26592,
+  37296,
+  11072,
+  21776,
+  36576,
+  6320,
+  16960,
+  31760,
+  1504,
+  16304,
+  26944,
+  37648,
+  11488,
+  22192,
+  32832,
+  6672,
+  17376,
+  32176,
+  1856,
+  12560,
+  27360,
+  38064,
+  11840,
+  22544,
+  33248,
+  7088,
+  17728,
+  32528,
+  2272,
+  12976,
+  27712,
+  38416,
+  12256,
+  22960,
+  33600,
+  7440,
+  18144,
+  28848
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192,
+  32464,
+  17680,
+  7008,
+  33184,
+  22496,
+  11808,
+  38000,
+  27312,
+  12528,
+  1840,
+  32064,
+  17280,
+  6592,
+  32768,
+  22096,
+  11408,
+  37584,
+  26896,
+  16224,
+  1440,
+  31712,
+  16928,
+  6256,
+  36528,
+  20528,
+  12080,
+  39424,
+  27008,
+  14400,
+  832,
+  29200,
+  16656,
+  7248,
+  35664,
+  23072,
+  9504,
+  37920,
+  25440,
+  12848,
+  3376,
+  31856,
+  19312,
+  5696,
+  34240,
+  21632,
+  16256,
+  40592,
+  27984,
+  14480,
+  1936,
+  30304,
+  16736,
+  4192,
+  36768
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    15,
+    15,
+    15,
+    15
+   ],
+   "pageQuarters": [
+    16,
+    14,
+    15,
+    15
+   ],
+   "pages": [
+    6,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    16,
+    16,
+    16,
+    12
+   ],
+   "pageQuarters": [
+    15,
+    14,
+    15,
+    16
+   ],
+   "pages": [
+    6,
+    6,
+    5,
+    7,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6
+   ],
+   "min": 832,
+   "max": 40592
+  },
+  "linePairCombos": 16,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664,
+   752,
+   3936,
+   3104,
+   2192,
+   1280,
+   368,
+   3632,
+   2720,
+   1808,
+   896,
+   0,
+   3184,
+   2272,
+   1360,
+   528,
+   3712,
+   2800,
+   1888,
+   1056,
+   144,
+   3328,
+   2416,
+   1584,
+   672,
+   2640,
+   3968,
+   192,
+   1648,
+   2912,
+   3216,
+   464,
+   1792,
+   2160,
+   3488,
+   736,
+   1040,
+   2368,
+   3760,
+   1008,
+   1312,
+   2704,
+   4032,
+   256,
+   1712,
+   2976,
+   3280,
+   592,
+   1856,
+   2224,
+   3552,
+   800,
+   1104,
+   2432,
+   3824
+  ],
+  "distinctDiffs": 60,
+  "diffQuarters": [
+   15,
+   15,
+   15,
+   15
+  ]
+ },
+ "sides": [
+  "base",
+  "head"
+ ],
+ "comparisons": [
+  "aa-post",
+  "change-post"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "aa-post",
+   "i": 29
+  },
+  {
+   "seq": 2,
+   "comparison": "change-post",
+   "i": 29
+  },
+  {
+   "seq": 3,
+   "comparison": "change-post",
+   "i": 50
+  },
+  {
+   "seq": 4,
+   "comparison": "aa-post",
+   "i": 50
+  },
+  {
+   "seq": 5,
+   "comparison": "aa-post",
+   "i": 24
+  },
+  {
+   "seq": 6,
+   "comparison": "change-post",
+   "i": 24
+  },
+  {
+   "seq": 7,
+   "comparison": "change-post",
+   "i": 30
+  },
+  {
+   "seq": 8,
+   "comparison": "aa-post",
+   "i": 30
+  },
+  {
+   "seq": 9,
+   "comparison": "aa-post",
+   "i": 58
+  },
+  {
+   "seq": 10,
+   "comparison": "change-post",
+   "i": 58
+  },
+  {
+   "seq": 11,
+   "comparison": "change-post",
+   "i": 18
+  },
+  {
+   "seq": 12,
+   "comparison": "aa-post",
+   "i": 18
+  },
+  {
+   "seq": 13,
+   "comparison": "aa-post",
+   "i": 55
+  },
+  {
+   "seq": 14,
+   "comparison": "change-post",
+   "i": 55
+  },
+  {
+   "seq": 15,
+   "comparison": "change-post",
+   "i": 42
+  },
+  {
+   "seq": 16,
+   "comparison": "aa-post",
+   "i": 42
+  },
+  {
+   "seq": 17,
+   "comparison": "aa-post",
+   "i": 40
+  },
+  {
+   "seq": 18,
+   "comparison": "change-post",
+   "i": 40
+  },
+  {
+   "seq": 19,
+   "comparison": "change-post",
+   "i": 21
+  },
+  {
+   "seq": 20,
+   "comparison": "aa-post",
+   "i": 21
+  },
+  {
+   "seq": 21,
+   "comparison": "aa-post",
+   "i": 39
+  },
+  {
+   "seq": 22,
+   "comparison": "change-post",
+   "i": 39
+  },
+  {
+   "seq": 23,
+   "comparison": "change-post",
+   "i": 13
+  },
+  {
+   "seq": 24,
+   "comparison": "aa-post",
+   "i": 13
+  },
+  {
+   "seq": 25,
+   "comparison": "aa-post",
+   "i": 11
+  },
+  {
+   "seq": 26,
+   "comparison": "change-post",
+   "i": 11
+  },
+  {
+   "seq": 27,
+   "comparison": "change-post",
+   "i": 41
+  },
+  {
+   "seq": 28,
+   "comparison": "aa-post",
+   "i": 41
+  },
+  {
+   "seq": 29,
+   "comparison": "aa-post",
+   "i": 43
+  },
+  {
+   "seq": 30,
+   "comparison": "change-post",
+   "i": 43
+  },
+  {
+   "seq": 31,
+   "comparison": "change-post",
+   "i": 4
+  },
+  {
+   "seq": 32,
+   "comparison": "aa-post",
+   "i": 4
+  },
+  {
+   "seq": 33,
+   "comparison": "aa-post",
+   "i": 25
+  },
+  {
+   "seq": 34,
+   "comparison": "change-post",
+   "i": 25
+  },
+  {
+   "seq": 35,
+   "comparison": "change-post",
+   "i": 51
+  },
+  {
+   "seq": 36,
+   "comparison": "aa-post",
+   "i": 51
+  },
+  {
+   "seq": 37,
+   "comparison": "aa-post",
+   "i": 28
+  },
+  {
+   "seq": 38,
+   "comparison": "change-post",
+   "i": 28
+  },
+  {
+   "seq": 39,
+   "comparison": "change-post",
+   "i": 36
+  },
+  {
+   "seq": 40,
+   "comparison": "aa-post",
+   "i": 36
+  },
+  {
+   "seq": 41,
+   "comparison": "aa-post",
+   "i": 46
+  },
+  {
+   "seq": 42,
+   "comparison": "change-post",
+   "i": 46
+  },
+  {
+   "seq": 43,
+   "comparison": "change-post",
+   "i": 37
+  },
+  {
+   "seq": 44,
+   "comparison": "aa-post",
+   "i": 37
+  },
+  {
+   "seq": 45,
+   "comparison": "aa-post",
+   "i": 10
+  },
+  {
+   "seq": 46,
+   "comparison": "change-post",
+   "i": 10
+  },
+  {
+   "seq": 47,
+   "comparison": "change-post",
+   "i": 57
+  },
+  {
+   "seq": 48,
+   "comparison": "aa-post",
+   "i": 57
+  },
+  {
+   "seq": 49,
+   "comparison": "aa-post",
+   "i": 54
+  },
+  {
+   "seq": 50,
+   "comparison": "change-post",
+   "i": 54
+  },
+  {
+   "seq": 51,
+   "comparison": "change-post",
+   "i": 60
+  },
+  {
+   "seq": 52,
+   "comparison": "aa-post",
+   "i": 60
+  },
+  {
+   "seq": 53,
+   "comparison": "aa-post",
+   "i": 17
+  },
+  {
+   "seq": 54,
+   "comparison": "change-post",
+   "i": 17
+  },
+  {
+   "seq": 55,
+   "comparison": "change-post",
+   "i": 22
+  },
+  {
+   "seq": 56,
+   "comparison": "aa-post",
+   "i": 22
+  },
+  {
+   "seq": 57,
+   "comparison": "aa-post",
+   "i": 44
+  },
+  {
+   "seq": 58,
+   "comparison": "change-post",
+   "i": 44
+  },
+  {
+   "seq": 59,
+   "comparison": "change-post",
+   "i": 47
+  },
+  {
+   "seq": 60,
+   "comparison": "aa-post",
+   "i": 47
+  },
+  {
+   "seq": 61,
+   "comparison": "aa-post",
+   "i": 12
+  },
+  {
+   "seq": 62,
+   "comparison": "change-post",
+   "i": 12
+  },
+  {
+   "seq": 63,
+   "comparison": "change-post",
+   "i": 53
+  },
+  {
+   "seq": 64,
+   "comparison": "aa-post",
+   "i": 53
+  },
+  {
+   "seq": 65,
+   "comparison": "aa-post",
+   "i": 16
+  },
+  {
+   "seq": 66,
+   "comparison": "change-post",
+   "i": 16
+  },
+  {
+   "seq": 67,
+   "comparison": "change-post",
+   "i": 6
+  },
+  {
+   "seq": 68,
+   "comparison": "aa-post",
+   "i": 6
+  },
+  {
+   "seq": 69,
+   "comparison": "aa-post",
+   "i": 2
+  },
+  {
+   "seq": 70,
+   "comparison": "change-post",
+   "i": 2
+  },
+  {
+   "seq": 71,
+   "comparison": "change-post",
+   "i": 52
+  },
+  {
+   "seq": 72,
+   "comparison": "aa-post",
+   "i": 52
+  },
+  {
+   "seq": 73,
+   "comparison": "aa-post",
+   "i": 15
+  },
+  {
+   "seq": 74,
+   "comparison": "change-post",
+   "i": 15
+  },
+  {
+   "seq": 75,
+   "comparison": "change-post",
+   "i": 31
+  },
+  {
+   "seq": 76,
+   "comparison": "aa-post",
+   "i": 31
+  },
+  {
+   "seq": 77,
+   "comparison": "aa-post",
+   "i": 59
+  },
+  {
+   "seq": 78,
+   "comparison": "change-post",
+   "i": 59
+  },
+  {
+   "seq": 79,
+   "comparison": "change-post",
+   "i": 26
+  },
+  {
+   "seq": 80,
+   "comparison": "aa-post",
+   "i": 26
+  },
+  {
+   "seq": 81,
+   "comparison": "aa-post",
+   "i": 14
+  },
+  {
+   "seq": 82,
+   "comparison": "change-post",
+   "i": 14
+  },
+  {
+   "seq": 83,
+   "comparison": "change-post",
+   "i": 19
+  },
+  {
+   "seq": 84,
+   "comparison": "aa-post",
+   "i": 19
+  },
+  {
+   "seq": 85,
+   "comparison": "aa-post",
+   "i": 34
+  },
+  {
+   "seq": 86,
+   "comparison": "change-post",
+   "i": 34
+  },
+  {
+   "seq": 87,
+   "comparison": "change-post",
+   "i": 33
+  },
+  {
+   "seq": 88,
+   "comparison": "aa-post",
+   "i": 33
+  },
+  {
+   "seq": 89,
+   "comparison": "aa-post",
+   "i": 3
+  },
+  {
+   "seq": 90,
+   "comparison": "change-post",
+   "i": 3
+  },
+  {
+   "seq": 91,
+   "comparison": "change-post",
+   "i": 56
+  },
+  {
+   "seq": 92,
+   "comparison": "aa-post",
+   "i": 56
+  },
+  {
+   "seq": 93,
+   "comparison": "aa-post",
+   "i": 49
+  },
+  {
+   "seq": 94,
+   "comparison": "change-post",
+   "i": 49
+  },
+  {
+   "seq": 95,
+   "comparison": "change-post",
+   "i": 35
+  },
+  {
+   "seq": 96,
+   "comparison": "aa-post",
+   "i": 35
+  },
+  {
+   "seq": 97,
+   "comparison": "aa-post",
+   "i": 32
+  },
+  {
+   "seq": 98,
+   "comparison": "change-post",
+   "i": 32
+  },
+  {
+   "seq": 99,
+   "comparison": "change-post",
+   "i": 1
+  },
+  {
+   "seq": 100,
+   "comparison": "aa-post",
+   "i": 1
+  },
+  {
+   "seq": 101,
+   "comparison": "aa-post",
+   "i": 27
+  },
+  {
+   "seq": 102,
+   "comparison": "change-post",
+   "i": 27
+  },
+  {
+   "seq": 103,
+   "comparison": "change-post",
+   "i": 7
+  },
+  {
+   "seq": 104,
+   "comparison": "aa-post",
+   "i": 7
+  },
+  {
+   "seq": 105,
+   "comparison": "aa-post",
+   "i": 9
+  },
+  {
+   "seq": 106,
+   "comparison": "change-post",
+   "i": 9
+  },
+  {
+   "seq": 107,
+   "comparison": "change-post",
+   "i": 20
+  },
+  {
+   "seq": 108,
+   "comparison": "aa-post",
+   "i": 20
+  },
+  {
+   "seq": 109,
+   "comparison": "aa-post",
+   "i": 45
+  },
+  {
+   "seq": 110,
+   "comparison": "change-post",
+   "i": 45
+  },
+  {
+   "seq": 111,
+   "comparison": "change-post",
+   "i": 5
+  },
+  {
+   "seq": 112,
+   "comparison": "aa-post",
+   "i": 5
+  },
+  {
+   "seq": 113,
+   "comparison": "aa-post",
+   "i": 48
+  },
+  {
+   "seq": 114,
+   "comparison": "change-post",
+   "i": 48
+  },
+  {
+   "seq": 115,
+   "comparison": "change-post",
+   "i": 8
+  },
+  {
+   "seq": 116,
+   "comparison": "aa-post",
+   "i": 8
+  },
+  {
+   "seq": 117,
+   "comparison": "aa-post",
+   "i": 23
+  },
+  {
+   "seq": 118,
+   "comparison": "change-post",
+   "i": 23
+  },
+  {
+   "seq": 119,
+   "comparison": "change-post",
+   "i": 38
+  },
+  {
+   "seq": 120,
+   "comparison": "aa-post",
+   "i": 38
+  }
+ ],
+ "base": "e733f3d888450707c049a17cd6100c891966bc87",
+ "head": "2f8984ddce025c92bade4a6fafd21f4863d25085",
+ "reduction": null,
+ "reads": [
+  "margin"
+ ],
+ "recordsSpread": true,
+ "declared": "POST /baseline11?a=1&b=2 with the 2-byte text/plain body 20 to the probe's configuration api (post.lua): a request with a body, which hyper reads. Touched: with the switch off a connection takes one more branch when it is accepted and a request takes the same path through hyper, but the compiled program is not the same (design Choice 78), so every request runs code this change compiles differently. Held to +1% with no floor; no reduction is declared. The kit captures the answers it compares with a GET, so the answers compared are those to a GET of this path; the POST's own answers are held only to wrk's count of failed requests, which must be zero in every turn.",
+ "plan": "f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225",
+ "inputs": "bc3ae620f69f9361d583acec6c205837fb977df427c23640313db3914582f065",
+ "sized": {
+  "from": "ed2bb6ac-a558-4d07-b7a7-76bf87308b48",
+  "K": 60,
+  "models": [
+   "normal",
+   "smoothed"
+  ],
+  "counts": [
+   {
+    "model": "normal",
+    "failing": 6173,
+    "rank": 37
+   },
+   {
+    "model": "smoothed",
+    "failing": 8332,
+    "rank": 37
+   }
+  ],
+  "model": "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz"
+ },
+ "request": {
+  "path": "/baseline11?a=1&b=2",
+  "headers": [],
+  "script": "post.lua"
+ },
+ "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT api",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "mask": [],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": "Xeon(R) Platinum 8168",
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

@@ -1,0 +1,8 @@
+comparison pilot-get placement 2 workload get
+A base-p15120 c566d7d3b7df6452dbfe164ee6afc150dac40f7078b8318a5f4baa74b37cc1a7
+B base-p12160 e2b8b8ab870d9357a5a9eb41cf46a1ec940a11816715bbef634e0a554aa83e86
+run bb9f3a45-a359-402d-9fa3-1100dfc6230f
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 88
+started 2026-11-27T19:16:10Z
+ended 2026-11-27T19:17:27Z

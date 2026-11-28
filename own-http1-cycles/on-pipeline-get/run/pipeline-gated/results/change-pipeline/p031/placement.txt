@@ -1,0 +1,8 @@
+comparison change-pipeline placement 31 workload pipeline
+A base-p1504 15ebf5ad0cb8cec82ead188e7cd8ab46dd9a2d790c12abe934ac3ebcbf829835
+B head-p1504 9750c84b690e5300ff158f9c9052551f124b7af36e1cbe7801b6a9c8816d6d6e
+run 6b14817f-9a23-40a8-a0c4-df083896ead9
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 38
+started 2026-11-27T20:30:12Z
+ended 2026-11-27T20:31:28Z

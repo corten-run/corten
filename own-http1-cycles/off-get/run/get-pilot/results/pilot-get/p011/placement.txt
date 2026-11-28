@@ -1,0 +1,8 @@
+comparison pilot-get placement 11 workload get
+A base-p736 cb7b8e29b79e4f37c2fded7b957ba75d06bead6c841c50eeb00d4438795f2d27
+B base-p22496 3da7c355f14fe2572d25e807bbb39f933287d0222a62b5dcc5983b3cc63f3b9f
+run bb9f3a45-a359-402d-9fa3-1100dfc6230f
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 57
+started 2026-11-27T18:36:19Z
+ended 2026-11-27T18:37:36Z

@@ -1,0 +1,546 @@
+{
+ "name": "own-http1-on",
+ "part": "gated",
+ "workload": "get",
+ "dry": null,
+ "K": 30,
+ "declaredK": "pilot",
+ "sizedFrom": null,
+ "R": 8,
+ "seconds": 3,
+ "seed": 2026112712,
+ "rank": 20,
+ "lowerRank": 11,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008,
+  35808,
+  5552,
+  20288,
+  30992,
+  736,
+  15536,
+  26176,
+  36880,
+  10720,
+  21424,
+  36160,
+  5904,
+  16608,
+  31408,
+  1088,
+  15888,
+  26592,
+  37296,
+  11072,
+  21776,
+  36576,
+  6320,
+  16960,
+  31760
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192,
+  32464,
+  17680,
+  7008,
+  33184,
+  22496,
+  11808,
+  38000,
+  27312,
+  12528,
+  1840,
+  32064,
+  17280,
+  6592,
+  32768,
+  22096,
+  11408,
+  37584,
+  26896,
+  16224,
+  1440,
+  31712,
+  16928,
+  6256,
+  36528
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    8,
+    8,
+    7,
+    7
+   ],
+   "pageQuarters": [
+    8,
+    7,
+    8,
+    7
+   ],
+   "pages": [
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    8,
+    8,
+    8,
+    6
+   ],
+   "pageQuarters": [
+    7,
+    7,
+    8,
+    8
+   ],
+   "pages": [
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3
+   ],
+   "min": 1440,
+   "max": 38336
+  },
+  "linePairCombos": 16,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664,
+   752,
+   3936,
+   3104,
+   2192,
+   1280,
+   368,
+   3632,
+   2720,
+   1808,
+   896,
+   0,
+   3184,
+   2272,
+   1360,
+   528,
+   3712,
+   2800,
+   1888,
+   1056,
+   144,
+   3328,
+   2416,
+   1584,
+   672
+  ],
+  "distinctDiffs": 30,
+  "diffQuarters": [
+   8,
+   8,
+   7,
+   7
+  ]
+ },
+ "sides": [
+  "base",
+  "head"
+ ],
+ "comparisons": [
+  "aa-get",
+  "change-get"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "aa-get",
+   "i": 27
+  },
+  {
+   "seq": 2,
+   "comparison": "change-get",
+   "i": 27
+  },
+  {
+   "seq": 3,
+   "comparison": "change-get",
+   "i": 21
+  },
+  {
+   "seq": 4,
+   "comparison": "aa-get",
+   "i": 21
+  },
+  {
+   "seq": 5,
+   "comparison": "aa-get",
+   "i": 17
+  },
+  {
+   "seq": 6,
+   "comparison": "change-get",
+   "i": 17
+  },
+  {
+   "seq": 7,
+   "comparison": "change-get",
+   "i": 4
+  },
+  {
+   "seq": 8,
+   "comparison": "aa-get",
+   "i": 4
+  },
+  {
+   "seq": 9,
+   "comparison": "aa-get",
+   "i": 20
+  },
+  {
+   "seq": 10,
+   "comparison": "change-get",
+   "i": 20
+  },
+  {
+   "seq": 11,
+   "comparison": "change-get",
+   "i": 8
+  },
+  {
+   "seq": 12,
+   "comparison": "aa-get",
+   "i": 8
+  },
+  {
+   "seq": 13,
+   "comparison": "aa-get",
+   "i": 1
+  },
+  {
+   "seq": 14,
+   "comparison": "change-get",
+   "i": 1
+  },
+  {
+   "seq": 15,
+   "comparison": "change-get",
+   "i": 16
+  },
+  {
+   "seq": 16,
+   "comparison": "aa-get",
+   "i": 16
+  },
+  {
+   "seq": 17,
+   "comparison": "aa-get",
+   "i": 22
+  },
+  {
+   "seq": 18,
+   "comparison": "change-get",
+   "i": 22
+  },
+  {
+   "seq": 19,
+   "comparison": "change-get",
+   "i": 14
+  },
+  {
+   "seq": 20,
+   "comparison": "aa-get",
+   "i": 14
+  },
+  {
+   "seq": 21,
+   "comparison": "aa-get",
+   "i": 7
+  },
+  {
+   "seq": 22,
+   "comparison": "change-get",
+   "i": 7
+  },
+  {
+   "seq": 23,
+   "comparison": "change-get",
+   "i": 2
+  },
+  {
+   "seq": 24,
+   "comparison": "aa-get",
+   "i": 2
+  },
+  {
+   "seq": 25,
+   "comparison": "aa-get",
+   "i": 15
+  },
+  {
+   "seq": 26,
+   "comparison": "change-get",
+   "i": 15
+  },
+  {
+   "seq": 27,
+   "comparison": "change-get",
+   "i": 23
+  },
+  {
+   "seq": 28,
+   "comparison": "aa-get",
+   "i": 23
+  },
+  {
+   "seq": 29,
+   "comparison": "aa-get",
+   "i": 12
+  },
+  {
+   "seq": 30,
+   "comparison": "change-get",
+   "i": 12
+  },
+  {
+   "seq": 31,
+   "comparison": "change-get",
+   "i": 19
+  },
+  {
+   "seq": 32,
+   "comparison": "aa-get",
+   "i": 19
+  },
+  {
+   "seq": 33,
+   "comparison": "aa-get",
+   "i": 29
+  },
+  {
+   "seq": 34,
+   "comparison": "change-get",
+   "i": 29
+  },
+  {
+   "seq": 35,
+   "comparison": "change-get",
+   "i": 18
+  },
+  {
+   "seq": 36,
+   "comparison": "aa-get",
+   "i": 18
+  },
+  {
+   "seq": 37,
+   "comparison": "aa-get",
+   "i": 6
+  },
+  {
+   "seq": 38,
+   "comparison": "change-get",
+   "i": 6
+  },
+  {
+   "seq": 39,
+   "comparison": "change-get",
+   "i": 10
+  },
+  {
+   "seq": 40,
+   "comparison": "aa-get",
+   "i": 10
+  },
+  {
+   "seq": 41,
+   "comparison": "aa-get",
+   "i": 5
+  },
+  {
+   "seq": 42,
+   "comparison": "change-get",
+   "i": 5
+  },
+  {
+   "seq": 43,
+   "comparison": "change-get",
+   "i": 11
+  },
+  {
+   "seq": 44,
+   "comparison": "aa-get",
+   "i": 11
+  },
+  {
+   "seq": 45,
+   "comparison": "aa-get",
+   "i": 3
+  },
+  {
+   "seq": 46,
+   "comparison": "change-get",
+   "i": 3
+  },
+  {
+   "seq": 47,
+   "comparison": "change-get",
+   "i": 28
+  },
+  {
+   "seq": 48,
+   "comparison": "aa-get",
+   "i": 28
+  },
+  {
+   "seq": 49,
+   "comparison": "aa-get",
+   "i": 13
+  },
+  {
+   "seq": 50,
+   "comparison": "change-get",
+   "i": 13
+  },
+  {
+   "seq": 51,
+   "comparison": "change-get",
+   "i": 30
+  },
+  {
+   "seq": 52,
+   "comparison": "aa-get",
+   "i": 30
+  },
+  {
+   "seq": 53,
+   "comparison": "aa-get",
+   "i": 24
+  },
+  {
+   "seq": 54,
+   "comparison": "change-get",
+   "i": 24
+  },
+  {
+   "seq": 55,
+   "comparison": "change-get",
+   "i": 25
+  },
+  {
+   "seq": 56,
+   "comparison": "aa-get",
+   "i": 25
+  },
+  {
+   "seq": 57,
+   "comparison": "aa-get",
+   "i": 26
+  },
+  {
+   "seq": 58,
+   "comparison": "change-get",
+   "i": 26
+  },
+  {
+   "seq": 59,
+   "comparison": "change-get",
+   "i": 9
+  },
+  {
+   "seq": 60,
+   "comparison": "aa-get",
+   "i": 9
+  }
+ ],
+ "base": "2f8984ddce025c92bade4a6fafd21f4863d25085",
+ "head": "0bcb3138c69f69dab997486c9af87a3660eb0ed4",
+ "reduction": 0.03,
+ "reads": [
+  "margin",
+  "reduction"
+ ],
+ "recordsSpread": true,
+ "declared": "GET /baseline11?a=1&b=2 to the probe's configuration api, no request header of its own: a staged API route, typed query parameters in and a short answer out. Touched: with the switch on its connection is Corten's own. Read for a reduction of 3%, the smallest reduction worth having, not a forecast, and held to +1% with no floor.",
+ "plan": "3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3",
+ "inputs": "9fe6c0b6df86cb921c828b773dd7be1e7f92dd091616cdbfe8e9093884355787",
+ "sized": {
+  "from": "60d44212-9b70-4bb6-b49f-99ae4d98d176",
+  "K": 30,
+  "models": [
+   "normal",
+   "smoothed"
+  ],
+  "counts": [
+   {
+    "model": "normal",
+    "failing": 6905,
+    "rank": 20
+   },
+   {
+    "model": "smoothed",
+    "failing": 7995,
+    "rank": 20
+   }
+  ],
+  "model": "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz"
+ },
+ "request": {
+  "path": "/baseline11?a=1&b=2",
+  "headers": []
+ },
+ "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc $BIN $PORT api",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "mask": [],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": "Xeon(R) Platinum 8168",
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

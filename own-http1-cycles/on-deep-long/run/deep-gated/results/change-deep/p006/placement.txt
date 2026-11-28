@@ -1,0 +1,8 @@
+comparison change-deep placement 6 workload deep
+A base-p21008 9dd35998a35e0e73df773d69bedeeba5fbf085014361496bd9294e0bad1d77a2
+B head-p21008 d397687a1fd5bad162b429398240a4adb866b2a586de85d1eefd6bad3ea0bc92
+run aaf08143-be2e-4a8c-91c5-68078b1f3f6e
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 95
+started 2026-11-27T21:48:49Z
+ended 2026-11-27T21:50:06Z

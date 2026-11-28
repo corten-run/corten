@@ -1,0 +1,8 @@
+comparison change-post placement 57 workload post
+A base-p33600 31898db0f39ea0f0c59802c88d5acb085eed9e6e8f2f725fd4e9fc15e12b607a
+B head-p33600 19d6ac4d9ab7047684ef7201d6f311fa2de7a0c716a1153187914c7cfe2b8bd6
+run a43df35b-22de-4be1-bd02-a773cc139fd4
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 50
+started 2026-11-27T20:46:47Z
+ended 2026-11-27T20:48:04Z

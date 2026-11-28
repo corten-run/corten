@@ -1,0 +1,17 @@
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+== base: e733f3d888450707c049a17cd6100c891966bc87, 19:35:27
+warning: `request-cost-probe` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 50.93s
+base: the captured link run again without a pad, with its map, is byte-identical to the build's own binary
+base 6f5eba7d91d9bec8af97cfe7059bd46dfd3f7ce1748bd911ec17dc6a9fcb1c15 4501648 bytes
+base built in 52 s
+== head: 2f8984ddce025c92bade4a6fafd21f4863d25085, 19:36:19
+warning: `request-cost-probe` (bin "probe") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 52.94s
+head: the captured link run again without a pad, with its map, is byte-identical to the build's own binary
+head eb8fa3e8405170643e4c266c9f535ecfc3db42b32634c20e905f954d9ebdb421 4662336 bytes
+head built in 53 s
+base: 0 input sections of .text aligned beyond 16 bytes
+head: 0 input sections of .text aligned beyond 16 bytes
+182 binaries, no two of one side with the same sha256; placements linked and checked in 68 s
+BUILD-DONE

@@ -1,0 +1,8 @@
+comparison change-pipeline placement 8 workload pipeline
+A base-p5552 148964d5dcb005981ed9e3837ba37aad44d01dbbde08b3ab84796cec6b8c8d61
+B head-p5552 8404d5b3ba52ee2eb5ffcb14afd935b609c577e75dd05f151c6b22355494a452
+run 6b14817f-9a23-40a8-a0c4-df083896ead9
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 74
+started 2026-11-27T21:16:10Z
+ended 2026-11-27T21:17:26Z

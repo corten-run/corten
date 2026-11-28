@@ -1,0 +1,8 @@
+comparison change-post placement 5 workload post
+A base-p10304 c1413fe4fcd0fbf4254f01d7930ce5a8413ba206bf31f8e3d727d3e1c5d773e9
+B head-p10304 1e179052a5b7e30e1ded9cf94685c27de766ccea9e8750fd5499b94ba0ee5aae
+run a43df35b-22de-4be1-bd02-a773cc139fd4
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 90
+started 2026-11-27T21:37:59Z
+ended 2026-11-27T21:39:16Z

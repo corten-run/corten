@@ -1,0 +1,8 @@
+comparison change-pipeline placement 21 workload pipeline
+A base-p1088 83ee1ba37850f2083d5285ccf1860a79ebad74bcf8b144b4ec9657b0c16e03ff
+B head-p1088 137879d7d5b13d136bc4362d75b1db0562df6c8a6f638af1ff570cbe53dcc447
+run 6b14817f-9a23-40a8-a0c4-df083896ead9
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 39
+started 2026-11-27T20:31:28Z
+ended 2026-11-27T20:32:45Z

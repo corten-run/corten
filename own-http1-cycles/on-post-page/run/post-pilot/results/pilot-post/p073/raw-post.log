@@ -1,0 +1,288 @@
+## pair w1 base
+# started on Fri Nov 27 17:59:26 2026
+
+3780196962,,cycles:u,3077592043,100.00,,
+6004008075,,cycles:k,3077592043,100.00,,
+4790166253,,instructions:u,3077592043,100.00,1.27,insn per cycle
+481953532,,L1-icache-load-misses,3077592043,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.91ms  764.53us  22.60ms   99.52%
+    Req/Sec    36.59k     5.03k   71.00k    96.72%
+  221802 requests in 3.10s, 82.71MB read
+Requests/sec:  71551.25
+Transfer/sec:     26.68MB
+RESULT 221802 0 0 0 0 0
+## pair w1 head
+# started on Fri Nov 27 17:59:30 2026
+
+3652016540,,cycles:u,3068409157,100.00,,
+6076435530,,cycles:k,3068409157,100.00,,
+4762348883,,instructions:u,3068409157,100.00,1.30,insn per cycle
+465859413,,L1-icache-load-misses,3068409157,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms    1.21ms  30.69ms   99.49%
+    Req/Sec    36.44k     4.27k   66.84k    96.72%
+  221076 requests in 3.10s, 82.44MB read
+Requests/sec:  71316.06
+Transfer/sec:     26.59MB
+RESULT 221076 0 0 0 0 0
+## pair 1 base
+# started on Fri Nov 27 17:59:35 2026
+
+3792644127,,cycles:u,2994627010,100.00,,
+5864490340,,cycles:k,2994627010,100.00,,
+4676708445,,instructions:u,2994627010,100.00,1.23,insn per cycle
+477114817,,L1-icache-load-misses,2994627010,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms    1.48ms  34.73ms   99.42%
+    Req/Sec    36.40k     5.20k   49.11k    86.67%
+  217251 requests in 3.03s, 81.01MB read
+Requests/sec:  71703.72
+Transfer/sec:     26.74MB
+RESULT 217251 0 0 0 0 0
+## pair 1 head
+# started on Fri Nov 27 17:59:39 2026
+
+3637002765,,cycles:u,2994560342,100.00,,
+5810190556,,cycles:k,2994560342,100.00,,
+4603141805,,instructions:u,2994560342,100.00,1.27,insn per cycle
+456891499,,L1-icache-load-misses,2994560342,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.93ms  770.97us  22.62ms   99.56%
+    Req/Sec    35.99k     1.77k   41.66k    76.67%
+  214591 requests in 3.02s, 80.02MB read
+Requests/sec:  71107.79
+Transfer/sec:     26.52MB
+RESULT 214591 0 0 0 0 0
+## pair 2 head
+# started on Fri Nov 27 17:59:43 2026
+
+3557475474,,cycles:u,2998984851,100.00,,
+5689897104,,cycles:k,2998984851,100.00,,
+4339700618,,instructions:u,2998984851,100.00,1.22,insn per cycle
+431908351,,L1-icache-load-misses,2998984851,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   78.27us   2.25ms   85.04%
+    Req/Sec    33.73k     1.25k   35.42k    73.33%
+  201251 requests in 3.03s, 75.04MB read
+Requests/sec:  66511.95
+Transfer/sec:     24.80MB
+RESULT 201251 0 0 0 0 0
+## pair 2 base
+# started on Fri Nov 27 17:59:47 2026
+
+3712208641,,cycles:u,2990583559,100.00,,
+5705185407,,cycles:k,2990583559,100.00,,
+4455819147,,instructions:u,2990583559,100.00,1.20,insn per cycle
+459615700,,L1-icache-load-misses,2990583559,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.02ms    1.47ms  34.46ms   99.34%
+    Req/Sec    34.75k     4.91k   48.05k    85.00%
+  207179 requests in 3.03s, 77.25MB read
+Requests/sec:  68481.91
+Transfer/sec:     25.54MB
+RESULT 207179 0 0 0 0 0
+## pair 3 base
+# started on Fri Nov 27 17:59:52 2026
+
+3688385665,,cycles:u,2994832437,100.00,,
+5899439414,,cycles:k,2994832437,100.00,,
+4704597372,,instructions:u,2994832437,100.00,1.28,insn per cycle
+475405600,,L1-icache-load-misses,2994832437,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.91ms  793.52us  23.25ms   99.52%
+    Req/Sec    36.66k     3.08k   44.42k    91.67%
+  218696 requests in 3.02s, 81.55MB read
+Requests/sec:  72467.99
+Transfer/sec:     27.02MB
+RESULT 218696 0 0 0 0 0
+## pair 3 head
+# started on Fri Nov 27 17:59:56 2026
+
+3789276655,,cycles:u,3064667927,100.00,,
+5959941486,,cycles:k,3064667927,100.00,,
+4721479150,,instructions:u,3064667927,100.00,1.25,insn per cycle
+484263927,,L1-icache-load-misses,3064667927,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms    1.45ms  34.63ms   99.48%
+    Req/Sec    36.05k     4.16k   64.02k    93.44%
+  218593 requests in 3.10s, 81.51MB read
+Requests/sec:  70503.77
+Transfer/sec:     26.29MB
+RESULT 218593 0 0 0 0 0
+## pair 4 head
+# started on Fri Nov 27 18:00:00 2026
+
+3626217007,,cycles:u,2999084328,100.00,,
+5776740551,,cycles:k,2999084328,100.00,,
+4495067627,,instructions:u,2999084328,100.00,1.24,insn per cycle
+449590141,,L1-icache-load-misses,2999084328,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.92ms   79.76us   2.68ms   77.28%
+    Req/Sec    35.02k     1.34k   38.45k    76.67%
+  208955 requests in 3.03s, 77.92MB read
+Requests/sec:  69055.65
+Transfer/sec:     25.75MB
+RESULT 208955 0 0 0 0 0
+## pair 4 base
+# started on Fri Nov 27 18:00:04 2026
+
+3541555621,,cycles:u,2998726550,100.00,,
+5764830335,,cycles:k,2998726550,100.00,,
+4468964464,,instructions:u,2998726550,100.00,1.26,insn per cycle
+461101928,,L1-icache-load-misses,2998726550,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.92ms   74.91us   2.06ms   86.46%
+    Req/Sec    34.98k     1.26k   36.72k    78.33%
+  208555 requests in 3.03s, 77.77MB read
+Requests/sec:  68924.09
+Transfer/sec:     25.70MB
+RESULT 208555 0 0 0 0 0
+## pair 5 base
+# started on Fri Nov 27 18:00:08 2026
+
+3660520228,,cycles:u,2998539775,100.00,,
+5752192786,,cycles:k,2998539775,100.00,,
+4513595372,,instructions:u,2998539775,100.00,1.23,insn per cycle
+461657831,,L1-icache-load-misses,2998539775,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms  754.98us  22.37ms   99.63%
+    Req/Sec    35.28k     2.28k   44.39k    76.67%
+  210381 requests in 3.02s, 78.45MB read
+Requests/sec:  69624.34
+Transfer/sec:     25.96MB
+RESULT 210381 0 0 0 0 0
+## pair 5 head
+# started on Fri Nov 27 18:00:13 2026
+
+3900373196,,cycles:u,2994559438,100.00,,
+5779936075,,cycles:k,2994559438,100.00,,
+4628701010,,instructions:u,2994559438,100.00,1.19,insn per cycle
+485147527,,L1-icache-load-misses,2994559438,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.94ms    0.99ms  26.49ms   99.53%
+    Req/Sec    35.93k     5.97k   43.62k    85.00%
+  214331 requests in 3.02s, 79.92MB read
+Requests/sec:  70931.89
+Transfer/sec:     26.45MB
+RESULT 214331 0 0 0 0 0
+## pair 6 head
+# started on Fri Nov 27 18:00:17 2026
+
+3739317506,,cycles:u,2998938732,100.00,,
+5552074656,,cycles:k,2998938732,100.00,,
+4219457173,,instructions:u,2998938732,100.00,1.13,insn per cycle
+428408349,,L1-icache-load-misses,2998938732,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   98.33us   2.43ms   76.35%
+    Req/Sec    32.83k     1.74k   35.24k    66.67%
+  195849 requests in 3.02s, 73.03MB read
+Requests/sec:  64898.35
+Transfer/sec:     24.20MB
+RESULT 195849 0 0 0 0 0
+## pair 6 base
+# started on Fri Nov 27 18:00:21 2026
+
+3617488845,,cycles:u,2998866843,100.00,,
+5734849935,,cycles:k,2998866843,100.00,,
+4523432065,,instructions:u,2998866843,100.00,1.25,insn per cycle
+465681073,,L1-icache-load-misses,2998866843,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.91ms   80.31us   1.95ms   86.54%
+    Req/Sec    35.17k     1.17k   36.78k    65.00%
+  209771 requests in 3.03s, 78.22MB read
+Requests/sec:  69231.58
+Transfer/sec:     25.82MB
+RESULT 209771 0 0 0 0 0
+## pair 7 base
+# started on Fri Nov 27 18:00:25 2026
+
+3688251027,,cycles:u,2998912887,100.00,,
+5872656017,,cycles:k,2998912887,100.00,,
+4715492622,,instructions:u,2998912887,100.00,1.28,insn per cycle
+485541903,,L1-icache-load-misses,2998912887,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.90ms  565.30us  18.49ms   99.52%
+    Req/Sec    36.69k     2.08k   44.45k    85.00%
+  218800 requests in 3.02s, 81.59MB read
+Requests/sec:  72504.28
+Transfer/sec:     27.04MB
+RESULT 218800 0 0 0 0 0
+## pair 7 head
+# started on Fri Nov 27 18:00:30 2026
+
+3699805181,,cycles:u,2998686193,100.00,,
+5874267341,,cycles:k,2998686193,100.00,,
+4711245328,,instructions:u,2998686193,100.00,1.27,insn per cycle
+455836475,,L1-icache-load-misses,2998686193,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms    1.21ms  30.43ms   99.53%
+    Req/Sec    36.58k     3.80k   48.77k    80.00%
+  218325 requests in 3.03s, 81.41MB read
+Requests/sec:  72060.71
+Transfer/sec:     26.87MB
+RESULT 218325 0 0 0 0 0
+## pair 8 head
+# started on Fri Nov 27 18:00:34 2026
+
+3636398261,,cycles:u,2994533415,100.00,,
+5890095300,,cycles:k,2994533415,100.00,,
+4666010224,,instructions:u,2994533415,100.00,1.28,insn per cycle
+467077097,,L1-icache-load-misses,2994533415,100.00,,
+Running 3s test @ http://127.0.0.1:18082/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.92ms  761.68us  22.49ms   99.55%
+    Req/Sec    36.23k     1.69k   43.66k    88.33%
+  216257 requests in 3.02s, 80.64MB read
+Requests/sec:  71664.26
+Transfer/sec:     26.72MB
+RESULT 216257 0 0 0 0 0
+## pair 8 base
+# started on Fri Nov 27 18:00:38 2026
+
+3676364878,,cycles:u,2998795322,100.00,,
+5771687129,,cycles:k,2998795322,100.00,,
+4521549932,,instructions:u,2998795322,100.00,1.23,insn per cycle
+455215430,,L1-icache-load-misses,2998795322,100.00,,
+Running 3s test @ http://127.0.0.1:18081/baseline11?a=1&b=2
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.91ms   72.22us   1.86ms   85.22%
+    Req/Sec    35.36k     1.56k   38.76k    80.00%
+  210861 requests in 3.03s, 78.63MB read
+Requests/sec:  69597.50
+Transfer/sec:     25.95MB
+RESULT 210861 0 0 0 0 0

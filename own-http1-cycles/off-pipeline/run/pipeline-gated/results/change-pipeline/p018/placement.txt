@@ -1,0 +1,8 @@
+comparison change-pipeline placement 18 workload pipeline
+A base-p5904 68c7baa254fb61ec50baff49b0cc941de1ae6d295255ec92dad00de058407bf0
+B head-p5904 18294568fa87296badce9da0d413667583f69ae06df5a26850dd03787359fb22
+run c64e4983-d84e-4bb4-9bc9-d5c232101f39
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 23
+started 2026-11-27T20:10:19Z
+ended 2026-11-27T20:11:36Z

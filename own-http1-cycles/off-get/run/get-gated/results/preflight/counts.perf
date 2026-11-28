@@ -1,0 +1,6 @@
+# started on Fri Nov 27 19:36:10 2026
+
+3346332813,,cycles:u,994431370,100.00,,
+7970288,,cycles:k,994412133,100.00,,
+8945229416,,instructions:u,994400948,100.00,2.67,insn per cycle
+29510804,,L1-icache-load-misses,994382934,100.00,,

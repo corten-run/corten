@@ -1,0 +1,8 @@
+comparison pilot-post placement 97 workload post
+A base-p35136 ad09bbe47c13e8f59f91eb8b2925900a5e6adee075f9c0f80697eeb936f57a89
+B base-p31488 4c38ca39dbacc781c67186b2b51f8224af0fb5bc550e91b8afb72501ec9fe9be
+run 8ec93b79-cc24-4d8b-82df-5b34f605a991
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 68
+started 2026-11-27T18:49:24Z
+ended 2026-11-27T18:50:41Z

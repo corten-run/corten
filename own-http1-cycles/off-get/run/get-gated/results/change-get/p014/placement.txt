@@ -1,0 +1,8 @@
+comparison change-get placement 14 workload get
+A base-p36880 daea647689f3776a71163efdd1eac3d7db3aa9dff9f93ce9fd6c65b3f2022f75
+B head-p36880 9819c596dfd2bd820fd5150f87d37eba298508ebc42f4ab9b6fbb20c0ea61753
+run 5c12c6b1-6067-41f3-920a-baa28e6e792f
+plan f0c299630cd32cea90a94e5f292b360a38b87c86fb446a3e9efd26f644aca225
+seq 42
+started 2026-11-27T20:30:46Z
+ended 2026-11-27T20:32:03Z

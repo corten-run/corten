@@ -1,0 +1,8 @@
+comparison change-pipeline placement 3 workload pipeline
+A base-p25824 9c2c6a9da707aae444c51485c520da9cecc11a9d16c07c26d42adc601a3fdd17
+B head-p25824 eeb2f90d9eac6c327cc9f8eee5efc2e10545bf3486e7da46802582f953e52d1f
+run 6b14817f-9a23-40a8-a0c4-df083896ead9
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 70
+started 2026-11-27T21:11:03Z
+ended 2026-11-27T21:12:20Z

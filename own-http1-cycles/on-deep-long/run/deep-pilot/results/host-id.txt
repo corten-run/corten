@@ -1,0 +1,4 @@
+model Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz
+microcode 0x1
+kernel 6.12.117+deb13-amd64
+os Debian GNU/Linux 13 (trixie)

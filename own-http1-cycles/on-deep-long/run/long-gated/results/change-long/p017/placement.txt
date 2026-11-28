@@ -1,0 +1,8 @@
+comparison change-long placement 17 workload long
+A base-p36160 44aedbbf8cdf0ac137dcaa67fd5596952aa6ba25e526176bc3aa6657e6205fb8
+B head-p36160 91f8bdee9fddc09fca68d4f2f8272757bf63d689ba5a2f46b4cfad7d9878f2ef
+run b8c929fc-2533-4c26-897d-a705ba2aae43
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 7
+started 2026-11-28T01:47:56Z
+ended 2026-11-28T01:49:13Z

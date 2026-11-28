@@ -1,0 +1,8 @@
+comparison aa-post placement 41 workload post
+A base-p1856 1a4e3a5b5dea4094a4493b2dea15c29c4288d7f27e69693c1469aec8396f8eef
+B base-p23072 51fabbd05d462954c38affd12bcf42b4d85ced6e240bbf03d1ee2f86484cf271
+run a43df35b-22de-4be1-bd02-a773cc139fd4
+plan 3ec67c264a0150f9e83d263665d81bcce12b18882e413d8bae52f62984b240b3
+seq 56
+started 2026-11-27T20:54:28Z
+ended 2026-11-27T20:55:45Z
