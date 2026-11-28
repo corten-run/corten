@@ -63,16 +63,19 @@ test("fleet controller changes keep the harness, Corten build, JSON and evidence
   const controllers = ["CLOUD.md", "cloud-production.mjs", "droplet.mjs", "fleet-production.test.mjs",
     "fleet-provider-test-worker.mjs", "fleet-verify.mjs", "group-continuation.mjs"].map(name => "bench/workloads/" + name);
   const paths = [...controllers, "changelog.d/pr-1944-1.md"];
+  // First-parent diff of the attempt-lock diagnostic at 8178187f5.
+  const attemptLock = ["CLOUD.md", "fleet.mjs", "fleet.test.mjs"].map(name => "bench/workloads/" + name);
   const expected = { apps: ["corten"], json: true };
   assert.deepEqual(selectScope(allApps, paths), expected);
-  for (const path of controllers) {
+  assert.deepEqual(selectScope(allApps, attemptLock), expected);
+  for (const path of new Set([...controllers, ...attemptLock])) {
     assert.deepEqual(selectScope(allApps, [path]), expected);
     assert.equal(selectEvidence([path]), true);
     assert.equal(selectKernel([path]), true);
   }
-  assert.deepEqual(selectScope(allApps, [...paths, "bench/fullstack/apps/rails/app.rb"]), { apps: ["corten", "rails"], json: true });
-  for (const path of ["bench/workloads/registry.mjs", "bench/workloads/cloud-new.mjs"]) {
-    assert.deepEqual(selectScope(allApps, [path, ...paths]), { apps: allApps, json: true });
+  assert.deepEqual(selectScope(allApps, [...paths, ...attemptLock, "bench/fullstack/apps/rails/app.rb"]), { apps: ["corten", "rails"], json: true });
+  for (const path of ["bench/workloads/registry.mjs", "bench/workloads/cloud-new.mjs", "bench/workloads/fleet.test.mjs.bak"]) {
+    assert.deepEqual(selectScope(allApps, [path, ...paths, ...attemptLock]), { apps: allApps, json: true });
   }
 });
 

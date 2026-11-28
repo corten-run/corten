@@ -7,7 +7,7 @@ const tooling = [".node-version", "package.json", "package-lock.json", ".dockeri
   "scripts/benchmark-scope.mjs", "scripts/benchmark-scope.test.mjs", "scripts/steady.mjs"];
 const rustInputs = ["Cargo.toml", "Cargo.lock", ".cargo", "rust-toolchain", "rust-toolchain.toml", "crates"];
 // Exact paths only. Other workloads files can supply shared parity inputs.
-const fleetControllerFiles = new Set(["CLOUD.md", "cloud-production.mjs", "droplet.mjs", "fleet-production.test.mjs",
+const fleetControllerFiles = new Set(["CLOUD.md", "cloud-production.mjs", "droplet.mjs", "fleet.mjs", "fleet.test.mjs", "fleet-production.test.mjs",
   "fleet-provider-test-worker.mjs", "fleet-verify.mjs", "group-continuation.mjs"].map(name => "bench/workloads/" + name));
 const catalogShared = [...tooling, ".github/workflows/catalog.yml", "bench/load-tool.mjs",
   // The classic TypeScript compiler native replay's binding parser loads, and its package.

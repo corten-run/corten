@@ -659,15 +659,18 @@ only containers and the network with this invocation's ownership label are remov
 runner does not create cloud machines or operate the fullstack/nightly state. The CI
 `Catalog Contract` workflow builds each framework a change selects and runs both of its
 sources, but does not publish performance numbers. `scripts/benchmark-scope.mjs` selects them
-from the pull request's merge commit against its first parent, or a push to `main` against the
-previous tip of `main`: a change to the directory of an app the matrix lists selects that app
+from the pull request's merge commit against its first parent. For a push to `main`, it includes
+paths changed since the most recent eligible successful Catalog push run, so an earlier
+unchecked change can still select an app. A change to the directory of an app the matrix lists selects that app
 and the apps that share a driver it changed (`aspnet-aot` runs the JSON jobs instead), a change
 to the framework's Rust inputs (`crates`, `Cargo.toml`, `Cargo.lock`, `.cargo`, the toolchain
 files) or to `bench/catalog/corten` selects Corten. The standalone Corten Cargo locks under
 `bench/marketplace/corten` and `bench/live/apps/corten`, like the listed fleet-controller files,
-select Corten and both JSON jobs. A change to the benchmark's other shared inputs, to an app
-directory the matrix does not list yet, or to the workflow selects them all. A manual run, and a
-push whose earlier commit is unknown or not an ancestor, also select them all; a change to none of these builds none
+select Corten and both JSON jobs. This includes `bench/workloads/fleet.mjs` and its unit
+test; the Catalog harness and Benchmark Evidence checks still run. A change to the benchmark's
+other shared inputs, to an app directory the matrix does not list yet, or to the workflow
+selects them all. A manual run or a push without a usable base and diff also selects them all;
+a change to none of these builds none
 ([Checks](../../CONTRIBUTING.md#checks)).
 
 The runner creates the shared upstream container with `--pull=missing`. Docker reuses
