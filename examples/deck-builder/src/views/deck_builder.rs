@@ -62,7 +62,7 @@ pub fn DeckBuilder<'a>(
     let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
     let (lines_ref, template, lift, copies, form, version_ref, total, bars, tallies, kinds) = refs();
     let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
-    let (unsure, previews) = refs();
+    let (unsure, previews, query) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
     let parts = js::Parts {
@@ -116,7 +116,7 @@ pub fn DeckBuilder<'a>(
     html! {
         <div
             class={Builder}
-            on:connect={js::start(parts, url::DeckFeed, signal)}
+            on:connect={js::start(parts, copies, url::DeckFeed, signal)}
             on:keydown={js::keys(event, parts, carry)}
             on:document:keydown={js::shortcut(event, parts)}
             on:dragend={js::dropped(carry)}
@@ -140,8 +140,15 @@ pub fn DeckBuilder<'a>(
                         </span>
                     </p>
                 </div>
-                <form class={Filter} method="get" action={url::Home::default()} role="search" on:submit={js::stay(event)}>
+                <form
+                    class={Filter}
+                    method="get"
+                    action={url::Home::default()}
+                    role="search"
+                    on:submit={js::applyFilter(event, query, browse)}
+                >
                     <input
+                        ref={query}
                         type="search"
                         name={q.q}
                         value={filter}

@@ -78,6 +78,7 @@ const home = new URL("/", base).href;
 const deckUrl = new URL("deck", home).href;
 const isSave = (request) => request.method() === "POST" && request.url() === deckUrl;
 const isLive = (request) => new URL(request.url()).pathname === "/feed/deck/live";
+const builderModule = (url) => url.pathname.endsWith("/deck_builder.js");
 
 /** Holds exactly one answer until the test has observed the edit it is meant to cover. */
 async function holdSave(page) {
@@ -107,7 +108,7 @@ async function blockedBuilder(engine, name) {
     let blocked = 0;
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
-    await page.route((url) => url.pathname.endsWith("/deck_builder.js"), (route) => {
+    await page.route(builderModule, (route) => {
       blocked += 1;
       return route.abort();
     });
@@ -171,6 +172,53 @@ async function blockedBuilder(engine, name) {
     check(`${name}: no uncaught errors with the builder blocked`, pageErrors.length === 0, pageErrors.join(" | "));
   } finally {
     try { await context.close(); } finally { await own?.close(); }
+  }
+}
+
+/** Use the real module, but release it only after the player has edited the plain HTML. */
+async function delayedBuilder() {
+  const context = await browser.newContext();
+  const resume = Promise.withResolvers();
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await page.route(builderModule, async (route) => {
+      await resume.promise;
+      await route.continue();
+    });
+    await Promise.all([
+      page.waitForRequest((request) => builderModule(new URL(request.url()))),
+      page.goto(home, { waitUntil: "commit" }),
+    ]);
+    const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
+    const edited = (await count.inputValue()) === "2" ? "3" : "2";
+    const previous = Number(await version(page));
+    const visible = page.locator("tbody tr:not([hidden])");
+    await count.fill(edited);
+    // Focusing the query commits the count input's change before the module can handle it.
+    await page.locator("input[type=search]").fill("oracle");
+    check("typing before the builder starts leaves the collection unfiltered", await visible.count() > 1);
+    const live = page.waitForRequest(isLive);
+    resume.resolve(undefined);
+    await live;
+
+    await page.locator(filterButton).click();
+    check("Filter applies the query typed before startup without navigating", page.url() === home &&
+      await visible.count() === 1 && await visible.first().getAttribute("data-key") === "salt-oracle");
+
+    const post = page.waitForResponse((r) => isSave(r.request()));
+    const [saved] = await Promise.all([post, page.locator(saveButton).click()]);
+    await settled(page);
+    check("Save sends the count edited before startup through autosave", saved.ok() &&
+      Number(new URLSearchParams(saved.request().postData() ?? "").get("draft")) > 0 &&
+      Number(await version(page)) === previous + 1);
+    await page.reload();
+    check("the edit made before startup survives a reload", Number(await version(page)) === previous + 1 &&
+      await count.evaluate((input) => /** @type {HTMLInputElement} */ (input).defaultValue) === edited &&
+      await count.inputValue() === edited);
+  } finally {
+    resume.resolve(undefined);
+    await context.close();
   }
 }
 
@@ -610,6 +658,7 @@ try {
   for (const [engine, name] of [[chromium, "Chromium"], [firefox, "Firefox"], [webkit, "WebKit"]]) {
     await blockedBuilder(engine, name);
   }
+  await delayedBuilder();
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those
   // answers.

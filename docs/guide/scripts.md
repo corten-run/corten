@@ -209,6 +209,9 @@ There is no page-wide flag that says a script loaded.
 In [Deck Builder](../../examples/deck-builder/README.md), Save stays drawn too. The builder's
 handler uses its autosave queue. If the module does not load, the button submits the form:
 a successful save redirects to the current deck, and a refusal draws the page with its reason.
+If the module loads after the player has typed, the counts rendered by the server (`defaultValue`)
+are the saved baseline, not the values in the fields now. Save sends those edits, and Filter
+applies the current query even if its input handler was not there when the player typed it.
 
 ### A value both sides compute
 

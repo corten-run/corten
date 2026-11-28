@@ -133,21 +133,33 @@ const kept = () =>
 const names = new Intl.Collator(document.documentElement.lang || undefined);
 
 /**
- * Reads the deck the server rendered, and follows the saved deck until the builder leaves the
- * page: another tab's save arrives as a patch.
- * @param {Parts} parts @param {FeedUrl<Slot>} feed @param {AbortSignal} signal
+ * Reads the rendered deck and any edits made before this module ran, then follows saved decks.
+ * @param {Parts} parts @param {HTMLInputElement[]} copies
+ * @param {FeedUrl<Slot>} feed @param {AbortSignal} signal
  */
-export function start(parts, feed, signal) {
+export function start(parts, copies, feed, signal) {
   const s = kept();
   s.signal = signal;
   s.generation = parts.generation.value;
   s.version = Number(parts.version.value);
-  s.drawn = typedDeck(parts);
-  s.order = [...s.drawn.keys()];
-  s.base = new Map(s.drawn);
-  s.theirs = new Map(s.drawn);
+  const lines = rows(parts.lines, DeckLine);
+  /** @type {Deck} */ const base = new Map();
+  /** @type {Deck} */ const edited = new Map();
+  for (const input of copies) {
+    const line = lines.of(input);
+    if (!line) continue;
+    const saved = Number(input.defaultValue);
+    const count = Math.max(0, Math.trunc(Number(input.value)) || 0);
+    if (saved > 0) base.set(line.id, saved);
+    if (count > 0) edited.set(line.id, count);
+  }
+  s.base = base;
+  s.drawn = base;
+  s.order = [...base.keys()];
+  s.theirs = new Map(base);
   s.theirGeneration = s.generation;
   s.theirVersion = s.version;
+  if (!same(base, edited)) draw(s, parts, edited);
   subscribe(
     feed,
     {
@@ -194,20 +206,6 @@ export function start(parts, feed, signal) {
     },
     { signal },
   );
-}
-
-/**
- * The deck as its count inputs hold it, a cleared one as no copies.
- * @param {Parts} parts
- */
-function typedDeck(parts) {
-  /** @type {Deck} */
-  const deck = new Map();
-  for (const line of rows(parts.lines, DeckLine)) {
-    const n = Math.max(0, Math.trunc(line.count) || 0);
-    if (n > 0) deck.set(line.id, (deck.get(line.id) ?? 0) + n);
-  }
-  return deck;
 }
 
 /** Whether two decks hold the same cards. @param {Deck} a @param {Deck} b */
@@ -895,8 +893,12 @@ export function filter(input, browse) {
   tally(browse);
 }
 
-/** With JavaScript the filter applies as it is typed: Enter sends nothing. @param {SubmitEvent} event */
-export function stay(event) {
+/**
+ * Apply even a query typed before the module ran.
+ * @param {SubmitEvent} event @param {HTMLInputElement} input @param {Browse} browse
+ */
+export function applyFilter(event, input, browse) {
+  filter(input, browse);
   event.preventDefault();
 }
 
