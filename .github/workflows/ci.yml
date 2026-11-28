@@ -7,6 +7,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Earlier commit SHA to check bench/ against
+        required: true
+        type: string
   workflow_call:
 
 # Initial main pushes share a ref group; main reruns cannot cancel the head. PRs still share a
@@ -203,13 +209,14 @@ jobs:
       - run: npm --prefix bench ci
         if: contains(env.PARTS, ' npm-check ') || contains(env.PARTS, ' group-apparatus ')
       # Check every commit since the last successful CI push to main, including superseded pushes.
-      # With no usable success, check from the root: origin/main may already be the tip.
+      # If the lookup fails, stop rather than guess which commits have already been checked.
       # For a PR use the merge commit's first parent. Release still uses the tag push's before
       # (all zeros for a new tag, which uses its merge base with origin/main).
       - name: The bench size check's base
         if: contains(env.PARTS, ' npm-check ')
         env:
           PUSH_BEFORE: ${{ github.event.before }}
+          DISPATCH_BASE: ${{ inputs.base }}
           GITHUB_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.token || '' }}
         run: |
           case "$GITHUB_EVENT_NAME" in
@@ -221,10 +228,17 @@ jobs:
               base=$(git rev-parse 'HEAD^1') ;;
             push)
               if [ "$GITHUB_REF" = refs/heads/main ]; then
-                base=$(node scripts/benchmark-scope.mjs ci-base)
+                base=$(node scripts/benchmark-scope.mjs ci-base) || exit 1
               else
                 base=$PUSH_BEFORE
               fi ;;
+            workflow_dispatch)
+              if [[ ! "$DISPATCH_BASE" =~ ^[0-9a-f]{40}$ || "$DISPATCH_BASE" = "$GITHUB_SHA" ]] ||
+                  ! git merge-base --is-ancestor "$DISPATCH_BASE" "$GITHUB_SHA" 2>/dev/null; then
+                echo "::error::Give CI a full commit SHA that is an earlier ancestor of the commit to check."
+                exit 1
+              fi
+              base=$DISPATCH_BASE ;;
             *) base= ;;
           esac
           if [ -z "$base" ]; then

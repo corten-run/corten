@@ -105,11 +105,15 @@ test("the Actions lookup gets a read-only token in the benchmark scope jobs and 
   assert.deepEqual(smoke.permissions, { contents: "read", actions: "read" });
   assert.deepEqual(release.permissions, ci.permissions);
   assert.deepEqual(release.jobs.checks.permissions, smoke.permissions);
+  assert.equal(ci.on.workflow_dispatch.inputs.base.required, true);
+  assert.equal(ci.on.workflow_dispatch.inputs.base.type, "string");
   const step = smoke.steps.find(step => step.name === "The bench size check's base");
   assert.deepEqual(step.env, { PUSH_BEFORE: "${{ github.event.before }}",
+    DISPATCH_BASE: "${{ inputs.base }}",
     GITHUB_TOKEN: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.token || '' }}" });
   assert.match(step.run, /base=\$\(git rev-parse 'HEAD\^1'\) ;;/);
-  assert.match(step.run, /if \[ "\$GITHUB_REF" = refs\/heads\/main \]; then\s+base=\$\(node scripts\/benchmark-scope.mjs ci-base\)\s+else\s+base=\$PUSH_BEFORE/);
+  assert.match(step.run, /if \[ "\$GITHUB_REF" = refs\/heads\/main \]; then\s+base=\$\(node scripts\/benchmark-scope.mjs ci-base\) \|\| exit 1\s+else\s+base=\$PUSH_BEFORE/);
+  assert.match(step.run, /workflow_dispatch\)[^]*git merge-base --is-ancestor "\$DISPATCH_BASE" "\$GITHUB_SHA"[^]*base=\$DISPATCH_BASE ;;/);
 });
 
 test("direct PRs and initial main pushes share ref groups; main reruns, dispatch and calls do not", () => {
@@ -142,10 +146,8 @@ test("direct PRs and initial main pushes share ref groups; main reruns, dispatch
     assert.deepEqual(group("push", main, "1", { run_attempt: "2" }), [`${name}-${isolated}1`, false]);
     assert.deepEqual(group("pull_request", pr, "3"), [`${name}-${pr}`, true]);
     assert.deepEqual(group("pull_request", pr, "3", { run_attempt: "2" }), group("pull_request", pr, "3"));
-    assert.equal(Object.hasOwn(on, "workflow_dispatch"), file !== "ci.yml");
-    if (Object.hasOwn(on, "workflow_dispatch")) {
-      assert.deepEqual(group("workflow_dispatch", main, "4"), [`${name}-${isolated}4`, false]);
-    }
+    assert.ok(Object.hasOwn(on, "workflow_dispatch"));
+    assert.deepEqual(group("workflow_dispatch", main, "4"), [`${name}-${isolated}4`, false]);
     assert.equal(Object.hasOwn(on, "workflow_call"), file !== "catalog.yml");
     if (Object.hasOwn(on, "workflow_call")) {
       // Calls report the caller's event and workflow file, even if it has the same display name.
@@ -552,7 +554,7 @@ function pushEvent(GITHUB_SHA, file, PUSH_BEFORE) {
 const successfulPush = head_sha => ({ event: "push", head_branch: "main", status: "completed", conclusion: "success", head_sha });
 const workflowRuns = (...runs) => Response.json({ workflow_runs: runs });
 
-test("CI checks a deleted oversized blob since its last success, or from the root with no usable success", async t => {
+test("CI checks a deleted oversized blob since its last successful main push", async t => {
   const { cwd, env, git, write, commit } = fixture(t);
   write(LIST, "# grandfathered\n");
   const success = commit();
@@ -564,7 +566,7 @@ test("CI checks a deleted oversized blob since its last success, or from the roo
   git("update-ref", "refs/remotes/origin/main", head);
   const event = pushEvent(head, "ci.yml", superseded);
   const workflow = "ci-base";
-  const base = await mainPushBase(event, cwd, env, { workflow, fetchRuns: url => {
+  const { base } = await mainPushBase(event, cwd, env, { workflow, fetchRuns: url => {
     assert.equal(url.pathname, "/repos/example/repo/actions/workflows/ci.yml/runs");
     return workflowRuns(successfulPush(success));
   } });
@@ -574,13 +576,29 @@ test("CI checks a deleted oversized blob since its last success, or from the roo
   assert.deepEqual(checkBenchSize(cwd, { head, base: "0".repeat(40), env }).problems, []);
   const wanted = new RegExp(`bench/r2/run\\.log: .* from commit ${superseded},`);
   assert.match(checkBenchSize(cwd, { head, base, env }).problems[0], wanted);
+});
 
+test("CI base lookup failure emits one actionable error and no base, even with a usable previous tip", t => {
+  const { cwd, env, write, commit } = fixture(t);
+  write("initial");
+  const before = commit();
+  write("second");
+  const head = commit();
+  const event = pushEvent(head, "ci.yml", before);
   const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
-  const fallback = execFileSync(process.execPath, [script, workflow], {
-    cwd, env: { ...env, ...event, GITHUB_TOKEN: "" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-  assert.equal(fallback, "root");
-  assert.match(checkBenchSize(cwd, { head, env: { ...env, GITHUB_ACTIONS: "true", CORTEN_BENCH_SIZE_BASE: fallback } }).problems[0], wanted);
+  const mock = source => `--import=data:text/javascript,${encodeURIComponent("globalThis.fetch = " + source)}`;
+  for (const [extra, reason] of [
+    [{ GITHUB_TOKEN: "" }, "the GitHub Actions API token is missing"],
+    [{}, "the GitHub Actions API returned HTTP 403"],
+  ]) {
+    const result = spawnSync(process.execPath, [mock('() => new Response("untrusted body", { status: 403 })'), script, "ci-base"], {
+      cwd, env: { ...env, ...event, ...extra }, encoding: "utf8",
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr.trim(),
+      `::error::Could not find the last successful main CI push: ${reason}. Rerun CI or run it manually (workflow_dispatch) with an explicit base.`);
+  }
 });
 
 test("a push to main scopes Catalog and Evidence from each last successful run, including superseded paths", async t => {
@@ -619,7 +637,6 @@ test("a missing, failed or non-ancestor main run lookup selects everything", asy
   const head = commit();
   write("later");
   const later = commit();
-  const event = pushEvent(head, "catalog.yml", base);
   for (const [label, fetchRuns] of [
     ["no successful runs", () => workflowRuns()],
     ["failed run", () => workflowRuns({ ...successfulPush(base), conclusion: "failure" })],
@@ -633,11 +650,13 @@ test("a missing, failed or non-ancestor main run lookup selects everything", asy
     ["non-ancestor commit", () => workflowRuns(successfulPush(later))],
     ["same commit", () => workflowRuns(successfulPush(head))],
   ]) {
-    const paths = await eventPaths(event, cwd, env, { workflow: "catalog", fetchRuns });
-    assert.equal(paths, undefined, label);
-    assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true }, label);
-    assert.equal(selectEvidence(paths), true, label);
-    assert.equal(selectKernel(paths), true, label);
+    for (const [workflow, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+      const paths = await eventPaths(pushEvent(head, file, base), cwd, env, { workflow, fetchRuns });
+      assert.equal(paths, undefined, label);
+      assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true }, label);
+      assert.equal(selectEvidence(paths), true, label);
+      assert.equal(selectKernel(paths), true, label);
+    }
   }
 });
 

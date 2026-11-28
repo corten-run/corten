@@ -38,9 +38,8 @@
 // main brings no history (a push that creates main itself brings none). Such a check reads the tip
 // and what is not yet on main, not the range the push brought. CI gives the base from its event:
 // a pull request's merge commit's first parent, a tag push's before, or the last successful CI
-// push to main. If that success is unavailable, the explicit base "root" checks all commits
-// reachable from the tip against empty initial history, with no grandfathered blobs. In GitHub
-// Actions an unspecified base fails rather than guessing. When none resolves
+// push to main. A manual run takes an explicit base. In GitHub Actions an unspecified base fails
+// rather than guessing. When none resolves
 // the check fails and says how to give one. A shallow clone fails, since the commits between the
 // base and the tip may be missing and would go unread. It reads the commits as committed, not the
 // working tree; untracked and ignored files are not read, and nothing is published or fetched.
@@ -169,13 +168,11 @@ export function commitOf(root, rev, env = process.env) {
  * The commit the tip is checked against and how it was chosen: `base` (--base), else `env`'s
  * CORTEN_BENCH_SIZE_BASE, else the merge base with origin/main (also for a merge commit; parent
  * order says nothing about which side is the target). Throws, saying how to give one, when none resolves.
- * The explicit base "root" has no starting commit.
  * @param {string} root @param {{ head: string, base?: string, env?: NodeJS.ProcessEnv }} options
- * @returns {{ sha: string | null, how: string }}
+ * @returns {{ sha: string, how: string }}
  */
 export function resolveBase(root, { head, base, env = process.env }) {
   const given = base ? { rev: base, how: "--base" } : env[BASE_ENV] ? { rev: /** @type {string} */ (env[BASE_ENV]), how: BASE_ENV } : null;
-  if (given?.rev === "root") return { sha: null, how: "full history from the root" };
   if (given && ZERO.test(given.rev)) {
     try {
       return { sha: git(root, ["merge-base", commitOf(root, head, env), "refs/remotes/origin/main"], env).toString().trim(), how: "the merge base with origin/main, for a new branch or tag (an all-zero base)" };
@@ -397,11 +394,11 @@ export function grandfathered(text, baseText, baseEntries, base) {
  * blob it adds or changes, once for each path and blob, with the earliest commit that has it and its
  * size; and `pairs`, each commit and directory where a lock file in LOCKS or its manifest was
  * added, changed, deleted or changed mode, in commit order, so the pairing is checked in every commit it changes.
- * @param {string} root @param {string | null} base @param {string} head @param {NodeJS.ProcessEnv} [env]
+ * @param {string} root @param {string} base @param {string} head @param {NodeJS.ProcessEnv} [env]
  * @returns {{ changes: Change[], pairs: { commit: string, dir: string }[] }}
  */
 export function history(root, base, head, env = process.env) {
-  const out = git(root, ["log", "--raw", "-z", "--no-abbrev", "-m", "--no-renames", "--no-color", "--no-ext-diff", "--reverse", "--format=%H", base === null ? head : `${base}..${head}`], env);
+  const out = git(root, ["log", "--raw", "-z", "--no-abbrev", "-m", "--no-renames", "--no-color", "--no-ext-diff", "--reverse", "--format=%H", `${base}..${head}`], env);
   /** @type {Map<string, Omit<Change, "size">>} */
   const seen = new Map();
   /** @type {Map<string, { commit: string, dir: string }>} */
@@ -497,7 +494,7 @@ export function checkHistory({ changes, pairs }, trusted, directory) {
  * Every check, for `head` (HEAD by default) against its base (resolveBase()). Throws when the clone
  * is shallow, no base resolves or a revision is not a commit.
  * @param {string} root @param {{ head?: string, base?: string, env?: NodeJS.ProcessEnv }} [options]
- * @returns {{ problems: string[], entries: Entry[], head: string, base: { sha: string | null, how: string }, changes: Change[] }}
+ * @returns {{ problems: string[], entries: Entry[], head: string, base: { sha: string, how: string }, changes: Change[] }}
  */
 export function run(root, { head = "HEAD", base, env = process.env } = {}) {
   if (git(root, ["rev-parse", "--is-shallow-repository"], env).toString().trim() === "true") {
@@ -513,9 +510,8 @@ export function run(root, { head = "HEAD", base, env = process.env } = {}) {
   const brought = history(root, from.sha, tip, env);
   const { changes } = brought;
   if (text === null) return { problems: [`${head} has no ${LIST}`], entries, head: tip, base: from, changes };
-  const baseText = from.sha === null ? null : committedList(root, from.sha, env);
-  const baseEntries = from.sha !== null && baseText === null ? tracked(root, from.sha, env) : [];
-  const { trusted, problems: listProblems } = grandfathered(text, baseText, baseEntries, from.sha ?? "empty history");
+  const baseText = committedList(root, from.sha, env);
+  const { trusted, problems: listProblems } = grandfathered(text, baseText, baseText === null ? tracked(root, from.sha, env) : [], from.sha);
   const problems = [...check(entries, text), ...listProblems, ...checkHistory(brought, trusted, (commit, dir) => directoryIn(root, commit, dir, env))];
   return { problems, entries, head: tip, base: from, changes };
 }
@@ -556,17 +552,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   const { problems, entries, base: from, changes } = result;
   const at = head ?? "HEAD";
-  const against = from.sha === null ? from.how : `${from.sha} (${from.how})`;
   // Thousands when this was written: none means the tree was not read, not that bench/ is clean.
   if (entries.length < 100) problems.push(`found only ${entries.length} files under bench/ at ${at}`);
   if (problems.length) {
-    console.error(`bench-size: ${problems.length} problem(s) at ${at} against ${against}\n${problems.join("\n")}\n${REMEDY}`);
+    console.error(`bench-size: ${problems.length} problem(s) at ${at} against ${from.sha} (${from.how})\n${problems.join("\n")}\n${REMEDY}`);
     process.exit(1);
   }
   const dirs = directories(entries);
   const kept = entries.filter((e) => reason(e, dirs.get(split(e.path)[0])));
   console.log(
     `bench-size: ${entries.length} files under bench/ at ${at}; ${kept.length} archives or files over ${LIMIT / 1024} KiB (${kept.reduce((n, e) => n + e.size, 0)} bytes), each at its listed blob; ` +
-      `${changes.length} blobs added or changed under bench/ checked against ${against}`,
+      `${changes.length} blobs added or changed under bench/ since ${from.sha} (${from.how})`,
   );
 }

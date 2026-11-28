@@ -478,14 +478,6 @@ test("a push is checked from the commit before it, a new branch or tag (an all-z
   assert.throws(() => size.run(d, { head: tip, base: "0".repeat(40), env }), /all-zero base.*no merge base with origin\/main/);
 });
 
-test("an explicit root scan checks the root commit itself without trusting a later list", () => {
-  const { d, base, listed } = history();
-  const root = id(d, "HEAD^");
-  const { problems } = size.run(d, { head: base, base: "root", env });
-  assert.ok(problems.some(problem => problem.includes(listed.slice(41)) && problem.includes(`from commit ${root}`)));
-  assert.ok(problems.some(problem => problem.includes("not in the base empty history")), problems.join("\n"));
-});
-
 test("a shallow clone fails, even with both ends of the range fetched, saying to fetch the whole history", () => {
   const { d, base } = history();
   commit(d, { "bench/r2/run.log": Buffer.alloc(LIMIT + 1, 97) }, "add");

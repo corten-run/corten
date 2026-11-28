@@ -152,7 +152,10 @@ Both scope jobs compare a pull request merge commit with its first parent, using
 diff rather than GitHub's path-filter file list. Newer pull request runs and new pushes to
 `main` cancel superseded runs of the same workflow. On `main`, each scope job and CI's bench
 size check cover commits since their workflow's last successful main push. With no usable base
-(including a rewritten push), scope selects every job and bench size checks the full history.
+(including a rewritten push), Catalog and Evidence select every job. CI instead fails its bench
+size base step and reports why, without guessing a range. Rerun CI or dispatch CI manually with
+`base` set to the full SHA of a known checked ancestor that covers the outstanding commits.
+A manual run checks that explicit range; it does not become the base for later main pushes.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,

@@ -95,12 +95,13 @@ async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TO
     headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${GITHUB_TOKEN}` },
     redirect: "error", signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) return undefined;
-  const { workflow_runs: runs } = await response.json();
-  if (!Array.isArray(runs)) return undefined;
+  if (!response.ok) return { reason: `the GitHub Actions API returned HTTP ${response.status}` };
+  const runs = (await response.json().catch(() => null))?.workflow_runs;
+  if (!Array.isArray(runs)) return { reason: "the GitHub Actions API returned an invalid workflow-runs response" };
   const run = runs[0];
   if (run?.event === "push" && run.head_branch === "main" && run.status === "completed" && run.conclusion === "success"
-      && typeof run.head_sha === "string" && sha.test(run.head_sha)) return run.head_sha;
+      && typeof run.head_sha === "string" && sha.test(run.head_sha)) return { base: run.head_sha };
+  return { reason: "the GitHub Actions API did not list a valid successful main push" };
 }
 
 // Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR.
@@ -108,22 +109,27 @@ export async function mainPushBase(event, cwd, env = process.env, { workflow, fe
   const { GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REF, GITHUB_REPOSITORY, GITHUB_WORKFLOW_REF, GITHUB_TOKEN, PUSH_BEFORE } = event;
   // Called workflows see the caller's event and workflow_ref, not their own.
   const file = scopeWorkflows[workflow];
-  if (file && GITHUB_EVENT_NAME === "push" && GITHUB_REF === "refs/heads/main"
-      && GITHUB_WORKFLOW_REF === `${GITHUB_REPOSITORY}/.github/workflows/${file}@${GITHUB_REF}`) {
-    try {
-      // Only a successful run proves the scope job and its selected checks finished. Use the
-      // prior tip only to detect a force-push; the successful run can predate a rewrite.
-      const base = GITHUB_TOKEN && sha.test(GITHUB_SHA ?? "") && await successfulMainBase(event, file, fetchRuns);
-      if (isEarlierCommit(base, GITHUB_SHA, cwd, env)
-          && (PUSH_BEFORE === base || isEarlierCommit(PUSH_BEFORE, GITHUB_SHA, cwd, env))) {
-        return base;
-      }
-    } catch {
-      // Do not print the response or error from an authenticated request.
-    }
-    console.warn("Successful main push base unavailable; using the conservative fallback.");
+  if (!file || GITHUB_EVENT_NAME !== "push" || GITHUB_REF !== "refs/heads/main"
+      || GITHUB_WORKFLOW_REF !== `${GITHUB_REPOSITORY}/.github/workflows/${file}@${GITHUB_REF}`) return undefined;
+  if (!GITHUB_TOKEN) return { reason: "the GitHub Actions API token is missing" };
+  if (!sha.test(GITHUB_SHA ?? "")) return { reason: "the pushed commit SHA is invalid" };
+  let result;
+  try {
+    result = await successfulMainBase(event, file, fetchRuns);
+  } catch {
+    // Do not print the response or error from an authenticated request.
+    return { reason: "the GitHub Actions workflow-runs request failed or timed out" };
   }
-  return undefined;
+  if (result.reason) return result;
+  // Only a successful run proves the checks finished. The prior tip detects a force-push;
+  // it is not a base, since that push may have been cancelled.
+  if (!isEarlierCommit(result.base, GITHUB_SHA, cwd, env)) {
+    return { reason: "the last successful push's commit is not available as an earlier ancestor" };
+  }
+  if (PUSH_BEFORE !== result.base && !isEarlierCommit(PUSH_BEFORE, GITHUB_SHA, cwd, env)) {
+    return { reason: "the previous main tip is unknown or is not an ancestor (main may have been rewritten)" };
+  }
+  return result;
 }
 
 export async function eventPaths(event, cwd, env = process.env, options) {
@@ -133,10 +139,11 @@ export async function eventPaths(event, cwd, env = process.env, options) {
     // Actions tests the synthetic merge, including any base-side path moves.
     return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd, env);
   }
-  const base = await mainPushBase(event, cwd, env, options);
-  if (base) {
+  const result = await mainPushBase(event, cwd, env, options);
+  if (result?.reason) console.warn(`Successful main push base unavailable: ${result.reason}; selecting every benchmark job.`);
+  if (result?.base) {
     try {
-      return changedPaths(base, GITHUB_SHA, cwd, env);
+      return changedPaths(result.base, GITHUB_SHA, cwd, env);
     } catch {
       console.warn("Main push diff unavailable; selecting every benchmark job.");
     }
@@ -149,7 +156,14 @@ if (import.meta.main) {
   const workflow = process.argv[2];
   const options = { workflow };
   if (workflow === "ci-base") {
-    console.log(await mainPushBase(process.env, undefined, process.env, options) ?? "root");
+    const result = await mainPushBase(process.env, undefined, process.env, options);
+    if (result?.base) {
+      console.log(result.base);
+    } else {
+      const reason = result?.reason ?? "this is not a direct push to main";
+      console.error(`::error::Could not find the last successful main CI push: ${reason}. Rerun CI or run it manually (workflow_dispatch) with an explicit base.`);
+      process.exitCode = 1;
+    }
   } else {
     const paths = await eventPaths(process.env, undefined, process.env, options);
     if (workflow === "catalog") {
