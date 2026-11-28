@@ -419,7 +419,7 @@ pub fn Gallery<'a>(
                             </button>
                         </div>
                     </form>
-                    <OrderResult text={result} />
+                    <p role="status"><OrderResult text={result} /></p>
                 </div>
             </section>
             <div class={Aside}>
@@ -572,7 +572,7 @@ pub fn Gallery<'a>(
                                 </MenuButton>
                             </DropdownMenu>
                         </div>
-                        <MenuResult text="" />
+                        <p role="status"><MenuResult text="" /></p>
                     </div>
                     <footer class={CardFooter {}}>
                         <a
@@ -732,7 +732,7 @@ pub struct Times {
 /// The listing's outcome: in the page, and on its own as the form's patch.
 #[component]
 pub fn OrderResult<'a>(text: &'a str) -> impl Patch {
-    html! { <p id={ResultId} role="status">{text}</p> }
+    html! { <span id={ResultId}>{text}</span> }
 }
 
 #[derive(Id)]
@@ -741,7 +741,7 @@ struct ResultId;
 /// What the last menu action did.
 #[component]
 pub fn MenuResult<'a>(text: &'a str) -> impl Patch {
-    html! { <p id={MenuResultId} role="status">{text}</p> }
+    html! { <span id={MenuResultId}>{text}</span> }
 }
 
 #[derive(Id)]

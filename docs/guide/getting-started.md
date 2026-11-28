@@ -204,7 +204,7 @@ async fn home(req: Req) -> HtmlResult {
                 <input name={name} required>
                 <button>"Greet me"</button>
             </form>
-            <Greeting name="" />
+            <p aria-live="polite"><Greeting name="" /></p>
         </Layout>
     })
 }
@@ -216,7 +216,11 @@ struct GreetForm { name: String }
 /// comes back, at the page's own address. One handler serves both.
 async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
     let name = &form.name;
-    let page = || async { req.page(html! { <Layout req={&req} title="Home"><Greeting name={name} /></Layout> }) };
+    let page = || async {
+        req.page(html! {
+            <Layout req={&req} title="Home"><p aria-live="polite"><Greeting name={name} /></p></Layout>
+        })
+    };
     req.patch_or(Greeting { name }, page).await
 }
 
@@ -225,7 +229,7 @@ struct GreetingId;
 
 #[component]
 fn Greeting(name: &str) -> impl Patch {
-    html! { <p id={GreetingId} aria-live="polite">if !name.is_empty() { "Hello, "{name}"!" }</p> }
+    html! { <span id={GreetingId}>if !name.is_empty() { "Hello, "{name}"!" }</span> }
 }
 
 /// The whole document. `<Corten />` is where Corten adds the runtime and the page's scripts and

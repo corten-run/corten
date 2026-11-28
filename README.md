@@ -117,7 +117,7 @@ fn home_page(req: &Req, name: &str) -> impl Document {
                 <input name={f.name} required>
                 <button>"Greet me"</button>
             </form>
-            <Greeting name={name} />
+            <p aria-live="polite"><Greeting name={name} /></p>
         </Layout>
     }
 }
@@ -148,11 +148,11 @@ struct GreetingId;
 #[component]
 fn Greeting(name: &str) -> impl Patch {
     html! {
-        <p id={GreetingId} aria-live="polite">
+        <span id={GreetingId}>
             if !name.is_empty() {
                 "Hello, " {name} "!"
             }
-        </p>
+        </span>
     }
 }
 ```
