@@ -719,16 +719,6 @@ export function countHalt({ stopped, code }) {
   return null;
 }
 
-const staleCount = "do not treat the summary's instruction counts as this round's unless a later count replaced them";
-
-/** Removes only ordinary count failure records; other skips, including count halts, stay. */
-export function withoutCountFailures(/** @type {string} */ text) {
-  return text.split(/(?<=\n)/).filter((line) => {
-    const count = /^\S+ step count skipped: count\.mjs exited \d+; /.exec(line);
-    return !count || line.slice(count[0].length).trimEnd() !== staleCount;
-  }).join("");
-}
-
 /**
  * run-all.mjs's steps in `list` and then the summary. A call stopped at its limit skips the rest of
  * its step and asks for `reset`; `build` runs the build step (buildStep), `open` and `close` start
@@ -737,8 +727,8 @@ export function withoutCountFailures(/** @type {string} */ text) {
  * count call whose end stops the round (countHalt), or any call left running after its stop or
  * whose output was released (superviseCall's `live`), stops it there: the reason is recorded as the step's skip, and no later
  * call, clean slate, step or summary runs, nor is the step's end or the round's finish recorded; this throws, and run-all.mjs records the round failed, which it does not
- * start again (resumeAt). An ordinary count failure is recorded as a skip, but the round goes on.
- * The effects are run-all.mjs's, passed in, so round.test.mjs runs this loop itself.
+ * start again (resumeAt). The effects are run-all.mjs's, passed in, so round.test.mjs runs this
+ * loop itself.
  * @param {string[]} list
  * @param {ReturnType<typeof calls>} all
  * @param {{
@@ -774,7 +764,6 @@ export async function runSteps(list, all, { call, progress, skip, reset, build, 
         throw new Error(`${halt}; the round stopped in its count step`);
       }
       leftRunning(step, result, skip);
-      if (step === "count" && result.code !== 0) skip(step, `count.mjs exited ${result.code}; ${staleCount}`);
       if (result.stopped) {
         skip(step, result.stopped);
         reset();

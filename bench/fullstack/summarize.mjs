@@ -27,8 +27,8 @@ const summary = { tier, ...(tier === "matched" ? { edge: edgeOf(raw) ? "on" : "o
 // Packed rounds keep tools.json in raw.tar.xz. Never fill historical gaps with today's pin.
 const tools = read(join(raw, "tools.json"));
 if (tools) summary.tools = tools;
-// Skipped steps ("<time> step <name> skipped: <why>") may have missing or earlier results.
-// Only rounds with skip records get the key.
+// Steps droplet.mjs skipped after the droplet hung ("<time> step <name> skipped: <why>"): their
+// results are partly or wholly missing. Only rounds with one get the key.
 const skippedFile = join(dir, "skipped.txt");
 if (existsSync(skippedFile)) {
   summary.skipped = readFileSync(skippedFile, "utf8").trim().split("\n").filter(Boolean).map((line) => {

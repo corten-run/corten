@@ -28,7 +28,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
 import { ACK_FD, ACK_MS, acknowledgments, CONTROL_FD, EVERY_EVENT, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
-import { roundNameError, withoutCountFailures } from "./round.mjs";
+import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -272,7 +272,6 @@ for (const names of PROBE_SETS) {
 // Merged into the round's earlier counts, so one app can be counted again on its own.
 const file = join(dir, "instructions.json");
 const results = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-const previousKeys = new Set(Object.keys(results));
 // The image each counted container was started from, by ID, read before its warmup: which build
 // was counted, whatever its tag names now (count-pairs.mjs checks it against the side's).
 const imagesFile = join(dir, "count-images.json");
@@ -282,7 +281,6 @@ for (const name of appsArg.split(",")) {
   for (const target of targets) {
     // A JSON-only app has no page to count.
     if (target === "page" && catalog[name].pages === false) continue;
-    previousKeys.delete(`${name}/${target}${suffix}`);
     docker("rm", "-f", `fsw-${name}`);
     const run = docker(...runArgs(name, catalog[name], source, join(here, "fixtures")));
     if (run.status !== 0) {
@@ -363,15 +361,4 @@ for (const name of appsArg.split(",")) {
   }
 }
 writeFileSync(file, JSON.stringify(results, null, 1));
-// All visited keys were replaced, with a count or an app failure. An unvisited key may still
-// hold an older count, so a partial retry cannot clear the warning for the summary as a whole.
-const skippedFile = join(dir, "skipped.txt");
-if (!previousKeys.size && existsSync(skippedFile)) {
-  const before = readFileSync(skippedFile, "utf8");
-  const after = withoutCountFailures(before);
-  if (after !== before) {
-    if (after) writeFileSync(skippedFile, after);
-    else rmSync(skippedFile, { force: true });
-  }
-}
 console.log("done");

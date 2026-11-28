@@ -1644,13 +1644,6 @@ three runs:
    noted, not refused: the count goes on with the events it reads and repeats that load with
    `instructions:u` alone where that is unusable. A recognized optional row with
    `<not supported>` can pass the default probe without a note.
-   If `count.mjs` exits nonzero without a halt, for example after a refused probe, the round
-   records the exit status in `skipped.txt`, runs its remaining steps and summarizes as usual.
-   `summary.json` keeps the `skipped` warning and the summary prints `SKIPPED: step count`:
-   the instruction rows carry no run identity, so the summary still lists them but they are
-   not evidence of this round's count unless replaced by a later count. A retry in the same
-   directory clears this warning only when it finishes and replaces every saved row, with a
-   count or an app failure. A partial retry leaves the warning, and other skips are unchanged.
    `count-pairs.mjs` sets `BENCH_COUNT_EVERY_EVENT=1` for every invocation, requiring every
    event at the probe. An optional event that passes the probe but fails under load can still
    produce a null count, which the paired runner marks not valid. `count-kernel.txt` records

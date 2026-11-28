@@ -85,10 +85,8 @@ const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) =
   console.log(now(), "node", args.join(" "));
   // Only count-pairs.mjs sets this mode. A round never passes it to count.mjs.
   const env = args[0] === "count.mjs" ? { ...process.env } : undefined;
-  if (env && Object.hasOwn(env, EVERY_EVENT)) {
-    console.log(`the round's count ignores ${EVERY_EVENT}`);
-    delete env[EVERY_EVENT];
-  }
+  if (env && Object.hasOwn(env, EVERY_EVENT)) console.log(`the round's count ignores ${EVERY_EVENT}`);
+  if (env) delete env[EVERY_EVENT];
   // Unattended, its output passes through here so a quiet call can be told from a busy one.
   const child = spawn("node", args, { cwd: here, env, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
   const result = await superviseCall(child, {
