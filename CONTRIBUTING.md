@@ -630,11 +630,11 @@ establish a general ranking.
       the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
       pages, over `--addresses 3`), so four pages are at most four bytes a connection, since a reading over
       fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
-      resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
-      than the larger of base's three span and four pages (of the size it prints, the step
-      resident memory is reported in: 16,384 bytes with 4,096-byte pages, under 3.3 bytes a
-      connection over the default 5,000); the figures a connection are rounded and do not decide
-      it. The floor was one page until 2026-11-27, when the maintainer raised it to four:
+      allocator live bytes (`idle.mjs --allocator`) is not above base's by more
+      than the larger of base's three-run span and four pages (16,384 bytes with 4,096-byte
+      pages, under 3.3 bytes a connection over the default 5,000). Report resident growth from
+      every run alongside live growth; it does not decide. Missing live bytes mean no figure,
+      never a comparison of resident memory instead. The four-page floor comes from the prior resident rule:
       [design Choice 76](docs/design.md#choice-counted-or-measured) gives the readings it rests
       on, whose cause was not established, and what it gives up, a cost under about 3.3 bytes a
       connection at the default, where 8 bytes more a connection is 40,000 bytes by arithmetic,

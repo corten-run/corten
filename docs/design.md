@@ -11945,13 +11945,21 @@ rules something out.
     rise inside the budget costs under +1% is a bet too. Idle memory has a statistic of its
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
     2,645 bytes a connection between runs: three runs a build, and a rise only when the median
-    of head's growths of resident memory, in bytes, is above base's by more than the larger of
-    base's three span and four pages. The required readings leave the allocator observer off.
+    of head's growths in allocator live bytes is above base's by more than the larger of
+    base's three-run span and four pages. On 2026-11-27 the maintainer was asked whether
+    allocator live bytes should decide, with resident memory reported, conditional on hosted
+    readings of one binary agreeing within the existing floor. The answer was “Option one is
+    approved” ([#2271 Decide the counted lane's idle-memory rule on the allocator's live bytes, with resident growth reported (the maintainer's ruling of 2026-11-27)](https://github.com/corten-run/corten/issues/2271)).
+    The [hosted self-comparison](https://github.com/corten-run/corten/actions/runs/46129076580/job/140930069470)
+    on 2026-11-28 gave six readings per case: live bytes spanned 0 after one request, 0 after
+    three browser requests, and 2,048 before any byte, all within 16,384. Keep that floor
+    initially to tolerate variation in the live reading, not to round it to whole pages.
+    The same run supplies the resident reading for context; it cannot stand in for missing live bytes.
     A [separate matched diagnostic](../bench/request-cost/README.md#allocator-diagnostics)
     prints each of its runs' growth in jemalloc live bytes (allocated less thread-cache bytes),
     the serving thread's net allocated bytes and jemalloc active bytes, alongside RSS from
-    that same run. The observer itself can move RSS, so none of those diagnostic figures
-    decides the rule.
+    that same run. Its optional collection does not replace any required reading.
+    Before this ruling, observer-off resident growth decided:
     Resident memory is reported a page at a time, so base's three can agree exactly and one
     page is the least step a run can show. One page was the
     least allowed, the step of the reading and not a measured bound on its accuracy, from
@@ -12249,6 +12257,8 @@ rules something out.
     record them, whose count is the baseline, the changes before it not having been counted,
     or cannot be taken because the
     probe does not build against that tag, so nothing bounds what counted costs add up to;
+    further hosted same-binary readings across runner and allocator versions establish a
+    tighter floor for live bytes; do not use the historical resident-span model to set it;
     a change shown to hold memory a connection keeps passes the idle rule under the four
     pages, so the floor hides a real cost; the hosted job fails a change on idle memory alone
     at four pages, with no memory a connection keeps shown, so four pages are still under

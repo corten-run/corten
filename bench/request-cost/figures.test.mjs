@@ -115,11 +115,11 @@ test("head's idle memory rises past base's by its growths in bytes, beyond base'
   assert.throws(() => idleRise({ base: [page, page, page], head: [page, page, 1.5], page, connections }), /head's growth of 1.5 bytes is not a whole number/);
   assert.throws(() => idleRise({ base: [1.5, page, page], head: [page, page, page], page, connections }), /base's growth of 1.5 bytes is not a whole number/);
   assert.throws(() => idleRise({ base: [2 ** 53, page, page], head: [page, page, page], page, connections }), /not a whole number/);
-  // The figures a connection, rounded, are not growths: a rise given as its figures (12,562 and
-  // 12,563, #2136's) is refused, not read as a rise of one byte.
-  assert.throws(() => idleRise({ base: [12562, 12562, 12562], head: [12563, 12563, 12563], page, connections }), /base's growth of 12562 bytes is not whole 4096-byte pages: give each run's growth, not its figure a connection/);
-  assert.throws(() => idleRise({ base: [page, page, page], head: [page, page, page + 1], page, connections }), /head's growth of 4097 bytes is not whole 4096-byte pages/);
-  // A shrink is whole pages too.
+  // The live counter resolves a byte. The four-page floor is a boundary, not a rounding rule.
+  for (const extra of [0, 1]) {
+    const live = 12562 + 4 * page + extra;
+    assert.equal(idleRise({ base: [12562, 12562, 12562], head: [live, live, live], page, connections }).rose, extra > 0);
+  }
   assert.equal(idleRise({ base: [page, page, page], head: [-page, -page, -page], page, connections }).rose, false);
   // The four pages are allowed only where they are at most four bytes a connection: a run over
   // fewer connections than a page has bytes decides nothing (#2149's review, of one page: over 40
