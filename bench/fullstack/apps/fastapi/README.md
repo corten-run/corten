@@ -29,6 +29,11 @@ keeps trickling without completing. It is a source-read deadline, not a new dead
 for form uploads or CPU-bound template rendering. JSON endpoints, catalog/legacy
 pages, and their existing policies are not changed.
 
+Failed or malformed upstream reads on the marketplace page return a generic,
+non-cacheable HTML 502. `GET /health/live` reports only that the app can respond;
+it does not read either record source or establish upstream readiness. Both are
+used by the Mixed Production qualification before its timing phases.
+
 `python -m unittest app.test_page_read` checks task cleanup on disconnect, expiry
 and outer cancellation. `page-lifetime.test.mjs` uses a real upstream and client
 socket, all three locales, and the ordinary default/matched production commands:
