@@ -159,13 +159,6 @@ and two real matches: glob 13.0.7 (GHSA-3g3m-2fjr-6pw4, fixed in 14.0.2) and min
 through Nitro's build-time `@vercel/nft` and `archiver`; neither is in the `.output` the Nuxt
 image runs. They stay until a follow-up takes those majors.
 
-A later lockfile refresh takes `@vercel/nft` 1.11.16 within Nitro's existing
-range. That tracer now uses `glob` 14.0.6 and its own `minimatch` 11.0.9.
-This removes the old `glob` from the lock, **not** every copy of `minimatch`
-10.2.6: `archiver` 8 still takes `readdir-glob` 3, which requires that major.
-No override is used. Future Nuxt builds use different build tools; this does
-not change an earlier run's inputs or establish a performance difference.
-
 Checks on the changed apps, run locally on Docker Desktop with the commit's sources, not on a
 benchmark host: catalog fixture and API checks for Spring, Rails and Phoenix (500 JSON records
 and 120 page checks per source), marketplace fixture and API checks for the same three (500
@@ -183,3 +176,17 @@ moved to 3.2.9: `check-app.mjs` for Rails and Phoenix, catalog and marketplace f
 checks for Rails, Phoenix and Nuxt (the same counts as above), live-delivery (2 of 2) and
 recoverable-live (6 of 6) parity for live Rails and Phoenix, the fullstack Rails tests (13
 runs, 203 assertions) and the live Rails store test (12 runs) all passed.
+
+### Nuxt tracer refresh
+
+A later lockfile refresh takes `@vercel/nft` 1.11.16 within Nitro's existing
+range. That tracer now uses `glob` 14.0.6 and its own `minimatch` 11.0.9.
+This removes the old `glob` from the lock, **not** every copy of `minimatch`
+10.2.6: `archiver` 8 still takes `readdir-glob` 3, which requires that major.
+No override is used. Future Nuxt builds use different build tools; this does
+not change an earlier run's inputs or establish a performance difference.
+
+With the lock at `d49e439b5`, the production Dockerfile built. On that image
+all 13 catalog, marketplace and alert unit checks passed, as did the marketplace
+HTTP suite (three checks, including both fixture and HTTP sources). These are
+local build and behavior checks, not a new timed result.
