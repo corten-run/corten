@@ -1,10 +1,70 @@
-// Focused DOM controls for the Firefox alerts smoke. No server needed.
+// Focused browser controls for the alerts smoke. No running watchlist needed.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import test from "node:test";
-import { firefox } from "@playwright/test";
+import { chromium, firefox } from "@playwright/test";
+import { retrying } from "../steady.mjs";
 import { alertsReadFixture, askingInPlace, captureAlertsDraw, pageRefresh } from "./page-refresh.mjs";
 import { base, within } from "./helpers.mjs";
+
+for (const [name, wrong] of [
+  ["an explicit retried alerts load stays pending without counting either document", ""],
+  ["a runtime nav read during the recovered alerts load still counts", "nav"],
+  ["a real document reload with the explicit Referer during alerts setup still counts", "reload"],
+]) test(name, { timeout: 30_000 }, async (t) => {
+  const reload = wrong === "reload";
+  const browser = await (reload ? firefox : chromium).launch();
+  t.after(() => browser.close());
+  const runtime = readFileSync(new URL("../../crates/corten/js/dist/corten.js", import.meta.url));
+  const runtimeRead = Promise.withResolvers();
+  let fixtureReads = 0;
+  const server = createServer((req, res) => {
+    if (req.url === "/corten.js") return res.writeHead(200, { "content-type": "text/javascript" }).end(runtime);
+    if (req.headers.corten === "nav") {
+      runtimeRead.resolve();
+      return; // Keep the read pending until the page closes, so no later draw changes the evidence.
+    }
+    const fixture = req.url.startsWith("/smoke/alerts/saving?");
+    if (fixture) ++fixtureReads;
+    else if (reload && req.url.startsWith("/alerts?")) runtimeRead.resolve();
+    res.setHeader("content-type", "text/html");
+    const head = wrong ? '<noscript data-corten-read-again="0.1"></noscript><script type="module" src="/corten.js"></script>' : "";
+    res.end(fixture ? `<!doctype html><head>${head}</head><main><p>Saving...</p></main>` : "<p>Saved.</p>");
+  });
+  await new Promise((ready) => server.listen(0, "127.0.0.1", ready));
+  t.after(() => new Promise((done) => server.close(done)));
+  const url = `http://127.0.0.1:${server.address().port}/alerts?saved=1`;
+  const page = await browser.newPage();
+  if (reload) await page.addInitScript(() => Object.defineProperty(window, "navigation", { value: undefined }));
+  else retrying(page, "net::ERR_CONNECTION_REFUSED");
+  const fixture = alertsReadFixture(url);
+  page.on("request", fixture.onPart);
+  await page.route(url, fixture.saving);
+  if (!reload) await page.route(url, (route) => {
+    // Refuse the browser response only after the pending fixture was selected.
+    t.mock.method(route, "fulfill", () => route.abort("connectionrefused"));
+    return route.fallback();
+  }, { times: 1 });
+  try {
+    await fixture.goto({ goto: async (...args) => {
+      const response = await page.goto(...args);
+      // Model a delayed goto acknowledgement: the runtime's own read has started before
+      // the test receives its response or opens either part gate.
+      if (wrong) await within(5000, "runtime did not read the page", runtimeRead.promise);
+      return response;
+    } });
+    if (reload) await page.waitForFunction(() => document.querySelector("p")?.textContent === "Saved.", null, { timeout: 5000 });
+    assert.equal(await page.locator("p").textContent(), reload ? "Saved." : "Saving...");
+    assert.equal(fixtureReads, reload ? 1 : 2);
+    assert.deepEqual([...fixture.whole].map((r) => r.isNavigationRequest() ? "reload" : r.headers().corten), wrong ? [wrong] : []);
+    if (reload) assert.equal([...fixture.whole][0].headers().referer, url.replace("/alerts?", "/smoke/alerts/saving?"));
+  } finally {
+    page.off("request", fixture.onPart);
+    await fixture.close(page);
+    await page.close();
+  }
+});
 
 test("a body failure aborts and drains an actual held Firefox alerts read without starting its fixture", { timeout: 30_000 }, async (t) => {
   const browser = await firefox.launch();
@@ -83,9 +143,11 @@ test("a stalled fixture has a bounded drain and a late rejection remains handled
   const response = Promise.withResolvers();
   let aborted = false;
   const work = fixture.saving({
-    request: () => ({ method: () => "GET", headers: () => ({}), isNavigationRequest: () => true }),
+    request: () => ({ method: () => "GET", headers: () => ({ corten: "action" }) }),
     fetch: () => response.promise, abort: async () => { aborted = true; },
   });
+  fixture.first.resolve();
+  await new Promise((done) => setImmediate(done));
   await assert.rejects(fixture.close({ unroute: async () => {} }), /drain the alerts route callbacks/);
   response.reject(new Error("socket closed after the case ended"));
   await work;

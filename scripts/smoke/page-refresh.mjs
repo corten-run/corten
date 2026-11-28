@@ -33,7 +33,24 @@ export function alertsReadFixture(/** @type {string} */ url) {
   const first = Promise.withResolvers();
   const next = Promise.withResolvers();
   const active = new Set();
-  let documentRead = false, partRead = false, closing = false;
+  let partRead = false, closing = false;
+  const fixture = new URL(url);
+  fixture.pathname = "/smoke/alerts/saving";
+  const parts = [], whole = new Set();
+  let opening = false, initial, retry;
+  const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
+    if (r.method() !== "GET" || !r.url().includes("/alerts?saved=")) return;
+    if (r.headers()["corten"] === "action") parts.push(r.url());
+    else {
+      whole.add(r);
+      // Mark only the explicit main-frame goto. A reload can inherit its Referer, so give
+      // the retry a slot only after the first attempt failed, not just while goto is pending.
+      if (opening && r.url() === url && r.headers().referer === fixture.href && r.isNavigationRequest() && !r.frame().parentFrame()) {
+        if (!initial) initial = r;
+        else if (initial.failure()) retry ??= r;
+      }
+    }
+  };
   const failures = [];
   const serve = async (/** @type {import("@playwright/test").Route} */ route, abort) => {
     if (closing) return abort();
@@ -47,10 +64,7 @@ export function alertsReadFixture(/** @type {string} */ url) {
       partRead = true;
       await first.promise;
       if (closing) return abort();
-    } else if (!documentRead && request.isNavigationRequest()) documentRead = true;
-    else return route.fallback();
-    const fixture = new URL(url);
-    fixture.pathname = "/smoke/alerts/saving";
+    } else if (request !== initial && request !== retry) return route.fallback();
     const response = await route.fetch({
       url: fixture.href, headers: { ...request.headers(), "accept-encoding": "identity" }, timeout: 6000,
     });
@@ -72,7 +86,19 @@ export function alertsReadFixture(/** @type {string} */ url) {
     return work.finally(() => active.delete(work));
   };
   return {
-    first, next, saving,
+    first, next, saving, parts, whole, onPart,
+    async goto(page) {
+      opening = true;
+      try {
+        const response = await page.goto(url, { referer: fixture.href });
+        const arrived = response?.request();
+        if (!arrived || (arrived !== initial && arrived !== retry)) throw new Error("alerts goto did not return its explicit document");
+        whole.delete(arrived);
+        if (arrived === retry) whole.delete(initial);
+      } finally {
+        opening = false;
+      }
+    },
     async close(page) {
       closing = true;
       first.resolve();
@@ -120,29 +146,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     {
       const { step } = steps(15_000, "the first alerts part did not draw and settle in 15 s");
       const url = await step(pending);
-      /** @type {string[]} */
-      const parts = [];
-      /** @type {string[]} */
-      const whole = [];
-      let initial = true;
-      const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
-        if (r.method() !== "GET" || !r.url().includes("/alerts?saved=")) return;
-        if (initial && r.url() === url && r.isNavigationRequest()) {
-          initial = false;
-          return;
-        }
-        (r.headers()["corten"] === "action" ? parts : whole).push(r.url());
-      };
       // Use the real renderer, not the race between the browser's first poll and the store's
       // 1.5 s lag. Only the document and its first part read render as still saving. Hold the
       // first read until the original DOM is captured, the next until the asking patch is seen.
       const fixture = alertsReadFixture(url);
+      const { parts, whole, onPart } = fixture;
       page.on("request", onPart);
       let before, regionStayed;
       let failed = false;
       try {
         await step(() => page.route(url, fixture.saving));
-        await step(() => page.goto(url));
+        await step(() => fixture.goto(page));
         const region = await step(() => liveRegion(page, "alert-status"));
         regionStayed = region.stayed;
         before = await step(() => page.evaluateHandle(captureAlertsDraw));
@@ -175,8 +189,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const terminal = await step(saved);
         check(
           "a page's part waiting for a write is read again after a full load, not the page",
-          region.text === "Saving..." && terminal === "Saved." && parts.length >= 2 && whole.length === 0 && page.url() === url,
-          `${region.text} -> ${terminal} after ${parts.length} part and ${whole.length} page reads`,
+          region.text === "Saving..." && terminal === "Saved." && parts.length >= 2 && whole.size === 0 && page.url() === url,
+          `${region.text} -> ${terminal} after ${parts.length} part and ${whole.size} page reads`,
         );
         const kept = await step(() => page.evaluate(() => ({
           marker: (/** @type {any} */ (window)).__marker,
@@ -210,8 +224,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await savedSoon();
         check(
           "a page's part reached by the runtime's navigation is read again, not the page",
-          (await saved()) === "Saved." && parts.length > from && whole.length === 1,
-          `${await saved()} after ${parts.length - from} part reads, ${whole.length} page loads (the navigation's)`,
+          (await saved()) === "Saved." && parts.length > from && whole.size === 1,
+          `${await saved()} after ${parts.length - from} part reads, ${whole.size} page loads (the navigation's)`,
         );
         // Away before the read: the runtime's navigation leaves the page, and its part is not read.
         await go(await pending());
