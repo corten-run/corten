@@ -12261,11 +12261,10 @@ rules something out.
     further hosted same-binary readings across runner and allocator versions establish a
     tighter floor for live bytes; do not use the historical resident-span model to set it;
     a change shown to hold memory a connection keeps passes the idle rule under the four
-    pages, so the floor hides a real cost; the hosted job fails a change on idle memory alone
-    at four pages, with no memory a connection keeps shown, so four pages are still under
-    what a run reads of where things were put (since the first of the required check's
-    rulings, of two binaries alone: one binary fails nothing); a run shows what the pages of
-    the readings the floor rests on are, either way;
+    pages, so the floor hides a real cost; a comparison of two binaries fails on live
+    bytes alone with no retained memory accounted for: check what the counter and workload
+    measured before changing the floor; a run explains the page-sized differences in the
+    historical resident readings, whose cause was not established;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
