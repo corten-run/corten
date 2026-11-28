@@ -1,6 +1,6 @@
 // Browser smoke test and timings for the deck builder: every move in the browser, autosave with
 // its refusals, another tab's edits, and the same forms with JavaScript off or the builder blocked.
-// Usage: node examples/deck-builder/smoke.mjs http://localhost:18487 [--autosave-only | --handoff-only]
+// Usage: node examples/deck-builder/smoke.mjs http://localhost:18487 [--autosave-only | --handoff-only | --validity-only]
 import http from "node:http";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
@@ -414,6 +414,146 @@ async function delayedBuilder(scenario) {
     await page.waitForSelector("form[data-patch]");
   } finally {
     resume.resolve(undefined);
+    await context.close();
+  }
+}
+
+const countField = (page, id) => page.locator(`ul li[data-key="${id}"] input[type=number]`);
+const numberInput = (field) => field.evaluate((el) => ({ value: el.value, bad: el.validity.badInput }));
+const typeBadNumber = async (field) => {
+  await field.press("ControlOrMeta+a");
+  await field.pressSequentially("1e");
+};
+
+/** A malformed number and an intentional clear both serialize as empty unless the browser stops the former. */
+async function nativeCountValidity() {
+  const context = await browser.newContext();
+  const resume = Promise.withResolvers();
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const count = countField(page, "gravel-sprite");
+    await page.route(builderModule, async (route) => {
+      await resume.promise;
+      await route.continue();
+    }, { times: 1 });
+    await Promise.all([
+      page.waitForRequest((r) => builderModule(new URL(r.url()))),
+      page.goto(home, { waitUntil: "commit" }),
+    ]);
+    const original = await count.inputValue();
+    const before = Number(await version(page));
+    await typeBadNumber(count);
+    const malformed = await numberInput(count);
+    check("real number keystrokes make an empty value with badInput", malformed.bad && malformed.value === "", JSON.stringify(malformed));
+    const load = page.waitForEvent("load");
+    resume.resolve(undefined);
+    await load;
+    check("the late builder leaves the malformed field native and untouched",
+      await page.locator("form[data-patch]").count() === 0 && (await numberInput(count)).bad);
+
+    const posts = [];
+    page.on("request", (r) => { if (isSave(r)) posts.push(r); });
+    const action = page.waitForEvent("console", { predicate: (m) => m.text() === "deck count invalid" });
+    await count.evaluate((el) => el.addEventListener("invalid", () => console.debug("deck count invalid"), { once: true }));
+    const first = Promise.race([action.then(() => null), page.waitForResponse((r) => isSave(r.request()))]);
+    await page.locator(saveButton).click();
+    const blocked = await first;
+    const witness = await context.newPage();
+    await witness.goto(home);
+    const serverCount = (await deck(witness))["gravel-sprite"];
+    const serverVersion = Number(await version(witness));
+    await witness.close();
+    check("malformed native Save sends no POST and leaves the saved deck and version unchanged",
+      !blocked && posts.length === 0 && serverCount === Number(original) && serverVersion === before,
+      blocked ? `sent count ${JSON.stringify(postedGravel(blocked.request()))}, HTTP ${blocked.status()}, server count ${serverCount}, version ${before} to ${serverVersion}`
+        : `server count ${serverCount}, version ${serverVersion}`);
+    if (blocked) return;
+
+    // Keep the next document native too, so both a correction and a true clear take the 303 path.
+    await page.route(builderModule, (route) => route.abort());
+    const post = async () => {
+      const [answer] = await Promise.all([
+        page.waitForResponse((r) => isSave(r.request())),
+        page.waitForEvent("load"),
+        page.locator(saveButton).click(),
+      ]);
+      return answer;
+    };
+    const corrected = original === "2" ? "3" : "2";
+    await count.fill(corrected);
+    const saved = await post();
+    check("native Save after correction commits exactly once",
+      saved.status() === 303 && saved.request().isNavigationRequest() && postedGravel(saved.request()) === corrected &&
+      await count.inputValue() === corrected && Number(await version(page)) === before + 1);
+    await count.fill("");
+    const cleared = await numberInput(count);
+    const removed = await post();
+    check("intentional native clear is valid and removes the line",
+      !cleared.bad && cleared.value === "" && removed.status() === 303 && postedGravel(removed.request()) === "" &&
+      await count.count() === 0 && Number(await version(page)) === before + 2);
+  } finally {
+    resume.resolve(undefined);
+    await context.close();
+  }
+}
+
+/** A blocked draft has not gone out. Correcting the field without changing its count must resume it. */
+async function queuedCountValidity() {
+  const context = await browser.newContext();
+  let release;
+  try {
+    context.setDefaultTimeout(8_000);
+    const page = await open(context);
+    const before = Number(await version(page));
+    const [first, queued, malformed] = ["gravel-sprite", "moth-court-herald", "lantern-warden"].map((id) => countField(page, id));
+    const changed = (value) => value === "1" ? "2" : "1";
+    const firstValue = changed(await first.inputValue());
+    const queuedOriginal = await queued.inputValue();
+    const queuedValue = changed(queuedOriginal);
+    const original = await malformed.inputValue();
+    const posts = [];
+    page.on("request", (r) => { if (isSave(r)) posts.push(r); });
+    release = await holdSave(page);
+    const [sent] = await Promise.all([
+      page.waitForRequest(isSave),
+      first.fill(firstValue).then(() => first.press("Tab")),
+    ]);
+    await queued.fill(queuedValue);
+    await queued.press("Tab");
+    await typeBadNumber(malformed);
+    check("an enhanced draft is queued behind a real in-flight save with another field malformed",
+      posts.length === 1 && (await numberInput(malformed)).bad && await queued.inputValue() === queuedValue);
+    const answer = page.waitForResponse((r) => r.request() === sent);
+    release();
+    check("the first autosave still gets its answer", (await answer).status() === 200);
+    await settled(page);
+    await page.locator(saveButton).click();
+    const witness = await context.newPage();
+    await witness.goto(home);
+    const saved = await deck(witness);
+    const serverVersion = Number(await version(witness));
+    const held = posts.length === 1 && await page.inputValue("input[name=draft]") === "1" &&
+      serverVersion === before + 1 && saved["gravel-sprite"] === Number(firstValue) &&
+      saved["moth-court-herald"] === Number(queuedOriginal) && saved["lantern-warden"] === Number(original) &&
+      (await numberInput(malformed)).bad && await queued.inputValue() === queuedValue;
+    await witness.close();
+    check("enhanced Save while malformed sends no new draft and retains the queued change", held,
+      held ? "" : `${posts.length} POSTs, server version ${serverVersion}, count ${saved["lantern-warden"]}`);
+    if (!held) return;
+
+    const [resumed] = await Promise.all([
+      page.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("draft") === "2"),
+      malformed.fill(original).then(() => malformed.press("Tab")),
+    ]);
+    await settled(page);
+    await page.reload();
+    check("correcting to the original count resumes exactly one queued autosave without removing the row",
+      resumed.status() === 200 && !resumed.request().isNavigationRequest() && posts.length === 2 &&
+      await malformed.inputValue() === original && await queued.inputValue() === queuedValue &&
+      Number(await version(page)) === before + 2);
+  } finally {
+    release?.();
     await context.close();
   }
 }
@@ -1018,6 +1158,10 @@ async function smoke() {
 
 try {
   if (process.argv.includes("--autosave-only")) await successiveAutosaves();
+  else if (process.argv.includes("--validity-only")) {
+    await queuedCountValidity();
+    await nativeCountValidity();
+  }
   else {
     if (!process.argv.includes("--handoff-only")) {
       await successiveAutosaves();
@@ -1026,6 +1170,8 @@ try {
     for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
     for (const selected of [false, true]) await nativeAddHandoff(selected);
     for (const code of [409, 422]) await nativeRefusal(code);
+    await queuedCountValidity();
+    await nativeCountValidity();
   }
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those

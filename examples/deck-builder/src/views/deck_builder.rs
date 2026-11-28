@@ -304,7 +304,7 @@ pub fn DeckBuilder<'a>(
                         </div>
                     }
                 </dl>
-                <form ref={form} id={DeckFormId} method="post" action={url::Save} novalidate>
+                <form ref={form} id={DeckFormId} method="post" action={url::Save}>
                     <input ref={generation_ref} type="hidden" name={f.generation} value={generation}>
                     <input ref={version_ref} type="hidden" name={f.version} value={version}>
                     {SubmitKey::field(f.submit)}
@@ -315,6 +315,7 @@ pub fn DeckBuilder<'a>(
                         ref={lines_ref}
                         class={Lines}
                         on:change={js::typed(copies.closest(), parts)}
+                        on:focusout={js::resumeSave(parts)}
                         on:dragstart={js::liftLine(event, lift.closest(), parts, carry)}
                         on:dragover={js::overLine(event, lines_ref)}
                         on:drop={js::dropLine(event, parts, carry)}

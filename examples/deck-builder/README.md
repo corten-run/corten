@@ -27,8 +27,11 @@ Filter and Save stay visible with scripting enabled. Until the builder starts, t
 submits the forms natively: successful writes redirect to the saved deck, and a refusal draws
 the page with its reason. If a first Save already committed, resending its key with different
 or malformed counts shows a conflict and asks the player to re-enter that edit on the saved deck.
-Malformed counts under a fresh key are still a form error. An Add can save without touching
-the count fields. If autosave starts on that same form and reuses
+Malformed counts that reach the server under a fresh key are still a form error. In the browser,
+a partly typed number is invalid even when its form value is empty; native Save blocks it,
+whereas deliberately clearing a count still removes the line. Autosave also waits for a valid
+form, and a pending save can resume after the field is corrected. An Add can save without
+touching the count fields. If autosave starts on that same form and reuses
 the native save's key, the server refuses the write and draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
 started, that document keeps its fields, focus, and native Save. Selections made before startup
@@ -79,16 +82,18 @@ Its browser test, which also times the screen: [`smoke.mjs`](smoke.mjs).
 Measured on 2026-11-28 with Chromium 159.0.8154.6 over loopback HTTP, with a fresh Windows app
 process (240 cards) and browser context for every sample. Each of the three readings per build
 and save mode was identical. The merge base is `1b9c1b0dd8348228f705b240cd44b74027469292`; the
-pre-repair checkout is `582018fce979cfdd097a3df0b2b027bcb3b691ba`.
+pre-repair checkout is `582018fce979cfdd097a3df0b2b027bcb3b691ba`. The acknowledgement repair
+was measured at `78da3d55ee708c9cbfddcb90ed698e4a1cd972a4`, then remeasured alongside the
+count-validation follow-up.
 
-| Bytes | Merge base | Before acknowledgement repair | After repair |
-|---|---:|---:|---:|
-| Startup HTML body | 164,146 | 161,100 | 161,100 |
-| `deck_builder.js` body | 21,805 | 22,690 | 22,857 |
-| All startup script bodies (11 / 10 / 10) | 90,972 | 91,288 | 91,455 |
-| Startup exchange: HTML and scripts | 271,217 | 267,175 | 267,342 |
-| First autosave exchange: POST and any acknowledgement script | 1,707 | 3,451 | 1,727 |
-| First native Save exchange: POST, 303, redirected GET and its response | 169,406 | 166,360 | 166,360 |
+| Bytes | Merge base | Before acknowledgement repair | Acknowledgement repair | Count validation |
+|---|---:|---:|---:|---:|
+| Startup HTML body | 164,146 | 161,100 | 161,100 | 161,487 |
+| `deck_builder.js` body | 21,805 | 22,690 | 22,857 | 23,192 |
+| All startup script bodies (11 / 10 / 10 / 10) | 90,972 | 91,288 | 91,455 | 91,790 |
+| Startup exchange: HTML and scripts | 271,217 | 267,175 | 267,342 | 268,064 |
+| First autosave exchange: POST and any acknowledgement script | 1,707 | 3,451 | 1,727 | 1,727 |
+| First native Save exchange: POST, 303, redirected GET and its response | 169,406 | 166,360 | 166,360 | 166,747 |
 
 Both saves changed Gravel Sprite's count from 3 to 2. The scripted save left the edited field to
 trigger autosave; before the repair its `200` patch led to a separate 1,744-byte script exchange.
@@ -96,7 +101,11 @@ After the repair that request is gone, while the patch body grew from 93 to 112 
 Save ran with JavaScript off, starting at `/?q=oracle` and returning to that filter with the saved
 count. Exchange totals include HTTP request and response headers and bodies as reported by
 Playwright, not transport framing. Startup excludes styles, images and feed traffic; save totals
-exclude the page open before the save and its subresources. These are byte counts, not timings.
+exclude the page open before the save and its subresources. The validation follow-up adds
+387 bytes to the HTML and 335 bytes to the startup script; the first autosave exchange is
+unchanged, and the added bytes in the native Save exchange are in the redirected page.
+The counts do not measure server allocations or retained memory for the native submit key's deck
+snapshot, or time under the save mutex when recording or comparing it.
 
 ## Nested Preview
 

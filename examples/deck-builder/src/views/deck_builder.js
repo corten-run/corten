@@ -96,6 +96,8 @@ const kept = () =>
     version: 0,
     /** A save is on its way. */
     sending: false,
+    /** A pending save was blocked by an invalid field, not sent. */
+    blocked: false,
     /** Sends whose answer never came (a lost connection): one may have been saved. @type {Sent[]} */
     unanswered: /** @type {Sent[]} */ ([]),
     /** How many sends this page made: the next one's draft number. */
@@ -368,7 +370,12 @@ function say(parts, state) {
  */
 function save(s, parts) {
   if (s.sending || s.conflict || s.waiting) return;
+  s.blocked = false;
   if (same(s.drawn, s.base) && s.unanswered.length === 0) return;
+  if (!parts.form.checkValidity()) {
+    s.blocked = true;
+    return;
+  }
   s.sending = true;
   s.drafts += 1;
   parts.draft.value = String(s.drafts);
@@ -527,6 +534,7 @@ export function retry(parts) {
 export function saveNow(event, parts, copies) {
   if (!enhanced(parts)) return;
   event.preventDefault();
+  if (!parts.form.reportValidity()) return;
   // Some browsers don't move focus to a clicked button.
   const focused = copies.find((input) => input === document.activeElement);
   if (focused) typed(focused, parts);
@@ -561,11 +569,20 @@ function step(s, parts, back) {
  * @param {HTMLInputElement} input @param {Parts} parts
  */
 export function typed(input, parts) {
-  if (!enhanced(parts)) return;
+  if (!enhanced(parts) || !input.validity.valid) return;
   const s = kept();
   const line = rows(parts.lines, DeckLine).of(input);
   if (!line) return;
   change(s, parts, [[line.id, copiesFrom(input) - (s.drawn.get(line.id) ?? 0)]]);
+}
+
+/** The count may have been corrected back to its original value, with no change to save.
+ * @param {Parts} parts
+ */
+export function resumeSave(parts) {
+  if (!enhanced(parts)) return;
+  const s = kept();
+  if (s.blocked) queueMicrotask(() => save(s, parts));
 }
 
 /** @param {HTMLInputElement} input */
