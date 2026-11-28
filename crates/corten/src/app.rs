@@ -1268,18 +1268,21 @@ impl<M: Middleware> App<M> {
         self
     }
 
-    /// Whether [`serve`] answers the HTTP/1.1 requests that have no body with Corten's own
-    /// connection code in the place of hyper's: off unless set. With it on, a connection's
-    /// requests are read and answered by Corten up to the first whose head has a
-    /// `Content-Length`, a `Transfer-Encoding`, an `Expect` or an `Upgrade` header, whatever the
-    /// header says, or that is a `CONNECT`, or an HTTP/1.0 request that asks to keep its
+    /// Whether [`serve`] reads and answers HTTP/1.1 requests with Corten's own connection code
+    /// in the place of hyper's: off unless set. With it on, a connection's requests are read
+    /// and answered by Corten, their bodies too (a `Content-Length` or chunks, with
+    /// `Expect: 100-continue`), up to the first whose head has an `Upgrade` header, whatever
+    /// the header says, or that is a `CONNECT`, or an HTTP/1.0 request that asks to keep its
     /// connection. The answers before that request are sent, and it and everything after it on
-    /// the connection are hyper's, as every request is with this off: a request's body, a
-    /// WebSocket's handshake and a tunnel are read by hyper either way.
+    /// the connection are hyper's, as every request is with this off: a WebSocket's handshake
+    /// and a tunnel are read by hyper either way.
     ///
-    /// The app is given the same requests, and its clients are answered in correct HTTP with the
-    /// head hyper writes, which is not a promise of hyper's bytes for every answer. Every limit
-    /// here holds as it does with hyper: [`App::header_timeout`], [`App::send_timeout`],
+    /// The app is given the same requests, with bodies that say the same of their length and
+    /// end, give the same bytes and trailers, and fail on the same framing with the same error,
+    /// so every limit on a body holds as it does with hyper ([`App::body_limit`], an area's
+    /// and an extractor's own). Its clients are answered in correct HTTP with the head hyper writes,
+    /// which is not a promise of hyper's bytes for every answer. Every limit here holds as it
+    /// does with hyper: [`App::header_timeout`], [`App::send_timeout`],
     /// [`App::max_request_head`], [`App::max_connections`], the [deadline](App::deadline) and
     /// [`App::shutdown_grace`]. What is known to differ (the app guide lists each): the answers
     /// to requests that arrived together (pipelined) leave in one write, where hyper writes each
@@ -1287,12 +1290,18 @@ impl<M: Middleware> App<M> {
     /// next paragraph); an answer's trailers are not sent; a head refused at the limit, or
     /// before its end has come, may be refused with the other of 400 and 431, or sooner or
     /// later; an answer whose body fails after more than a buffer of it was ready is cut short
-    /// where hyper would have sent none of it; behind a long body its handler left unread, a
-    /// connection may be kept where hyper alone would have closed it, or closed where it would
-    /// have been kept; a body type of the app's own that panics where it is asked its length or
-    /// whether it has ended, or as it is dropped, takes with its connection the answers before
-    /// it that had not been sent; an answer cut short because its client closed its side while
-    /// none of it waited is cut after more of it, or less, than hyper sends; and a client that
+    /// where hyper would have sent none of it; a chunked body with a line feed that has no
+    /// carriage return before it among its trailers fails where it is read, where hyper reads
+    /// on for more trailers; a body is read from the socket only as the app asks for it, where
+    /// hyper reads one piece ahead; behind a long body its handler left unread, a
+    /// connection may be kept where hyper would have closed it, or closed where it would
+    /// have been kept; a body its handler holds unread while the rest of it arrives in several
+    /// writes keeps its connection where hyper closes it, and is not answered for a client that
+    /// has left by then where hyper answers; a body type of the app's own that panics where it
+    /// is asked its length or whether it has ended, or as it is dropped, takes with its
+    /// connection the answers before it that had not been sent; an answer cut short because its
+    /// client closed its side while none of it waited, or over a socket that takes little, is
+    /// cut after more of it, or less, than hyper sends; and a client that
     /// pipelines requests and reads no answer holds more of the server's memory than it does
     /// with hyper, which is why this is off unless an app asks
     /// (`docs/design.md#choice-own-http1`, with what was measured and what would make it the
@@ -1311,8 +1320,10 @@ impl<M: Middleware> App<M> {
     /// the headers an app sends unless it says otherwise; 23 where every feature of the crate
     /// is on, which makes that answer 720 bytes) where hyper ran 1, and 213 and 219 for
     /// answers of 77 and 75 bytes, the shortest there are. Any of them can be
-    /// for a request whose answer is never sent, which hyper would not have begun. An app whose
-    /// handlers for requests without a body are costly, or change something, should leave this
+    /// for a request whose answer is never sent, which hyper would not have begun, and a
+    /// request with a body is one of them like any other: a `POST` sent behind other requests
+    /// by a client that reads nothing is read and handled here while the answers ahead of it
+    /// wait. An app whose handlers are costly, or change something, should leave this
     /// off or bound that work itself (for each client, or by how much runs at once), unless its
     /// clients reach it through a proxy that does not pipeline.
     pub fn own_http1(mut self, enabled: bool) -> Self {

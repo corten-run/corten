@@ -1,15 +1,16 @@
 //! A connection is hyper's from the first request this one does not answer itself: one whose head
-//! has a `Content-Length`, a `Transfer-Encoding`, an `Expect` or an `Upgrade` line, a `CONNECT`,
-//! or an HTTP/1.0 request that asks to keep its connection ([`super::head`]). This connection
-//! sends the answers to the requests before it, then gives back
+//! has an `Upgrade` line, a `CONNECT`, or an HTTP/1.0 request that asks to keep its connection
+//! ([`super::head`]). This connection sends the answers to the requests before it, then gives back
 //! its IO with everything it read and did not answer, that request's head first ([`Rewound`]), and
-//! the caller serves the rest of the connection with hyper, which reads that request itself.
+//! the caller serves the rest of the connection with hyper, which reads that request itself, and
+//! its body if it has one.
 //!
-//! So a request's body is read by hyper alone, with every rule it has for one, and an app that
-//! switches protocols sees one thing whichever connection read the requests before: hyper's
-//! `OnUpgrade` in the request's extensions, and hyper's `Upgraded` once the `101` (or a tunnel's
-//! `2xx`) has gone. hyper has no public way to make either, so a connection of Corten's own could
-//! only hand over types of its own, and every place that takes hyper's would need a second arm.
+//! So an app that switches protocols sees one thing whichever connection read the requests
+//! before: hyper's `OnUpgrade` in the request's extensions, and hyper's `Upgraded` once the `101`
+//! (or a tunnel's `2xx`) has gone. hyper has no public way to make either, so a connection of
+//! Corten's own could only hand over types of its own, and every place that takes hyper's would
+//! need a second arm. And an HTTP/1.0 client that keeps its connection is answered by the one
+//! server that writes `connection: keep-alive` for it.
 //!
 //! Nothing is taken from the read buffer before the head is known to be this connection's to
 //! answer, so the bytes hyper is given are the ones the client sent, in the allocation they were

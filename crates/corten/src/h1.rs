@@ -1,15 +1,31 @@
-//! An HTTP/1.1 server connection of Corten's own, for the requests that have no body, in the
-//! place of hyper's (`hyper::server::conn::http1`) on a server whose app asked for it
+//! An HTTP/1.1 server connection of Corten's own, in the place of hyper's
+//! (`hyper::server::conn::http1`) on a server whose app asked for it
 //! ([`crate::App::own_http1`]). Why it is here, what would make it the default and what would take
 //! it out again: `docs/design.md#choice-own-http1`.
 //!
 //! [`serve`] is one connection: a loop that reads a request's head ([`head`]), calls the
-//! connection's service with it, writes the answer, and goes on to the next request. At the first
-//! request it does not answer itself (one that may have a body or switch protocols, or an
-//! HTTP/1.0 client's that asks to keep the connection) it stops, and the rest of the connection
-//! is hyper's ([`handoff`]). Everything around it is unchanged: the
-//! service ([`crate::app::Connection`]), the IO it reads and writes ([`crate::watch::Watched`],
-//! and so both timeouts and the connection's place under the cap) and shutdown.
+//! connection's service with it, reads the request's body as the app asks for it ([`body`]),
+//! writes the answer, and goes on to the next request. At the first request it does not answer
+//! itself (one that may switch protocols, a `CONNECT`, or an HTTP/1.0 client's that asks to keep
+//! the connection) it stops, and the rest of the connection is hyper's ([`handoff`]). Everything
+//! around it is unchanged: the service ([`crate::app::Connection`]), the IO it reads and writes
+//! ([`crate::watch::Watched`], and so both timeouts and the connection's place under the cap)
+//! and shutdown.
+//!
+//! **A request's body.** Where it ends is said by its head, read as hyper's server reads one
+//! ([`head::Framing`]), and found in the bytes by [`body::Decoder`]. The app is given what
+//! hyper gives it: a body that answers `size_hint` and `is_end_stream` as hyper's does, gives
+//! the same pieces, trailers and errors, and marks a read that waits for the client for the
+//! request's deadline ([`crate::extract::Arriving`]). The connection reads the socket for a body
+//! only when the app has asked for a piece and has none ([`Conn::poll_feed`]): from the handler,
+//! from the answer's body (an echo), or from a task that outlived both, in which case the next
+//! request is read only when that body has ended. A client that waits to be told to send
+//! (`Expect: 100-continue`) is told when the app first asks, and never once any of the answer
+//! is written. A body the app dropped unfinished is read past only as far as [`PASSED`] bytes
+//! and two pieces that had arrived ([`Conn::pass`], hyper's rule); otherwise the connection
+//! ends with that request's answer. A body that is not framed as its head said, or whose client
+//! closed its side before its end, fails the app's read, and the connection ends with that
+//! answer, since where the next request would begin is not known.
 //!
 //! **When bytes go to the client.** Every answer is written to one buffer (`out`), and the buffer
 //! is written to the IO, and the IO flushed,
@@ -40,13 +56,27 @@
 //! and that piece is held (not copied) until the one before has gone, so a stream is read one
 //! piece ahead of what its client has taken, and a body that fails before any of its answer had
 //! to go leaves no part of it with the client. What the client sent is read only when the
-//! connection needs it (a head) and never while bytes of a head wait to be read, so a client
+//! connection needs it (a head, or a piece of a body the app has asked for) and never while
+//! bytes it has read wait to be taken, so a client
 //! that sends without reading is held back by the socket; the read buffer holds one read
-//! ([`Inbox`]): [`READ`] bytes or fewer, or a head of the app's limit. A head's bytes are its
+//! ([`Inbox`]): [`READ`] bytes or fewer, a head of the app's limit, or, while the app takes a
+//! body in pieces that large, up to [`READ_MOST`]. A head's bytes are its
 //! request's while it is answered (its header values share them), and a look for the client's
 //! end behind a head that filled the buffer is given another, of [`READ`] bytes at the most:
-//! so while one request is answered a connection holds no more of what its client sent than
-//! the app's limit and a read.
+//! so while a request without a body is answered a connection holds no more of what its client
+//! sent than the app's limit and a read.
+//!
+//! Of a request's body the connection holds one read and nothing more of its own: a piece is
+//! the read's own bytes, shared and not copied, and is the app's from when it is given, one
+//! piece at the most given and not taken. So a body its handler does not read costs the server
+//! what came with the head, a part of one read, however much the client sends; and a body the
+//! handler reads costs one read at a time, of [`READ`] bytes unless the reads fill and the app
+//! takes what they bring whole, when a read is offered twice the last piece and [`READ_MOST`]
+//! at the most. A chunk's size line and extensions are counted and dropped as they are read
+//! ([`body::EXTENSIONS`] bytes of extensions in a body, then it fails), so a body of one-byte
+//! chunks, or of extensions alone, holds a read as any other does. Trailers are kept until the
+//! body's end, in a buffer of their own that holds no more than the app's limit on a head and
+//! 100 lines; what the app is given of them is a header map made from that.
 //!
 //! **When an answer cannot be finished.** A body that fails, or panics, before any byte of its
 //! answer has gone ends the connection without that answer: the answers before it are sent, and
@@ -89,11 +119,12 @@
 //! [`LINES_KEPT`] lines is freed there too) and the header map of the last answer, emptied, with
 //! the room that answer's headers made it take.
 //!
-//! **What it does not do**, each of which hyper does: read a request's body, or answer a request
-//! that may switch protocols (both hyper's, with the rest of the connection); send an answer's
+//! **What it does not do**, each of which hyper does: answer a request that may switch
+//! protocols or a `CONNECT` (hyper's, with the rest of the connection); send an answer's
 //! trailers (they are dropped, and `Trailer` with them); a custom reason phrase
 //! (`hyper::ext::ReasonPhrase`).
 
+pub(crate) mod body;
 mod handoff;
 pub(crate) mod head;
 
@@ -110,8 +141,9 @@ use bytes::{Buf, Bytes, BytesMut};
 use http::{HeaderMap, Method, Version};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use body::{Asks, Broken, Decoder, Feed, Step};
 pub(crate) use handoff::{Apart, Handed, Rewound};
-use head::{Asked, Coding, Head, Known, Refusal};
+use head::{Asked, Coding, Framing, Head, Known, Refusal, Said};
 
 use crate::{body::Body, watch::Answered};
 
@@ -172,6 +204,12 @@ std::thread_local! {
     /// The most bytes the buffer of answers of a connection of this thread has held as a send
     /// began, and the most room it had, for a test of the bound.
     pub(crate) static OUT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// How many requests with a body the connections of this thread have read the body of.
+    pub(crate) static BODIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many bodies their app dropped unfinished the connections of this thread have read
+    /// past or given up ([`Conn::pass`]), and how many times a piece that a read of the
+    /// connection's had cut was taken for one with what followed.
+    pub(crate) static PASSES: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// What the client has sent and the connection has not read yet. A read appends to it
@@ -179,7 +217,8 @@ std::thread_local! {
 /// here), so no byte of it is written twice.
 ///
 /// **What it holds.** One read's worth, and a read is made only when what it holds has no more of
-/// what the connection is reading (a head). A read is offered [`FIRST`] bytes at first and about
+/// what the connection is reading (a head, or a body its app has asked for a piece of). A read is
+/// offered [`FIRST`] bytes at first and about
 /// twice as much after each that fills what it was offered (4 KB, 8 KB and so on), and more than
 /// [`READ`] only while the client's bytes are taken in pieces that large: at most twice the
 /// largest piece taken of the read before, up to [`READ_MOST`]. So a client that sends a pipeline
@@ -240,9 +279,24 @@ impl Inbox {
         &self.buf
     }
 
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.buf.len()
+    }
+
+    /// One that has read `bytes`, for a test of what reads from it.
+    #[cfg(test)]
+    pub(crate) fn holding(bytes: &[u8]) -> Inbox {
+        let mut inbox = Inbox::new();
+        inbox.buf.extend_from_slice(bytes);
+        inbox
+    }
+
+    /// Drops the first `count` bytes: a body's framing, which no one is given. For how much the
+    /// next read is offered it is a piece of the smallest size, so a body that is all framing
+    /// (extensions, trailers) is read [`READ`] bytes at a time.
+    pub(crate) fn skip(&mut self, count: usize) {
+        self.most = self.most.max(count.min(1));
+        self.buf.advance(count);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -264,6 +318,10 @@ impl Inbox {
     /// nothing else holds its bytes (a request's headers share them until they are dropped), in
     /// a new one otherwise. `limit`: how long what is unread may be with what is read behind it
     /// (a head, up to the app's limit); no room is made for more.
+    ///
+    /// Inlined always: into the read for a head, as it was when that was its one caller, and
+    /// into the read for a body ([`Conn::fill`]), which is a function apart.
+    #[inline(always)]
     pub(crate) fn poll_fill<I: AsyncRead + Unpin>(
         &mut self,
         io: &mut I,
@@ -424,12 +482,48 @@ struct Conn<I> {
     /// client's end ([`Conn::poll_body`]).
     waited: bool,
     vectored: bool,
+    /// The connection's end of the body of the request being answered, until the body has been
+    /// read to its end, has failed, or has been dropped by the app and read past or given up
+    /// ([`Conn::poll_feed`]). While it is here, what is unread is the body's, and no head is read.
+    feed: Option<Feed>,
+    /// The request being answered is the connection's last: its body could not be read to its
+    /// end, or was left unread with more of it to come than is read past ([`Conn::pass`]).
+    ends: bool,
+    /// And its answer says so (`connection: close`), if its head is not written yet: the body was
+    /// left unread. (One that failed as the app read it closes the connection without a word, as
+    /// with hyper, which stops reading there and does not note that it will close.)
+    unkept: bool,
+}
+
+/// What a client that waits to be told to send its body is told (`Expect: 100-continue`), as
+/// hyper writes it.
+const GO_ON: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
+/// How many bytes of a body its app dropped are read past, at the most, to keep the connection
+/// ([`Conn::pass`]): as many as hyper's first two reads hold (8 KiB, then 16 KiB), which is what
+/// hyper reads past for a request sent whole on a new connection.
+const PASSED: usize = 8_192 + 16_384;
+
+/// What [`Conn::poll_feed`] did for the request's body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fed {
+    /// Nothing this task has to act on.
+    Nothing,
+    /// The app's end, in this task, was given what it waited for, and is to be polled again.
+    Again,
+    /// The app had dropped the body, and the body ended in the piece hyper reads ahead of the
+    /// app. hyper has known the body's end since it read that piece, and has looked for the
+    /// client's end from then on; this connection, which read nothing ahead, learns of both
+    /// only now, and the caller that is about to write looks first ([`Conn::poll_body`]).
+    EndedAhead,
 }
 
 impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     fn new(io: I, limit: usize) -> Conn<I> {
         let vectored = io.is_write_vectored();
         Conn {
+            feed: None,
+            ends: false,
+            unkept: false,
             io,
             inbox: Inbox::new(),
             partial: None,
@@ -493,7 +587,14 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             return Err(Instead::Hypers);
         }
         let bytes = self.inbox.take(scanned.len);
-        Ok(Some(head::build(&bytes, scanned, &self.indices, &mut self.cached)?))
+        let mut said = Said::NOTHING;
+        let head = head::build(&bytes, scanned, &self.indices, &mut self.cached, &mut said)?;
+        // The body's reader is made here, where the head is read, and found by the request's
+        // answerer in `feed`: a head is then moved as it was before bodies were read.
+        if said.framing != Framing::None {
+            self.body(said);
+        }
+        Ok(Some(head))
     }
 
     /// Writes everything written so far to the IO and flushes it. Pending: the IO has no room,
@@ -632,9 +733,13 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// on), or the IO has failed. A client that closes its side while a request of its is being
     /// answered has left, and the request with it, as with hyper. Looked for only while nothing
     /// it sent waits to be read: at most one read is taken ahead (a pipelined request), and no
-    /// more until the connection has used it.
+    /// more until the connection has used it. And not while the request's body is unfinished:
+    /// what is read then is the body, read when the app asks for it, and a client that has
+    /// closed its side is a body that fails ([`Conn::feed`]), as with hyper. Nor once a body
+    /// could not be read to its end (`ends`): nothing more is read of that client, by hyper
+    /// either, which so never learns that it left, and its request is answered.
     fn poll_left(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
-        if self.inbox.is_empty() {
+        if self.inbox.is_empty() && self.feed.is_none() && !self.ends {
             match self.inbox.poll_look(&mut self.io, cx) {
                 Poll::Ready(Ok(0)) => {
                     self.left = true;
@@ -645,6 +750,230 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             }
         }
         Ok(())
+    }
+
+    /// Begins the body of a request whose head frames one: the connection's end of it (`feed`),
+    /// with nothing of it read or given yet. Made where the head is read, so that a head is
+    /// what it was before bodies were read, and the connection holds nothing more for a
+    /// request that has no body; the request's answerer finds it there ([`Conn::request`]).
+    #[cold]
+    #[inline(never)]
+    fn body(&mut self, said: Said) {
+        let decoder = match said.framing {
+            Framing::None => return,
+            Framing::Length(length) => Decoder::length(length),
+            Framing::Chunked => Decoder::chunked(self.limit),
+        };
+        #[cfg(test)]
+        BODIES.set(BODIES.get() + 1);
+        self.feed = Some(Feed::new(decoder, said.expects));
+    }
+
+    /// The request whose head is `parts`, with the body [`Conn::body`] began, as the app is
+    /// given it: what hyper's `Incoming` is on its connection, wrapped as that is so that a read
+    /// of it that waits for the client is marked for the deadline
+    /// ([`crate::extract::Arriving`]). What has been read of it already (it came with the head)
+    /// is the app's at once, a piece that needs no read; not for a client that waits to be told
+    /// to send it, which is told when the app asks.
+    ///
+    /// Apart from the path of a request that has no body, which is made where it was before
+    /// bodies were read ([`serving`]).
+    #[cold]
+    #[inline(never)]
+    fn request(&mut self, parts: http::request::Parts) -> http::Request<Body> {
+        let body = match &self.feed {
+            Some(feed) => {
+                let (coming, expects) = feed.coming();
+                if !expects {
+                    self.feed(None);
+                }
+                Body::new(crate::extract::Arriving(coming))
+            }
+            None => Body::empty(),
+        };
+        http::Request::from_parts(parts, body)
+    }
+
+    /// One read for a body. Apart from the read for a head, and never inlined: a head's read is
+    /// then [`Inbox::poll_fill`]'s one other caller, compiled into it as it was when it was the
+    /// only one, so a request without a body does not pay a call for it.
+    #[inline(never)]
+    fn fill(inbox: &mut Inbox, io: &mut I, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        inbox.poll_fill(io, cx, usize::MAX)
+    }
+
+    /// Gives the app the next piece of its request's body, or the body's end: from what has been
+    /// read, and where that holds no more of the body, from the IO, a read at a time (`cx`;
+    /// without one nothing is read). A body that is not framed as its head said, and one whose
+    /// client closed its side before its end, fails there: the app's read of it does, and the
+    /// connection ends with this request's answer, since where the next request begins is not
+    /// known. `true` when the one that waited for what was given is this task, which polls what
+    /// it holds of the app's again.
+    fn feed(&mut self, mut cx: Option<&mut Context<'_>>) -> bool {
+        loop {
+            let Some(feed) = &self.feed else { return false };
+            let (again, over) = {
+                let mut reading = feed.reading();
+                match reading.decoder.step(&mut self.inbox) {
+                    Step::Piece(piece) => {
+                        let whole = reading.decoder.given();
+                        reading.cut = reading.decoder.partway() && self.inbox.filled;
+                        (feed.give(piece, whole, cx.as_deref_mut()), whole)
+                    }
+                    Step::End(trailers) => (feed.end(trailers, cx.as_deref_mut()), true),
+                    Step::Wrong => {
+                        self.ends = true;
+                        (feed.fail(Broken::Reading, cx.as_deref_mut()), true)
+                    }
+                    Step::More => {
+                        let Some(cx) = cx.as_deref_mut() else { return false };
+                        // Nothing is unread here: all that was read was the body's, and is taken.
+                        match Self::fill(&mut self.inbox, &mut self.io, cx) {
+                            Poll::Pending => return false,
+                            Poll::Ready(Ok(count)) if count > 0 => continue,
+                            Poll::Ready(_) => {
+                                self.ends = true;
+                                (feed.fail(Broken::Reading, Some(cx)), true)
+                            }
+                        }
+                    }
+                }
+            };
+            if over {
+                self.feed = None;
+            }
+            return again;
+        }
+    }
+
+    /// Does for the request's body what the app has asked of it since this was last called, and
+    /// has the task woken when it asks again from another ([`Fed`]).
+    ///
+    /// **The app asked for a piece and has none**: one is read ([`Conn::feed`]). A client that
+    /// waits to be told to send the body is told first, once, and only if no byte of the answer
+    /// has been written (`tells`), as hyper tells it.
+    ///
+    /// **The app dropped the body unfinished**: hyper's rule ([`Conn::pass`]).
+    ///
+    /// Anything else (the app has a piece it has not taken, or has not asked) reads nothing.
+    fn poll_feed(&mut self, cx: &mut Context<'_>, tells: bool) -> Fed {
+        let Some(feed) = &self.feed else { return Fed::Nothing };
+        match feed.looks(cx) {
+            Asks::Ready | Asks::Empty { wanted: false } => Fed::Nothing,
+            Asks::Empty { wanted: true } => {
+                if std::mem::take(&mut feed.reading().expects) && tells {
+                    self.lend();
+                    self.out.extend_from_slice(GO_ON);
+                }
+                if self.feed(Some(cx)) {
+                    Fed::Again
+                } else {
+                    Fed::Nothing
+                }
+            }
+            Asks::Dropped { ready, took } => {
+                // What hyper has taken of the body by now that this connection has not: it reads
+                // a piece ahead of the app when it runs, unless the client waits to be told, and
+                // one more when it finds the body dropped. Here nothing was read ahead, so both
+                // are read now, but for a piece the app was given and did not take (which was
+                // read ahead) and one it took since this task last ran (behind which hyper has
+                // not run, and so has read nothing).
+                let pieces = if ready || took || feed.reading().expects { 1 } else { 2 };
+                if self.pass(cx, pieces) {
+                    Fed::EndedAhead
+                } else {
+                    Fed::Nothing
+                }
+            }
+        }
+    }
+
+    /// A body the app dropped before its end: read past, if that takes no waiting, no more than
+    /// `pieces` pieces of it and no more than [`PASSED`] bytes; otherwise the connection ends
+    /// with this request's answer, which says so if its head is not written yet, and the rest of
+    /// the body is not read. hyper's rule (`poll_drain_or_close_read`), which bounds what a
+    /// client can make the server read for a request the app has answered already.
+    ///
+    /// A piece is what had arrived of the body, to the body's end or its chunk's; the line that
+    /// ends a chunked body, with its trailers, is a piece of its own. Where a read of this
+    /// connection's ended inside a chunk with more of it in the socket (`cut`), what follows to
+    /// the chunk's end is the same piece: hyper, whose reads are longer, would have had it in
+    /// one. hyper's pieces end where its own reads do too, which this does not follow: the
+    /// bound in bytes is in their place.
+    ///
+    /// A body found wrong, or cut short by its client's end, in the piece hyper would have read
+    /// ahead of the app (the first of two) ends the connection without a word in the answer:
+    /// hyper stops reading there and notes nothing.
+    ///
+    /// `true` when the body ended in that piece: hyper knew the body's end before the app
+    /// dropped the body ([`Fed::EndedAhead`]).
+    #[cold]
+    #[inline(never)]
+    fn pass(&mut self, cx: &mut Context<'_>, mut pieces: u8) -> bool {
+        let Some(feed) = self.feed.take() else { return false };
+        let mut reading = feed.reading();
+        let ahead = pieces == 2;
+        let (mut rest, mut passed, mut quiet) = (reading.cut, 0, false);
+        #[cfg(test)]
+        PASSES.set((PASSES.get().0 + 1, PASSES.get().1 + usize::from(rest)));
+        let ended = loop {
+            let had = self.inbox.len();
+            let step = reading.decoder.step(&mut self.inbox);
+            passed += had - self.inbox.len();
+            match step {
+                Step::Piece(_) if reading.decoder.given() => break true,
+                Step::Piece(_) => {
+                    if !rest {
+                        pieces -= 1;
+                    }
+                    rest = reading.decoder.partway() && self.inbox.filled;
+                    #[cfg(test)]
+                    PASSES.set((PASSES.get().0, PASSES.get().1 + usize::from(rest)));
+                    if (pieces == 0 && !rest) || passed > PASSED {
+                        break false;
+                    }
+                }
+                Step::End(_) => break true,
+                Step::Wrong => {
+                    quiet = ahead && pieces == 2;
+                    break false;
+                }
+                Step::More if passed >= PASSED => break false,
+                Step::More => match Self::fill(&mut self.inbox, &mut self.io, cx) {
+                    Poll::Ready(Ok(count)) if count > 0 => {}
+                    Poll::Ready(_) => {
+                        quiet = ahead && pieces == 2;
+                        break false;
+                    }
+                    Poll::Pending => break false,
+                },
+            }
+        };
+        drop(reading);
+        if !ended || passed > PASSED {
+            self.ends = true;
+            self.unkept = !quiet;
+            return false;
+        }
+        ahead && pieces == 2
+    }
+
+    /// Behind an answer whose request's body is unfinished: the answer goes out, and the body is
+    /// read for whoever holds it (a task that outlived the handler), as it asks, to the body's
+    /// end. Only then is the next request read: until then what the client sends is this
+    /// request's. `Err` when the answer cannot be sent.
+    fn poll_behind(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.poll_feed(cx, false) == Fed::Again {
+            // Nothing of the app's is polled by this task here; whoever was given a piece is.
+            cx.waker().wake_by_ref();
+        }
+        if self.feed.is_none() {
+            return Poll::Ready(Ok(()));
+        }
+        if let Poll::Ready(Err(error)) = self.poll_send(cx) {
+            return Poll::Ready(Err(error));
+        }
+        Poll::Pending
     }
 
     /// What the connection does while an answer's body waits: `Err` when the client is gone, and
@@ -714,7 +1043,10 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// has come, so the first read can take a request with nothing yet said of the client's end
     /// behind it, and then the request is answered, by hyper's connection as by this one, which
     /// each learn of the end when their task next waits.
-    fn poll_answer<F>(&mut self, cx: &mut Context<'_>, answering: Pin<&mut F>) -> Poll<io::Result<http::Response<Answered>>>
+    ///
+    /// A handler that waits for its request's body is given the next piece of it and polled
+    /// again ([`Conn::poll_feed`]), [`TURN`] times at the most before other tasks run.
+    fn poll_answer<F>(&mut self, cx: &mut Context<'_>, mut answering: Pin<&mut F>) -> Poll<io::Result<http::Response<Answered>>>
     where
         F: Future<Output = Result<http::Response<Answered>, Infallible>>,
     {
@@ -722,8 +1054,34 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             ready!(self.poll_send(cx))?;
             return Poll::Ready(Err(left));
         }
-        if let Poll::Ready(Ok(answer)) = answering.poll(cx) {
-            return Poll::Ready(Ok(answer));
+        let mut turns = 0;
+        loop {
+            if let Poll::Ready(Ok(answer)) = answering.as_mut().poll(cx) {
+                return Poll::Ready(Ok(answer));
+            }
+            let written = self.out.len();
+            if self.poll_feed(cx, true) != Fed::Again {
+                break;
+            }
+            // At the body's end the client's end is looked for behind it, before the handler is
+            // asked again, as hyper looks when it has read a body's last piece: a client that
+            // closed its side behind a whole request has left, with a body as without one.
+            if self.feed.is_none() {
+                if let Err(left) = self.poll_left(cx) {
+                    // A client told to send its body in this turn (`GO_ON`), whose body was
+                    // there to its end and who had left, is not told: hyper finds the client's
+                    // end before it has flushed what it wrote, and drops that. Nothing has been
+                    // sent since `written` was read.
+                    self.out.truncate(written);
+                    ready!(self.poll_send(cx))?;
+                    return Poll::Ready(Err(left));
+                }
+            }
+            turns += 1;
+            if turns == TURN {
+                cx.waker().wake_by_ref();
+                break;
+            }
         }
         // While the handler waits, everything written so far goes out: the answers before this
         // one.
@@ -775,6 +1133,56 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         })
     }
 
+    /// What the connection does where an answer's body waits ([`Conn::poll_meanwhile`]), and for
+    /// one that waits for its request's body (an echo, a stream made from what the client
+    /// sends): it is given the next piece of that and asked again ([`Conn::poll_feed`]),
+    /// [`TURN`] times at the most before other tasks run; what is written of the answer goes out
+    /// first, each time, as with hyper, which flushes before it reads on. So an answer whose
+    /// body fails with its request's has begun by then, and is cut short.
+    ///
+    /// At the request's body's end the client's end is looked for behind it, before the answer's
+    /// body is asked again, as hyper looks when it has read a body's last piece and before it
+    /// writes: a client that has closed its side by then has left, and is written no more of an
+    /// answer that waited for what it sent.
+    ///
+    /// `late`: the request's body was found to have ended in this poll of the task, as its
+    /// handler dropped it with its answer. hyper reads that end only once it has written and
+    /// flushed what the answer gave in the turn it was made, and looks for the client's end
+    /// then; so what is written goes out here before the look, and a client that has left has
+    /// the beginning of the answer from both.
+    ///
+    /// Apart from [`Conn::poll_body`], which a body that does not wait never leaves.
+    #[inline(never)]
+    fn poll_waiting(&mut self, cx: &mut Context<'_>, body: &mut Answered, late: bool) -> Poll<io::Result<Option<Bytes>>> {
+        if late {
+            if let Poll::Ready(Err(error)) = self.poll_send(cx) {
+                return Poll::Ready(Err(error));
+            }
+        }
+        let mut turns = 0;
+        loop {
+            self.poll_meanwhile(cx)?;
+            if self.feed.is_none() {
+                return Poll::Pending;
+            }
+            let fed = self.poll_feed(cx, false);
+            if self.feed.is_none() {
+                self.poll_left(cx)?;
+            }
+            if fed != Fed::Again {
+                return Poll::Pending;
+            }
+            turns += 1;
+            if turns == TURN {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            if let Poll::Ready(next) = Self::poll_piece(cx, body)? {
+                return Poll::Ready(Ok(next));
+            }
+        }
+    }
+
     /// Writes an answer's body as it comes: whether the connection can go on to another request.
     /// `ahead`: what the body gave while the piece before it waited to go, kept by the caller
     /// from one poll to the next.
@@ -794,9 +1202,19 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         ahead: &mut Option<Option<Bytes>>,
     ) -> Poll<io::Result<bool>> {
         use http_body::Body;
-        if self.waited {
+        // The request's body, if it is unfinished: read past or given up where the handler
+        // dropped it with its answer, before the client's end is looked for. Where that finds
+        // the body's end in the piece hyper reads ahead of the app, the client's end is looked
+        // for at once: hyper has looked since it read that piece, and a client that closed its
+        // side while its handler held a body that had ended is given no answer by either.
+        let unfinished = self.feed.is_some();
+        let ended_ahead = unfinished && self.poll_feed(cx, false) == Fed::EndedAhead;
+        if self.waited || ended_ahead {
             self.poll_left(cx)?;
         }
+        // The body ended here and not ahead: hyper reads that end behind what this turn writes
+        // of the answer (`poll_waiting`).
+        let late = unfinished && !ended_ahead && self.feed.is_none();
         loop {
             // A piece too large to copy, or enough to fill a write, goes out before anything is
             // written behind it: a client that reads slowly holds the stream back. The body is
@@ -808,10 +1226,10 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                 if ahead.is_none() {
                     match Self::poll_piece(cx, body)? {
                         Poll::Ready(next) => *ahead = Some(next),
-                        Poll::Pending => {
-                            self.poll_meanwhile(cx)?;
-                            return Poll::Pending;
-                        }
+                        Poll::Pending => match self.poll_waiting(cx, body, late)? {
+                            Poll::Ready(next) => *ahead = Some(next),
+                            Poll::Pending => return Poll::Pending,
+                        },
                     }
                 }
                 ready!(self.poll_deliver(cx, self.waited))?;
@@ -820,10 +1238,10 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                 Some(next) => next,
                 None => match Self::poll_piece(cx, body)? {
                     Poll::Ready(next) => next,
-                    Poll::Pending => {
-                        self.poll_meanwhile(cx)?;
-                        return Poll::Pending;
-                    }
+                    Poll::Pending => match self.poll_waiting(cx, body, late)? {
+                        Poll::Ready(next) => next,
+                        Poll::Pending => return Poll::Pending,
+                    },
                 },
             };
             let Some(piece) = next else { return Poll::Ready(self.end(*coding)) };
@@ -1003,13 +1421,21 @@ where
         first = false;
         // In a block: the head's parts are read here, and what has been borrowed is held by the
         // future across every wait behind it, to the end of its scope.
-        let (request, mut asked) = {
-            let Head { parts, keep_alive } = head;
-            let asked = Asked { head: parts.method == Method::HEAD, http11: parts.version == Version::HTTP_11, keep_alive };
-            (http::Request::from_parts(parts, Body::empty()), asked)
-        };
+        let mut asked;
         let answer = {
-            let mut answering = pin!(service.call(request));
+            let mut answering = pin!({
+                let Head { parts, keep_alive } = head;
+                asked = Asked { head: parts.method == Method::HEAD, http11: parts.version == Version::HTTP_11, keep_alive };
+                // A body is unfinished here only if this request's head framed one (`parse`):
+                // the body of the request before has ended by now (below). The service is
+                // called in two places so that a request with no body is not made first and
+                // copied again for a body to be put into it.
+                if conn.feed.is_some() {
+                    service.call(conn.request(parts))
+                } else {
+                    service.call(http::Request::from_parts(parts, Body::empty()))
+                }
+            });
             let answer = poll_fn(|cx| {
                 let answer = conn.poll_answer(cx, answering.as_mut());
                 conn.waited |= answer.is_pending();
@@ -1021,7 +1447,7 @@ where
                 Err(_) => return false,
             }
         };
-        if closing.load(Relaxed) {
+        if closing.load(Relaxed) || conn.unkept {
             asked.keep_alive = false;
         }
         // The answer's head, written without a wait: its parts are not held across one.
@@ -1077,6 +1503,20 @@ where
         // answer's last bytes have gone already.
         drop(body);
         conn.unflushed = true;
+        // The request's body, where it is unfinished: read past or given up if the app dropped
+        // it, and read to its end for a task that holds it still, before anything behind it is
+        // taken for a request.
+        if conn.feed.is_some() {
+            let read = poll_fn(|cx| {
+                let read = conn.poll_behind(cx);
+                conn.waited |= read.is_pending();
+                read
+            });
+            if read.await.is_err() {
+                return false;
+            }
+        }
+        last |= conn.ends;
         // A piece too large to copy goes out before anything is written behind it, and so does a
         // full buffer: a client that sends requests and reads no answers is not answered further.
         // A client that closes its side while the answer waits for it to read is given up there
