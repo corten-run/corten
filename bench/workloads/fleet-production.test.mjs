@@ -662,7 +662,7 @@ function externalFailureFixture(p) {
     assert.equal(await fleetMain([...args(r, g), "--detach", "--print-approval"], p.deps), 3);
     return [...args(r, g), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
   };
-  async function seed(group = "json-api", round = "r20", posted = false, orphaned = false) {
+  async function seed(group = "json-api", round = "r20", posted = false, orphaned = false, auditSelection) {
     assert.equal(await prepare(round, group), 3);
     assert.equal(await fleetMain(await approve(round, group), { ...p.deps, main: async () => {
       if (!posted) return 2;
@@ -695,7 +695,9 @@ function externalFailureFixture(p) {
       if (orphaned) {
         const journal = path.join(local, "monitor-journal.jsonl");
         const frame = (kind, sequence, payload) => ({ schema: "benchmark-control-frame/v1", id: monitorId, kind, sequence, payload });
-        const audit = syntheticDelivery(group), identities = audit.bundle.receipts.map((r) => r.identity);
+        const audit = syntheticDelivery(group);
+        if (auditSelection) audit.bundle.receipts = auditSelection(audit.bundle.receipts);
+        const identities = audit.bundle.receipts.map((r) => r.identity);
         const prefix = group === "json-api" ? "json" : "mixed";
         const subject = { schema: `benchmark-${prefix}-audit-subject/v1`, commit, campaignSha256: "f".repeat(64),
           ...(group === "json-api" ? { identities } : { requests: identities.map((identity) => ({ identity })) }) };
@@ -746,7 +748,11 @@ function externalFailureFixture(p) {
       fs.writeFileSync(delivered, delivery);
       const rows = original.toString("utf8").trimEnd().split("\n").map((row) => JSON.parse(row));
       const writeJournal = (entries) => fs.writeFileSync(journal, entries.map((row) => JSON.stringify(row)).join("\n") + "\n");
-      for (const bad of ["", "{", "{}"]) {
+      const envelope = JSON.parse(delivery), receipts = envelope.bundle.receipts;
+      const withReceipts = (receipts) => JSON.stringify({ ...envelope, bundle: { ...envelope.bundle, receipts } });
+      const changedIdentity = { ...receipts[0], identity: { ...receipts[0].identity, imageId: "different-image" } };
+      for (const bad of ["", "{", "{}", withReceipts(receipts.slice(1)), withReceipts([receipts[1], ...receipts.slice(1)]),
+        withReceipts([changedIdentity, ...receipts.slice(1)])]) {
         fs.writeFileSync(delivered, bad);
         writeJournal(rows.map((row) => row.kind === "delivery-sealed"
           ? { ...row, payload: { ...row.payload, bytes: Buffer.byteLength(bad), sha256: digest(bad) } } : row));
@@ -755,6 +761,8 @@ function externalFailureFixture(p) {
       fs.writeFileSync(delivered, delivery);
       const subject = path.join(local, `monitor-audit-${group}`, "json-audit-subject.json"), subjectBytes = fs.readFileSync(subject);
       fs.writeFileSync(journal, original);
+      fs.writeFileSync(subject, JSON.stringify({ ...JSON.parse(subjectBytes), campaignSha256: "a".repeat(64) }));
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /saved audit delivery differs/);
       fs.unlinkSync(subject);
       assert.throws(() => externalFailedHostBinding(fleet, { orphaned }));
       fs.writeFileSync(subject, subjectBytes);
@@ -799,6 +807,23 @@ function externalFailureFixture(p) {
   }
   return { prepare, approve, seed };
 }
+
+test("retained orphan audit uses its sealed selection after the JSON registry grows", { timeout: 60000 }, async (t) => {
+  const p = fixture(t, "ssh-late", "hardening"), root = p.h.base;
+  p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
+  fs.writeFileSync(path.join(root, "index.json"), "[]");
+  const { prepare, seed } = externalFailureFixture(p);
+  const { old } = await seed("json-api", "r20", false, true, (receipts) => {
+    const retained = receipts.filter(({ identity }) => identity.app !== "ntex");
+    assert.ok(retained.length > 0 && retained.length < receipts.length);
+    return retained;
+  });
+  const original = treeHash(old);
+  assert.equal(readExternalFailedHost(readFleet(old, "r20")).group, "json-api");
+  assert.equal(await prepare("r21", "hardening"), 3);
+  assert.equal(treeHash(old), original);
+  assert.ok(p.events().every(({ boundary, method }) => boundary !== "provider" || method === "GET"));
+});
 
 test("retained orphan receipt survives a proved reuse of its stopped Windows owner PID", { timeout: 60000 }, async (t) => {
   const p = fixture(t, "ssh-late", "hardening"), root = p.h.base;

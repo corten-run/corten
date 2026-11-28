@@ -6,7 +6,7 @@ import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdi
 import { dirname, join, resolve, relative } from "node:path";
 import { durable, digest, fileHash, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { streamLimits, verifyApparatus } from "./isolated/control-stream.mjs";
-import { auditDelivery } from "./cloud-audit.mjs";
+import { auditDelivery, replayAuditDelivery } from "./cloud-audit.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 
 function monitorRegistration(local, state) {
@@ -165,6 +165,7 @@ export function settledMonitor(local, state) {
 export function requireOrphanedAuditMonitor(local, state) {
   requireAcknowledgedStart(state);
   const { id, host } = monitorRegistration(local, state), { group, round } = state;
+  assert.ok(group === "json-api" || group === "mixed-production", "unsupported native audit group");
   assert.ok(host.hostname === state.name, "monitor hostname differs");
   const requireJournal = (value) => assert.ok(value, "monitor journal requires reconciliation");
   const now = Date.now(), audit = [];
@@ -200,7 +201,10 @@ export function requireOrphanedAuditMonitor(local, state) {
     && delivery.campaign === campaign && [end, delivery].every((p) => p.subjectSha256 === subjectSha256));
   const queued = regular(join(local, `monitor-delivery-${group}.json`), streamLimits.deliveryBytes);
   assert.ok(delivery.bytes === queued.length && delivery.sha256 === digest(queued), "saved audit delivery differs");
-  try { checkedAuditDelivery(local, state, queued, { campaign, auditGroup: group, approveSubject: subjectSha256 }); }
+  try {
+    const subject = auditSubject(local, { group, subjectSha256 }, state.commit);
+    checkedAuditDelivery(local, state, queued, { campaign, auditGroup: group, approveSubject: subjectSha256 }, subject);
+  }
   catch { throw new Error("saved audit delivery differs"); }
 }
 
@@ -225,14 +229,19 @@ export function sealedMonitor(local, state) {
   return { registration, terminal };
 }
 
-function checkedAuditDelivery(local, state, bytes, options) {
-  const intent = auditDelivery(bytes, options);
+function auditIdentities(subject, group) {
+  return group === "json-api" ? subject.identities : subject.requests.map((r) => r.identity);
+}
+
+function checkedAuditDelivery(local, state, bytes, options, sealedSubject) {
+  const pinned = sealedSubject && auditIdentities(sealedSubject, options.auditGroup);
+  const intent = sealedSubject ? replayAuditDelivery(bytes, options, pinned) : auditDelivery(bytes, options);
   if (state.group !== undefined) assert.equal(state.group, intent.group);
   const ready = JSON.parse(regular(join(local, "monitor-audit-" + intent.group + "-ready.json")));
   for (const key of ["campaign", "group", "subjectSha256"]) assert.equal(intent[key], ready[key]);
   assert.match(intent.campaign, new RegExp("^" + state.round + "-[a-f0-9]{16}$"));
-  const subject = auditSubject(local, intent, state.commit), delivery = JSON.parse(bytes);
-  const expected = intent.group === "json-api" ? subject.identities : subject.requests.map((r) => r.identity);
+  const expected = pinned ?? auditIdentities(auditSubject(local, intent, state.commit), intent.group);
+  const delivery = JSON.parse(bytes);
   assert.ok(Array.isArray(expected)); assert.equal(delivery.bundle.receipts.length, expected.length);
   for (const receipt of delivery.bundle.receipts) {
     const wanted = expected.find((value) => value.app === receipt.identity.app && value.key === receipt.identity.key);
