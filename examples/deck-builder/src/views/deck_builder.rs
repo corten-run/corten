@@ -121,7 +121,7 @@ pub fn DeckBuilder<'a>(
     html! {
         <div
             class={Builder}
-            on:connect={js::start(parts, copies, browse, url::DeckFeed, signal)}
+            on:connect={js::start(parts, copies, browse, url::DeckFeed, f.card.as_str(), f.count.as_str(), signal)}
             on:keydown={js::keys(event, parts, carry)}
             on:document:keydown={js::shortcut(event, parts)}
             on:dragend={js::dropped(carry)}

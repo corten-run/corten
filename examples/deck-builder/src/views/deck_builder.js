@@ -141,9 +141,9 @@ const names = new Intl.Collator(document.documentElement.lang || undefined);
  * A native Add can leave even a clean form with a spent key. Keep that key so the server
  * can refuse the handoff rather than acknowledge a scripted draft it never applied.
  * @param {Parts} parts @param {HTMLInputElement[]} copies @param {Browse} browse
- * @param {FeedUrl<Slot>} feed @param {AbortSignal} signal
+ * @param {FeedUrl<Slot>} feed @param {string} cardField @param {string} countField @param {AbortSignal} signal
  */
-export function start(parts, copies, browse, feed, signal) {
+export function start(parts, copies, browse, feed, cardField, countField, signal) {
   // The server draws zero selected. Only tally if a control changed before startup.
   if (browse.cards.querySelector("input:checked")) tally(browse);
   browse.all.disabled = false;
@@ -165,6 +165,18 @@ export function start(parts, copies, browse, feed, signal) {
   s.theirs = new Map(base);
   s.theirGeneration = s.generation;
   s.theirVersion = s.version;
+  // Write the send the queue will acknowledge, not the editor's spelling (e.g. "2e0").
+  // Leave the live inputs and the form's version, draft and submit key alone.
+  parts.form.addEventListener("formdata", ({ formData }) => {
+    const sent = s.sending && s.unanswered.at(-1);
+    if (!sent) return;
+    formData.delete(cardField);
+    formData.delete(countField);
+    for (const [id, n] of sent.deck) {
+      formData.append(cardField, id);
+      formData.append(countField, String(n));
+    }
+  }, { signal });
   subscribe(
     feed,
     {

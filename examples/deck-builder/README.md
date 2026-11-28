@@ -32,8 +32,10 @@ a partly typed number is invalid even when its form value is empty; native Save 
 whereas deliberately clearing a count still removes the line. Autosave also waits for a valid
 form. Editing another count leaves the incomplete number alone; once corrected, both edits can
 go in one save. Each send takes the counts actually in the form, even if a previous save was
-still on its way when the player corrected a focused field. Add and Add selected also leave an
-incomplete number and any selection alone.
+still on its way when the player corrected a focused field. Autosave sends those counts as
+decimal integers from its queued deck: retrying a lost answer with `2e0` in a focused field
+sends `2` without rewriting the editor. Native Save still posts the literal field.
+Add and Add selected also leave an incomplete number and any selection alone.
 A refusal leaves incomplete fields in place, including the focused editor between reordered
 lines. Finishing an unsaved card's count at zero removes the row without an autosave or undo entry.
 An Add can save without touching the count fields. If autosave starts on that same form and reuses
@@ -121,6 +123,34 @@ increase in `deck_builder.js` (23,127 to 23,856). These are decoded body sizes, 
 For the focus and sort handoff changes, fetching the unfiltered 240-card page and its builder
 script from fresh app processes gave 161,546 to 161,700 HTML bytes and 23,936 to 23,784
 script bytes, compared with `6e7ee05dd`.
+
+### Browser save cost
+
+Measured in headless Chromium 159.0.8154.6 on Windows, with reduced motion and real loopback
+saves. The unfiltered collection had 240 rows. Each deck started with one copy of each of the
+first 5 or 36 distinct cards shown. Clicking Add on the next two distinct cards in one turn
+sent the first deck immediately and queued the second behind its acknowledgement. Both
+POST drafts had to receive their own Saved answer; two Undos restored the starting deck.
+Each build and deck size ran in a fresh page for each of six batches, with all six build orders
+represented. Each batch discarded two warmups and measured eight pairs.
+
+| Browser interval (pooled median, ms) | Starting rows | Merge base `1b9c1b0dd` | Before retry fix `1cedea0e6` | Queued form data |
+|---|---:|---:|---:|---:|
+| First Add click, synchronous dispatch | 5 | 2.75 | 2.80 | 3.30 |
+| First acknowledgement, synchronous dispatch | 5 | 1.00 | 1.10 | 1.40 |
+| First acknowledgement to next POST fetch | 5 | 1.95 | 2.25 | 2.65 |
+| First Add click, synchronous dispatch | 36 | 4.10 | 4.15 | 3.85 |
+| First acknowledgement, synchronous dispatch | 36 | 1.40 | 1.50 | 1.80 |
+| First acknowledgement to next POST fetch | 36 | 2.60 | 2.50 | 3.15 |
+
+Add is timed around the DOM click, including drawing and starting its POST. The acknowledgement
+dispatch is timed from window capture to bubble; the longer interval ends at the next real
+fetch call, before network or server time. These are elapsed times, not CPU or paint times.
+Scheduling on the shared workstation mattered: with five rows the final build's batch medians
+for acknowledgement to fetch ranged from 1.20 to 16.95 ms. The synchronous acknowledgement
+medians increased for both sizes; the Add results do not establish a speedup. At startup the
+unfiltered HTML and builder script grew from 161,700 and 23,784 bytes at `1cedea0e6` to
+161,715 and 24,157 bytes respectively.
 
 ### Native save receipt cost
 

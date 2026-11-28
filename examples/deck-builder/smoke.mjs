@@ -83,7 +83,8 @@ const postedGravel = (request) => {
 };
 
 /** Two edits without another script fetch. Optionally lose the second reply and retry without the live feed. */
-async function successiveAutosaves(loseReply = false) {
+async function successiveAutosaves(spelling = "") {
+  const loseReply = spelling !== "";
   const context = await browser.newContext();
   const live = Promise.withResolvers();
   try {
@@ -99,10 +100,11 @@ async function successiveAutosaves(loseReply = false) {
     // A save must be acknowledged even if the browser cannot fetch another app script.
     const scripts = "**/scripts/*.js";
     await page.route(scripts, (route) => route.abort());
-    const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
+    const id = loseReply ? "moth-court-herald" : "gravel-sprite";
+    const count = countField(page, id);
     const start = await count.inputValue();
     const loaded = Number(await version(page));
-    const label = loseReply ? "autosave without live feed" : "autosave";
+    const label = loseReply ? `autosave retry (${spelling})` : "autosave";
     let previousKey;
     for (const [index, copies] of [start === "2" ? "3" : "2", start].entries()) {
       const edit = async () => {
@@ -126,18 +128,38 @@ async function successiveAutosaves(loseReply = false) {
         check("the server committed the save whose reply was lost", await response.promise === 200 &&
           lostFields.get("draft") === "2" && lostFields.get("version") === String(loaded + 1));
         await page.waitForFunction(() => document.querySelector("[role=status][data-state]")?.getAttribute("data-state") === "offline");
+        if (spelling === "2e0") {
+          const save = page.locator(saveButton);
+          await typeBadNumber(count);
+          await save.evaluate((el) => el.click());
+          check("a lost reply does not turn incomplete input into a retry", (await numberInput(count)).bad &&
+            await page.locator('input[name=draft]').inputValue() === "2");
+          await count.fill("2.5");
+          await save.evaluate((el) => el.click());
+          check("a fractional count still blocks the pending save", await count.evaluate((el) => el.validity.stepMismatch) &&
+            await page.locator('input[name=draft]').inputValue() === "2");
+        }
+        await count.fill(spelling);
+        check(`${label}: the focused spelling is valid and has the committed count`, await count.evaluate(
+          (el, n) => el === document.activeElement && el.validity.valid && el.valueAsNumber === Number(n), copies));
       }
       const [reply] = await Promise.all([
-        page.waitForResponse((r) => isSave(r.request()) && postedGravel(r.request()) === copies, { timeout: 5_000 }).catch((error) => {
+        page.waitForResponse((r) => isSave(r.request()), { timeout: 5_000 }).catch((error) => {
           if (error.name !== "TimeoutError") throw error;
           return null;
         }),
-        lostFields ? page.getByRole("button", { name: "Try again" }).click() : edit(),
+        lostFields ? page.getByRole("button", { name: "Try again" }).evaluate((el) => el.click()) : edit(),
       ]);
       const fields = reply && saveFields(reply.request());
       const key = fields?.get("submit");
+      if (lostFields && fields) {
+        check(`${label}: the entire retry deck has the committed decimal counts`,
+          ["card", "count"].every((key) => JSON.stringify(fields.getAll(key)) === JSON.stringify(lostFields.getAll(key))),
+          `posted ${fields.getAll("count")[fields.getAll("card").indexOf(id)]}`);
+      }
       check(`${label} ${index + 1}: sends a new non-navigation POST and gets a 200 patch`,
         reply?.status() === 200 && !reply.request().isNavigationRequest() && "corten-patch" in reply.headers() &&
+        fields.getAll("count")[fields.getAll("card").indexOf(id)] === copies &&
         !!key && key !== previousKey && fields?.get("version") === String(loaded + index) &&
         (lostFields ? key === lostFields.get("submit") && fields.get("draft") === "3" : fields?.get("draft") === String(index + 1)),
         reply ? `HTTP ${reply.status()}` : "no matching POST response");
@@ -148,6 +170,8 @@ async function successiveAutosaves(loseReply = false) {
       check(`${label} ${index + 1}: acknowledges the patch and advances the version without navigating`,
         !!ack && await version(page) === String(loaded + index + 1) && page.url() === home, JSON.stringify(await status(page)));
       if (!ack) return;
+      if (lostFields) check(`${label}: acknowledgement kept the focused spelling`, await count.evaluate(
+        (el, literal) => el === document.activeElement && el.value === literal, spelling));
       previousKey = key;
     }
     await page.unroute(scripts);
@@ -778,7 +802,7 @@ async function queuedCountValidity() {
 }
 
 /** A refusal rendered as a new document has no autosave to acknowledge. */
-async function nativeRefusal(code) {
+async function nativeRefusal(code, literal = "99") {
   const context = await browser.newContext();
   const resume = Promise.withResolvers();
   try {
@@ -796,7 +820,7 @@ async function nativeRefusal(code) {
       await Promise.all([other.waitForEvent("load"), other.locator(saveButton).click()]);
       await other.close();
     } else {
-      await count(page).fill("99");
+      await count(page).fill(literal);
     }
     // An input or click can ask for the failed module again on the outgoing page. It
     // must not consume the refusal document's hold, including its preload/import requests.
@@ -819,6 +843,7 @@ async function nativeRefusal(code) {
     ]);
     check(`native ${code}: the refusal is a full navigation with its reason`, refusal.status() === code &&
       refusal.request().isNavigationRequest() && (await page.textContent("#save-note")).includes("Not saved:"));
+    if (code === 422) check(`native Save leaves ${literal} for the server to validate`, postedGravel(refusal.request()) === literal);
     check(`native ${code}: the notice has no autosave handler`, await page.locator("#save-note").getAttribute("data-on") === null);
     check(`native ${code}: the refusal document's builder is still held`, await selectAll(page).isDisabled());
     const previous = Number(await version(page));
@@ -1399,7 +1424,7 @@ async function smoke() {
 try {
   if (process.argv.includes("--autosave-only")) {
     await successiveAutosaves();
-    await successiveAutosaves(true);
+    for (const spelling of ["2e0", "2.0", "02"]) await successiveAutosaves(spelling);
   } else if (process.argv.includes("--validity-only")) {
     for (const two of [false, true]) await refusedZeroRow(two);
     for (const focused of [false, true]) await multiEditCounts(focused);
@@ -1410,7 +1435,7 @@ try {
   else {
     if (!process.argv.includes("--handoff-only")) {
       await successiveAutosaves();
-      await successiveAutosaves(true);
+      for (const spelling of ["2e0", "2.0", "02"]) await successiveAutosaves(spelling);
       await smoke();
     }
     for (const scenario of ["edited", "incomplete", "removed", "lost answer", "cost", "cost-desc", "name-desc", "owned-asc"]) {
@@ -1419,6 +1444,7 @@ try {
     for (const selected of [false, true]) await nativeAddHandoff(selected);
     await nativeAddHandoff(false, true);
     for (const code of [409, 422]) await nativeRefusal(code);
+    await nativeRefusal(422, "2e0");
     for (const two of [false, true]) await refusedZeroRow(two);
     for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);
