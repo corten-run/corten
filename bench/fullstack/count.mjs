@@ -28,7 +28,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
 import { COUNT_OUTPUT, COUNT_OUTPUT_ARG } from "./count-admission.mjs";
-import { ACK_FD, ACK_MS, acknowledgments, CONTROL_FD, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
+import { ACK_FD, ACK_MS, acknowledgments, CONTROL_FD, EVERY_EVENT, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
@@ -43,6 +43,9 @@ for (const target of targets) {
 }
 // The matched tier's numbers never go into an r<n> round, nor the defaults' into an m<n> one.
 if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
+const mode = process.env[EVERY_EVENT];
+if (mode !== undefined && mode !== "1") throw new Error(`${EVERY_EVENT} is 1 or unset, not ${JSON.stringify(mode)}`);
+const everyEvent = mode === "1";
 const suffix = source === "api" ? "/api" : "";
 const ITERATIONS = 5000;
 const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
@@ -231,9 +234,11 @@ async function counted(id, name, work, events) {
 }
 
 // Before any load: the kernel and CPU this runs on, and `perf` counting an idle second on the
-// count's CPUs with each event set a count gives it (PROBE_SETS), one at a time, each within a
-// bound, so a `perf` that does not fit the running kernel, cannot count a set or does not answer
-// stops the step here with the reason. Each set is written to count-kernel.txt before it runs, so
+// count's CPUs with each event set a count gives it (PROBE_SETS), a row a CPU as a count asks, one
+// at a time, each within a bound, so a `perf` that does not fit the running kernel, cannot count a
+// set's required event, names a row as a count would not read it (#2232) or does not answer stops
+// the step here with the reason (in main's whole set, a note: probeVerdict). With EVERY_EVENT=1
+// every event is required. Each set is written to count-kernel.txt before it runs, so
 // a host that stops as one runs leaves its name (#2151); a stopped host cannot refuse, and is the
 // watcher's to notice (droplet.mjs). r8's droplet locked up as counting started (#466); this probe
 // has no `-G`, so it would not have caught that, but the round's log says how far counting got.
@@ -244,24 +249,27 @@ const pending = waiting ? ` (installed, waiting for a reboot: ${waiting})` : "";
 // The CPUs perf counts on, each of which must give its own row in a count: -C's list, or every online CPU for -a.
 const cpus = selectedCpus(countCpus, existsSync("/sys/devices/system/cpu/online") ? readFileSync("/sys/devices/system/cpu/online", "utf8") : undefined);
 const kernelFile = join(dir, "count-kernel.txt");
-writeFileSync(kernelFile, `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\ncpu ${cpu}\n`);
+const modeLine = everyEvent ? `${EVERY_EVENT}=1: every event is required at the probe` : "";
+writeFileSync(kernelFile, `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\ncpu ${cpu}\n${modeLine ? `${modeLine}\n` : ""}`);
 console.log(`counting on kernel ${kernel}${pending}, cpu ${cpu}, perf stat ${countCpus.join(" ")}`);
 for (const names of PROBE_SETS) {
-  const line = `${new Date().toISOString()} probing perf stat ${countCpus.join(" ")} -e ${names.join(",")}`;
+  const args = perfProbeArgs(countCpus, names);
+  const line = `${new Date().toISOString()} probing perf ${args.join(" ")}`;
   appendFileSync(kernelFile, `${line}\n`);
   console.log(line);
-  const probe = await runBounded("perf", perfProbeArgs(countCpus, names), { env: { ...process.env, LC_ALL: "C" } });
-  const { refuse, note } = probeVerdict(names, probe);
+  const probe = await runBounded("perf", args, { env: { ...process.env, LC_ALL: "C" } });
+  const { refuse, note } = probeVerdict(names, probe, everyEvent);
+  const reason = refuse && modeLine ? `${refuse}; ${modeLine}` : refuse;
   // A probe whose end was not seen stops the step before anything else is written: its record
   // is the halt's to write, and a write that fails does not turn the halt into another exit.
   if (probe.cleanup !== "confirmed") halt(() => {
-    appendFileSync(kernelFile, `${new Date().toISOString()} refused: ${refuse ?? probe.error ?? "cleanup unconfirmed"}\n`);
+    appendFileSync(kernelFile, `${new Date().toISOString()} refused: ${reason ?? probe.error ?? "cleanup unconfirmed"}\n`);
     appendFileSync(kernelFile, `${new Date().toISOString()} stopped: the probe's perf was not seen to end, so nothing more is counted on this host\n`);
-    console.error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}; the probe's perf was not seen to end, so nothing more is counted on this host`);
+    console.error(`perf cannot count on kernel ${kernel} (${cpu}): ${reason}; the probe's perf was not seen to end, so nothing more is counted on this host`);
   });
-  appendFileSync(kernelFile, `${new Date().toISOString()} ${refuse ? `refused: ${refuse}` : note ? `not counted: ${note}` : "counted"}\n`);
+  appendFileSync(kernelFile, `${new Date().toISOString()} ${reason ? `refused: ${reason}` : note ? `note: ${note}` : "counted"}\n`);
   if (note) console.warn(`probe: ${note}`);
-  if (refuse) throw new Error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}`);
+  if (reason) throw new Error(`perf cannot count on kernel ${kernel} (${cpu}): ${reason}`);
 }
 
 // Standalone counts merge so one app can be counted again. Managed output starts empty.

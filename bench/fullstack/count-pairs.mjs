@@ -53,7 +53,7 @@ import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { k6Image } from "../load-tool.mjs";
-import { HALT_EXIT, loadTotals } from "./count-perf.mjs";
+import { EVERY_EVENT, HALT_EXIT, loadTotals } from "./count-perf.mjs";
 import { median, pct, upperRank } from "../placement/stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -75,8 +75,8 @@ export const COUNTS = Object.freeze({
   kernelCyclesPerRequest: "cycles:k",
   userL1iMissesPerRequest: "L1-icache-load-misses:u",
 });
-/** The environment count.mjs reads (bench/fullstack/apps.mjs), recorded in the ledger as given. */
-export const COUNT_ENV = Object.freeze(["BENCH_TIER", "BENCH_EDGE", "BENCH_APPS", "BENCH_NETWORK", "BENCH_API_CONTAINER", "BENCH_APP_CPUS", "BENCH_LOAD_CPUS", "BENCH_FIXTURE_LOAD_CPUS"]);
+/** The kit's BENCH_* settings as passed to count.mjs, including the runner's probe mode. */
+export const COUNT_ENV = Object.freeze(["BENCH_TIER", "BENCH_EDGE", "BENCH_APPS", "BENCH_NETWORK", "BENCH_API_CONTAINER", "BENCH_APP_CPUS", "BENCH_LOAD_CPUS", "BENCH_FIXTURE_LOAD_CPUS", EVERY_EVENT]);
 /** The arguments of each invocation after its round name and before its target. */
 export const COUNT_ARGS = Object.freeze(["1", "corten"]);
 /** The tag count.mjs starts its image from. */
@@ -716,6 +716,8 @@ function haltOf(records) {
 
 async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string, held: () => boolean, records: Map<string, any> }} */ { dir, now, log, env, id, held, records }) {
   const file = join(dir, "invocations.jsonl"), runFile = join(dir, "run.json");
+  // Every event is needed here (invalid). Record the same mode we pass to count.mjs.
+  const countEnv = { ...env, [EVERY_EVENT]: "1" };
   const kitDir = o.kit ?? here;
   const plan = schedule(o.last, o.targets, o.prefix);
   const kit = kitOf(kitDir), environment = environmentOf(o.exec, env, o.which ?? ((name) => onPath(name, env)));
@@ -725,7 +727,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     const saved = JSON.parse(readFileSync(runFile, "utf8"));
     ids = { base: saved.ids?.base, head: saved.ids?.head };
     const current = { base: id(o.images.base), head: id(o.images.head) };
-    const differ = differences(saved, settingsOf({ ...o, env }, ids, plan, kit, environment));
+    const differ = differences(saved, settingsOf({ ...o, env: countEnv }, ids, plan, kit, environment));
     if (current.base !== ids.base || current.head !== ids.head) differ.push(`the images' IDs now (${o.images.base} ${current.base || "none"}, ${o.images.head} ${current.head || "none"})`);
     if (differ.length) throw new Error(`${runFile} is another experiment's: ${differ.join(", ")} differ from it. Go on with the same images, kit, host, settings and environment, or use a new prefix`);
   } else {
@@ -735,7 +737,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     if (ids.base === ids.head) throw new Error("the two sides are one image: the A/A is the run's own, so the change's sides must differ");
     const taken = plan.filter((i) => existsSync(join(o.results, i.name)));
     if (taken.length) throw new Error(`${taken.length} of the run's output paths exist already (${join(o.results, taken[0].name)}): use a new prefix`);
-    writeFileSync(runFile, JSON.stringify(settingsOf({ ...o, env }, ids, plan, kit, environment), null, 1) + "\n", { flag: "wx" });
+    writeFileSync(runFile, JSON.stringify(settingsOf({ ...o, env: countEnv }, ids, plan, kit, environment), null, 1) + "\n", { flag: "wx" });
   }
   // What could make the next count, or the report, not the run's: the daemon's lock taken from it,
   // or a file the count runs no longer the bytes run.json binds.
@@ -767,7 +769,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
       else {
         // Written before count.mjs starts, so a restart that finds no exit after it refuses to go on.
         appendFileSync(file, JSON.stringify({ name: inv.name, dispatched: now() }) + "\n");
-        const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env });
+        const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env: { ...countEnv } });
         // Its exit first, before anything here that can fail: a halt is in the ledger whatever follows.
         const exited = { name: inv.name, exited: now(), rc: r.status, signal: r.signal ?? null };
         appendFileSync(file, JSON.stringify(exited) + "\n");

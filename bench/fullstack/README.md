@@ -1618,7 +1618,19 @@ three runs:
    CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
    count, a running time above zero and 100% of its enabled time (read from the digits perf
    printed: a percentage above 100 is refused, not read as 100, and one just below 100 is not taken
-   as 100), and no other CPU did. A CPU the
+   as 100), and no other CPU did. The user L1i row is read by the name asked for,
+   `L1-icache-load-misses:u`, or by either of two aliases: `L1-icache-load-misses` and
+   `L1-icache-load-misses [cpu]`. In the `perf` 6.8.12 captures on x86 with one core PMU, `perf`
+   omits `:u` and adds `[cpu]` with `-A`; the same names were reported on 6.12.118
+   ([#2232 The catalog count reads no L1i row since perf is run with -A: perf names the row with a suffix, so every invocation is not valid](https://github.com/corten-run/corten/issues/2232)).
+   In the source for x86 with one core PMU and `-A`, v6.1 to v6.7 leave the name bare, v6.8 to
+   v6.12 add `[cpu]`, v6.13 and v6.14 use `cpu/L1-icache-load-misses/`, and v6.15 and v6.16
+   exempt legacy cache events from renaming. The v6.8 to v6.12 bracketed name can instead be an
+   Arm PMU's; v6.8's source uses PMU-qualified names (`cpu_core/.../`, `cpu_atom/.../`) for
+   hybrid Intel. A name the count does not recognize gives it no L1i row: a round can keep its
+   other events, and each `count-pairs.mjs` invocation is refused at its probe (below). An alias
+   is added only from a captured row.
+   A CPU the
    app never ran on during the load gives no running time either and cannot be told from one whose
    counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
    CPU it is counted on (`BENCH_APP_CPUS=1`); an unpinned local count with `-a` is kept only where
@@ -1646,13 +1658,30 @@ three runs:
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).
    It first writes the running kernel (and any package waiting for a reboot) and the CPU model to
    `count-kernel.txt` and has `perf` count an idle second on the count's CPUs with each event set
-   a count gives it, one at a time (`instructions:u`, `instructions:k`, then the first pass's
-   whole set), each in a process group of its own that is killed after 30 s (never once its
+   a count gives it, a row a CPU (`-A`) as a count asks, one at a time (`instructions:u`,
+   `instructions:k`, then the first pass's whole set), each in a process group of its own that is killed after 30 s (never once its
    leader has exited, when the group's number may be another's) and given up as no answer 5 s
    after that rather than waited out; a probe whose `perf` exits while something it started
-   holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with the reason when `perf` does not fit that kernel, cannot count a set's
-   required event, or does not answer; the first pass's whole set failing by itself is noted, not
-   refused, since the count then repeats that load with `instructions:u` alone. Each set is written
+   holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with
+   the reason when `perf` does not fit that kernel, a required event (`instructions:u` or
+   `instructions:k`) has no row or has even one row without a whole count, `perf` prints a row
+   whose event name is unknown to the kit, or `perf` does not answer. A recognized event outside
+   the requested set is not flagged just for being outside it. In a round,
+   `run-all.mjs` leaves `BENCH_COUNT_EVERY_EVENT` unset in the count even if its caller set it;
+   when it was set, the launcher logs that it ignores the setting without giving its value.
+   A fault the default probe checks in the first pass's whole set that `perf` answered for is
+   noted, not refused: the count goes on with the events it reads and repeats that load with
+   `instructions:u` alone where that is unusable. A recognized optional row with
+   `<not supported>` can pass the default probe without a note.
+   `count-pairs.mjs` sets `BENCH_COUNT_EVERY_EVENT=1` for every invocation, requiring every
+   event at the probe. An optional event that passes the probe but fails under load can still
+   produce a null count, which the paired runner marks not valid. `count-kernel.txt` records
+   this mode when enabled; for a direct `count.mjs` the variable must be `1` or unset.
+   When a probe under `count-pairs.mjs` refuses because an event lacks a whole count or a row
+   the count reads, that invocation exits before its load and is recorded as not valid, with the
+   reason in its log. The runner starts the next invocation and goes to its end; if all
+   invocations have this fault, the run has no bound. The probe checks names and counts only;
+   one row a CPU and the running times are the count's checks. Each set is written
    to `count-kernel.txt` before it runs, so a host that stops during one leaves its name. A host
    that stops cannot refuse: `droplet.mjs` notices one that does not answer (`--stall`). A count's
    `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails
@@ -2235,10 +2264,11 @@ fewest that give a 95% bound, to 999, so every round name has one length, and ea
 named once; anything else is refused before a lock is taken or Docker is called.
 
 Its records are in `results/<prefix>/`: `run.json`, written before the first invocation, with both
-images' IDs, the ordered schedule, what `count.mjs` is given (its arguments and the `BENCH_*`
-settings it reads), the SHA-256 and size of each file the count runs (`count.mjs` and every module
-it imports, the k6 script, `fixtures/items.json` it mounts into the app, and `count-pairs.mjs` and
-its imports), and the host as the count's environment reaches it (the Docker daemon's ID, version
+images' IDs, the ordered schedule, what `count.mjs` is given (its arguments and the kit's `BENCH_*`
+settings, including the runner's `BENCH_COUNT_EVERY_EVENT=1` in `env`), the SHA-256 and size of
+ each file the count runs (`count.mjs` and every module it imports, the k6 script,
+`fixtures/items.json` it mounts into the app, and `count-pairs.mjs` and its imports), and the
+host as the count's environment reaches it (the Docker daemon's ID, version
 and name, `DOCKER_HOST` and `DOCKER_CONTEXT`, the `docker` and `perf` the count's PATH gives with
 their versions, the kernel, Node and the k6 image by digest); `invocations.jsonl`, each invocation
 as it starts and as it ends, with the SHA-256 and size of the four files it is read from (its

@@ -159,31 +159,46 @@ export function acknowledgments(ackMs = ACK_MS) {
   };
 }
 
-/** The probe of one event set before the first count: the same CPUs and events, over an idle second, no cgroup. */
+/**
+ * The probe of one event set before the first count: the same CPUs and events over an idle second,
+ * no cgroup, a row a CPU (`-A`) as a count asks, so each row is named as a count's will be (#2232).
+ */
 export function perfProbeArgs(/** @type {string[]} */ cpus, /** @type {string[]} */ names) {
   const flags = cpuFlags(cpus);
   supportedSet(names);
-  return ["stat", ...flags, "-x", ",", "--log-fd", "1", "-e", names.join(","), "--", "sleep", "1"];
+  return ["stat", ...flags, "-A", "-x", ",", "--log-fd", "1", "-e", names.join(","), "--", "sleep", "1"];
 }
 
 /** Every set a count gives perf, in the order the probe runs them: each alone first, then main's whole set. */
 export const PROBE_SETS = Object.freeze([passEvents("main", true), passEvents("kernel"), passEvents("main")]);
 
 /**
+ * The environment variable count-pairs.mjs sets for each count.mjs it starts, `1`: a count there is
+ * valid only with every event of its sets, so its probe refuses a set any event of which it cannot
+ * read, where a round's probe notes it (probeVerdict).
+ */
+export const EVERY_EVENT = "BENCH_COUNT_EVERY_EVENT";
+
+/**
  * What one probe found wrong with its set, or null: perf could not start, did not answer within its
- * bound, did not exit 0, or gave no count for a required event of the set (a counter the CPU or the
- * VM does not expose prints `<not supported>` and still exits 0). An optional event the set holds
- * may be unusable, as it may in a count.
+ * bound or did not exit 0; it printed a row under a name a count does not read as any of the kit's
+ * events (#2232); or it gave no whole count on each of its rows, or no row, for a required event of
+ * the set (a counter the CPU or the VM does not expose prints `<not supported>` and still exits 0),
+ * or, with `every`, for any event of the set. Otherwise an optional event may be unusable, as it
+ * may in a count. Only names and counts are read: not one row a CPU, nor running times.
  * @param {string[]} names
  * @param {{ status: number | null, signal?: string | null, stdout?: string, stderr?: string, error?: string }} r
  */
-export function probeError(names, r) {
-  const said = (r.stderr ?? "").trim() || (r.stdout ?? "").trim();
-  if (r.error) return `perf stat -e ${names.join(",")}: ${r.error}`;
-  if (r.status !== 0) return `perf stat -e ${names.join(",")} exited ${r.status ?? r.signal ?? "-"}${said ? `: ${said}` : ""}`;
-  const counts = parsePerfCounts(r.stdout ?? "");
-  for (const event of names.filter((e) => Object.values(REQUIRED).includes(e))) {
-    if (counts.get(event)?.count == null) return `perf stat -e ${names.join(",")} gave no count for ${event}${said ? `: ${said}` : ""}`;
+export function probeError(names, r, every = false) {
+  const set = `perf stat -e ${names.join(",")}`, stderr = (r.stderr ?? "").trim();
+  const said = stderr || (r.stdout ?? "").trim();
+  if (r.error) return `${set}: ${r.error}`;
+  if (r.status !== 0) return `${set} exited ${r.status ?? r.signal ?? "-"}${said ? `: ${said}` : ""}`;
+  const { counts, unread } = parsePerfCounts(r.stdout ?? "");
+  if (unread.length) return `${set} printed a row for ${unread.map((e) => JSON.stringify(e)).join(", ")}, which a count does not read as an event of the set`;
+  for (const event of names.filter((e) => every || Object.values(REQUIRED).includes(e))) {
+    const why = counts.has(event) ? counts.get(event) : "no row for it";
+    if (why) return `${set} gave no count for ${event}: ${why}${stderr ? `; perf said: ${stderr}` : ""}`;
   }
   return null;
 }
@@ -266,35 +281,50 @@ export function runBounded(command, args, { timeoutMs = PROBE_MS, graceMs = GRAC
 
 /**
  * Whether a probe refuses the count: every fault of a set does, but one perf answered for in main's
- * whole set (it exited by itself, not within a bound's kill), which the count meets by repeating its
- * first load with user instructions alone, the set probed first; that is a note, not a refusal.
+ * whole set (it exited by itself, not within a bound's kill) is a note, not a refusal: the count goes
+ * on with the events it reads, repeating its first load with user instructions alone (the set probed
+ * first) where those are unusable, and records each other event it cannot read as having no row. With
+ * `every` (count-pairs.mjs, EVERY_EVENT) that is a refusal too, as its count needs every event.
  * @param {string[]} names
  * @param {Parameters<typeof probeError>[1]} r
  * @returns {{ refuse: string | null, note: string | null }}
  */
-export function probeVerdict(names, r) {
-  const why = probeError(names, r);
+export function probeVerdict(names, r, every = false) {
+  const why = probeError(names, r, every);
   if (!why) return { refuse: null, note: null };
   const whole = names.join(",") === passEvents("main").join(",");
-  return whole && !r.error ? { refuse: null, note: `${why}; the count repeats its first load with ${REQUIRED.main} alone` } : { refuse: why, note: null };
+  return whole && !r.error && !every ? { refuse: null, note: `${why}; the count goes on with the events it reads, and repeats its first load with ${REQUIRED.main} alone where that is unusable` } : { refuse: why, note: null };
 }
 
-/** Some perf versions omit :u when displaying a generic cache event. */
-const eventOf = (/** @type {string | undefined} */ event) => (event === "L1-icache-load-misses" ? events.userL1iMissesPerRequest : event);
+// See README.md, Method 5, for the L1i aliases and their perf version history.
+const L1I_ROWS = Object.freeze(["L1-icache-load-misses", "L1-icache-load-misses [cpu]"]);
+const eventOf = (/** @type {string | undefined} */ event) => (event !== undefined && L1I_ROWS.includes(event) ? events.userL1iMissesPerRequest : event);
 
-/** A probe's counts, perf's total over its CPUs (`perf stat -x ,` with no `-A`): only whether each event gave a count is read from it. */
-export function parsePerfCounts(/** @type {string} */ text) {
+/**
+ * A probe's rows a CPU (`-A -x ,` with no `-G`: CPU, count, unit, event, running time, running
+ * percentage), named as a count's rows are, and skipped where a count skips them (no CPU, no event
+ * name). `counts` holds, for each of the kit's events, null where every row of it has a whole count,
+ * or the first that does not, as `CPU <n>: <what perf printed>`; `unread` each other name a row gave.
+ * @param {string} text
+ */
+export function parsePerfCounts(text) {
+  /** @type {Map<string, string | null>} */
   const counts = new Map();
+  /** @type {string[]} */
+  const unread = [];
   for (const line of text.split("\n")) {
-    const [value, , event, , , running] = line.split(",");
+    const [cpuField, value = "", , event] = line.split(",");
+    const cpu = /^CPU(\d+)$/.exec(cpuField?.trim() ?? "");
+    if (!cpu || !event) continue;
     const name = eventOf(event);
-    if (!eventNames.includes(name)) continue;
+    if (!eventNames.includes(name)) {
+      if (!unread.includes(event)) unread.push(event);
+      continue;
+    }
     const raw = value.trim();
-    const runningPct = /^\d+(?:\.\d+)?$/.test(running?.trim() ?? "") ? Number(running) : null;
-    const count = /^\d+$/.test(raw) ? Number(raw) : null;
-    counts.set(name, { count, runningPct, error: count === null ? raw || "missing count" : null });
+    if (!counts.get(name)) counts.set(name, /^\d+$/.test(raw) ? null : `CPU ${cpu[1]}: ${raw || "missing count"}`);
   }
-  return counts;
+  return { counts, unread };
 }
 
 /**
