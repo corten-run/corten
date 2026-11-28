@@ -25,10 +25,10 @@ export async function liveRegion(page, id) {
     };
     const role = region?.getAttribute("role");
     const ariaLive = region?.getAttribute("aria-live");
-    const live = ariaLive !== "off" && (role === "status" || role === "alert" || role === "log" ||
-      ariaLive === "polite" || ariaLive === "assertive");
-    const ready = live && exposed(region);
+    const live = ':is([role="status"],[role="alert"],[role="log"],[aria-live="polite"],[aria-live="assertive"]):not([aria-live="off"])';
+    const ready = region?.matches(live) && exposed(region);
     const stillLive = () => exposed(region) && region.getAttribute("role") === role && region.getAttribute("aria-live") === ariaLive;
+    const exposedMessage = (node) => exposed(node) && !node.matches(live) && !node.querySelector(live);
     const text = message.textContent;
     let current = message;
     let accepted = null;
@@ -50,7 +50,7 @@ export async function liveRegion(page, id) {
       if (next.parentElement !== region || this.parentElement === region) return;
       current = next;
       accepted = wasLive && !message.isConnected && document.getElementById(id) === next &&
-        stillLive() && exposed(next) ? next : null;
+        stillLive() && exposedMessage(next) ? next : null;
       if (!accepted) return;
       if (changed === null && next.textContent !== text) {
         changed = next.textContent;
@@ -68,7 +68,7 @@ export async function liveRegion(page, id) {
         if (!ready) return null;
         if (timeout === undefined) {
           return accepted && !message.isConnected && document.getElementById(id) === accepted &&
-            accepted.parentElement === region && stillLive() && exposed(accepted) ? accepted.textContent : null;
+            accepted.parentElement === region && stillLive() && exposedMessage(accepted) ? accepted.textContent : null;
         }
         if (changed === null) {
           await new Promise((resolve) => {
