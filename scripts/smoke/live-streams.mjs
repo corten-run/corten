@@ -84,6 +84,8 @@ export async function liveRegionControls(browser, report = check) {
 
     for (const [name, change, expected] of [
       ["a patch must expose the replacement message itself", "hidden", false],
+      ["a replacement must not put its message inside a hidden descendant", "hidden-child", false],
+      ["a replacement must not turn off live updates for the message", "live-off", false],
       ["a replacement message must not itself be a second status region", "nested-status", false],
       ["a replacement message must not contain a second live region", "nested-live-child", false],
       ["revealing a hidden message later in the same task does not expose its insertion", "reveal", false],
@@ -103,9 +105,11 @@ export async function liveRegionControls(browser, report = check) {
         const replacement = message.cloneNode();
         replacement.textContent = "After";
         if (change === "nested-status") replacement.setAttribute("role", "status");
-        if (change === "nested-live-child") {
+        if (change === "live-off") replacement.setAttribute("aria-live", "off");
+        if (change === "nested-live-child" || change === "hidden-child") {
           const child = document.createElement("span");
-          child.setAttribute("aria-live", "polite");
+          if (change === "hidden-child") child.setAttribute("aria-hidden", "true");
+          else child.setAttribute("aria-live", "polite");
           child.textContent = replacement.textContent;
           replacement.replaceChildren(child);
         }

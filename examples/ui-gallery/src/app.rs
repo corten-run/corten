@@ -522,7 +522,7 @@ fn RatioExample<'a>(t: Msg, example: &'a ExampleBounds, errors: Option<&'a Error
     let f = ExampleBounds::FIELDS;
     let e = errors.map_or_else(|| Within::none(ExampleBoundsId), |errors| errors.within(ExampleBoundsId));
     html! {
-        <form id={ExampleBoundsId} method="post" action={url::Help}>
+        <form id={ExampleBoundsId} method="post" action={url::Help} data-patch>
             <label for={e.id(f.minimum_ratio)}>"Minimum ratio example"</label>
             <input
                 type="number"

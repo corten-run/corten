@@ -1031,11 +1031,11 @@ two of one type cannot clash.
 A refusal no single field explains (a rule across fields, or a service the handler wrote to
 saying no: "The policy was retired meanwhile.") is the form's own message:
 `errors.add_form(text)`, shown with `{errors.form_message()}` at the top of the form, a
-`role="alert"` paragraph. Browsers can send an
-[accessibility alert event](https://www.w3.org/TR/wai-aria-1.2/#alert) when an alert is inserted, so
-unlike a polite status line it does not need a live region already on the page. The alert is a
-live region of its own, so it goes inside no other: in the UI kit's look it is
-`<FormAlert errors={&errors} .. />`, the destructive `Alert` around the message, not
+`role="alert"` paragraph. Where the platform supports it, browsers can send an
+[accessibility alert event](https://www.w3.org/TR/wai-aria-1.2/#alert) when an alert is inserted, even
+without a live region already on the page. Whether a patched form alert is spoken has not been
+verified with NVDA or VoiceOver. The alert is a live region of its own, so it goes inside no other.
+For the UI kit's look use `<FormAlert errors={&errors} .. />`, the destructive `Alert` around the message, not
 `form_message()` inside an `Alert`. JSON clients get it first in
 `message` and as `form`; an agent tool gets it first in its error.
 

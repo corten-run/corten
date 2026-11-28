@@ -1,4 +1,4 @@
-/** Capture the message and its exposed live region before the action, then check the replacement.
+/** Check that a patch replaces a plain-text message inside its already exposed live region.
  * @param {import("@playwright/test").Page} page
  * @param {string} id
  */
@@ -26,12 +26,15 @@ export async function liveRegion(page, id) {
     const role = region?.getAttribute("role");
     const ariaLive = region?.getAttribute("aria-live");
     const live = ':is([role="status"],[role="alert"],[role="log"],[aria-live="polite"],[aria-live="assertive"]):not([aria-live="off"])';
-    const ready = region?.matches(live) && exposed(region);
+    // These examples patch text (or clear it), not a subtree with its own accessibility semantics.
+    const plainMessage = (node) => node.childElementCount === 0 && !node.matches("[role], [aria-live]");
+    const ready = region?.matches(live) && exposed(region) && plainMessage(message);
     const stillLive = () => exposed(region) && region.getAttribute("role") === role && region.getAttribute("aria-live") === ariaLive;
-    const exposedMessage = (node) => exposed(node) && !node.matches(live) && !node.querySelector(live);
     const text = message.textContent;
     let current = message;
-    let accepted = null;
+    const validReplacement = () => current.parentElement === region && !message.isConnected &&
+      document.getElementById(id) === current && stillLive() && plainMessage(current) && exposed(current);
+    let accepted = false;
     let changed = null;
     let notify = () => {};
     const prototype = Element.prototype;
@@ -49,10 +52,8 @@ export async function liveRegion(page, id) {
       replaceWith.call(this, next);
       if (next.parentElement !== region || this.parentElement === region) return;
       current = next;
-      accepted = wasLive && !message.isConnected && document.getElementById(id) === next &&
-        stillLive() && exposedMessage(next) ? next : null;
-      if (!accepted) return;
-      if (changed === null && next.textContent !== text) {
+      accepted = wasLive && validReplacement();
+      if (accepted && changed === null && next.textContent !== text) {
         changed = next.textContent;
         notify();
       }
@@ -67,8 +68,7 @@ export async function liveRegion(page, id) {
       try {
         if (!ready) return null;
         if (timeout === undefined) {
-          return accepted && !message.isConnected && document.getElementById(id) === accepted &&
-            accepted.parentElement === region && stillLive() && exposedMessage(accepted) ? accepted.textContent : null;
+          return accepted && validReplacement() ? current.textContent : null;
         }
         if (changed === null) {
           await new Promise((resolve) => {
