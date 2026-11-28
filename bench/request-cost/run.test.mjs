@@ -303,6 +303,13 @@ test("idle.mjs prints no figure when an allocator sample is invalid", { skip }, 
   assert.equal(run.stdout, "");
 });
 
+test("idle.mjs prints no figure when the final allocator sweep loses a connection", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_CLOSE_ON_SWEEP: "3" });
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  assert.match(run.stderr, /not a measurement: the probe (?:had closed 1 of the 40 connections|held 39 more open files for 40 connections)/);
+  assert.equal(run.stdout, "");
+});
+
 test("each kind of run compare.mjs asks for is one the kit takes, and its --json is what was measured, the whole figure compare.mjs reads", { skip }, async () => {
   const plan = Object.fromEntries(compare.readings().map((reading) => [reading.file, reading]));
   const take = async (/** @type {string} */ file, /** @type {string[]} */ more = [], asked = {}, /** @type {Record<string, string>} */ environment = {}) => {

@@ -273,6 +273,8 @@ counters, the run refuses rather than report the missing counters as zero.
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
 when it may open fewer files than there are connections and the rest wait in its listen queue.
+The kit checks both at the final resident reading and again after the allocator reply, before
+closing its side of the connections, so a connection lost during the sweep also refuses the run.
 A request on a connection waiting there is not answered while it waits, and such a run ends in
 one of two ways: no answer has come for 30 seconds, or the probe closed connections first,
 since Corten closes the ones it holds at its own 30 seconds and then accepts those that
@@ -626,4 +628,5 @@ the preload and reads the stand-in's own status in `/proc`, as a host does, and 
 a growth that is its after less its before, a figure that is that growth over the connections and
 a before that is not the stand-in's; the `--json` run with a 65,536-byte page is checked only for
 the page size it carries. The stand-in replies to the idle-only signal with known counters;
-the test checks their growth, the two measured sweep times, and refusal of a malformed sample.
+the test checks their growth, the two measured sweep times, and refusal of a malformed sample or
+a connection closed before the final reply.

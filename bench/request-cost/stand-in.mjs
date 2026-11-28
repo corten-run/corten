@@ -27,6 +27,8 @@
 //   STAND_IN_FEWER_MALLOCS=1     a part holds one call to malloc fewer than its requests (16 each)
 //   STAND_IN_NOT_FOUND_FROM=<n>  the server's nth request and those after it are answered 404
 //   STAND_IN_DEAF_AFTER=<n>      after its nth run the control exits 0 and asks for nothing
+//   STAND_IN_CLOSE_ON_SWEEP=<n>  close one held connection before replying to the nth sweep
+import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname, join } from "node:path";
@@ -109,8 +111,11 @@ function serve() {
   hold(0);
   /** Each connection's request heads, in the order the connections were accepted. @type {string[][]} */
   const connections = [];
+  /** @type {Set<net.Socket>} */
+  const sockets = new Set();
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     part.opened += 1;
+    sockets.add(socket);
     // What this connection holds until it is closed, and the page it leaves behind once it is.
     let held = 2;
     hold(held);
@@ -146,7 +151,10 @@ function serve() {
       release();
       socket.end();
     });
-    socket.on("close", release);
+    socket.on("close", () => {
+      sockets.delete(socket);
+      release();
+    });
     socket.on("error", () => {});
   });
   const control = net.createServer({ allowHalfOpen: true }, (socket) => {
@@ -158,12 +166,19 @@ function serve() {
   });
   if (process.env.PROBE_IDLE_MEMORY) {
     let sweeps = 0;
-    process.on("SIGUSR1", () => {
+    process.on("SIGUSR1", async () => {
       sweeps += 1;
+      if (String(sweeps) === process.env.STAND_IN_CLOSE_ON_SWEEP) {
+        const [socket] = sockets;
+        if (!socket) throw new Error("no held connection to close during the allocator sweep");
+        const closed = once(socket, "close");
+        socket.destroy();
+        await closed;
+      }
       if (String(sweeps) === process.env.STAND_IN_BAD_SWEEP) {
         process.stdout.write('{"live":5,"threadNet":0,"active":"123","nanos":246000}\n');
       } else {
-        const open = part.opened - part.closed;
+        const open = sockets.size;
         process.stdout.write(`${JSON.stringify({ live: 50_000 + 123 * open, threadNet: 60_000 - 3 * open, active: 65_536 + 4096 * open, nanos: 246_000 + sweeps })}\n`);
       }
     });

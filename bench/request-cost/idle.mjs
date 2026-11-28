@@ -91,17 +91,24 @@ try {
   const took = `${seconds.toFixed(1)} s`;
   await sleep(1000);
   const after = memory();
-  const accepted = files() - open;
-  // A connection the probe has closed (Corten waits 30 seconds for a request unless the app says
-  // otherwise) holds nothing there.
-  const closed = all.filter((connection) => connection.closed).length;
-  const afterAllocator = await probe.memory();
-  for (const connection of all) connection.socket.destroy();
+  const checkHeld = () => {
+    const accepted = files() - open;
+    const closed = all.filter((connection) => connection.closed).length;
+    try {
+      return held({ connections, before, after, closed, accepted });
+    } catch (error) {
+      throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
+    }
+  };
   let bytes;
+  let afterAllocator;
   try {
-    bytes = held({ connections, before, after, closed, accepted });
-  } catch (error) {
-    throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
+    bytes = checkHeld();
+    afterAllocator = await probe.memory();
+    // A close during the sweep would put the two readings over different connections.
+    checkHeld();
+  } finally {
+    for (const connection of all) connection.socket.destroy();
   }
   const what = values.silent ? `sent nothing to the probe for ${name}` : `answered ${requests} ${name}`;
   const allocator = {
