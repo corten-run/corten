@@ -1,42 +1,115 @@
 import { engine, check } from "./helpers.mjs";
 import { liveRegion } from "./live-region.mjs";
 
-export async function liveRegionControls(browser) {
+export async function liveRegionControls(browser, report = check) {
   const page = await browser.newPage();
   try {
     for (const [name, ancestor, region, afterRole, expected, afterText = "After"] of [
       ["an already rendered status accepts a replacement message", "", 'role="status"', "status", true],
       ["a role added with the message does not count as a live region", "", "", "status", false],
       ["an ancestor unhidden with the message does not count as rendered", "hidden", 'role="status"', "status", false],
+      ["aria-hidden removed with the update does not count as exposed", "", 'role="status" aria-hidden="true"', "status", false],
+      ["an aria-hidden ancestor hides its live region", 'aria-hidden="true"', 'role="status" aria-hidden="false"', "status", false],
+      ["inert removed from the region with the update does not count as exposed", "", 'role="status" inert', "status", false],
+      ["inert removed from an ancestor with the update does not count as exposed", "inert", 'role="status"', "status", false],
       ["aria-live off overrides the status role", "", 'role="status" aria-live="off"', "status", false],
       ["the region must keep its live semantics", "", 'role="log"', "status", false],
-      ["the replacement wait follows the node even when the text is unchanged", "", 'role="alert"', "alert", true, "Before"],
+      ["a known action can replace the message without changing its text", "", 'role="alert"', "alert", true, "Before"],
     ]) {
       await page.setContent(`<div ${ancestor}><div ${region}><p id="message">Before</p></div></div>`);
       const { text, stayed } = await liveRegion(page, "message");
       await page.locator("#message").evaluate((message, { afterRole, afterText }) => {
         const region = message.parentElement;
-        region.parentElement.removeAttribute("hidden");
+        for (const element of [region, region.parentElement]) {
+          for (const attribute of ["hidden", "aria-hidden", "inert"]) element.removeAttribute(attribute);
+        }
         region.setAttribute("role", afterRole);
         const replacement = message.cloneNode();
         replacement.textContent = afterText;
         message.replaceWith(replacement);
       }, { afterRole, afterText });
-      check(name, (await stayed(4000)) === expected && text === "Before");
+      report(name, (await stayed()) === expected && text === "Before");
     }
+
+    for (const inside of [false, true]) {
+      const status = '<div role="status"><p id="message">Before</p></div>';
+      await page.setContent(inside ? `<dialog>${status}</dialog>` : `${status}<dialog></dialog>`);
+      await page.locator("dialog").evaluate((dialog) => dialog.showModal());
+      const { stayed } = await liveRegion(page, "message");
+      if (!inside) await page.locator("dialog").evaluate((dialog) => dialog.close());
+      await replaceMessage(page, "message", "After");
+      report(inside ? "a live region inside the modal is exposed" : "a live region behind the modal is not exposed",
+        (await stayed()) === inside);
+    }
+
+    await page.setContent('<div aria-live="polite"><p id="message">Before</p></div>');
+    const locate = page.locator.bind(page);
+    const evaluateHandle = page.evaluateHandle.bind(page);
+    const duringCapture = () => replaceMessage(page, "message", "During capture");
+    // Place the same update between locator resolution and evaluation, or just before an atomic
+    // evaluation. Only the split capture retains the now-detached message.
+    page.locator = (selector, options) => {
+      const locator = locate(selector, options);
+      locator.evaluateHandle = async (capture, arg) => {
+        const stale = await locator.elementHandle();
+        try {
+          await duringCapture();
+          return await stale.evaluateHandle(capture, arg);
+        } finally {
+          await stale.dispose();
+        }
+      };
+      return locator;
+    };
+    page.evaluateHandle = async (capture, arg) => {
+      await duringCapture();
+      return evaluateHandle(capture, arg);
+    };
+    try {
+      const { text, stayed } = await liveRegion(page, "message");
+      await replaceMessage(page, "message", "After");
+      report("capture sees the connected message even when a replacement arrives at lookup",
+        await stayed() && text === "During capture", text);
+    } finally {
+      page.locator = locate;
+      page.evaluateHandle = evaluateHandle;
+    }
+
+    await page.setContent('<corten-live aria-live="polite"><p id="last-trade">Last trade: first</p></corten-live>');
+    const waitForFunction = page.waitForFunction.bind(page);
+    page.waitForFunction = async (probe, arg, options) => {
+      await replaceMessage(page, "last-trade", "Last trade: first");
+      const waiting = waitForFunction(probe, arg, options);
+      await page.evaluate(() => setTimeout(() => {
+        const message = document.getElementById("last-trade");
+        const replacement = message.cloneNode();
+        replacement.textContent = "Last trade: second";
+        message.replaceWith(replacement);
+      }, 750));
+      return waiting;
+    };
+    await liveFragments(page, (name, ok, detail) => report(`after a same-text replacement: ${name}`, ok, detail));
   } finally {
     await page.close();
   }
 }
 
-export async function liveFragments(page) {
+function replaceMessage(page, id, text) {
+  return page.evaluate(({ id, text }) => {
+    const message = document.getElementById(id);
+    const replacement = message.cloneNode();
+    replacement.textContent = text;
+    message.replaceWith(replacement);
+  }, { id, text });
+}
+
+export async function liveFragments(page, report = check) {
   // <corten-live src>: the server streams fragments and the runtime swaps them in by id.
-  const { text: firstTrade, stayed } = await liveRegion(page, "last-trade");
-  // A trade a second: one drawn in four seconds is a fragment the runtime applied.
-  const regionStayed = await stayed(4000);
-  const nextTrade = (await page.textContent("#last-trade")) ?? "";
-  check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
-  check("a trade replaces only the live region's message", regionStayed);
+  const { text: firstTrade, changed } = await liveRegion(page, "last-trade");
+  // Use the text from the same replacement that passed the live-region identity check.
+  const nextTrade = await changed(4000);
+  report("<corten-live> swaps in the fragments the server streams", nextTrade?.startsWith("Last trade: ") === true, `${firstTrade} -> ${nextTrade ?? "no qualifying replacement"}`);
+  report("a trade replaces only the live region's message", nextTrade !== null);
 }
 
 export async function streamCompression(page) {

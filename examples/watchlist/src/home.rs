@@ -249,7 +249,7 @@ pub(crate) fn WatchForm<'a>(others: &'a [(&'static str, &'static str)]) -> impl 
 struct LastTradeId;
 
 #[component]
-fn LastTrade(text: &str) -> impl Render {
+fn LastTrade(text: &str) -> impl Patch {
     html! { <p id={LastTradeId}>{text}</p> }
 }
 
@@ -457,6 +457,12 @@ mod tests {
             .add::<Stock>()
             .add::<crate::smoke::Reading>()
             .sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
+    }
+
+    #[test]
+    fn last_trade_is_a_patch_of_only_the_message() {
+        let trade: &dyn Patch = &LastTrade { text: "Last trade: <ACME>" };
+        assert_eq!(trade.to_html(), r#"<p id="last-trade">Last trade: &lt;ACME&gt;</p>"#);
     }
 
     #[tokio::test]

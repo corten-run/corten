@@ -258,11 +258,12 @@ try {
   const ids = await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).slice(0, 2).map((r) => r.id));
   await page.click(`#${ids[0]} input[type=checkbox]`);
   await page.click(`#${ids[1]} input[type=checkbox]`);
+  // The modal makes the surrounding page, including the live region, inert.
+  const { stayed: regionStayed } = await liveRegion(page, "desk-status");
   await page.click("[role=group] button:nth-of-type(1)");
   check("Archive opens the dialog", await page.isVisible("dialog[open]"));
   const itemCount = () => page.textContent("#item-count");
   const countBefore = await itemCount();
-  const { stayed: regionStayed } = await liveRegion(page, "desk-status");
   await page.click("dialog button[value=confirm]");
   await page.waitForFunction(() => /Archived/.test(document.getElementById("desk-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
   check("confirming archives the rows", (await page.textContent("#desk-status")) === "Archived 2 items.", await page.textContent("#desk-status"));
