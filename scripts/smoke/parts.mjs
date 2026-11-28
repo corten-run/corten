@@ -37,46 +37,45 @@ async function watch(until, probe, done) {
 /**
  * Follows the waiting part's link to the page with the picks read in, and says which step did not
  * happen, or "" when every one did (#2246):
- * 1. one Playwright click, with its own actionability checks and error;
- * 2. the first request that click makes to the link's address (a whole load or `corten: nav` or
+ * 1. one Playwright click on a link to the exact Watchlist picks URL, with hover prefetch off;
+ * 2. the first request that click makes to that address (a whole load or `corten: nav` or
  *    `page`) answers with the picks and no read template. Both steps have 10 s from invoking
  *    the click, including any navigation that Playwright waits for;
- * 3. those picks drawn at that address: the page's address is the link's when they are seen, the
+ * 3. those picks drawn at that address: the page's address is the expected one when they are seen, the
  *    rows are the ones that answer carried, the waiting part is gone, and no part read
  *    (`corten: action`) was sent after the click that could have filled them. Drawing has 10 s
  *    from accepting the answer.
  * @param {import("@playwright/test").Page} page
  */
 export async function followPicks(page) {
-  // The link's address, resolved, with the waiting part marked, so a page that keeps it is told.
+  const target = new URL("/?picks=true", page.url()).href;
   let link = "";
   try {
     link = await within(
       5000,
       "not settled within 5 s",
-      page.evaluate(() => {
+      page.evaluate((target) => {
         const part = document.querySelector("#picks");
-        if (part) /** @type {any} */ (part).__waitingPicks = true;
-        const a = document.querySelector("#picks a");
-        return a instanceof HTMLAnchorElement ? a.href : "";
-      }),
+        const a = part?.querySelector("a");
+        if (!(a instanceof HTMLAnchorElement)) return "";
+        if (a.href === target) {
+          // Isolate click navigation; the dedicated prefetch smoke checks reuse separately.
+          a.setAttribute("data-no-prefetch", "");
+          /** @type {any} */ (part).__waitingPicks = true;
+        }
+        return a.href;
+      }, target),
     );
   } catch (error) {
     return `the link could not be read (${firstLine(error)}), at ${page.url()}`;
   }
   if (!link) return `the waiting part has no link to follow, at ${page.url()}`;
-  const target = new URL(link);
-  target.hash = "";
-  const asked = target.href;
+  if (link !== target) return `the waiting part links to ${link}, expected ${target}`;
   /** @typedef {import("@playwright/test").Request} Request */
   /** @typedef {import("@playwright/test").Response} Response */
   /** @typedef {{ request: Request, how: string, status?: number, parsed?: { rows: string[], readNow: boolean }, unread?: string }} Answer */
-  /** @type {Map<Request, Answer>} */
-  const answers = new Map();
   /** @type {Answer | undefined} */
   let direct;
-  /** @type {Answer | undefined} */
-  let prefetch;
   let requests = 0;
   let reads = 0;
   let until = 0;
@@ -85,17 +84,11 @@ export async function followPicks(page) {
     if (!until) return;
     const { corten, purpose } = r.headers();
     if (corten === "action") reads++;
-    if (r.url() !== asked || r.method() !== "GET") return;
+    if (purpose === "prefetch" || r.url() !== target || r.method() !== "GET") return;
     const how = r.resourceType() === "document" ? "load" : corten === "nav" || corten === "page" ? corten : "";
     if (!how) return;
-    const isPrefetch = purpose === "prefetch";
-    const answer = { request: r, how: isPrefetch ? `${how} (prefetch)` : how };
-    answers.set(r, answer);
-    if (isPrefetch) prefetch ??= answer;
-    else {
-      direct ??= answer;
-      requests++;
-    }
+    direct ??= { request: r, how };
+    requests++;
   };
   /** The picks in an answer's markup, parsed by the browser. @param {string} body */
   const parse = (body) =>
@@ -107,11 +100,11 @@ export async function followPicks(page) {
   const lateBody = "body not read in time";
   /** @param {Response} res */
   const onResponse = async (res) => {
-    const a = answers.get(res.request());
-    if (!a) return;
+    const a = direct;
+    if (!a || a.request !== res.request()) return;
     a.status = res.status();
     if (!res.ok()) return;
-    // Start each body read independently, bounded by the time left since invoking the click.
+    // The body read is bounded by the time left since invoking the click.
     try {
       const left = until - performance.now();
       if (left <= 0) throw new Error(lateBody);
@@ -124,10 +117,6 @@ export async function followPicks(page) {
       a.unread = firstLine(error);
     }
   };
-  // The runtime can consume a fresh hover prefetch without fetching again. Use it only when no
-  // direct request was observed: even a failed direct request takes precedence, including while
-  // waiting for the picks to be drawn. A later request cannot replace the first direct answer.
-  const selected = () => direct ?? prefetch;
   /** @param {Answer | undefined} a */
   const carries = (a) => a?.parsed?.rows.length === 2 && !a.parsed.readNow;
   /** @param {Answer} a */
@@ -138,16 +127,16 @@ export async function followPicks(page) {
     if (non2xx(a)) return "non-2xx response";
     return a.request.failure()?.errorText ?? a.unread ?? (a.status === undefined ? "no response" : performance.now() >= until ? lateBody : "body still pending");
   };
-  /** The answers so far, without their markup. */
-  const said = () => [...answers.values()].map((a) => ({
+  /** The click's first answer, without its markup. @param {Answer} a */
+  const describe = (a) => ({
     how: a.how,
     status: a.status,
     body: bodyStatus(a),
     items: a.parsed?.rows.length,
     readNow: a.parsed?.readNow,
-  }));
+  });
   const noAnswer = () =>
-    `no answer to the navigation to ${asked} carried the picks (10 s from click start, ${requests} click requests, answers ${JSON.stringify(said())}), at ${page.url()}`;
+    `no answer to the navigation to ${target} carried the picks (10 s from click start, ${requests} click requests, answer ${JSON.stringify(direct ? describe(direct) : null)}), at ${page.url()}`;
   page.on("request", onRequest);
   page.on("response", onResponse);
   try {
@@ -155,14 +144,15 @@ export async function followPicks(page) {
     try {
       await page.click("#picks a", { timeout: Math.max(1, Math.floor(until - performance.now())) });
     } catch (error) {
-      return `the click on the link failed (${firstLine(error)}; 10 s click budget), ${requests} click requests for ${asked} sent, at ${page.url()}`;
+      return `the click on the link failed (${firstLine(error)}; 10 s click budget), ${requests} click requests for ${target} sent, at ${page.url()}`;
     }
     const answered = await watch(
       until,
-      async () => selected(),
-      (a) => !!a && (carries(a) || (a === direct && !!(a.parsed || a.unread || a.request.failure() || non2xx(a)))),
+      async () => direct,
+      (a) => !!a && !!(a.parsed || a.unread || a.request.failure() || non2xx(a)),
     );
-    if (!answered.ok || !carries(selected())) return noAnswer();
+    const a = answered.last;
+    if (!answered.ok || !a || !carries(a)) return noAnswer();
     const drawn = await watch(
       performance.now() + 10_000,
       () => page.evaluate(() => {
@@ -174,12 +164,11 @@ export async function followPicks(page) {
           waiting: !!part && !!(/** @type {any} */ (part).__waitingPicks),
         };
       }),
-      (seen) => seen.at === link && !seen.readNow && !seen.waiting && reads === 0 && carries(selected()) && JSON.stringify(selected()?.parsed?.rows) === JSON.stringify(seen.rows),
+      (seen) => seen.at === target && !seen.readNow && !seen.waiting && reads === 0 && JSON.stringify(a.parsed?.rows) === JSON.stringify(seen.rows),
     );
     if (!drawn.ok) {
-      if (!carries(selected())) return noAnswer();
       const error = drawn.error ? `; last probe error: ${drawn.error}` : "";
-      return `the picks the answer carried were not drawn at ${link} within 10 s of accepting it (last seen ${JSON.stringify(drawn.last ?? null)}, ${reads} part reads, ${requests} click requests, answers ${JSON.stringify(said())}${error})`;
+      return `the picks the answer carried were not drawn at ${target} within 10 s of accepting it (last seen ${JSON.stringify(drawn.last ?? null)}, ${reads} part reads, ${requests} click requests, answer ${JSON.stringify(describe(a))}${error})`;
     }
     return "";
   } finally {

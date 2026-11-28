@@ -1,4 +1,4 @@
-// Run in the pinned Playwright image: node --test scripts/smoke/parts.test.mjs
+// Run in the pinned Playwright image: SMOKE_PARTS_ENGINE=chromium node --test scripts/smoke/parts.test.mjs
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -10,19 +10,21 @@ const rows = '<ul id="picks"><li>One</li><li>Two</li></ul>';
 const html = (body) => ({ contentType: "text/html", body });
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("the failed-part link's smoke checks the first click and its answer", async (t) => {
+test("the failed-part link's smoke checks the first click and its answer", { concurrency: 4 }, async (t) => {
   const engines = { chromium, firefox, webkit };
   const engine = process.env.SMOKE_PARTS_ENGINE ?? "chromium";
   const browser = await engines[engine].launch();
   t.after(() => browser.close());
-  for (const { name, mode, failure, clicks, requests } of [
+  await Promise.all([
     { name: "one successful click", mode: "good", clicks: 1, requests: ["click"] },
     { name: "a whole document can answer the click", mode: "document", clicks: 1, requests: ["click"] },
     { name: "a corten: page fetch can answer the click", mode: "page", clicks: 1, requests: ["click"] },
     { name: "an answer can finish more than three seconds after the click", mode: "slow", clicks: 1, requests: ["click"] },
     { name: "an intercepted click keeps Playwright's timeout", mode: "covered", failure: /the click on the link failed.*Timeout/, clicks: 0, requests: [] },
-    { name: "a consumed prefetch answers the click without a second fetch", mode: "reuse", clicks: 1, requests: ["prefetch"] },
+    { name: "the smoke opts out of hover prefetch and the click fetches the page", mode: "opt-out", clicks: 1, requests: ["click"] },
     { name: "a swallowed first click is not made again", mode: "swallow", failure: /no answer.*0 click requests/, clicks: 1, requests: [] },
+    { name: "a hover that draws the right page cannot stand in for a swallowed click", mode: "hover-draw", failure: /no answer.*0 click requests/, clicks: 1, requests: ["prefetch"] },
+    { name: "the Watchlist link must have exactly the expected query", mode: "wrong-query", failure: /the waiting part links to .*unexpected=1.*expected .*\?picks=true/, clicks: 0, requests: [] },
     { name: "a failed first navigation is not replaced by a second click", mode: "first-503", failure: /"status":503/, clicks: 1, requests: ["click"] },
     { name: "a good unused prefetch cannot hide the click's 503 and stale picks", mode: "stale", failure: /no answer.*"status":503/, clicks: 1, requests: ["prefetch", "click"] },
     { name: "a held prefetch body does not delay the click's good answer", mode: "held-prefetch", clicks: 1, requests: ["prefetch", "click"] },
@@ -35,8 +37,8 @@ test("the failed-part link's smoke checks the first click and its answer", async
     { name: "the right address with different rows is not a draw of the answer", mode: "different-rows", failure: /were not drawn.*Stale/, clicks: 1, requests: ["click"] },
     { name: "the right rows at another address are not a draw there", mode: "wrong-address", failure: /were not drawn.*\/wrong/, clicks: 1, requests: ["click"] },
     { name: "a part read can have supplied the visible rows", mode: "part-read", failure: /were not drawn.*1 part reads/, clicks: 1, requests: ["click", "action"] },
-  ]) {
-    await t.test(name, { timeout: 30_000 }, async (t) => {
+  ].map(({ name, mode, failure, clicks, requests }) =>
+    t.test(name, { timeout: 30_000 }, async (t) => {
       const asked = [];
       let clickStarted;
       let release;
@@ -69,12 +71,13 @@ test("the failed-part link's smoke checks the first click and its answer", async
         };
       }
       const cover = mode === "covered" ? '<div style="position:fixed;inset:0"></div>' : "";
-      await page.route(`${base}/`, (route) => route.fulfill(html(`<div id="picks"><a href="/picked">See picks</a></div>${cover}`)));
+      const target = `/?picks=true${mode === "wrong-query" ? "&unexpected=1" : ""}`;
+      await page.route(`${base}/`, (route) => route.fulfill(html(`<div id="picks"><a href="${target}">See picks</a></div>${cover}`)));
       await page.route(`${base}/part`, (route) => {
         asked.push("action");
         return route.fulfill(html(rows));
       });
-      await page.route(`${base}/picked`, async (route) => {
+      await page.route(`${base}${target}`, async (route) => {
         const prefetch = route.request().headers().purpose === "prefetch";
         if ((prefetch && mode === "held-prefetch") || (!prefetch && ["held-click", "late-click-body"].includes(mode))) return route.fallback();
         asked.push(prefetch ? "prefetch" : "click");
@@ -90,9 +93,21 @@ test("the failed-part link's smoke checks the first click and its answer", async
         sessionStorage.clicks = "0";
         const link = document.querySelector("#picks a");
         let prefetched;
-        if (["stale", "held-prefetch", "reuse"].includes(mode)) {
+        if (["stale", "held-prefetch", "opt-out", "hover-draw"].includes(mode)) {
           link.addEventListener("pointerover", () => {
+            // Model the runtime's opt-out in the positive control. The other fixtures deliberately
+            // issue a hover request despite the marker, to prove that the smoke will not use it.
+            if (mode === "opt-out" && link.closest("[data-no-prefetch]")) return;
             prefetched = fetch(link.href, { headers: { corten: "nav", purpose: "prefetch" } });
+            if (mode === "hover-draw") {
+              void prefetched.then(async (answer) => {
+                const body = await answer.text();
+                // Let the click land before replacing its target. Only hover fetches and draws.
+                while (sessionStorage.clicks === "0") await new Promise(requestAnimationFrame);
+                document.querySelector("#picks").outerHTML = body;
+                history.pushState(null, "", link.href);
+              });
+            }
           }, { once: true });
         }
         window.addEventListener("click", async (event) => {
@@ -102,9 +117,9 @@ test("the failed-part link's smoke checks the first click and its answer", async
           event.preventDefault();
           // Intercept before the old document-level landing listener hears the click.
           if (n === 1 && (mode === "swallow" || mode === "first-503")) event.stopImmediatePropagation();
-          if (mode === "swallow" && n === 1) return;
+          if ((mode === "swallow" && n === 1) || mode === "hover-draw") return;
           if (prefetched) await prefetched; // At least headers, before the click's answer.
-          const answer = mode === "reuse" ? await prefetched : await fetch(link.href, { headers: { corten: mode === "page" ? "page" : "nav" } }).catch(() => null);
+          const answer = (mode === "opt-out" && prefetched) || await fetch(link.href, { headers: { corten: mode === "page" ? "page" : "nav" } }).catch(() => null);
           if (!answer) return;
           if (!answer.ok && mode !== "stale") return;
           const body = mode === "part-read" ? await fetch("/part", { headers: { corten: "action" } }) : answer;
@@ -115,10 +130,16 @@ test("the failed-part link's smoke checks the first click and its answer", async
       const result = await followPicks(page);
       const actualClicks = await page.evaluate(() => Number(sessionStorage.clicks));
       t.diagnostic(`${actualClicks} click(s), requests ${JSON.stringify(asked)}, ${result || "accepted"}`);
+      if (mode === "hover-draw") {
+        assert.equal(page.url(), `${base}${target}`);
+        assert.deepEqual(await page.locator("ul#picks li").allTextContents(), ["One", "Two"]);
+        assert.equal(actualClicks, 1);
+        assert.deepEqual(asked, ["prefetch"]);
+      }
       if (failure) assert.match(result, failure);
       else assert.equal(result, "");
       assert.equal(actualClicks, clicks);
       assert.deepEqual(asked, requests);
-    });
-  }
+    }),
+  ));
 });
