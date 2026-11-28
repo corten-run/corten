@@ -12980,6 +12980,274 @@ rules something out.
     layer; 2026-11-27, for cost 6, `Keeps::poll` and the inner-request shutdown test read on
     `aff499aa7`, and tokio 1.54.1 read for a timer's shutdown error.
 
+78. <a id="choice-request-gzip"></a>**A body compressed as it is sent is zstd, else libdeflate's gzip
+    up to 16 KiB and brotli 1 past it.** A client that accepts
+    gzip and not zstd (Safari before 26.3, a later Safari on a macOS before 26.3, and a browser
+    over plain HTTP; every request that comes through CloudFront with gzip and Brotli on in its
+    cache policy, which sends the app `br,gzip` whatever the viewer sent and is what the
+    [deploy guide](guide/deploy.md#response-compression) has an app behind it set; an HTTP client
+    that asks for `gzip` alone, as Go's `net/http` does) was sent brotli 1 when it
+    also accepted brotli and flate2's gzip 1 when it did not, and compressing was most of what
+    its request cost. libdeflate's gzip at its level 1 takes less to make than brotli 1, is
+    smaller than flate2's at every size measured, and is smaller than brotli 1 on a short body
+    but not on a long one that repeats. So for a page, a patch or JSON made for one request the
+    server's order after zstd is gzip then brotli for a body up to 16 KiB, and brotli then gzip
+    past it. A client that accepts one of the two gets that one at any size, and its own ranking
+    (q-values) comes before the server's order. One client can so be sent gzip for a short page
+    and brotli for a long one; both carry `Vary: Accept-Encoding`. A held document read before
+    its stored forms exist is compressed as any answer is, so that client is sent a short one as
+    gzip until the stored brotli exists and as brotli after, where it was brotli 1 and then the
+    stored brotli. Stored forms (assets, held
+    JSON) are brotli 11 or 9 first, unchanged, and a stream is zstd or flate2's gzip
+    ([Choice 32](#choice-stream-coding)): libdeflate compresses only a whole body into one
+    buffer, which a request's body is and a stream is not.
+
+    Where 16 KiB comes from: twelve bodies cut to sizes from 1 KB up, each cut compressed whole
+    by both (the `brotli` crate's level 1 with the window the server gives it, libdeflate's
+    level 1). The bodies are card-market's home page (1,203 bytes), the item page of its smoke
+    fixture (9,793) and that page with the item's contents and field values repeated twenty
+    times under varied names (32,501); this repository's README, two guides and this document
+    rendered to HTML by Python-Markdown (28 KB to 880 KB); and five JSON files (the HttpArena
+    benchmark's `dataset.json`, 13 KB; card-market's two fixtures, 31 and 68 KB;
+    `bench/workloads/latest-stable.json`, 83 KB; and a 231 KB `plan.json` under
+    `bench/live/evidence`). The long page is the item page for its first 8,192 bytes, so
+    below that there are eleven contents, and four of the twelve are this repository's own
+    documents. The one body with records that repeat as an app's list does, the smoke fixture's
+    JSON, is the one where gzip is the larger from 8 KB; no list page and no patch between 6 and
+    16 KiB was swept.
+
+    | Cut to (bytes) | Bodies that long | libdeflate's gzip 1 against brotli 1 |
+    |---|---|---|
+    | 1,024 to 6,144 | 12 | 0.5% to 8.9% smaller on every one |
+    | 8,192 to 16,384 | 11 | 4.6% to 10.4% smaller on ten; 2.8% to 11.6% larger on card-market's smoke fixture (28 to 154 bytes) |
+    | 20,480 to 32,768 | 9 | 2.1% to 7.4% smaller on five (the four documents and the workloads file); 3.5% to 30.5% larger on four (92 to 927 bytes) |
+    | 49,152 and up | 6 | 0.7% to 5.9% smaller on the two guides at every cut; larger on the other four at some cut, by 0.1% to 27.9% (143 to 1,819 bytes) |
+
+    Between 16,384 and 20,480 bytes brotli 1 gains on a body that repeats (the long page: 3,242
+    bytes at 16,384 and 3,479 at 20,480, where libdeflate's grew from 3,092 to 3,670), so the
+    line is 16 KiB. Up to it gzip is the smaller on all but one body, where it adds 28 to 154
+    bytes; past it a body is coded as it was before this Choice, so none grows, and five of the
+    nine bodies that reach 20 KB would have been 2.1% to 7.4% smaller as gzip, which is not
+    taken: where gzip loses past the line it loses by up to 30.5%. The cuts are
+    prefixes: they show what length does to one content, not what another page of that length
+    holds. flate2's gzip 1, which a client with gzip alone was sent, was 1.9% to 28.3% larger
+    than libdeflate's at all 161 cuts.
+
+    Measured on the item page (9,793 bytes) and the long page (32,501), before at `bcf4aa073`
+    and after at `fdf94a6a7`:
+
+    | Page, `Accept-Encoding` | Sent before | Sent after | Instructions a request | Time a request in process | CPU a request on card-market's image | Page faults a request: that image, jemalloc's defaults, glibc |
+    |---|---|---|---|---|---|---|
+    | item, `gzip, deflate, br` | brotli 1, 2,475 bytes | gzip, 2,307 | 841,069 to 409,926 | 96.3 to 55.7 µs | 147 to 97 µs | 0, 19.35, 2.00 to 0, 0, 0 |
+    | item, `gzip` | gzip 1 (flate2), 2,612 | gzip, 2,307 | 866,175 to 409,526 | 178.8 to 55.2 µs | 163 to 103 µs | 1.62, 11.93, 53.01 to 0, 0, 0 |
+    | item, `br` | brotli 1, 2,475 | the same | 840,586 to 840,592 | 97.2 to 93.6 µs | 147 to 150 µs | 0, 19.37, 2.01 to 0, 19.37, 2.00 |
+    | item, `gzip, deflate, br, zstd` | zstd 1, 2,250 | the same | 335,265 to 335,326 | 40.7 to 41.1 µs | 83 to 87 µs | none before or after |
+    | item, `identity` | as it is | the same | 73,370 to 73,339 | 11.70 to 11.79 µs | not probed | not probed |
+    | long, `gzip, deflate, br` | brotli 1, 4,440 | the same | 2,079,617 to 2,079,523 | 337.7 to 332.5 µs | 357 to 347 µs | 37.84, 39.92, 0 to 37.85, 39.92, 0 |
+    | long, `gzip` | gzip 1 (flate2), 5,587 | gzip, 5,367 | 1,370,990 to 1,094,730 | 295.5 to 147.5 µs | 237 to 187 µs | 2.35, 17.32, 0 to 0, 0, 0 |
+    | long, `gzip, deflate, br, zstd` | zstd 1, 3,981 | the same | not counted | not timed | 183 to 140 µs | none before or after |
+
+    Instructions and the time in process are `route_loop`'s whole request (`LOOP_TARGET=document`,
+    card-market's release test build on glibc's allocator, no socket): instructions under
+    callgrind as the difference between a 4 s and a 16 s loop over the difference in requests,
+    three such pairs a build, the median, whose three values ranged by at most 1,332; the time
+    three 5 s loops a build, the builds taking turns, the median, ranging by at most 3.7 µs. The
+    CPU and the faults are card-market's image (`--cpus 1`; the page asked 3,000 times over 8
+    connections after 500, with `gzip, br` where the counts sent `gzip, deflate, br`; its
+    `/proc/1/stat` read before and after as `bench/fullstack/alloc-faults.mjs` reads it), three
+    rounds, the median; no request failed. The faults repeated to 0.04 a request. The CPU is
+    counted in 10 ms ticks, 3.3 µs a request, and its rounds ranged by up to 73 µs, so it shows
+    the size of a change and not a difference of a few µs: the rows whose coding did not change
+    moved by -43 to +13 µs across the three allocators. With jemalloc's defaults the item page
+    for `gzip, br` went from 230 to 100 µs, and on glibc from 167 to 103. The zstd request's
+    time in process was higher after in each of its three turns (40.94 to 41.10, 40.51 to 40.88
+    and 40.74 to 41.12 µs), on 61 more instructions.
+
+    Under load, as paired cycles ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2)
+    with the plan written before the run: a small app's JSON of 4 to 8 KB
+    (`GET /json/{25,40,50}?m=4`, written by `Json`, through the stages, on jemalloc as the
+    starter's image sets it), the two builds on 24 cores of a c-48 with the load's 4,096
+    connections on the other 24, each turn a freshly started server, 2 s of warm-up and a 3 s
+    load inside 6 s counted by `perf stat`, the builds' order turned every pair. For `gzip, br` a request took
+    284,990 user and kernel cycles against 403,571 at the medians: 29.22% fewer at the median of
+    40 pairs (21.96% to 33.79% fewer), with a one-sided 95% bound of 28.76% fewer against the 5%
+    the plan asked (user 219,414 against 335,155, kernel 65,618 against 68,285, user
+    instructions 271,224 against 400,807). For `gzip, deflate, br, zstd`, which is zstd before
+    and after and which the plan held to +1% as a workload the change touches, a request took
+    241,846 against 239,718: 1.19% more at the median of 60 pairs (6.70% fewer to 4.51% more)
+    with a bound of 1.50% more, so that margin was not met, on the same instructions
+    (232,873 against 232,936, 0.02% more at the median of the pairs with a bound of 0.06%; user
+    cycles 178,834 against 176,642, kernel 63,242 against 62,923). A text answer that names no
+    coding took 82,972 against 83,348, 0.28% fewer over 60 pairs with a bound of 0.19% fewer.
+    No request was answered with a 4xx or a 5xx (socket errors were not counted), every
+    counter ran for all of every turn, and the builds' answers to one probe of each workload
+    were the same but `Date` (for `gzip, br`, also but the coding, the `ETag` and the length).
+    User L1 instruction-cache misses were not counted for the first and the third workload. A
+    first run at `01ad562a3`, before gzip stopped at 16 KiB and read before the plan was
+    revised, had the zstd comparison 0.01% more at the median of 60 pairs with a bound of
+    0.46%. A
+    diagnostic planned after that miss and before it ran, which tests nothing against a margin,
+    made the zstd comparison three more times, 60 pairs each, also counting user L1
+    instruction-cache misses: the same two builds again took 1.84% more (bound 2.40%); the
+    candidate built with a function of 3,100 bytes that nothing calls
+    ([Choice 71](#choice-layout-floor)'s pad, which moved 3,507 of its 4,585 functions) 0.71%
+    more (bound 1.15%); and the base built with that pad, against the base, 0.71% more (bound
+    0.95%; user cycles 0.90% more, bound 1.18%). In each the instructions moved by at most
+    0.06% at the median of the pairs and the cache misses, about 4,200 to 4,300 a request, by
+    -0.30% to +0.12%. So on this host a pad no request runs cost the base what the padded
+    candidate cost, and the candidate as built cost 0.5 to 1.1 points more than that in its two
+    runs: placement and a cost of this change are not told apart, and a zstd request is not
+    shown to be as fast as it was. Three pairs of binaries so gave that path bounds of 0.46%,
+    1.50% and 2.40% more (the last two the same pair). The code on this branch has since taken
+    main's later commits, among them one to the `Json` writer these workloads run
+    (`a02c81e86`); that binary was not measured. Not run under load: a client with gzip alone or brotli
+    alone, and a body past 16 KiB (counted and probed above). These are cycles, not latency.
+
+    A second declared run read the code that would merge across placements
+    ([Choice 72](#choice-placement-runs)), under a plan in the pull request before it. Its
+    author was asked for it by the maintainer after the result above, in the session that wrote
+    this change, which is not on the pull request. Base main `14126d2a8` against head
+    `498291116`, this change with that main merged, on the probe that Choice's runs use
+    (`GET /private` to its `plain` configuration, a page of about 6 KB made for one visitor,
+    features `json` and `compress`), each side compiled once and placed 30 ways, 8 recorded
+    pairs a placement after one that is not, every turn a fresh start, and the base against
+    itself under a second list of pads as what the run can resolve; two c-8s, one with a Xeon
+    Platinum 8168 for the request with no `Accept-Encoding` and one with an 8280 for the zstd
+    request. With `gzip, deflate, br, zstd` the base against itself read 0.27% more at the
+    median of the 30 placement medians with a bound of 0.49% more, and with its lists' labels
+    swapped a bound of 0.09% fewer, so it resolved 1%; the change read 0.43% fewer (placement
+    medians from 1.45% fewer to 2.48% more) with a bound of 0.03% fewer, on 0.01% fewer user
+    instructions and 0.74% more user L1 instruction-cache misses a request (bound 1.60% more).
+    That is under the margin as the plan read the head's placements (below). With no
+    `Accept-Encoding` the base against itself read 0.42% more
+    with a bound of 1.03% more (0.22% more with the labels swapped; placement medians from
+    3.31% fewer to 3.39% more, 19 of 30 above zero), so that workload was not resolved, and by
+    the plan the change does not pass on it whatever its own reading, which was 0.06% fewer
+    (2.24% fewer to 1.52% more) with a bound of 0.22% more, on 0.04% fewer instructions and
+    1.84% more instruction-cache misses (bound 2.47% more). The reduction, on one build of
+    each side over 40 pairs with `gzip, br`: 157,039 user and kernel cycles a request against
+    228,437, 31.43% fewer at the median (25.54% to 35.46% fewer) with a bound of 31.20% fewer
+    (user instructions 282,932 against 473,660). All 120 placement runs completed, every
+    counter ran for all of every turn, and no comparison was run again. So of the two workloads
+    this run held to +1% one read under it by the plan's own check of the head's placements
+    and one was not resolved, and the run does not carry the change. Nor does it undo the first run's miss, which Pull requests keeps binding ("a
+    placement run declared after it does not clear such a miss"); whether a run on later
+    commits can stand in for that one is governed by the maintainer's exception in the pull
+    request, and neither run meets it. The second run's own check of its head's C code was not
+    accepted: 22 of its 30 placements failed the rule then on `main`, leaving both change
+    comparisons without a binding bound. [Choice 72](#choice-placement-runs) now answers that
+    finding with LLD's alignment rule and a second pad that restores the data's place in a line.
+    The diagnostic the plan named, which no reading uses, has the change's placement
+    medians where the pad is a multiple of 64 (the 8 placements that do meet the rule) at
+    0.14% more against 0.47% fewer for the other 22 on the zstd request, and 0.71% fewer
+    against 0.02% more with no `Accept-Encoding`. And the plan as first posted compared the
+    answers' headers with nothing masked but `Date`, which no binary meets against a second
+    start of itself, since a compressed answer's weak `ETag` is keyed per start; a dry run
+    stopped on that at its answers, before any turn, and the plan was changed in the pull
+    request to mask that one value at 14:40:09 UTC, 19 seconds after the dry run that then
+    passed began the two-pair check turns the plan says it reads for nothing, and five minutes
+    before the measured run's first turn (14:44:58). The receipt is
+    commit `04d4ec477` under the tag `evidence/request-gzip-1971-placed`: the kit, the plan as
+    run and as first posted, both hosts' results and the dry run's (its parent `29af5a467`,
+    under `evidence/request-gzip-1971-placements`, differs by one comment line of a script).
+
+    The receipt is commit `4800ed8d1`, which adds it to `fdf94a6a7`, kept under the tag
+    `evidence/request-gzip-1971`: the kit (the plans,
+    the scripts, the small app, the sweep's program and the generators of the long page and of
+    the rendered documents) and the result files. Three figures below were read from a terminal
+    and have no file there: the compressor's 200 KiB and the zstd context's 193 KiB,
+    `libdeflate-sys` built alone, and the image's growth. The requests are those of
+    `MDA2AV/HttpArena@986128bbf527`, whose `dataset.json` the sweep also reads.
+
+    The dependency: `libdeflater`, whose `libdeflate-sys` compiles libdeflate's C (MIT) into
+    the app under the `compress` feature alone. A local build already needs a C compiler for
+    `zstd-sys`. The image `corten new` writes does not compile zstd (it links the build image's
+    `libzstd`, `ZSTD_SYS_USE_PKG_CONFIG=1`), so there libdeflate is the only C compiled, by the
+    compiler `rust:1-trixie` has. Built alone it took 4.8 to 5.1 s of a clean release build (16
+    cores, three builds); card-market's clean release build as its image makes it took 70.6 to
+    71.3 s before and 70.9 to 71.4 s after (16 cores, four builds each, the two taking turns),
+    its binary grew by 91,528 bytes (7,353,952 to 7,445,480) and its image by 137,872. A change
+    without it does not meet this. Each coder alone on one core (a program outside the
+    repository; bytes out, then the best of seven runs of 2,000 calls):
+
+    | Body | brotli 1 | libdeflate 1 | flate2 on zlib-rs, level 2 | flate2 on zlib-rs, level 1 | flate2 on miniz_oxide, level 1 (the gzip before) |
+    |---|---|---|---|---|---|
+    | JSON cut to 2,560 bytes | 692, 18.4 µs | 647, 12.0 | 646, 23.1 | 775, 12.5 | 695, 16.5 |
+    | item page cut to 4,096 | 1,378, 31.4 | 1,288, 17.1 | 1,315, 31.9 | 1,623, 17.7 | 1,401, 24.1 |
+    | JSON cut to 5,120 | 1,046, 26.3 | 964, 17.0 | 963, 27.9 | 1,170, 15.1 | 1,065, 19.4 |
+    | item page, 9,793 | 2,475, 70.0 | 2,307, 34.4 | 2,379, 52.3 | 2,920, 27.1 | 2,612, 43.1 |
+    | JSON, 13,298 | 2,081, 51.6 | 1,865, 35.3 | 1,903, 45.7 | 2,355, 24.3 | 2,076, 31.9 |
+
+    libdeflate takes 32% to 51% less time than brotli 1 and is 6% to 10% smaller. zlib-rs, a
+    deflate in Rust behind flate2, is 12% to 18% larger than brotli 1 at its level 1; at its
+    level 2, within 3.1% of libdeflate's size, it is slower than brotli 1 on the three bodies up
+    to 5 KB (2% to 26%) and 11% to 25% faster on the two larger, and it would also change the
+    gzip of every stream and stored form, which flate2 makes. miniz_oxide's level 2, the first of
+    its levels smaller than brotli 1 on the item page (2,340 bytes), took 84.8 µs there.
+    libdeflate's levels 2 to 4 gave 1.5% to 2.1% fewer bytes on the item page for 43% to 52%
+    more time, so level 1. Against the gzip before, libdeflate's time ranged from 29% less to 11%
+    more on these and four larger bodies. Each thread that has compressed a body keeps its
+    compressor, 200 KiB (asked of the C allocator, read with glibc's `mallinfo2`), where its
+    zstd context held 193 KiB after one 10 KB body. The buffer libdeflate writes into is the
+    most the body can come to, about the body's own size, zeroed, and what is sent or kept is
+    cut to what was written.
+
+    Not chosen: gzip past 16 KiB, which from 20 KB to 32 KB was 2.1% to 7.4% smaller than
+    brotli 1 on five of nine bodies and 3.5% to 30.5% larger on four (on the long page 985,000
+    fewer instructions a request for 927 more bytes, 21%), because a faster encoder on the
+    server does not pay for more bytes to the visitor, what it loses where it loses is four
+    times what it saves where it wins, and the server cannot tell a body that repeats from one
+    that does not without compressing it twice; flate2 on zlib-rs at its level 2, which needs no
+    C and came within 3.1% of libdeflate's size, but was slower than brotli 1 on the three bodies
+    up to 5 KB and would change the gzip of every stream and stored form (the table above, one
+    run on one host: the weakest comparison here and the first to measure again); linking the
+    system's libdeflate (`libdeflate-sys`'s `dynamic` feature), which is a Cargo feature where
+    zstd's is an environment variable, so it would be a feature of `corten` and a package in
+    the runtime image to save 92 KB and no build time that was seen; libdeflate for a stored
+    form's gzip 9 (made once per file; not measured); gzip ahead of zstd (on the item page zstd
+    1 took 74,600 fewer instructions and sent 57 fewer bytes); dropping brotli (a client may
+    accept nothing else, long bodies that repeat are smaller with it, and stored forms are
+    brotli).
+
+    Stands on: measured (the sweep, whose bytes do not vary; instructions, three pairs a build;
+    time in process, three turns; CPU and faults on the image, three rounds; cycles under load,
+    40 and 60 pairs a workload on one host, whose margin for a zstd request was not met, and a
+    second run across 30 placements a workload on two hosts, which did not resolve the
+    uncompressed request and read the zstd request under its margin by a check of the head's
+    C code that is not the gate's; the
+    coders alone, one run on one host; a clean build's time, four builds each); platform (libdeflate 1.26.1 as `libdeflater` 1.26.1 builds it,
+    `brotli` 9.1.3; Go 1.27.4's `net/http` asking for gzip alone, as its `Transport`
+    documents; caniuse's zstd data, where Chrome and Edge send it from 123, Firefox from 126,
+    Safari on iOS from 26.3 and Safari on a Mac from 26.3 on macOS 26.3 or later, 84.27% of
+    use by StatCounter's shares for October 2026; CloudFront's developer guide for the header
+    it sends an origin, read and not run here); reasoned (up to 16 KiB gzip
+    is smaller on all but one body measured and at most 154 bytes larger there, which the first
+    congestion window holds either way, so no browser's load time was measured); bet (how many
+    of an app's requests come without zstd, which is all of them behind CloudFront and few
+    straight from browsers; and that an app's
+    bodies are like the twelve measured: one whose short bodies repeat as the smoke fixture does
+    sends 2.8% to 11.6% more as gzip, and one whose long bodies do not repeat sends up to 7.4%
+    more as brotli than gzip would); value (Fast, and proven fast; Small surface, deliberate
+    dependencies: the C library is behind the one feature, which already compiles zstd's in a
+    local build, README Values).
+
+    Revisit when: every browser Corten supports sends zstd and CloudFront sends an origin
+    zstd, so that gzip and brotli made per request serve only other clients; a deflate in Rust is as small as libdeflate's level 1 and
+    as fast on these bodies, which would take the C library out; the `brotli` crate's or
+    libdeflate's fast levels change, since the line was drawn between these two; an app's short
+    bodies are measured larger as gzip than as brotli 1; or bodies compressed per request are
+    far larger than those measured (the buffer is the body's size).
+
+    Last checked: 2026-11-23, at `bcf4aa073` and `fdf94a6a7`, on two DigitalOcean droplets with
+    a Xeon Platinum 8280 (the counts, the times and the cycles on a c-48, Linux 7.0.0-43, perf
+    6.12.118, and the sweep, the coders alone, the probe and the builds on a c-16, Linux
+    6.8.0-149, both with Docker 29.10.0), with rustc 1.100.0, libdeflater 1.26.1, brotli 9.1.3
+    and Debian's libjemalloc2 5.3.0 in the image, and caniuse's zstd data, pkg.go.dev's
+    `net/http` at go1.27.4 and CloudFront's developer guide as they read that day; 2026-11-23,
+    the run across placements, `14126d2a8` against `498291116` on two DigitalOcean c-8s (a Xeon
+    Platinum 8168 and an 8280), Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD 23.1.5, gcc
+    14.2.0 and perf 6.12.118.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

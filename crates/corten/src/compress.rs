@@ -3,12 +3,31 @@
 //! Pages, patches and JSON are generated per request, so they are compressed per request at the
 //! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge and
 //! Firefox, and Safari over HTTPS from 26.3 as caniuse lists it; Playwright's WebKit does not
-//! send it), otherwise brotli 1, otherwise gzip 1. On
+//! send it), otherwise gzip made by libdeflate at its level 1 for a body up to 16 KiB and
+//! brotli 1 for a larger one, or the one of the two the client accepts. The client's own ranking
+//! (its q-values) comes before this order. On
 //! card-market's item page (8.8 KB on average; instructions by callgrind in process, bytes the
 //! average `render_cost` reports) zstd 1 adds about 230,000 user instructions to the request and
 //! sends 2,178 bytes; brotli 1 adds about 690,000 for 2,358 bytes. brotli's other fast levels cost
 //! more: 2 adds 1.22 million for 2,142 bytes, and 0 (with its window sized to the body) adds
-//! 745,000 for 2,492. The runtime and [`crate::assets`] files never change, so they are compressed
+//! 745,000 for 2,492. Up to 16 KiB gzip is ahead of brotli because libdeflate's is smaller than
+//! brotli 1 there and takes less: on the item page of card-market's smoke fixture (9,793 bytes;
+//! `route_loop`'s whole request in process under callgrind, three pairs of loops, at
+//! `fdf94a6a7`) the request takes
+//! 335,326 instructions with zstd 1 for 2,250 bytes, 409,926 with libdeflate's gzip for 2,307, and
+//! 840,592 with brotli 1 for 2,475; flate2's gzip 1, which a client with gzip alone got before,
+//! took 866,175 for 2,612 (`docs/design.md#choice-request-gzip`, with the times and the page
+//! faults). Past 16 KiB the order is the one before, brotli then gzip, since gzip is no longer
+//! the smaller on most bodies: of twelve pages, documents and JSON files cut to sizes from 1 KB
+//! up, gzip was 4.6 to 9.9% smaller on eight of the nine that reach 16 KiB and 11.6% larger on
+//! one, and from 20 KB to 32 KB 3.5 to 30.5% larger on four of them (those that repeat) and 2.1
+//! to 7.4% smaller on the other five, which brotli so sends a little larger than gzip would.
+//! A client that accepts gzip alone gets libdeflate's at every size, smaller than flate2's gzip 1
+//! was on each of those. libdeflate compresses a whole body into one buffer, which is what a
+//! request's body is; its levels 2 to 4 gave at most 2.1% fewer bytes on the item page for 43 to
+//! 52% more time. Each thread that has made one keeps its compressor (200 KiB), as it keeps its
+//! zstd context.
+//! The runtime and [`crate::assets`] files never change, so they are compressed
 //! once, at brotli 11 and gzip 9, the first time a client asks for them (in a background thread, so
 //! startup is not delayed; until then they go out as dynamic responses).
 //! JSON the app holds as bytes and sends again ([`crate::json::Raw`]) is compressed once too, the
@@ -51,7 +70,13 @@ use crate::{body::Body, response::Response};
 pub(crate) const MIN_SIZE: u64 = 1024;
 const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
-const GZIP_LEVEL: u32 = 1;
+/// libdeflate's fastest level, for a body compressed per request ([`encode`]).
+const GZIP_LEVEL: i32 = 1;
+/// The largest body gzip is ahead of brotli for when it is compressed per request
+/// ([`Accepts::now`]). Up to here libdeflate's gzip 1 was the smaller of the two on all but one
+/// of the bodies measured; from 20 KB to 32 KB gzip was up to 30.5% larger than brotli 1 on four
+/// of nine and up to 7.4% smaller on five (`docs/design.md#choice-request-gzip`).
+const GZIP_FIRST: u64 = 16 * 1024;
 /// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
 /// 2.7 KB redraw of one changed row costs 129 to 453 bytes a time; at 3 it costs 60 to 69
 /// (`what_a_redraw_sends`). An event made and sent through `apply` then takes about 286,650
@@ -185,6 +210,9 @@ fn compressible(essence: &str) -> bool {
 
 thread_local! {
     static ZSTD: RefCell<Option<zstd::bulk::Compressor<'static>>> = const { RefCell::new(None) };
+    /// Kept by each thread that has compressed a body with gzip: 200 KiB at level 1 (asked of
+    /// the C allocator, measured with glibc's), about what the zstd context holds.
+    static GZIP: RefCell<Option<libdeflater::Compressor>> = const { RefCell::new(None) };
 }
 
 /// How hard a one-shot compression tries.
@@ -207,7 +235,8 @@ pub(crate) enum Level {
     Best,
 }
 
-/// One-shot compression at `level`. zstd is only ever used per request.
+/// One-shot compression at `level`. zstd is only ever used per request, and so is libdeflate,
+/// which makes a request's gzip; a stored form's gzip 9 is flate2's.
 pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
     match coding {
         Coding::Zstd => ZSTD.with_borrow_mut(|slot| {
@@ -227,9 +256,20 @@ pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
             }
             out
         }
+        Coding::Gzip if level == Level::Fast => GZIP.with_borrow_mut(|slot| {
+            let compressor = slot.get_or_insert_with(|| {
+                libdeflater::Compressor::new(libdeflater::CompressionLvl::new(GZIP_LEVEL).expect("a libdeflate level"))
+            });
+            // libdeflate writes into a buffer it is given whole: the most the body can come to.
+            let mut out = vec![0; compressor.gzip_compress_bound(data.len())];
+            let written = compressor.gzip_compress(data, &mut out).expect("libdeflate compresses into its bound");
+            out.truncate(written);
+            // The body sent holds what was written, not the bound it was given.
+            out.shrink_to_fit();
+            out
+        }),
         Coding::Gzip => {
-            let level = if level == Level::Fast { GZIP_LEVEL } else { 9 };
-            let mut writer = flate2::write::GzEncoder::new(Vec::with_capacity(data.len() / 3), flate2::Compression::new(level));
+            let mut writer = flate2::write::GzEncoder::new(Vec::with_capacity(data.len() / 3), flate2::Compression::new(9));
             writer.write_all(data).expect("gzip writes to memory");
             writer.finish().expect("gzip writes to memory")
         }
@@ -237,19 +277,28 @@ pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
 }
 
 /// What a request accepts, read before it moves on: each coding's q-value (in thousandths, `0`:
-/// not accepted), in the server's order of preference, zstd, brotli, gzip.
+/// not accepted), by coding (zstd, brotli, gzip).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Accepts([u16; 3]);
 
 impl Accepts {
     /// Whether the request accepts a coding a page is compressed with.
     pub(crate) fn any(self) -> bool {
-        self.now().is_some()
+        self.0.iter().any(|q| *q > 0)
     }
 
-    /// The coding for a body compressed as it is sent: the highest q-value, then the server's order.
-    fn now(self) -> Option<Coding> {
-        self.best(&[Coding::Zstd, Coding::Brotli, Coding::Gzip])
+    /// The coding for a body of `size` bytes compressed as it is sent: the highest q-value, then
+    /// the server's order for one made now, which is zstd, then gzip for a body up to
+    /// [`GZIP_FIRST`], where it is the smaller of the other two on nearly every body measured
+    /// and takes less to make, and brotli for a larger one, where gzip is up to 30% larger on a
+    /// body that repeats (the module's figures). A stored form is brotli first
+    /// ([`Accepts::stored`]).
+    fn now(self, size: u64) -> Option<Coding> {
+        if size <= GZIP_FIRST {
+            self.best(&[Coding::Zstd, Coding::Gzip, Coding::Brotli])
+        } else {
+            self.best(&[Coding::Zstd, Coding::Brotli, Coding::Gzip])
+        }
     }
 
     /// The coding for a body compressed as it is sent and flushed a chunk at a time (an event
@@ -290,7 +339,6 @@ pub(crate) fn negotiate(headers: &HeaderMap) -> Accepts {
 /// `res` compressed for what the request accepts when it is worth it: a body compressed before
 /// ([`Stored`]) is sent in the form made for it, anything else is compressed now.
 pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
-    let coding = accepts.now();
     // Another server's answer goes on as it came: its encoding is the upstream's (#205).
     if res.extensions().get::<crate::answer::Relayed>().is_some() {
         return res;
@@ -327,7 +375,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     let (mut parts, body) = res.into_parts();
     vary(&mut parts.headers);
     let size = body.size_hint().exact();
-    let Some(coding) = coding.filter(|_| size.is_some_and(|n| n >= MIN_SIZE)) else {
+    let Some(coding) = size.filter(|n| *n >= MIN_SIZE).and_then(|n| accepts.now(n)) else {
         return Response::from_parts(parts, body);
     };
     // Exact size: a buffered page or JSON body, never a stream, so collecting it does not wait
@@ -899,6 +947,7 @@ mod tests {
         apply(
             Table::new()
                 .route("/page", get(move || async move { ([HTML], page) }))
+                .route("/long", get(|| async { ([HTML], long_page()) }))
                 .route("/small", get(|| async { ([HTML], "<p>small</p>") }))
                 .route("/png", get(|| async { ([(header::CONTENT_TYPE, "image/png")], vec![0u8; 4096]) }))
                 .route("/relay", get(|| async { relayed("text/html; charset=utf-8", Body::from("<p>corten</p>".repeat(200))) }))
@@ -969,6 +1018,36 @@ mod tests {
         assert_eq!(read("zstd;q=0.5, br;q=0.5").await.0[header::CONTENT_ENCODING], "br");
     }
 
+    /// A held document's reads before its stored forms exist are compressed as any answer is: a
+    /// short one is gzip for a client without zstd, and the stored brotli once it is made.
+    #[cfg(feature = "json")]
+    #[tokio::test]
+    async fn a_held_document_is_gzip_for_a_client_without_zstd_until_its_brotli_is_stored() {
+        let text: String =
+            format!("[{}]", (0..300).map(|i| format!(r#"{{"id":{i},"name":"row {i}"}}"#)).collect::<Vec<_>>().join(","));
+        assert!((MIN_SIZE..=GZIP_FIRST).contains(&(text.len() as u64)));
+        let raw = crate::json::Raw::new(text.clone()).unwrap();
+        let held = raw.clone();
+        let app = apply(Table::new().route("/doc", get(move || std::future::ready(crate::Json(held.clone())))));
+        let read = || {
+            let app = app.clone();
+            async move {
+                let req = Request::get("/doc").header("accept-encoding", "gzip, br").body(Body::empty()).unwrap();
+                let (parts, body) = app.oneshot(req).await.unwrap().into_parts();
+                (parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
+            }
+        };
+        for _ in 0..2 {
+            let (headers, body) = read().await;
+            assert_eq!(headers[header::CONTENT_ENCODING], "gzip");
+            let mut out = String::new();
+            std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut out).unwrap();
+            assert_eq!(out, text);
+        }
+        raw.wait_stored();
+        assert_eq!(read().await.0[header::CONTENT_ENCODING], "br");
+    }
+
     /// A job that panics costs its own value's forms, not the worker: the next held value read
     /// twice is still compressed.
     #[cfg(feature = "json")]
@@ -1028,9 +1107,15 @@ mod tests {
     fn one_pass_finds_the_coding_for_now_and_for_a_stored_form() {
         let at = |value: &str| {
             let a = negotiate(&accept(value));
-            (a.now(), a.stored())
+            (a.now(MIN_SIZE), a.stored())
         };
         assert_eq!(at("gzip, deflate, br, zstd"), (Some(Coding::Zstd), Some(Coding::Brotli)));
+        // Made now, gzip is ahead of brotli for a body up to `GZIP_FIRST`; a stored form is
+        // brotli first.
+        assert_eq!(at("gzip, deflate, br"), (Some(Coding::Gzip), Some(Coding::Brotli)));
+        assert_eq!(at("br, gzip"), (Some(Coding::Gzip), Some(Coding::Brotli)));
+        assert_eq!(at("br"), (Some(Coding::Brotli), Some(Coding::Brotli)));
+        assert_eq!(at("br, gzip;q=0.9"), (Some(Coding::Brotli), Some(Coding::Brotli)), "the client's ranking comes first");
         assert_eq!(at("zstd"), (Some(Coding::Zstd), None));
         assert_eq!(at("zstd, gzip"), (Some(Coding::Zstd), Some(Coding::Gzip)));
         assert_eq!(at("br;q=0.5, gzip"), (Some(Coding::Gzip), Some(Coding::Gzip)));
@@ -1039,6 +1124,59 @@ mod tests {
         assert_eq!(at("ZSTD;Q=0.2, Br;q=0.2"), (Some(Coding::Zstd), Some(Coding::Brotli)));
         assert_eq!(at("x-gzip;q=bad, br;q=0"), (None, None), "an invalid weight skips that coding");
         assert_eq!(negotiate(&HeaderMap::new()), Accepts::default());
+    }
+
+    /// What gzip's place ahead of brotli rests on: for a body under `GZIP_FIRST` the gzip a request
+    /// is sent is smaller than brotli 1, and smaller than flate2's gzip 1, which made it before. A
+    /// change of coder or level that loses either fails here.
+    #[test]
+    fn a_short_bodys_gzip_is_smaller_than_brotli_1_and_than_flate2s_gzip_1() {
+        let words =
+            ["card", "market", "holo", "mint", "played", "rare", "foil", "seller", "ships", "listing", "offer", "edition"];
+        let mut seed = 0x2545_f491_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize
+        };
+        let page: String = (0..70)
+            .map(|i| {
+                format!(
+                    r#"<li id="r{i}"><a href="/items/item_{}">{} {} {}</a> <span class="price">{}.{:02}</span> {} by {}</li>"#,
+                    next() % 5_000,
+                    words[next() % words.len()],
+                    words[next() % words.len()],
+                    words[next() % words.len()],
+                    next() % 900,
+                    next() % 100,
+                    words[next() % words.len()],
+                    words[next() % words.len()]
+                )
+            })
+            .collect();
+        assert!((4_096..GZIP_FIRST).contains(&(page.len() as u64)), "{}", page.len());
+        let gzip = encode(Coding::Gzip, page.as_bytes(), Level::Fast);
+        let brotli = encode(Coding::Brotli, page.as_bytes(), Level::Fast);
+        let mut flate = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(1));
+        flate.write_all(page.as_bytes()).unwrap();
+        let flate = flate.finish().unwrap();
+        assert!(gzip.len() < brotli.len(), "gzip {} against brotli 1 {}", gzip.len(), brotli.len());
+        assert!(gzip.len() < flate.len(), "gzip {} against flate2's gzip 1 {}", gzip.len(), flate.len());
+    }
+
+    /// Past `GZIP_FIRST` the order is the one before, brotli ahead of gzip, since gzip is larger
+    /// there on a body that repeats; zstd and the client's own ranking still come first, and a
+    /// client with gzip alone gets gzip.
+    #[test]
+    fn a_body_past_the_gzip_size_is_brotli_for_a_client_without_zstd() {
+        let now = |value: &str, size: u64| negotiate(&accept(value)).now(size);
+        for accepted in ["gzip, deflate, br", "br, gzip"] {
+            assert_eq!(now(accepted, GZIP_FIRST), Some(Coding::Gzip), "{accepted}");
+            assert_eq!(now(accepted, GZIP_FIRST + 1), Some(Coding::Brotli), "{accepted}");
+        }
+        assert_eq!(now("gzip, deflate, br, zstd", GZIP_FIRST + 1), Some(Coding::Zstd));
+        assert_eq!(now("gzip", GZIP_FIRST + 1), Some(Coding::Gzip));
+        assert_eq!(now("br;q=0.5, gzip", GZIP_FIRST + 1), Some(Coding::Gzip), "the client's ranking comes first");
+        assert_eq!(now("identity", GZIP_FIRST + 1), None);
     }
 
     /// A stream takes zstd, else gzip, by the client's ranking as a page does, and never brotli,
@@ -1092,6 +1230,14 @@ mod tests {
         assert!([&brotli, &gzip, &zstd].iter().all(|coded| coded.len() < original.len() / 2));
     }
 
+    /// A page past `GZIP_FIRST`: rows that differ.
+    fn long_page() -> String {
+        let page: String =
+            (0..600).map(|i| format!(r#"<tr id="o{i}"><td>{}</td><td>row {i}</td></tr>"#, i * 7919 % 1000)).collect();
+        assert!(page.len() as u64 > GZIP_FIRST, "{}", page.len());
+        page
+    }
+
     fn relayed(content_type: &'static str, body: Body) -> Response {
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
@@ -1112,20 +1258,47 @@ mod tests {
         assert_eq!(headers["content-encoding"], "zstd");
         assert_eq!(headers["vary"], "accept-encoding");
         assert_eq!(zstd::bulk::decompress(&body, 1 << 20).unwrap(), original.as_bytes());
-        let (headers, body) = get_with("/page", "gzip, br").await;
-        assert_eq!(headers["content-encoding"], "br");
-        let mut out = Vec::new();
-        brotli::BrotliDecompress(&mut &body[..], &mut out).unwrap();
-        assert_eq!(out, original.as_bytes());
-        let (headers, body) = get_with("/page", "gzip").await;
-        assert_eq!(headers["content-encoding"], "gzip");
-        let mut out = String::new();
-        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut out).unwrap();
-        assert_eq!(out, original);
+        // Without zstd, gzip (libdeflate's, read back by flate2's decoder) is ahead of brotli for
+        // a page this size.
+        for accepted in ["gzip, br", "br, gzip", "gzip"] {
+            let (headers, body) = get_with("/page", accepted).await;
+            assert_eq!(headers["content-encoding"], "gzip", "{accepted}");
+            let mut out = String::new();
+            std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut out).unwrap();
+            assert_eq!(out, original, "{accepted}");
+        }
+        // Brotli for a client that takes only that, or ranks it above gzip.
+        for accepted in ["br", "br, gzip;q=0.5"] {
+            let (headers, body) = get_with("/page", accepted).await;
+            assert_eq!(headers["content-encoding"], "br", "{accepted}");
+            let mut out = Vec::new();
+            brotli::BrotliDecompress(&mut &body[..], &mut out).unwrap();
+            assert_eq!(out, original.as_bytes(), "{accepted}");
+        }
         let (headers, body) = get_with("/page", "identity").await;
         assert!(!headers.contains_key("content-encoding"));
         assert_eq!(headers["vary"], "accept-encoding", "caches must still key on the coding");
         assert_eq!(body, original.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn a_long_page_is_brotli_for_a_client_without_zstd_and_gzip_for_one_with_gzip_alone() {
+        let original = long_page();
+        for accepted in ["gzip, br", "br, gzip", "br"] {
+            let (headers, body) = get_with("/long", accepted).await;
+            assert_eq!(headers["content-encoding"], "br", "{accepted}");
+            let mut out = Vec::new();
+            brotli::BrotliDecompress(&mut &body[..], &mut out).unwrap();
+            assert_eq!(out, original.as_bytes(), "{accepted}");
+        }
+        let (headers, body) = get_with("/long", "gzip").await;
+        assert_eq!(headers["content-encoding"], "gzip");
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut out).unwrap();
+        assert_eq!(out, original);
+        let (headers, body) = get_with("/long", "gzip, deflate, br, zstd").await;
+        assert_eq!(headers["content-encoding"], "zstd");
+        assert_eq!(zstd::bulk::decompress(&body, 1 << 20).unwrap(), original.as_bytes());
     }
 
     #[tokio::test]

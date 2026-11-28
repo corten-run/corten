@@ -306,6 +306,12 @@ Dependency input: this refresh moves the Corten app's brotli from 9.1.1 to 9.1.3
 Compare a new run with an earlier one as a changed dependency input: no speedup from the move was
 measured, and r21 stays pinned to its recorded source, `4225a2837`.
 
+Dependency input: [#1971 Compress a request's small body with gzip by libdeflate for a client without zstd](https://github.com/corten-run/corten/pull/1971)
+adds `libdeflater` 1.26.1 to the Corten app's lock, and the app answers a request that accepts
+gzip and brotli but not zstd (the mixed plan's `br, gzip`) with gzip for a body up to 16 KiB,
+where it answered brotli; a larger body stays brotli. Compare a run after it with an earlier one
+as a changed dependency input and a changed coding.
+
 The proposed [marketplace v2 contract](../marketplace/README.md) retains a richer app workload
 while requiring equivalent request-time localization. It is groundwork, not a measured or
 ready-to-run replacement for catalog or the historical marketplace suite.

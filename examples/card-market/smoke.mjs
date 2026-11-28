@@ -451,8 +451,10 @@ try {
   );
   const zstd = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "zstd" } });
   check("pages are compressed with zstd when the client accepts it", zstd.headers.get("content-encoding") === "zstd" && /accept-encoding/.test(zstd.headers.get("vary") ?? ""));
-  const br = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br" } });
-  check("pages fall back to brotli", br.headers.get("content-encoding") === "br" && (await br.text()).includes("Card Name 5"));
+  const gzip = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br" } });
+  check("pages fall back to gzip for a client without zstd", gzip.headers.get("content-encoding") === "gzip" && (await gzip.text()).includes("Card Name 5"));
+  const br = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "br" } });
+  check("and to brotli for one that takes only that", br.headers.get("content-encoding") === "br" && (await br.text()).includes("Card Name 5"));
   for (const weight of ["nan", "inf", "1.5", "-0", "1.0001", "0.1234", ""]) {
     const response = await fetch(`${base}/items/item_5`, {
       headers: { "accept-language": `en;q=${weight}, fr;q=0.5`, "accept-encoding": `zstd;q=${weight}, gzip;q=0.001` },

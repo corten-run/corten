@@ -14,7 +14,8 @@ docker build -t {{name}} . && docker run -p 8080:8080 {{name}}
 `--locked`: they refuse a missing or stale lock rather than resolve a different dependency graph.
 In a workspace, commit its root lockfile.
 
-For a local build, the `compress` feature normally needs a C compiler for `zstd-sys`.
+For a local build, the `compress` feature needs a C compiler for `libdeflate-sys` and normally
+for `zstd-sys`.
 Remove `features = ["compress"]` from the `corten` dependency in `Cargo.toml` to build
 without it and serve responses without Corten's compression.
 

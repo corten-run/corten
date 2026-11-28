@@ -698,22 +698,33 @@ JSON API's, whose cycles were 13% lower.
 
 ## Response compression
 
-The starter enables `compress`: zstd, Brotli and gzip for responses compressed per request;
-Brotli and gzip for assets and held JSON compressed once; and zstd or gzip, never Brotli,
-for event streams ([Choice 32](../design.md#choice-stream-coding)).
+The starter enables `compress`. A response compressed per request is zstd for a client that
+offers it; for one that does not, gzip up to 16 KiB and Brotli past it, or the one of the two
+the client accepts. Assets and held JSON compressed once are Brotli and gzip, and event streams
+zstd or gzip, never Brotli ([Choice 32](../design.md#choice-stream-coding)). A request's gzip
+is made by libdeflate: up to 16 KiB it was smaller than Brotli at level 1, the level a request's
+Brotli is made at, on all but one of the bodies measured and took less to make (29% fewer
+cycles a request under load for JSON of 4 to 8 KB), and at every size it was
+smaller than the gzip it replaced ([Choice 78](../design.md#choice-request-gzip)). So one
+client can be sent gzip for a short page and Brotli for a long one; `Vary: Accept-Encoding`
+is the same for both.
 
 Revisit Brotli when a zstd/gzip-only build can serve supported clients without a slowdown.
-Compare release builds on the same item pages, runtime, kit CSS and held JSON: use gzip for
-clients that do not offer zstd, and try high-level zstd for assets and held JSON where the
-client offers it. Measure bytes for both client groups, CPU for pages compressed per request,
-and browser load time on a throttled link if the replacement sends more. A faster encoder on
-the server is not enough if the extra bytes make the page slower for the visitor.
+For a body compressed per request that was measured: past 16 KiB a body that repeats was up
+to 30% larger as gzip and one that does not at most 7.4% smaller, so Brotli stays there. For assets and held JSON, compare release
+builds on the same runtime, kit CSS and held JSON, and try high-level zstd where the client
+offers it. Measure bytes for both client groups and browser load time on a throttled link if
+the replacement sends more. A faster encoder on the server is not enough if the extra bytes
+make the page slower for the visitor.
 
+`libdeflate-sys` builds its bundled C sources and links them into the app, so the build needs
+a C compiler, which the starter's build image has, and the runtime image nothing for it.
 By default `zstd-sys` builds its bundled C sources, which needs a C compiler, even when a
 system zstd is installed. The starter's Dockerfile instead sets `ZSTD_SYS_USE_PKG_CONFIG=1` to use the build image's libzstd, which needs
 `libzstd.so.1` in the runtime image. To keep compression in an image without that shared
-library, remove the setting so the build compiles zstd and links it into the app. To avoid
-zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
+library, remove the setting so the build compiles zstd and links it into the app. With the
+setting, libdeflate is the only C the starter's image compiles. To build
+without either C library, turn off the `compress` feature in the app's `Cargo.toml`.
 
 Whichever compresses, the proxy passes the browser's `Accept-Encoding` on to the app (row 13
 above). With the feature or without, a page `GET` is hashed for an `ETag` only when the request

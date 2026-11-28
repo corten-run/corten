@@ -71,6 +71,9 @@ typeid = { version = "1", optional = true }
 corten-feed = { workspace = true, optional = true }
 brotli = { version = "9", optional = true }
 flate2 = { version = "1", optional = true }
+# gzip for a body compressed per request: up to 16 KiB smaller than brotli 1 on nearly every body
+# measured, in less time, and smaller than flate2's gzip 1 at every size (`src/compress.rs`).
+libdeflater = { version = "1", optional = true }
 zstd = { version = "0.14", default-features = false, optional = true }
 # The tz database, bundled so an image without /usr/share/zoneinfo has it too.
 # `tz-fat`: each zone's transitions written out for years ahead, so a lookup does not work them out
@@ -89,9 +92,9 @@ json = ["serde/derive", "dep:serde_json", "dep:serde_path_to_error"]
 # reading of the types that #[derive(ToJson)] and #[derive(FromJson)] write and read them by.
 # serde_json's `raw_value` (no dependency): a `Box<RawValue>` field is described as any JSON.
 types = ["json", "serde_json/raw_value", "dep:typeid"]
-# corten::compress: pages compressed per request (zstd, brotli, gzip), the runtime and assets
+# corten::compress: pages compressed per request (zstd, gzip, brotli), the runtime and assets
 # compressed once at the highest brotli and gzip levels.
-compress = ["dep:brotli", "dep:flate2", "dep:zstd"]
+compress = ["dep:brotli", "dep:flate2", "dep:libdeflater", "dep:zstd"]
 # corten::feed: live data for scripts (snapshot + ordered patches over server-sent events).
 feed = ["json", "dep:corten-feed"]
 # corten::agent: the app's actions as Model Context Protocol tools for AI agents.

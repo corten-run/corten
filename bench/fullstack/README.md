@@ -1002,6 +1002,16 @@ response needs a new one. A 4 MiB window was not the cost either: sizing the win
 left the instructions unchanged at level 1 (806,910 against 806,872 a request) and within about
 430 a request at level 2.
 
+Since
+[#1971 Compress a request's small body with gzip by libdeflate for a client without zstd](https://github.com/corten-run/corten/pull/1971),
+a page up to 16 KiB compressed per request for a client without zstd is gzip made by libdeflate,
+and brotli 1 only past that size or for a client that accepts nothing else. On the item page of
+card-market's smoke fixture (9,793 bytes, `route_loop` as above with pairs of 4 s and 16 s loops,
+three pairs, at `fdf94a6a7` against `bcf4aa073`) the request took 409,926 instructions and sent
+2,307 bytes, where brotli 1 took 841,069 for 2,475
+([design Choice 78](../../docs/design.md#choice-request-gzip)). The tables above are as they
+were measured.
+
 The rounds' page numbers (20,705 a second, 47 µs of CPU a page in r16) are for the request
 without either. Sending a browser's headers instead would compare the frameworks' compression
 defaults rather than their rendering: in round conform2, asked with `Accept-Encoding: br, gzip`,

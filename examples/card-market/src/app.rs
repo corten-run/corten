@@ -1126,7 +1126,7 @@ mod tests {
             ("navigation, identity", "/items/", Some("nav"), "identity"),
             ("document, identity", "/items/", None, "identity"),
             ("document, zstd", "/items/", None, "gzip, deflate, br, zstd"),
-            ("document, br", "/items/", None, "gzip, deflate, br"),
+            ("document, br", "/items/", None, "br"),
             ("document, gzip", "/items/", None, "gzip"),
             ("json, identity", "/api/items/", None, "identity"),
         ] {
