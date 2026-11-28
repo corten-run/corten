@@ -12218,11 +12218,12 @@ rules something out.
     handler add up to, though two requests to one probe do not take every path a counted change
     can cost on, and the release and `main` answer one of them differently, by a difference a
     run records and nobody reviews, so part of what a run reads there is the answer and not
-    the path to it; and a rise of up to four pages over base's three, 16,384 bytes and under
-    3.3 bytes a connection at the gate's settings, is where the allocator put things or a cost
-    too small to refuse a change for, and not memory a connection holds, which the
-    maintainer's ruling of 2026-11-27 takes on three sizes of reading whose cause no run
-    established); measured (the kit's
+    the path to it; the former resident-memory rule allowed four pages because a small RSS
+    rise might reflect allocator placement, though no run established the cause. The
+    live-byte rule keeps four pages as an initial tolerance, not as evidence that a live
+    allocation is only placement); measured (one hosted self-comparison on 2026-11-28:
+    across six readings per case on one runner, live growth spanned 0, 0 and 2,048 bytes,
+    all within 16,384 bytes; this does not bound variation on other runners; the kit's
     repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
@@ -12373,7 +12374,9 @@ rules something out.
     six alternating local runs of one release binary over 5,000 connections, three per mode.
     Resident growth with the observer off was 62,820,352, 62,816,256 and 62,828,544 bytes.
     With it on, it was 62,812,160, 62,812,160 and 62,816,256 bytes. That is 1 to 3 pages lower
-    (8,192 bytes by the medians), not evidence that the shift is equal across builds.
+    (8,192 bytes by the medians), not evidence that the shift is equal across builds;
+    2026-11-28, for the live-byte floor, the [hosted calibration log](https://github.com/corten-run/corten/actions/runs/46129076580/job/140930069470) at `60f95c44b`:
+    both builds had the same binary checksum and the job recorded all 18 readings.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits
