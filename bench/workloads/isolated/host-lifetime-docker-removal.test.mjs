@@ -272,7 +272,51 @@ test("the Browser census fences exact removal across list and inspect; terminal 
   assert.equal(faults, 0);
 });
 
-test("a Browser sample waits past 200 ms within the continuity budget without moving its timestamp", linux, async (t) => {
+test("strict Browser replay accepts an inventory captured after the exact removal", linux, async (t) => {
+  const { gate } = anchor(t);
+  let faults = 0, present = true;
+  const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate);
+  const base = f.clock, pid = 5000, scope = `/system.slice/docker-${id}.scope`, imageId = "sha256:" + "b".repeat(64);
+  const state = { Status: "running", Pid: pid, Running: true, Paused: false, Restarting: false,
+    Dead: false, OOMKilled: false, ExitCode: 0, StartedAt: new Date(base + 50).toISOString(), FinishedAt: "0001-01-01T00:00:00Z" };
+  f.docker = (argv) => {
+    if (argv[3] === "ls") return present ? id : "";
+    assert.deepEqual(argv.slice(3), ["inspect", id]); assert.equal(present, true);
+    return JSON.stringify([{ Id: id, Image: imageId, RestartCount: 0, State: state }]);
+  };
+  f.override = (path) => {
+    if (path === `/proc/${pid}/cgroup`) return `0::${scope}\n`;
+    if (path === `/sys/fs/cgroup${scope}/cgroup.procs`) return `${pid}\n`;
+    if (path === `/sys/fs/cgroup${scope}/cgroup.events`) return "populated 1\n";
+    if (path === `/sys/fs/cgroup${scope}/cpu.max`) return "100000 100000\n";
+    if (path === `/sys/fs/cgroup${scope}/memory.max`) return "1073741824\n";
+  };
+  f.clock = base + 100; await f.tick();
+  let unlock = lockBrowserDocker(gate, true), terminalAt;
+  f.flock = (_args, options, acquire) => {
+    assert.equal(probe(gate, "-s"), 75);
+    assert.ok(options.timeout > 100);
+    f.clock = base + 850; terminalAt = f.clock;
+    f.clock = base + 900; present = false; unlock(); unlock = undefined;
+    return acquire();
+  };
+  try { f.clock = base + 800; await f.tick(); }
+  finally { unlock?.(); delete f.flock; }
+  f.clock = base + 950;
+  const proof = await f.finish();
+  const subject = { schema: "native-browser-host-subject/v2", executionWindow: { startedAt: base, endedAt: f.clock },
+    participants: [{ id, imageId, role: "application", window: { startedAt: base + 50, endedAt: terminalAt },
+      terminal: { id, imageId, restartCount: 0, state, limits: { NanoCpus: 1e9, Memory: 2 ** 30, CpusetCpus: "" } } }] };
+  assert.equal(proof.status, "verified");
+  assert.equal(inspectBrowserParticipants(subject, proof), true, "post-removal absence must not be backdated into the running window");
+  const absent = proof.samples.at(-2);
+  assert.equal(absent.at, base + 900); assert.deepEqual(absent.docker.inventory, []);
+  absent.at = base + 800;
+  assert.equal(inspectBrowserParticipants(subject, proof), false, "the reader still refuses absence before the terminal receipt");
+  assert.equal(faults, 0);
+});
+
+test("a Browser sample waits past 200 ms within its budget and stamps the actual capture", linux, async (t) => {
   const { gate } = anchor(t);
   let faults = 0;
   const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate);
@@ -281,12 +325,15 @@ test("a Browser sample waits past 200 ms within the continuity budget without mo
   let unlock = lockBrowserDocker(gate, true);
   try {
     f.clock += 100;
-    f.override = () => { f.clock += 25; f.override = () => {}; };
+    f.override = () => {
+      assert.equal(probe(gate), 75, "the cgroup census must already hold the shared gate");
+      f.clock += 25; f.override = () => {};
+    };
     f.flock = (args, options, acquire) => {
       const wait = 350;
       assert.equal(probe(gate, "-s"), 75);
-      assert.deepEqual(args, ["-s", "-E", "75", "-w", "0.775", "0"]);
-      assert.equal(options.timeout, 775);
+      assert.deepEqual(args, ["-s", "-E", "75", "-w", "0.8", "0"]);
+      assert.equal(options.timeout, 800);
       assert.ok(wait < options.timeout);
       f.clock += wait; unlock(); unlock = undefined;
       return acquire();
@@ -294,7 +341,7 @@ test("a Browser sample waits past 200 ms within the continuity budget without mo
     await f.tick();
   } finally { unlock?.(); delete f.flock; }
   assert.deepEqual(listedAt, [previous + 475]);
-  assert.equal(f.samples().at(-1).at, previous + 125);
+  assert.equal(f.samples().at(-1).at, previous + 475);
   assert.equal(faults, 0);
   const following = f.clock + 50;
   f.clock = following; await f.tick();
@@ -378,6 +425,28 @@ test("an expired gate budget cannot be renewed by moving the wall clock backward
   assert.equal(faults, 1);
   assert.notEqual((await f.finish()).status, "verified");
   assert.equal(f.terminal.observerFailures.first.operation, "docker-gate");
+});
+
+test("cgroup capture cannot spend past the deadline after acquiring a free gate", linux, async (t) => {
+  const { gate } = anchor(t);
+  let faults = 0, lists = 0;
+  const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate);
+  f.clock += 100; await f.tick();
+  const previous = f.samples().at(-1).at;
+  f.docker = () => { lists++; return ""; };
+  f.flock = (args, options, acquire) => {
+    assert.equal(args.includes("-n"), true); assert.equal(options.timeout, 50);
+    options.timeout = 1000; // The fake clock drives the budget, not host scheduling.
+    return acquire();
+  };
+  f.override = () => { f.clock += 51; f.override = () => {}; };
+  f.clock += 950; await f.tick();
+  delete f.flock;
+  assert.equal(lists, 0); assert.equal(faults, 1); assert.equal(probe(gate), 0);
+  assert.equal(f.samples().at(-1).at, previous);
+  const proof = await f.finish();
+  assert.equal(proof.status, "blocked"); assert.equal(proof.checks.empty, true);
+  assert.equal(f.terminal.observerFailures.first.operation, "snapshot");
 });
 
 test("a lock returned at the monotonic deadline is released without listing", linux, async (t) => {

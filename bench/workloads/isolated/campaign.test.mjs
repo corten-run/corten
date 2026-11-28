@@ -216,7 +216,9 @@ mock.module("./host-lifetime.mjs", { exports: {
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    const observer = { attach() { if (startup) { startup.attached++; startup.onAttach?.(); } }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
+    const observer = { attach() { if (startup) { startup.attached++; startup.onAttach?.(); } }, dispose() {
+      if (startup) { startup.disposed++; startup.onDispose?.(); }
+    }, finish(result, retainTerminalClock, settled) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
@@ -231,7 +233,7 @@ mock.module("./host-lifetime.mjs", { exports: {
     } };
     if (!startup) return observer;
     assert.ok(startupSignal instanceof AbortSignal);
-    startup.signal = startupSignal; startup.directory = directory; startup.enter();
+    startup.signal = startupSignal; startup.directory = directory; startup.enter(args);
     return startup.gate.then(() => {
       if (startup.failure) throw Object.assign(new Error("PRIVATE_SETUP_FAILURE"), { operation: "sample-open", code: "EIO" });
       return observer;
@@ -358,6 +360,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   if (lifetimeStartup) {
     const startup = lifetimeStartup;
     startup.child = child;
+    startup.runnerGateFd = gated ? options.stdio[actualLifetime.browserDockerGateChildFd] : undefined;
     const send = child.send.bind(child);
     child.send = (message, callback) => {
       if (message.type === "cancel") {
@@ -1212,6 +1215,66 @@ for (const stop of ["cancel", "close"]) for (const failure of [false, true]) tes
     await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
   } finally { release(); await rejected; }
 });
+
+for (const kind of ["sync", "close", "read", "sync and close"]) test(`accepted Browser command log ${kind} failure disposes the observer without a terminal proof`,
+  { skip: process.platform !== "linux" }, async (t) => {
+    const s = setupGroup("fullstack-browser"); s.plan.bindings[0].preparation.fixtures = [];
+    const h = await begin(s), closed = [];
+    const open = fs.openSync, sync = fs.fsyncSync, close = fs.closeSync, read = fs.readFileSync;
+    const syncError = Object.assign(new Error("synthetic command log sync failure"), { code: "EIO" });
+    const closeError = Object.assign(new Error("synthetic command log close failure"), { code: "ENOSPC" });
+    const readError = Object.assign(new Error("synthetic command log read failure"), { code: "EIO" });
+    let logFd, captureFd, sealedLogFd;
+    const owner = lifetimeStartup = { gate: Promise.resolve(), attached: 0, disposed: 0,
+      enter({ browserDockerGate }) {
+        assert.equal(browserDockerGate.fd, logFd);
+        owner.logFd = logFd;
+        captureFd = actualLifetime.reopenBrowserDockerGate(browserDockerGate);
+      },
+      onDispose() {
+        fs.closeSync(captureFd);
+        if (kind === "sync and close") throw new Error("synthetic observer cleanup failure");
+      } };
+    t.mock.method(fs, "openSync", (path, ...args) => {
+      const fd = open(path, ...args);
+      if (typeof path === "string" && path.endsWith("command-0.log")) {
+        if (args[0] === "wx") logFd = fd;
+        else if (kind === "read" && logFd === undefined) sealedLogFd = fd;
+      }
+      return fd;
+    });
+    t.mock.method(fs, "readFileSync", (path, ...args) => {
+      if (sealedLogFd !== undefined && path === sealedLogFd) { sealedLogFd = undefined; throw readError; }
+      return read(path, ...args);
+    });
+    t.mock.method(fs, "fsyncSync", (fd) => {
+      if (fd === logFd && kind.includes("sync")) throw syncError;
+      return sync(fd);
+    });
+    t.mock.method(fs, "closeSync", (fd) => {
+      const log = fd === logFd;
+      if (log || fd === owner.runnerGateFd || fd === captureFd) closed.push(fd);
+      close(fd);
+      // Later journal opens may reuse a closed numeric descriptor.
+      if (log) { logFd = undefined; if (kind.includes("close")) throw closeError; }
+    });
+    syncBuiltinESMExports();
+    try {
+      let error;
+      try { await s.campaign.advance(h); } catch (failure) { error = failure; }
+      assert.equal(owner.attached, 1);
+      assert.equal(owner.disposed, 1);
+      assert.equal(error, kind.includes("sync") ? syncError : kind === "read" ? readError : closeError);
+      assert.deepEqual(closed.slice(0, 3), [owner.runnerGateFd, owner.logFd, captureFd]);
+      assert.equal(new Set(closed.slice(0, 3)).size, 3);
+      assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+      assert.equal(s.campaign.status(h).state, "preserved-uncertain");
+      assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
+    } finally {
+      if (captureFd !== undefined && !closed.includes(captureFd)) close(captureFd);
+      t.mock.restoreAll(); syncBuiltinESMExports(); lifetimeStartup = null;
+    }
+  });
 
 for (const crossed of [false, true]) test(`command-started journal ${crossed ? "crosses" : "stays within"} the observation startup cutoff`, async (t) => {
   const s = setupGroup("catalog-page"); s.plan.bindings[0].preparation.fixtures = [];

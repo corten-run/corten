@@ -273,8 +273,10 @@ Core targets a 100 ms interval for recursive cgroup and live PID/start/executabl
 reads. Fullstack Browser leaves at least 50 ms between the end of each periodic
 Docker census and the start of the next; a gap over one second still fails.
 
-In the bound Linux Browser invocation, the Docker census shares a `flock` gate
-with the runner's exact owned container removal. The observer reserves 50 ms for
+In the bound Linux Browser invocation, the observer takes the shared `flock`
+before its cgroup census and sample timestamp, and holds it through the Docker
+census. This keeps post-removal absence out of samples dated before the runner's
+terminal receipt. The observer reserves 50 ms for
 capture and 50 ms for storage yield when waiting; inside that reserve it only
 tries a nonblocking lock, and never renews an expired periodic deadline. After a
 recorded fault, finish gets one fresh gate budget of at most one second to record

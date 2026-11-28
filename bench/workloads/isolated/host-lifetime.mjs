@@ -295,11 +295,11 @@ const retryPause = new Int32Array(new SharedArrayBuffer(4));
 const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
   "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
 const retriedEmptyCensuses = new WeakSet();
-function snapshot(path, executables, pending, lastSampleAt = null, timing, previousProcesses, inline) {
+function snapshot(path, executables, pending, lastSampleAt = null, timing, previousProcesses, inline, gateDeadline = Infinity) {
   // Spend only the time left in the existing continuity window. A monotonic
   // deadline also bounds retries when the wall clock moves backwards.
   const remaining = lastSampleAt === null ? maximumSampleGapMs : maximumSampleGapMs - (Date.now() - lastSampleAt);
-  const started = performance.now(), deadline = started + Math.max(0, Math.min(maximumSampleGapMs, remaining));
+  const started = performance.now(), deadline = Math.min(gateDeadline, started + Math.max(0, Math.min(maximumSampleGapMs, remaining)));
   let race, successor, attempts = 0;
   for (;;) {
     const inlineRetry = inline && successor;
@@ -715,7 +715,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     if (captureGate) { const { fd } = captureGate; captureGate = undefined; closeSync(fd); }
   }
   function dispose() {
-    closed = true; stopSampling(); releaseStartup(); closeCaptureGate(); pending?.close(); writer?.abort();
+    closed = true; stopSampling(); releaseStartup();
+    try { closeCaptureGate(); }
+    finally { try { pending?.close(); } finally { writer?.abort(); } }
   }
   for (const value of startupSignals) value.addEventListener("abort", dispose, { once: true });
   try {
@@ -794,34 +796,37 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function collectSample(timing, terminalGateDeadline) {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
-    const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses, inline), initial = [], keys = new Set();
-    const observedMono = captureGate ? performance.now() : undefined;
-    if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
-      && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
-    const processes = observed.processes;
-    // Keep initial raw PID/start/executable/type observations once. Every live
-    // sample independently re-reads those identities and records their references;
-    // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.
-    sampleOperation = "process-record";
-    observed.processes = observed.processes.map((p) => {
-      const key = processRecordKey(p);
-      if (!writer.has(key) && !keys.has(key)) { initial.push({ key, value: serial(p) }); keys.add(key); }
-      return key;
+    let gateDeadline, observed, observedMono, processes;
+    const initial = [], keys = new Set();
+    const unlock = captureGate && observing("docker-gate", () => {
+      // Stamp the combined sample under the same lock as Docker capture. A
+      // removal completed during the wait must not be dated back into its live window.
+      const now = performance.now();
+      const wallElapsed = lastSampleAt === null ? 0 : Math.max(0, Date.now() - lastSampleAt);
+      gateDeadline = terminalGateDeadline ?? Math.min(lastSampleMono ?? now, now - wallElapsed) + maximumSampleGapMs;
+      return lockBrowserDocker(captureGate, false, gateDeadline,
+        terminalGateDeadline === undefined ? browserDockerCaptureReserveMs + browserStorageYieldMs : 0);
     });
-    sampleOperation = "docker-inventory";
-    if (captureDocker) {
-      const unlock = captureGate && observing("docker-gate", () => {
-        if (terminalGateDeadline !== undefined) return lockBrowserDocker(captureGate, false, terminalGateDeadline);
-        // Preserve room for Docker capture and the storage yield before the next
-        // sample. A wall shift can shorten, but cannot renew, the monotonic budget.
-        const now = performance.now();
-        const wallElapsed = Math.max(0, Date.now() - (lastSampleAt ?? observed.at));
-        const deadline = Math.min(lastSampleMono ?? observedMono, now - wallElapsed) + maximumSampleGapMs;
-        return lockBrowserDocker(captureGate, false, deadline, browserDockerCaptureReserveMs + browserStorageYieldMs);
+    try {
+      observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses, inline, gateDeadline);
+      observedMono = captureGate ? performance.now() : undefined;
+      if (gateDeadline !== undefined && terminalGateDeadline === undefined && observedMono > gateDeadline)
+        throw new Error("Browser sample continuity deadline exceeded");
+      if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
+        && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
+      processes = observed.processes;
+      // Keep initial raw PID/start/executable/type observations once. Every live
+      // sample independently re-reads those identities and records their references;
+      // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.
+      sampleOperation = "process-record";
+      observed.processes = processes.map((p) => {
+        const key = processRecordKey(p);
+        if (!writer.has(key) && !keys.has(key)) { initial.push({ key, value: serial(p) }); keys.add(key); }
+        return key;
       });
-      try { observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck); }
-      finally { unlock?.(); }
-    }
+      sampleOperation = "docker-inventory";
+      if (captureDocker) observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck);
+    } finally { unlock?.(); }
     if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
       const path = groupPath(kernel.cgroup);
       assert.ok(scopeCpuSetMatches(kernel.groups, path, liveCpus.application)
