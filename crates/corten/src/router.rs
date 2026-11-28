@@ -1091,7 +1091,8 @@ impl Fix {
         Fix { method, allow: None }
     }
 
-    #[inline]
+    // Always, as `RouterFuture::poll`, its one caller in the source, which says why.
+    #[inline(always)]
     fn apply(self, mut res: Response) -> Response {
         use http_body::Body as _;
         if self.method == Asked::Connect && res.status().is_success() {
@@ -1142,7 +1143,11 @@ pub struct RouterFuture {
 impl Future for RouterFuture {
     type Output = Result<Response, Infallible>;
 
-    #[inline]
+    // Always, not left to the compiler: it has two callers, the future of hyper's connection and
+    // the one of Corten's own (`crate::h1`), and with two the compiler kept it a function of its
+    // own, which cost a request on hyper's connection 34 instructions it does not cost with one
+    // (docs/design.md#choice-own-http1).
+    #[inline(always)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let res = std::task::ready!(this.answering.as_mut().poll(cx));

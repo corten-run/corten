@@ -45,6 +45,8 @@ dependencies = [
  "getrandom 0.4.3",
  "http",
  "http-body",
+ "httparse",
+ "httpdate",
  "hyper",
  "hyper-util",
  "matchit",

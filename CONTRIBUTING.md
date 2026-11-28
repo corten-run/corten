@@ -35,7 +35,9 @@ bench/request-cost/  Instructions and allocations a request costs over a socket,
 ```
 
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
-protocols, HTTP/1.1 only), `http` (the HTTP types apps name as `corten::http`), `http-body`
+protocols, HTTP/1.1 only), `httparse` and `httpdate` (the parser hyper reads a request's head
+with and the formatter it writes `Date` with, both in its tree: `App::own_http1`'s connection
+uses the same two), `http` (the HTTP types apps name as `corten::http`), `http-body`
 (the body trait hyper and its clients share), `bytes` (bodies and multipart pieces),
 `matchit` (the router's path matching) and `percent-encoding` (its parameters, and the escapes
 in a route's query), `tokio`
@@ -201,7 +203,7 @@ the check names a commit, run
 
 ```powershell
 $checkout = Split-Path -Leaf $PWD
-docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-trixie sh -c "rustup component add clippy rustfmt llvm-tools >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo test --release --workspace --all-features"
+docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-trixie sh -c "rustup component add clippy rustfmt llvm-tools >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && CORTEN_TEST_OWN_HTTP1=1 cargo test -p corten-run --all-features --lib && cargo test --release --workspace --all-features"
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-trixie sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten-run --no-default-features && cargo check -p corten-run --no-default-features --features json --all-targets && cargo check -p corten-run --no-default-features --features agent,feed && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check --no-script-types && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check --no-script-types && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-msrv-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1.89-trixie cargo check --locked --workspace --all-features --all-targets
 npm run check
@@ -214,6 +216,9 @@ node scripts/smoke-dev.mjs http://localhost:18483 corten-watchlist-dev
 docker rm -f corten-watchlist-dev
 docker build --build-arg CARD_MARKET_SMOKE=1 -f examples/card-market/Dockerfile -t corten-card-market .
 docker run -d --name corten-card-market -p 18481:8080 -e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -e AGENT_ORIGINS=http://127.0.0.1:18481 -e EMBED_ORIGINS=http://127.0.0.1:18481 -e PROXIES=172.16.0.0/12,192.168.0.0/16 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token -v "${PWD}/examples/card-market/fixtures:/fixtures:ro" corten-card-market
+node examples/card-market/smoke.mjs http://localhost:18481
+docker rm -f corten-card-market
+docker run -d --name corten-card-market -p 18481:8080 -e OWN_HTTP1=1 -e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -e AGENT_ORIGINS=http://127.0.0.1:18481 -e EMBED_ORIGINS=http://127.0.0.1:18481 -e PROXIES=172.16.0.0/12,192.168.0.0/16 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token -v "${PWD}/examples/card-market/fixtures:/fixtures:ro" corten-card-market
 node examples/card-market/smoke.mjs http://localhost:18481
 docker rm -f corten-card-market
 docker build -f examples/ui-gallery/Dockerfile -t corten-ui-gallery .
@@ -253,7 +258,13 @@ docker network rm feeds
 ```
 
 The first command also compiles every `rust` code block in `README.md` and `docs/guide/` as a
-doctest. Mark a fragment that cannot compile on its own `rust,ignore`, and a complete program
+doctest, and runs `corten`'s unit tests a second time with `CORTEN_TEST_OWN_HTTP1=1`: the
+servers those tests start with the default connection then answer on Corten's own HTTP/1.1
+connection, as an app that calls `App::own_http1(true)` does. Only `1` forces the switch on;
+unset, empty, `0` and every other value leave the test defaults unchanged. A test that says
+which connection it wants, or calls the router with no server, runs as it did the first time
+([Choice 78](docs/design.md#choice-own-http1)); card-market's smoke runs
+a second time for the same reason, against the app started with `OWN_HTTP1`. Mark a fragment that cannot compile on its own `rust,ignore`, and a complete program
 that serves forever `rust,no_run`. The second's `corten check` runs `--no-script-types`, since
 the Rust image has no Node; CI's `rust-checks` job installs TypeScript and type-checks the new app's
 scripts. The second ends by packaging every published crate and

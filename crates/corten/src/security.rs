@@ -2145,7 +2145,11 @@ pub(crate) struct Unnamed;
 /// ([`unnamed`]). A client writes `Host` first (RFC 9110 7.2 asks it to), so the first name is
 /// looked at first, and only a request without one is given the mark. Where `Host` is not
 /// first it is most often near it, so the names are read in turn and not searched by hash.
-#[inline]
+///
+/// Inlined always: it has two callers, the service of hyper's connection and the one of Corten's
+/// own (`crate::h1`), and a function with two the compiler may keep out of line on hyper's path,
+/// as it did the router's future (`crate::router::RouterFuture`).
+#[inline(always)]
 pub(crate) fn mark_unnamed(req: &mut Request) {
     if req.headers().keys().next() != Some(&header::HOST) {
         mark_if_unnamed(req);

@@ -1,6 +1,7 @@
 // Browser smoke test of the production pieces, against the card-market example (API or fixture mode).
 // Usage: node examples/card-market/smoke.mjs [http://localhost:18410]
 import { randomUUID } from "node:crypto";
+import { connect } from "node:net";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
@@ -925,6 +926,50 @@ try {
   check("a partner's alert from a limited address is counted as the partner's", asPartner.status === 200, String(asPartner.status));
   const stillReads = await fetch(`${base}/items/item_5`, { headers: { "x-forwarded-for": limited } });
   check("reads from a limited address still pass", stillReads.status === 200, String(stillReads.status));
+
+  // Requests a client sends in one write, one with a body among them, are each answered, in
+  // order, with the bytes each gets alone on a connection of its own (all but `Date` and
+  // `Connection`). With `OWN_HTTP1` set the server's own connection answers those before the body
+  // and hands the connection to hyper at it (`App::own_http1`); without it hyper answers them all.
+  const { hostname, port, host } = new URL(base);
+  const raw = (/** @type {string} */ text) =>
+    /** @type {Promise<string>} */ (
+      new Promise((resolve, reject) => {
+        const socket = connect(Number(port), hostname);
+        /** @type {Buffer[]} */
+        const got = [];
+        socket.setTimeout(10_000, () => socket.destroy(new Error("the server did not close the connection in 10 s")));
+        socket.on("connect", () => socket.write(text, "latin1"));
+        socket.on("data", (piece) => got.push(piece));
+        socket.on("error", reject);
+        socket.on("close", () => resolve(Buffer.concat(got).toString("latin1")));
+      })
+    );
+  const alert = JSON.stringify({ id: "item_5", email: "ada@example.com", target_price: "1.00" });
+  // A write from an address of its own each time, so each is that address's first.
+  const write = () =>
+    `POST /api/alerts HTTP/1.1\r\nhost: ${host}\r\nauthorization: Bearer guess\r\nx-forwarded-for: 192.0.2.${octet()}\r\ncontent-type: application/json\r\ncontent-length: ${alert.length}\r\n`;
+  const asks = () => [
+    [`GET /api/items/item_5 HTTP/1.1\r\nhost: ${host}\r\n`, ""],
+    [`HEAD /api/items/item_5 HTTP/1.1\r\nhost: ${host}\r\n`, ""],
+    [write(), alert],
+    // An item the fixture does not have: the answer behind the body is a 404, unlike the first.
+    [`GET /api/items/item_6 HTTP/1.1\r\nhost: ${host}\r\n`, ""],
+  ];
+  const closing = "connection: close\r\n";
+  const alone = [];
+  for (const [head, body] of asks()) alone.push(await raw(`${head}${closing}\r\n${body}`));
+  const together = await raw(asks().map(([head, body], at, all) => `${head}${at === all.length - 1 ? closing : ""}\r\n${body}`).join(""));
+  const less = (/** @type {string} */ sent) => sent.replace(/^(date|connection): .*\r\n/gim, "");
+  // The status each gets alone. Together they are read as one string: a body does not end in a
+  // line break, so the answer behind it does not begin a line and cannot be found by one.
+  const lines = alone.map((sent) => /^HTTP\/1\.1 (\d{3}) /.exec(sent)?.[1] ?? "none").join(" ");
+  const same = less(together) === alone.map(less).join("");
+  check(
+    "requests sent in one write, one with a body among them, are each answered in order as each is alone",
+    lines === "200 200 401 404" && same,
+    `${lines} alone; ${together.length} bytes together, ${alone.map((sent) => sent.length).join(" + ")} alone, ${same ? "the same" : "not the same"} but for Date and Connection`,
+  );
 
   // Back and forward restore a page from memory. Playwright turns the back/forward cache off, and
   // its default headless shell never restores a page; the full Chromium in headless mode does.

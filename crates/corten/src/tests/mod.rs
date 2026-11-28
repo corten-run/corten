@@ -636,6 +636,8 @@ mod bodies;
 mod cache;
 mod caller;
 mod forms;
+mod h1;
+mod h1_fuzz;
 #[cfg(feature = "json")]
 mod json_answers;
 mod layout;

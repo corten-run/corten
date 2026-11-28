@@ -547,6 +547,8 @@ impl HttpBody for Ended {
 /// An HTTP/2 stream's body would come through here without a compile error, and what hyper holds
 /// for one that ended with its headers is to be read before it does
 /// (`docs/design.md#choice-deadline-body`).
+// With two callers, the out-of-line call in the connection service cost 12 instructions per request.
+#[inline]
 pub(crate) fn arriving(body: hyper::body::Incoming) -> Body {
     if body.is_end_stream() {
         Body::new(Ended)

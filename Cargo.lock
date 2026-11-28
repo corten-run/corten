@@ -355,6 +355,8 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "httparse",
+ "httpdate",
  "hyper",
  "hyper-util",
  "jiff",

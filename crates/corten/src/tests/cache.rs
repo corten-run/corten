@@ -9064,6 +9064,14 @@ fn corten_makes_its_failures_through_the_constructors_that_mark_them() {
     // The file, what the line holds, how many lines hold it, and why each may.
     const OWN: &[(&str, &str, usize, &str)] = &[
         ("assets.rs", "NO_FAVICON_CACHE)]).into_response()", 1, "no icon: one 404 for everyone, public for an hour"),
+        (
+            "h1/head.rs",
+            "let status = if failed { StatusCode::INTERNAL_SERVER_ERROR } else { status };",
+            1,
+            "the 500 Corten's own connection writes in place of an interim answer, as hyper's connection writes its own: \
+             every header of the answer is dropped first, so none is left to share it \
+             (`the_500_in_place_of_an_interim_answer_has_none_of_the_answer_s_headers`)",
+        ),
         ("lib.rs", "source: error.into(), corten: false }", 1, "Error::new: a handler's own failure"),
         ("lib.rs", "source: status.canonical_reason()", 1, "Error::status: a handler's own failure"),
         ("lib.rs", "Error::status(StatusCode::NOT_FOUND)", 1, "Error::not_found: a handler's own failure"),

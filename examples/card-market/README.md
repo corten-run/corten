@@ -34,6 +34,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | `EMBED_ORIGINS` | origins whose pages may frame an item's card (`/embed/items/{id}`), comma separated; no other page may be framed | none |
 | `WRITES_PER_MINUTE` | writes one client address may make a minute | 20 |
 | `MAX_CONNECTIONS` | the most connections held open at once; past it, new ones wait until one closes | no limit |
+| `OWN_HTTP1` | present (any value) to answer requests that have no body on Corten's own HTTP/1.1 connection (`App::own_http1`) | hyper's connection answers every request |
 | `PROXIES` | the load balancers whose `X-Forwarded-For` is trusted: addresses or CIDRs, comma separated | the connection's address |
 | `HTTPS` | present (any value) when served over HTTPS: browsers are told to keep using it (HSTS) | not sent |
 | `HOSTS` | the host names the app answers, comma separated (`*` for any); a request for any other gets a 421 | `localhost` and names under it, IP addresses, and HTTP/1.0 requests with no `Host` |

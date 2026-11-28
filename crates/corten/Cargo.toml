@@ -39,6 +39,14 @@ pin-project-lite = "0.2"
 # keep (RFC 9110, 7.8).
 hyper = { version = "1.12", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio", "service"] }
+# The parser hyper reads a request's head with, already in its tree at this version: Corten's own
+# HTTP/1.1 connection (`App::own_http1`) reads heads with it too, so the two refuse the same ones
+# (docs/design.md#choice-own-http1).
+httparse = "1.9"
+# The formatter hyper writes an answer's `Date` with, already in its tree at this version: Corten's
+# own connection writes its `Date` with it too, once a second a thread, and has no calendar code
+# of its own.
+httpdate = "1"
 # The layer and service traits `App::layer` takes and `corten::Router` implements, so a tower
 # layer (a rate limit, a trace span) goes around the app.
 tower-layer = "0.3"
@@ -58,7 +66,9 @@ memchr = "2.4"
 zmij = "1"
 # `macros` for `tokio::select!` in the accept loop and shutdown. 1.44 for `task::coop`, which the
 # send timeout reads so a wake from the task's budget does not count as a client making room.
-tokio = { version = "1.44", default-features = false, features = ["macros", "net", "rt", "signal", "sync", "time"] }
+# `io-util` for `AsyncReadExt::read_buf`, which reads into a buffer's spare room without `unsafe`
+# in Corten (`App::own_http1`'s read buffer).
+tokio = { version = "1.44", default-features = false, features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 # Always on for `Form` and `Query`; `json` adds the derive.
 serde = { version = "1", default-features = false, features = ["std"] }

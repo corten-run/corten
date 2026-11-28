@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn only_one_forces_the_own_http1_test_default() {
+    use crate::app::own_http1_test_override;
+    use std::ffi::OsStr;
+
+    assert!(!own_http1_test_override(None));
+    for value in ["", "0", "true", "01", "1 "] {
+        assert!(!own_http1_test_override(Some(OsStr::new(value))), "{value:?}");
+    }
+    assert!(own_http1_test_override(Some(OsStr::new("1"))));
+}
+
 /// Whether this system has an IPv6 loopback address to listen on.
 fn has_ipv6_loopback() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
@@ -390,7 +402,7 @@ async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
 /// until it has room for more, and its flush until everything it holds has gone. It notes, for
 /// its connection (by the client's port), how long each flush that waited took, and when it was
 /// dropped and whether a flush was waiting then.
-struct Held {
+pub(super) struct Held {
     tcp: tokio::net::TcpStream,
     held: Vec<u8>,
     flushing: Option<std::time::Instant>,
@@ -408,6 +420,13 @@ struct HeldFlushes {
 
 impl Held {
     const ROOM: usize = 256 << 10;
+
+    /// One whose notes nobody reads, for a test that needs only an IO that holds what it is
+    /// written.
+    pub(super) fn unseen(tcp: tokio::net::TcpStream) -> Held {
+        let port = tcp.peer_addr().map_or(0, |addr| addr.port());
+        Held { tcp, held: Vec::new(), flushing: None, port, seen: Default::default() }
+    }
 
     /// Moves what it holds to the socket while the socket takes it.
     fn send(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
