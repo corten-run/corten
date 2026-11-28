@@ -14,7 +14,7 @@ import { startupOutcome, supervise } from "./process.mjs";
 import { observeHost, readLiveWorkloadEnd, sampleAuditClock, terminalClockPolicy, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
-import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
+import { beginLifetime, browserDockerGateEnv, browserDockerGateIdentity, composeHostProof, inspectLifetime, reopenBrowserDockerGate } from "./host-lifetime.mjs";
 import { hostStorageFailure, trackHostStorageStartup } from "./host-durable-writer.mjs";
 import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
@@ -121,7 +121,7 @@ export function createCampaign({ authorize }) {
     const number = c.commandIndex++, path = `${directory}/command-${number}.log`, fd = openSync(join(c.directory, path), "wx", 0o600);
     const hostDirectory = join(c.directory, directory, `command-${number}-host`);
     let startupDiagnostic = trackHostStorageStartup(hostDirectory);
-    let result, observer, hostManifestSha256, pid, attachmentComplete = false;
+    let result, observer, hostManifestSha256, pid, browserDockerFd, attachmentComplete = false;
     function disposeObserver() {
       const rejected = observer; observer = undefined;
       rejected?.dispose();
@@ -133,9 +133,13 @@ export function createCampaign({ authorize }) {
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
+      const browserDockerGate = process.platform === "linux" && binding.request.group === "fullstack-browser"
+        && invocation === binding.execution.invocation ? { fd, identity: browserDockerGateIdentity(fd) } : undefined;
+      if (browserDockerGate) browserDockerFd = reopenBrowserDockerGate(browserDockerGate);
       result = await supervise({ ...invocation, shell: false }, { cwd: repo,
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
-          GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv, ...compilerTarget?.env }, signal: commandSignal,
+          GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv, ...compilerTarget?.env,
+          ...(browserDockerGate && { [browserDockerGateEnv]: browserDockerGate.identity }) }, signal: commandSignal, browserDockerFd,
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
         onStartupRejected(outcome) {
           try { disposeObserver(); }
@@ -146,7 +150,7 @@ export function createCampaign({ authorize }) {
           try {
             checkStartup();
             observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
-              directory: hostDirectory, command: number, pid, signal: commandSignal, startupSignal,
+              directory: hostDirectory, command: number, pid, signal: commandSignal, startupSignal, browserDockerGate,
               onFault() { observerStop.abort(); } });
             checkStartup();
             await observer.attach(pid);
@@ -158,10 +162,22 @@ export function createCampaign({ authorize }) {
         },
       });
     } finally {
-      try { captureStartupDiagnostic(false); }
-      finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
+      let failure;
+      const cleanup = (step) => {
+        try { step(); } catch (error) { failure ??= error; }
+      };
+      cleanup(() => captureStartupDiagnostic(false));
+      if (browserDockerFd !== undefined) cleanup(() => closeSync(browserDockerFd));
+      cleanup(() => fsyncSync(fd));
+      cleanup(() => closeSync(fd));
+      if (!failure && result) cleanup(() => c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) }));
+      if (failure) {
+        // There can be no terminal proof without the command log. In particular,
+        // don't leave an accepted observer timer and its own gate fd behind.
+        cleanup(disposeObserver);
+        throw failure;
+      }
     }
-    c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;
     if (startupOutcome(result) === "accepted") {
       const manifest = await observer.finish(result, retainTerminalClock, settled); hostManifestSha256 = manifest.sha256;

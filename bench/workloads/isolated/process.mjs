@@ -10,7 +10,7 @@ const startupOutcomes = new WeakMap();
 export const startupOutcome = (result) => startupOutcomes.get(result);
 
 /** Supervision is bounded; force/IPC uncertainty is never a clean successful exit. */
-export function supervise(invocation, { cwd, env, log, signal, onStart, onStartupRejected }, deadlines = limits) {
+export function supervise(invocation, { cwd, env, log, signal, onStart, onStartupRejected, browserDockerFd }, deadlines = limits) {
   assert.equal(invocation.executable, "node");
   assert.equal(invocation.shell, false);
   assert.ok(Array.isArray(invocation.argv) && invocation.argv.length > 0);
@@ -110,7 +110,7 @@ export function supervise(invocation, { cwd, env, log, signal, onStart, onStartu
     try {
       child = childProcess.spawn(process.execPath, [bootstrap, ...invocation.argv], {
         cwd, env, shell: false, windowsHide: true, detached: process.platform === "linux",
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        stdio: browserDockerFd === undefined ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe", "ipc", browserDockerFd],
       });
       child.on("error", (failure) => {
         error ??= failure.message;
