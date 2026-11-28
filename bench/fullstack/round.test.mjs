@@ -685,7 +685,8 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     mkdirSync(join(fullstack, "fixtures"), { recursive: true });
     mkdirSync(join(tree, "bench", "live"));
     for (const file of ["droplet.mjs", "apps.mjs", "conformance.mjs", "inventory.mjs", "pack.mjs", "passes.mjs", "round.mjs", "count-perf.mjs", "count-admission.mjs"]) copyFileSync(join(import.meta.dirname, file), join(fullstack, file));
-    writeFileSync(join(fullstack, "trend.mjs"), "");
+    writeFileSync(join(fullstack, "trend.mjs"), `import { writeFileSync } from "node:fs";
+if (process.env.FAKE_PROGRESS_AFTER_PUBLISH) writeFileSync(process.env.FAKE_PROGRESS_AFTER_PUBLISH, "t finished " + "0".repeat(32) + "\\n");`);
     copyFileSync(join(import.meta.dirname, "..", "live", "apps.mjs"), join(tree, "bench", "live", "apps.mjs"));
     writeFileSync(join(fullstack, "fixtures", "items.json"), JSON.stringify({ item_1: { id: "item_1" } }));
     writeFileSync(join(fullstack, "results-r1.progress"), "t boot\nt finished\n");
@@ -720,6 +721,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       'case "$last" in *"tar -czf /tmp/results.tgz"*) if [ -n "$FAKE_START_IN_DOWNLOAD" ]; then : > "$FAKE_START_IN_DOWNLOAD"; fi ;; esac',
       // FAKE_DROP: a step whose script holds that text runs there, and then every reply is lost.
       'if [ -n "$FAKE_DROP" ]; then case "$last" in *"$FAKE_DROP"*) bash -c "$script" >/dev/null 2>&1; echo "Connection to 203.0.113.9 closed by remote host." >&2; exit 255 ;; esac; fi',
+      'p="$FAKE_REMOTE/bench/bench/fullstack/results-r1.progress"; if [ -n "$FAKE_RESTORE_FINISH" ] && grep -qx "t finished $FAKE_PROGRESS_AFTER_COPY" "$p"; then case "$last" in *"tail -n 1 -- "*) bash -c "$script"; rc=$?; printf "t finished %s\\n" "$FAKE_RESTORE_FINISH" > "$p"; exit "$rc" ;; esac; fi',
       'exec bash -c "$script"',
       "",
     ].join("\n"), { mode: 0o755 });
@@ -731,6 +733,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       'eval "src=\\${$(($# - 1))}"',
       'case "$src" in *:/tmp/results.tgz) cp "$FAKE_REMOTE/results.tgz" "$last" ;; *) cp "$src" "$FAKE_REMOTE$(printf "%s" "${last#*:}")" ;; esac',
       'if [ -n "$FAKE_PROGRESS_AFTER_COPY" ]; then printf "t finished %s\\n" "$FAKE_PROGRESS_AFTER_COPY" > "$FAKE_REMOTE/bench/bench/fullstack/results-r1.progress"; fi',
+      'if [ -d "$FAKE_READY_RESULT" ]; then mkdir -p "$(dirname "$FAKE_RESULT")" && mv "$FAKE_READY_RESULT" "$FAKE_RESULT" || exit 1; fi',
       "",
     ].join("\n"), { mode: 0o755 });
     // doctl fails unless FAKE_DOCTL_CREATE or FAKE_DOCTL_LIST is set: then it lists no droplet (or
@@ -741,6 +744,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       "#!/bin/sh",
       'printf "doctl %s\\n=====\\n" "$*" >> "$FAKE_LOG"',
       '[ -n "$FAKE_DOCTL_CREATE$FAKE_DOCTL_LIST" ] || exit 1',
+      'case "$*" in "compute droplet delete"*) if [ -n "$FAKE_CHANGE_ON_DELETE" ]; then printf "t finished %s\\n" "$FAKE_CHANGE_ON_DELETE" > "$FAKE_REMOTE/bench/bench/fullstack/results-r1.progress"; exit 1; fi ;; esac',
       'case "$*" in "account get"*|"compute droplet-action power-cycle"*) [ -n "$FAKE_DOCTL_ACCOUNT" ] && exit 0 ;; esac',
       'case "$*" in',
       '  "compute droplet list"*) [ -z "$FAKE_DOCTL_LIST" ] || echo "$FAKE_DOCTL_LIST" ;;',
@@ -1104,7 +1108,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.ok(finished.deleted, finished.calls.join("\n---\n").slice(0, 2000));
     assert.equal(finished.status, 1);
     assert.ok(!existsSync(join(fullstack, "results", "r1")));
-    for (const mode of ["failed", "plain finish", "torn finish", "different run", "occupied", "new start", "new finish", "no count", "new count", "stale summary"]) {
+    for (const mode of ["failed", "plain finish", "torn finish", "different run", "occupied", "new start", "new finish", "archive replacement", "legacy replacement", "after publish", "after delete error", "no count", "new count", "stale summary"]) {
       const local = join(fullstack, "results", "r1");
       const remoteResult = join(dirname(remoteProgress), "results", "r1");
       const { argv, options } = prepare({ log: done, collect: true });
@@ -1113,7 +1117,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       const instructions = join(remoteResult, "instructions.json");
       writeFileSync(instructions, old);
       writeFileSync(join(remoteResult, "other-raw.txt"), "partial evidence\n");
-      if (["occupied", "new start", "new finish", "new count", "stale summary"].includes(mode)) {
+      if (["occupied", "new start", "new finish", "after publish", "after delete error", "new count", "stale summary"].includes(mode)) {
         const file = join(root, "fresh.json");
         writeFileSync(file, JSON.stringify({ "corten/json": countRows(1000) }));
         admitCount(remoteResult, id, file, ["corten/json"], 3);
@@ -1124,18 +1128,26 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       } else writeFileSync(join(remoteResult, "summary.json"), JSON.stringify({
         countAdmission: countIdentity(readCount(remoteResult)), instructions: mode === "no count" ? {} : { "corten/json": { user: 123456 } },
       }));
-      writeFileSync(remoteProgress, `t boot ${id}\n` + (mode === "failed" ? "t failed\n" : mode === "plain finish" ? "t finished\n"
+      writeFileSync(remoteProgress, `t boot ${id}\n` + (mode === "failed" ? "t failed\n" : ["plain finish", "legacy replacement"].includes(mode) ? "t finished\n"
         : `t finished ${mode === "different run" ? "0".repeat(32) : id}${mode === "torn finish" ? "" : "\n"}`));
       if (mode === "occupied") {
         mkdirSync(local, { recursive: true });
         writeFileSync(join(local, "instructions.json"), old);
       }
       if (mode === "new start") Object.assign(options.env, { FAKE_FLIP: join(root, "flips"), FAKE_FLIP_AT: "3" });
-      if (mode === "new finish") Object.assign(options.env, { FAKE_PROGRESS_AFTER_COPY: "0".repeat(32) });
+      if (["new finish", "archive replacement", "legacy replacement"].includes(mode)) Object.assign(options.env, { FAKE_PROGRESS_AFTER_COPY: "0".repeat(32) });
+      if (mode === "new finish") Object.assign(options.env, { FAKE_RESTORE_FINISH: id });
+      if (mode === "after publish") Object.assign(options.env, { FAKE_PROGRESS_AFTER_PUBLISH: remoteProgress });
+      if (mode === "after delete error") {
+        argv.unshift("--import", "data:text/javascript,Atomics.wait%20%3D%20()%20%3D%3E%20'timed-out'");
+        Object.assign(options.env, { FAKE_CHANGE_ON_DELETE: "0".repeat(32) });
+      }
       const r = outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
       const message = `${mode}: ${r.stdout}${r.stderr}`;
-      assert.equal(r.status, mode === "new start" ? 3 : mode === "no count" || mode === "new count" ? 0 : 1, message);
-      assert.equal(r.deleted, mode !== "new start", message);
+      const changed = ["new start", "new finish", "archive replacement", "legacy replacement", "after publish", "after delete error"].includes(mode);
+      if (mode === "new finish") assert.equal(r.progress, `t finished ${id}\n`, "the old finish returned after the contradictory snapshot");
+      assert.equal(r.status, changed ? 3 : mode === "no count" || mode === "new count" ? 0 : 1, message);
+      assert.equal(r.calls.filter((c) => c.startsWith("doctl compute droplet delete")).length, changed && mode !== "after delete error" ? 0 : 1, message);
       const kept = join(fullstack, "diagnostics");
       const [entry] = readdirSync(kept);
       const archive = join(kept, entry, "results.tgz");
@@ -1145,7 +1157,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
         assert.equal(raw("instructions.json"), old, message);
         assert.ok(!existsSync(join(local, "instructions.json")), message);
         assert.equal(readCount(local)?.rows, null, message);
-      } else if (mode === "new count") assert.equal(readCount(local)?.rows["corten/json"][0].userPerRequest, 1000, message);
+      } else if (["new count", "after publish", "after delete error"].includes(mode)) assert.equal(readCount(local)?.rows["corten/json"][0].userPerRequest, 1000, message);
       else if (mode === "stale summary") {
         assert.ok(!existsSync(local), message);
         assert.equal(JSON.parse(raw("instructions.json"))["corten/json"][0].userPerRequest, 1000, message);
@@ -1155,6 +1167,48 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
         assert.equal(readFileSync(join(local, "instructions.json"), "utf8"), old, message);
         assert.deepEqual(readdirSync(local), ["instructions.json"], message);
       } else assert.ok(!existsSync(local), message);
+    }
+    // A local save failure on --attach reaches the fallback partial-download path. It cannot
+    // collect from or delete a replacement finish, even with the same ended unit snapshot.
+    {
+      const original = "1".repeat(32);
+      const { argv, options } = prepare({ collect: true, progress: `t finished ${original}\n`, log: done, fake: { FAKE_PROGRESS_AFTER_COPY: "0".repeat(32) } });
+      argv[argv.indexOf("--collect")] = "--attach";
+      const fault = 'import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module"; const sync = fs.fsyncSync; fs.fsyncSync = (...args) => { fs.fsyncSync = sync; syncBuiltinESMExports(); throw Error("fixture: archive sync failed"); }; syncBuiltinESMExports();';
+      argv.unshift("--import", `data:text/javascript,${encodeURIComponent(fault)}`);
+      const r = outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /fixture: archive sync failed/);
+      assert.equal(r.progress, `t finished ${"0".repeat(32)}\n`);
+      assert.equal(r.calls.filter((c) => c.startsWith("scp ")).length, 1, r.stdout);
+      assert.ok(!r.deleted, r.stdout);
+    }
+    // A managed directory appears during the suite's first scp, after any local preflight
+    // but before tar extracts. Neither suite's Fullstack-side files may enter that directory.
+    for (const suite of ["browser", "harden"]) {
+      const { argv, options } = prepare({ log: suite === "browser" ? "browser suite done\n" : done, collect: true });
+      argv.push("--suite", suite);
+      const local = join(fullstack, "results", "r1");
+      const ready = join(root, "ready-result");
+      const id = beginCount(ready);
+      writeFileSync(join(ready, "summary.json"), JSON.stringify({ countAdmission: countIdentity(readCount(ready)), instructions: {} }));
+      const suiteDir = join(dirname(remoteProgress), "results", "r1");
+      mkdirSync(suiteDir, { recursive: true });
+      writeFileSync(join(suiteDir, "summary.json"), '{"sentinel":123456}');
+      writeFileSync(join(suiteDir, "hardening.json"), "{}");
+      if (suite === "browser") {
+        const browser = join(remote, "bench", "bench", "browser", "results", "r1");
+        mkdirSync(browser, { recursive: true });
+        writeFileSync(join(browser, "separate.txt"), "browser results");
+      }
+      Object.assign(options.env, { FAKE_READY_RESULT: ready, FAKE_RESULT: local, FAKE_DOCTL_LIST: `4242 corten-bench-${suite}-r1 203.0.113.9` });
+      const r = outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.ok(r.deleted && r.downloaded);
+      assert.deepEqual(readdirSync(local).sort(), ["count-admission.json", "summary.json"]);
+      assert.equal(checkCountCollection(local, id)?.id, id);
+      assert.equal(readFileSync(join(fullstack, "results", ".suites", suite, "r1", "summary.json"), "utf8"), '{"sentinel":123456}');
+      if (suite === "browser") assert.equal(readFileSync(join(tree, "bench", "browser", "results", "r1", "separate.txt"), "utf8"), "browser results");
     }
     // A launch whose start settled but whose unit was not then read as active, going on from a step
     // with the earlier run's "all done" still in its log: the watch reads the unit active and keeps

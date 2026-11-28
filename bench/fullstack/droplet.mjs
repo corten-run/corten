@@ -34,11 +34,11 @@
 //     same apps reached directly; its summary says so (edge: "off").
 //   --suite harden: the hardening step alone (harden.mjs: slow clients, oversized requests and
 //     connection floods) for every app of the tier, or those --apps names; results in
-//     bench/fullstack/results/<round>/hardening.json. It runs on its own cadence, not every round,
+//     bench/fullstack/results/.suites/harden/<round>/hardening.json. It runs on its own cadence, not every round,
 //     and needs no edge, so a matched one runs on the defaults tier's droplet size.
 //   --suite browser: only the browser step of this comparison (run-all.mjs browser through browser:
 //     parity, look, bytes, browser timing), then bench/browser's run-all.mjs; results in both
-//     results folders.
+//     bench/fullstack/results/.suites/browser/<round> and bench/browser/results/<round>.
 // Fullstack keeps the download in diagnostics/ and publishes a verified result in results/<round>/
 // only when that directory is absent. Its raw output is then packed into raw.tar.xz (pack.mjs).
 // A droplet this creates is destroyed once its
@@ -208,7 +208,14 @@ const destroy = () => {
     // Three tries a minute apart (synchronous: this also runs on SIGINT).
     let deleted = false;
     for (let i = 0; i < 3 && !deleted; i += 1) {
-      if (i) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, minute);
+      if (i) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, minute);
+        if (watchedEnd && !stillEnded(watchedEnd.snapshot, "the failed deletion")) {
+          mayDestroy = false;
+          process.exitCode = 3;
+          return;
+        }
+      }
       deleted = run("doctl", ["compute", "droplet", "delete", dropletId, "--force"], { allowFail: true, timeout: minute }).status === 0;
     }
     if (!deleted) console.log(`could not delete droplet ${dropletId}: delete it with doctl compute droplet delete ${dropletId} --force`);
@@ -271,16 +278,18 @@ const watchProgress = `${suiteDir}/results-${round}.progress`;
 const progressRead = `tail -n 1 -- ${watchProgress} 2>/dev/null | { IFS= read -r last || last=; printf 'progress %s\\n' "$last"; }\n`;
 // host.txt: the CPU model and the rest, since droplets of one size are not all the same machine.
 const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --version; npx playwright --version)";
-const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label,
-  /** @type {{ id: string, snapshot: string } | null} */ finish = null) => {
-  const local = join(here, "..", localName, "results");
+// No legal round name begins with a dot. A suite download never extracts over a Fullstack
+// replay directory, even if one appears after the download has started.
+const fullstackResults = ["browser", "harden"].includes(suite) ? join(here, "results", ".suites", suite) : join(here, "results");
+/** A legacy finish has no count ID. A new exact finish must not replace that observation either.
+ * @type {{ id: string | null, snapshot: string } | null} */
+let watchedEnd = null;
+let lostEnd = false;
+const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, publish = false) => {
+  const local = localName === "fullstack" ? fullstackResults : join(here, "..", localName, "results");
   const result = join(local, round);
   mkdirSync(local, { recursive: true });
-  if (suite !== "fullstack" && localName === "fullstack" && lstatSync(join(result, COUNT_RECEIPT), { throwIfNoEntry: false })) {
-    throw new Error("another suite must not replace a managed Fullstack round");
-  }
-  const exclude = suite !== "fullstack" && localName === "fullstack" ? ` --exclude=${round}/${COUNT_RECEIPT}` : "";
-  await retry(3, () => remote(`cd ${remoteDir} && mkdir -p results/${round} && (cp ${log} results/${round}/run.log 2>/dev/null || true) && ${hostInfo} > results/${round}/host.txt 2>&1; tar -czf /tmp/results.tgz${exclude} -C results ${round}`, 5));
+  await retry(3, () => remote(`cd ${remoteDir} && mkdir -p results/${round} && (cp ${log} results/${round}/run.log 2>/dev/null || true) && ${hostInfo} > results/${round}/host.txt 2>&1; tar -czf /tmp/results.tgz -C results ${round}`, 5));
   if (suite === "fullstack") {
     const diagnostics = join(here, "diagnostics");
     mkdirSync(diagnostics, { recursive: true });
@@ -295,11 +304,11 @@ const download = async (/** @type {string} */ remoteDir, /** @type {string} */ l
     syncDirectory(here);
     console.log(`${label} archive kept at ${archive}`);
     // Never overlay an earlier replay directory, even if this archive proves a fresh count.
-    if (!finish || lstatSync(result, { throwIfNoEntry: false })) return false;
+    if (!publish || !watchedEnd?.id || lstatSync(result, { throwIfNoEntry: false })) return false;
     try {
       run("tar", ["-xzf", archive, "-C", stage], { timeout: 5 * minute });
       if (!lstatSync(extracted, { throwIfNoEntry: false })?.isDirectory()) return false;
-      const count = checkCountCollection(extracted, finish.id);
+      const count = checkCountCollection(extracted, watchedEnd.id);
       if (!count) return false;
       // Unadmitted rows belong only in the retained archive, not beside a published summary.
       if (!count.rows) rmSync(join(extracted, COUNT_OUTPUT), { force: true, recursive: true });
@@ -309,7 +318,7 @@ const download = async (/** @type {string} */ remoteDir, /** @type {string} */ l
       }
       syncDirectory(extracted);
       // An unloaded unit can look identical after a short intervening invocation.
-      if (endedNow(finish.id) !== finish.snapshot || lstatSync(result, { throwIfNoEntry: false })) return false;
+      if (!endedNow() || lstatSync(result, { throwIfNoEntry: false })) return false;
       renameSync(extracted, result);
       syncDirectory(local);
       syncDirectory(here);
@@ -325,20 +334,29 @@ const download = async (/** @type {string} */ remoteDir, /** @type {string} */ l
   console.log(`${label} in ${join(local, round)}`);
   return true;
 };
-const downloadAll = async (/** @type {string} */ label, /** @type {{ id: string, snapshot: string } | null} */ finish = null) => {
-  const published = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, finish);
+const downloadAll = async (/** @type {string} */ label, publish = false) => {
+  const published = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, publish);
   if (suite === "browser") await download("/bench/bench/browser", "browser", label);
   return published;
 };
 // The round's unit as it reads now when two snapshots of it agree and show it ended (round.mjs,
 // snapshotsEnded), or null: not ended, changing, or not read (no answer, or a query that failed).
-const endedNow = (/** @type {string | null} */ finish = null) => {
-  const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || exit 1\n${finish ? progressRead : ""}after=$(snap) || exit 1\nprintf '%s\\n%s\\n' "$before" "$after"`, { quiet: true, allowFail: true });
+const readEnded = () => {
+  const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || exit 1\n${watchedEnd ? progressRead : ""}after=$(snap) || exit 1\nprintf '%s\\n%s\\n' "$before" "$after"`, { quiet: true, allowFail: true });
   if (r.status !== 0) return null;
   const lines = String(r.stdout ?? "").replaceAll("\r", "").split("\n");
-  if (finish && countFinish(lines.shift()?.slice("progress ".length) ?? "") !== finish) return null;
+  if (watchedEnd && countFinish(lines.shift()?.slice("progress ".length) ?? "") !== watchedEnd.id) return null;
   const [before = "", after = ""] = lines;
   return snapshotsEnded(before, after) ? before.trim() : null;
+};
+// After watch sees a Fullstack end, every subsequent observation, including error recovery
+// and the final deletion check, must confirm that same finish and snapshot. Once lost, a
+// later matching read cannot restore the original collector's permission.
+const endedNow = () => {
+  if (lostEnd) return null;
+  const seen = readEnded();
+  if (watchedEnd && seen !== watchedEnd.snapshot) { lostEnd = true; return null; }
+  return seen;
 };
 // How to delete a droplet this run created and leaves, once its round has ended.
 const deleteHint = () => dropletId && !keep ? ` (droplet ${dropletId}: once round ${round} has ended there, collect it with node bench/fullstack/droplet.mjs ${round} --collect${suite === "fullstack" ? "" : ` --suite ${suite}`}, which deletes it, or delete it with doctl compute droplet delete ${dropletId} --force)` : "";
@@ -665,6 +683,7 @@ try {
     }
   }
   const { state, snapshot, id } = await watch(collect);
+  if (suite === "fullstack" && snapshot) watchedEnd = { id: id ?? null, snapshot };
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
   if (state === "finished" || state === "stopped") startUnconfirmed = false;
   if (state === "running" || state === "unknown") {
@@ -676,7 +695,7 @@ try {
     // next --collect.
     if (state === "finished") {
       console.log("downloading the results");
-      const published = await downloadAll("results", id && snapshot ? { id, snapshot } : null);
+      const published = await downloadAll("results", true);
       if (!published) {
         console.log("Fullstack result not published: missing or different count admission, changing unit, or occupied destination");
         process.exitCode = 1;
@@ -685,8 +704,8 @@ try {
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
       // harden.mjs prints the marker only when every phase ran and its file was written; a download
       // without the file is not a finished hardening round.
-      if (suite === "harden" && !existsSync(join(here, "results", round, "hardening.json"))) {
-        console.log(`results/${round}/hardening.json did not come down with the round`);
+      if (suite === "harden" && !existsSync(join(fullstackResults, round, "hardening.json"))) {
+        console.log(`${join(fullstackResults, round, "hardening.json")} did not come down with the round`);
         process.exitCode = 1;
       }
       if (suite === "fullstack" && published) {
