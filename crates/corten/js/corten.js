@@ -2701,9 +2701,8 @@ navigation
       // One the page dispatches changed nothing.
       if (event.isTrusted) event.navigationType === null ? at && writes.set(at, written(at) + 1) : ((changes += 1), (changed = event.navigationType));
       look();
-      // The navigation that held a marked answer's replace ({@link held}) commits its address: the
-      // nav link to it is current from now, as the address is, not from when the answer was drawn,
-      // and an address on another path is a turn from now too ({@link turnAt}).
+      // A held replace can change the current link and, for a patch on another path, end the
+      // source page's submits ({@link turnAt}).
       if (event.isTrusted && event.navigationType && held && held !== true && !turnAt?.()) markCurrent();
     })
   : // Every `popstate` the browser fires is a move, its address changed or not (Back between two
@@ -3420,8 +3419,9 @@ let held;
 let heldFor;
 
 /**
- * For a patch's replace to another path, reconcile its turn once the address commits, even if no
- * event reached the runtime. It may commit inside the call or while a listener holds it.
+ * For a marked answer on another path, mark the nav and end a patch's source submits when the
+ * destination path is observed in the same history slot. This does not identify the replace or
+ * catch a path that no check saw.
  * @type {(() => boolean) | undefined}
  */
 let turnAt;
@@ -3657,7 +3657,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
   const here = (/** @type {boolean} */ drawing = false) => {
-    // A listener may have stopped currententrychange. Check the address before this answer acts.
+    // A listener may have stopped currententrychange. Check the path before this answer acts.
     turnAt?.();
     // A draw that already happened may still put its address in after a visit was cancelled.
     return (drawing || !signal.aborted) && (!pending.here || standing(pending.here, drawing));
@@ -3869,6 +3869,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           const before = exact();
           const seen = changes;
           const key = where();
+          const destination = new URL(to).pathname;
           // Held from here until the call has returned, the entry's state is back and what is left
           // on its way has been read: a marked press a listener makes inside the call (a
           // `precommitHandler`, which the browser runs before the call returns), as the state goes
@@ -3877,15 +3878,15 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // whatever the call ends in.
           heldFor = pending.here;
           held = true;
-          turnAt = patch ? () => {
-            if (location.pathname === path || location.href !== to || (navigation && where() !== key)) return false;
+          turnAt = destination === path ? undefined : () => {
+            // A handler can replace the query again before any commit notification reaches us.
+            if (location.pathname !== destination || (navigation && where() !== key)) return false;
             turnAt = undefined;
-            leave();
-            // An immediate replace is marked by apply after this call; a held commit must do it
-            // here, even if a listener stopped the trusted event.
+            if (patch) leave();
+            // An immediate replace is marked by apply or swapPage after this call.
             if (held !== true) markCurrent();
             return true;
-          } : undefined;
+          };
           try {
             try {
               history.replaceState(kept, "", to);
@@ -3938,7 +3939,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
             // nothing of that. It is read while the call's hold is still on, so a press the read
             // makes is held too; a read that throws (a page's own getter) leaves no hold, and the
             // answer, drawn, is not said to have failed.
-            /** @type {NavigationTransition | null | undefined} */
+            /** @type {(NavigationTransition & { readonly committed?: Promise<void> }) | null | undefined} */
             let now;
             try {
               now = navigation?.transition;
@@ -3960,6 +3961,13 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               heldFor = pending.here;
               try {
                 was.finished.then(end, end);
+                if (turnAt) {
+                  const reconcile = () => { if (held === was) turnAt?.(); };
+                  // Wake before handlers finish when the event was stopped. The promise is not
+                  // evidence by itself: the observed transition may be a listener's navigation,
+                  // and a follow-up replace can reject committed after the path already changed.
+                  was.committed?.then(reconcile, reconcile);
+                }
               } catch {
                 end();
               }

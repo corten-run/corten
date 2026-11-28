@@ -12427,10 +12427,11 @@ rules something out.
     differ from the form's without JavaScript by its fragment. A link
     the runtime follows has the same limit, and Corten's own redirect to a place names it in
     `corten-location`. The same
-    address calls nothing, and a nav link to the new address is marked current, as for a
-    navigation, once that address is in: where a page's listener holds the replace (below), as the
-    held navigation commits the address it puts in, not as the answer draws. No entry is added, so Back goes to the page before the screen, and Forward and a
-    reload read the page at the address, as for any entry. What the draw runs as it goes comes
+    address calls nothing, and a nav link to the new path is marked current, as for a
+    navigation, once that path is on screen: for a held replace (below), when the runtime observes
+    the destination path in the same slot, not as the answer draws. No entry is added, so Back goes
+    to the page before the screen, and Forward and a reload read the page at the address, as for
+    any entry. What the draw runs as it goes comes
     before the replace and sees the old address: a `focus` handler as focus is put back on a
     control the patch drew, a dialog it opens again, an element's `connectedCallback`. A submit
     one of them sends goes as the page stood, so a form there without an `action` sends to the
@@ -12646,14 +12647,21 @@ rules something out.
     user has left the page it was for, and the form it would be said on with it. A marked answer
     that draws another page is a turn, as a visit to that page is: a page answer (`corten-page`,
     another route's `<main>` included, and a 5xx's, which puts no address in) as it is drawn, and a
-    patch once its address on another path is in (where a page's `navigate` listener holds the
-    replace, as the held navigation commits that address). It checks the committed address before
-    a submit's press, answer or retry can act and when the held navigation settles, even if the page
-    stops `currententrychange`; the same check updates nav links on a held commit. It ends every
-    submit of the old page, even one sent after the draw and before the commit, sparing its own
-    submit and those the draw made. It fixes the set at commit, not at draw, so a destination
-    press made during an abort cannot remove a source controller from that set. It uses the same
-    code as a visit to number a write it cut off before its answer came, so the next navigation
+    patch to another path when it puts its address in. For a held replace the runtime looks for
+    the destination pathname in the same history slot (the entry's key). A follow-up change to the query or
+    fragment does not hide that path. The runtime checks before a submit's press, answer or
+    retry can act, on a trusted entry change,
+    and when the held transition's `committed` (where available) or `finished` settles. The commit
+    promise is a prompt to check before the handler finishes, not proof of the runtime's own
+    replace: the transition can belong to a listener's navigation, and Firefox can reject
+    `committed` if a handler immediately replaces the address again, though the first address
+    did go in. The runtime does not track which replace put the path there or infer a transient
+    destination none of these checks saw. For both patches and page answers the same check
+    updates nav links if the page stops `currententrychange`. A turn ends every submit of the old
+    page, even one sent after the patch drew and before the new path was observed, sparing its own
+    submit and those the draw made. It fixes the set at the turn, not when the patch draws, so a
+    destination press made during an abort cannot remove a source controller from that set. It uses
+    the same code as a visit to number a write it cut off before its answer came, so the next navigation
     reads the page whole, and counts the turn by
     which a failed write is said only on a form drawn with no navigation to another address since
     its press. A press the draw made of a form whose write it ends (an element's
@@ -12931,9 +12939,12 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 4,049 bytes larger raw (46,502 to 50,551), 1,645
-    with gzip (16,718 to 18,363) and 1,485 with brotli (15,106 to 16,591), paid once a release by
-    every user (18, 19 and 18 larger than `e3b11c27b`, which could miss a source write replaced in
+    What it costs: the runtime every page loads is 4,117 bytes larger raw (46,502 to 50,619), 1,669
+    with gzip (16,718 to 18,387) and 1,505 with brotli (15,106 to 16,611), paid once a release by
+    every user (68, 24 and 20 larger than `9c15c572e`, which could miss a source write when a
+    held replace's event was stopped and its query changed again, and left the nav link stale
+    until a held patch's handler finished, or even afterward for a held page answer; that build
+    was 18, 19 and 18 larger than `e3b11c27b`, which could miss a source write replaced in
     the map as it aborted another; that build was 207, 87 and 82 larger than `4465e4303`, which
     missed source writes and retries outside the draw-time snapshot, dropped a destination press
     behind a source write, and left
@@ -13129,7 +13140,11 @@ rules something out.
     or the platform gains a call that aborts a navigation on its way without beginning another,
     when a replace a page's listener holds could be ended rather than waited out.
 
-    Last checked: 2026-11-27, the runtime's default-zlib sizes at `0bbc20a49` and a destination
+    Last checked: 2026-11-27, the runtime's default-zlib sizes against `9c15c572e`, a late source
+    write after a held replace with stopped events and a follow-up query change, and the current
+    link before held patch and page handlers finish, in Linux Playwright 1.65.1's Chromium,
+    Firefox and WebKit (all three cases fail in each engine at `9c15c572e`);
+    2026-11-27, the runtime's default-zlib sizes at `0bbc20a49` and a destination
     press made during the abort of a source write, in Linux Playwright 1.65.1's Chromium, Firefox
     and WebKit (the old write's patch draws over the destination at `e3b11c27b`);
     2026-11-27, a source retry

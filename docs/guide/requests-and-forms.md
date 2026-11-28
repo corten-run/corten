@@ -2263,15 +2263,18 @@ address even beside elements that draw). A 4xx patch that
 draws (a 422) moves it, and so does a page answer
 (`<main>`) drawn in place. A patch's CSS variables (`data-vars`) are in before its address goes
 in, as a page answer's are, so a `navigate` listener that hears the replace sees the patch whole.
-A marked answer that draws another page, a page answer (`<main>`, another route's too, a 5xx's
-included) or a patch whose address is on another path (once that address commits, where a
-script's `navigate` listener holds the replace), is a turn as a visit to that page is: a submit of
-another form sent from the page before it and still on its way (a Save) draws nothing and fires no
-`corten:error` when its answer comes, even if it was sent after the draw while the old address was
-still in place. The runtime checks the committed address before acting on an answer, press or
-retry, and when the held replace settles. Those checks end old submits and update the current nav
-link even if a listener stopped `currententrychange`. A write cut off before its answer came makes
-the next navigation read the page whole, as one a link cuts off.
+A marked page answer (`<main>`, another route's too, a 5xx's included) is a turn as it draws.
+A marked patch to another path is a turn when it puts its address in. For a held replace the
+runtime looks for the destination pathname in the same history slot, even if a script has
+already changed the query or fragment there. After a turn, a submit still on its way from the
+old page (a Save) draws nothing and fires no `corten:error`, even if it was sent after the patch
+drew while the old address was still in place. The runtime checks the path before acting on
+an answer, press or retry, and on an entry
+change or when the held transition's commit (where available) or finish promise settles. The
+same path check updates the current nav link for patches and page answers even if a listener
+stopped `currententrychange`. The check does not prove which replace put the path there or detect
+a destination the page has already left before any of these checks see it. A write cut off before its answer came
+makes the next navigation read the page whole, as one a link cuts off.
 A GET or POST the answer's own draw queues behind a write it cuts off (a layout form an element
 presses as it connects) is the new page's and is sent once that write has ended, subject to the
 usual checks on queued reads. A source press is not replayed on the new page, even if its write

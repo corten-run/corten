@@ -3569,25 +3569,32 @@ export async function heldBoundaryPresses(browser, errors) {
   const names = {
     retry: "a source POST retry already scheduled before a held replace commits is not sent to the destination",
     late: "a source POST sent after the marked patch drew cannot paint after its held replace commits",
+    "late-grid": "a source POST cannot paint after a held replace commits without its event and a handler changes the query again",
     commit: "a trusted commit listener can submit a layout form at the destination even while its source write is pending",
     fresh: "a trusted commit listener without a pending write submits the same layout form at the destination",
     draw: "a POST sent by the marked patch's own draw can still paint after its held replace commits",
-    nav: "a held replace marks the destination link current even when an earlier listener stops its commit event",
+    nav: "a held patch replace marks the destination link current before its handler ends even with the commit event stopped",
+    "nav-page": "a held page replace marks the destination link current before its handler ends even with the commit event stopped",
     reentrant: "a submit made while the commit is aborting source writes cannot save the source write it replaces",
   };
   for (const [kind, name] of Object.entries(names)) {
     const page = await browser.newPage();
     page.on("pageerror", (e) => errors.push(`held boundary ${kind}: ${e.message}`));
     try {
-      await page.addInitScript(({ kind, destination }) => {
+      const marks = kind === "nav" || kind === "nav-page";
+      const late = kind === "late" || kind === "late-grid";
+      await page.addInitScript(({ kind, to, stops }) => {
         const w = /** @type {any} */ (window);
         w.navigation?.addEventListener("currententrychange", (/** @type {any} */ event) => {
-          if (!event.isTrusted || event.navigationType !== "replace" || location.pathname !== destination) return;
+          if (!event.isTrusted || event.navigationType !== "replace") return;
+          const at = location.pathname + location.search;
+          if (kind === "late-grid" && at === `${to}&view=grid`) event.stopImmediatePropagation();
+          if (at !== to) return;
           w.__heardCommit = true;
           if (kind === "commit" || kind === "fresh") w.__post("second");
-          if (kind === "nav") event.stopImmediatePropagation();
+          if (stops) event.stopImmediatePropagation();
         });
-      }, { kind, destination });
+      }, { kind, to, stops: marks || kind === "late-grid" });
       await page.goto(base + source);
       if (!(await page.evaluate(() => "NavigationPrecommitController" in window))) {
         skip(name, "no precommitHandler");
@@ -3598,20 +3605,29 @@ export async function heldBoundaryPresses(browser, errors) {
       const writing = new Promise((resolve) => (release = () => resolve(undefined)));
       /** @type {string[]} */
       const posts = [];
+      // A page answer swaps <main>, including its nav. Start with the same two links to check
+      // that the runtime, not the response's markup, marks the destination at commit.
+      const layout = kind === "nav-page" ? await page.evaluate(() => ({
+        shell: document.querySelector('meta[name="corten-shell"]')?.getAttribute("content") ?? "",
+        nav: document.querySelector("main nav")?.outerHTML ?? "",
+      })) : null;
       await page.route((url) => [source, destination].includes(url.pathname), async (route) => {
         const req = route.request();
         if (req.headers()["corten"] !== "action") return route.fallback();
-        if (req.method() === "GET" && req.url() === base + to)
+        if (req.method() === "GET" && req.url() === base + to) {
+          if (layout)
+            return route.fulfill({ headers: { "corten-page": "1", "corten-shell": layout.shell, "content-type": "text/html" }, body: `<p id="held-boundary-panel">destination</p>${layout.nav}` });
           return route.fulfill({ headers: { "corten-patch": "1", "content-type": "text/html" }, body: `<p id="held-boundary-panel">destination${kind === "draw" ? "<smoke-held-write></smoke-held-write>" : ""}</p>` });
+        }
         if (req.method() !== "POST") return route.fallback();
         const body = req.postData();
         posts.push(`${req.url().slice(base.length)} ${body}`);
         if (body === "v=first" || body === "v=lead") await writing;
-        await route.fulfill(kind === "late" || kind === "draw" || (kind === "reentrant" && body === "v=first")
+        await route.fulfill(late || kind === "draw" || (kind === "reentrant" && body === "v=first")
           ? { headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<p id="held-boundary-panel">written</p>' }
           : { status: 204 }).catch(() => {});
       });
-      await page.evaluate(({ kind, source, destination, to }) => {
+      await page.evaluate(({ kind, source, destination, to, marks }) => {
         const w = /** @type {any} */ (window);
         const main = /** @type {HTMLElement} */ (document.querySelector("main"));
         const panel = document.createElement("p");
@@ -3667,16 +3683,19 @@ export async function heldBoundaryPresses(browser, errors) {
           };
         }
         const held = new Promise((resolve) => { w.__commit = resolve; });
-        const finishing = kind === "nav" ? new Promise((resolve) => { w.__finish = resolve; }) : undefined;
+        const finishing = marks ? new Promise((resolve) => { w.__finish = resolve; }) : undefined;
         w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
           if (event.navigationType !== "replace" || new URL(event.destination.url).pathname + new URL(event.destination.url).search !== to) return;
-          event.intercept({ precommitHandler: () => held, handler: () => finishing });
+          event.intercept({ precommitHandler: () => held, handler: () => {
+            if (kind === "late-grid") history.replaceState(history.state, "", `${to}&view=grid`);
+            return finishing;
+          } });
           w.__holding = true;
         });
         if (location.pathname !== source) throw new Error("held replacement fixture is not on its source page");
-      }, { kind, source, destination, to });
+      }, { kind, source, destination, to, marks });
       const initial = kind === "retry" || kind === "commit" || kind === "reentrant";
-      const writes = initial || kind === "late" || kind === "draw";
+      const writes = initial || late || kind === "draw";
       if (kind === "reentrant") {
         const lead = page.waitForRequest((r) => r.postData() === "v=lead", { timeout: 5000 });
         await page.evaluate(() => /** @type {any} */ (window).__lead());
@@ -3693,10 +3712,11 @@ export async function heldBoundaryPresses(browser, errors) {
         panel: document.getElementById("held-boundary-panel")?.textContent,
         current: Array.from(document.querySelectorAll("main nav a[aria-current=page]"), (a) => a.getAttribute("href")).join(),
         heard: !!(/** @type {any} */ (window).__heardCommit),
+        holding: !!(/** @type {any} */ (window).navigation.transition),
       }));
       await page.waitForFunction(() => /** @type {any} */ (window).__holding && document.getElementById("held-boundary-panel")?.textContent === "destination", undefined, { timeout: 5000 });
       const during = await state();
-      if (kind === "late") await page.evaluate(() => /** @type {any} */ (window).__post("first"));
+      if (late) await page.evaluate(() => /** @type {any} */ (window).__post("first"));
       const firstSent = await first;
       if (kind === "retry") {
         await page.evaluate(() => {
@@ -3711,18 +3731,29 @@ export async function heldBoundaryPresses(browser, errors) {
       const second = destinationPost ? page.waitForRequest((r) => r.url() === base + to && r.method() === "POST" && r.postData() === "v=second", { timeout: 2000 }).then(() => true, () => false) : false;
       const cut = kind === "reentrant" ? page.waitForEvent("requestfailed", { predicate: (r) => r.postData() === "v=first", timeout: 2000 }).then(() => true, () => false) : true;
       await page.evaluate(() => /** @type {any} */ (window).__commit());
-      await page.waitForFunction((to) => location.pathname + location.search === to, to, { timeout: 5000 });
+      const arrived = kind === "late-grid" ? `${to}&view=grid` : to;
+      await page.waitForFunction((at) => location.pathname + location.search === at, arrived, { timeout: 5000 });
       if (kind === "retry") await page.evaluate(() => /** @type {any} */ (window).__retry());
-      if (kind === "nav") await page.evaluate(() => /** @type {any} */ (window).__finish());
+      let markedBeforeFinish = true;
+      if (marks) {
+        markedBeforeFinish = await page.waitForFunction((destination) =>
+          !!(/** @type {any} */ (window).navigation.transition) &&
+            Array.from(document.querySelectorAll("main nav a[aria-current=page]"), (a) => a.getAttribute("href")).join() === destination,
+        destination, { timeout: 2000 }).then(() => true, () => false);
+        await page.evaluate(() => /** @type {any} */ (window).__finish());
+      }
       const secondSent = await second;
       const wasCut = await cut;
+      if (kind === "late-grid")
+        await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 });
       release();
       await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition) && !document.getElementById("held-boundary-write")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 });
       const after = await state();
       const expected = [...(kind === "reentrant" ? [`${source} v=lead`] : []), ...(writes ? [`${source} v=first`] : []), ...(destinationPost ? [`${to} v=second`] : [])];
-      check(name, during.at === source && during.panel === "destination" && firstSent && wasCut && after.at === to && after.heard &&
+      check(name, during.at === source && during.holding && during.panel === "destination" && firstSent && wasCut && after.at === arrived && after.heard &&
         after.panel === (kind === "draw" ? "written" : "destination") && secondSent === destinationPost && posts.join() === expected.join() &&
-        (kind !== "nav" || (during.current === source && after.current === destination)), JSON.stringify({ during, firstSent, wasCut, after, posts, secondSent }));
+        (!marks || (during.current === source && markedBeforeFinish && after.current === destination)),
+      JSON.stringify({ during, firstSent, wasCut, markedBeforeFinish, after, posts, secondSent }));
     } finally {
       await page.close();
     }
