@@ -42,6 +42,57 @@ export async function liveRegionControls(browser, report = check) {
         (await stayed()) === inside);
     }
 
+    for (const [name, markup] of [
+      ["opening details with the patch does not expose the original status", "<details><summary>Details</summary>STATUS</details>"],
+      ["revealing content-visibility with the patch does not expose the original status", '<div style="content-visibility:hidden">STATUS</div>'],
+    ]) {
+      await page.setContent(markup.replace("STATUS", '<div role="status"><p id="message">Before</p></div>'));
+      const { stayed } = await liveRegion(page, "message");
+      await page.locator("#message").evaluate((message) => {
+        const details = document.querySelector("details");
+        if (details) details.open = true;
+        else document.querySelector("[style]").removeAttribute("style");
+        const replacement = message.cloneNode();
+        replacement.textContent = "After";
+        message.replaceWith(replacement);
+      });
+      report(name, !(await stayed()));
+    }
+
+    for (const [name, markup, expected] of [
+      ["closing a modal after a patch does not expose the patch retroactively", "STATUS<dialog></dialog>", false],
+      ["closing a modal before a patch exposes the status again", "STATUS<dialog></dialog>", true],
+      ["opening details after a patch does not expose the patch retroactively", "<details open><summary>Details</summary>STATUS</details>", false],
+    ]) {
+      await page.setContent(markup.replace("STATUS", '<div role="status"><p id="message">Before</p></div>'));
+      const { stayed } = await liveRegion(page, "message");
+      await page.locator("#message").evaluate((message, revealFirst) => {
+        const dialog = document.querySelector("dialog");
+        const details = document.querySelector("details");
+        if (dialog) dialog.showModal();
+        if (details) details.open = false;
+        if (revealFirst) dialog.close();
+        const replacement = message.cloneNode();
+        replacement.textContent = "After";
+        message.replaceWith(replacement);
+        if (!revealFirst) dialog?.close();
+        if (details) details.open = true;
+      }, expected);
+      report(name, (await stayed()) === expected);
+    }
+
+    await page.setContent('<div role="status"><p id="message">Before</p></div>');
+    const fleeting = await liveRegion(page, "message");
+    await page.evaluate(async () => {
+      const message = document.getElementById("message");
+      const replacement = message.cloneNode();
+      replacement.textContent = "Briefly";
+      message.replaceWith(replacement);
+      await new Promise((resolve) => setTimeout(resolve, 18));
+      replacement.replaceWith(message);
+    });
+    report("a brief replacement is recorded even between polls", (await fleeting.changed(250)) === "Briefly");
+
     await page.setContent('<div aria-live="polite"><p id="message">Before</p></div>');
     const locate = page.locator.bind(page);
     const evaluateHandle = page.evaluateHandle.bind(page);
@@ -76,17 +127,16 @@ export async function liveRegionControls(browser, report = check) {
     }
 
     await page.setContent('<corten-live aria-live="polite"><p id="last-trade">Last trade: first</p></corten-live>');
-    const waitForFunction = page.waitForFunction.bind(page);
-    page.waitForFunction = async (probe, arg, options) => {
+    page.evaluateHandle = async (capture, arg) => {
+      const captured = await evaluateHandle(capture, arg);
       await replaceMessage(page, "last-trade", "Last trade: first");
-      const waiting = waitForFunction(probe, arg, options);
       await page.evaluate(() => setTimeout(() => {
         const message = document.getElementById("last-trade");
         const replacement = message.cloneNode();
         replacement.textContent = "Last trade: second";
         message.replaceWith(replacement);
-      }, 750));
-      return waiting;
+      }, 50));
+      return captured;
     };
     await liveFragments(page, (name, ok, detail) => report(`after a same-text replacement: ${name}`, ok, detail));
   } finally {

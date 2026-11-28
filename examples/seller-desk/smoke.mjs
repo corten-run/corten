@@ -258,7 +258,7 @@ try {
   const ids = await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).slice(0, 2).map((r) => r.id));
   await page.click(`#${ids[0]} input[type=checkbox]`);
   await page.click(`#${ids[1]} input[type=checkbox]`);
-  // The modal makes the surrounding page, including the live region, inert.
+  // Capture before opening: the modal makes the surrounding page and its live region inert.
   const { stayed: regionStayed } = await liveRegion(page, "desk-status");
   await page.click("[role=group] button:nth-of-type(1)");
   check("Archive opens the dialog", await page.isVisible("dialog[open]"));
@@ -267,7 +267,7 @@ try {
   await page.click("dialog button[value=confirm]");
   await page.waitForFunction(() => /Archived/.test(document.getElementById("desk-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
   check("confirming archives the rows", (await page.textContent("#desk-status")) === "Archived 2 items.", await page.textContent("#desk-status"));
-  check("archiving keeps the live region and replaces its message", await regionStayed());
+  check("the archive patch replaces only the live message after the modal closes", await regionStayed());
   const left = await page.$$eval(ids.map((id) => `#${id}`).join(","), (rows) => rows.length);
   check("the patch removed the archived rows and the selection is clear", left === 0 && (await count()) === "0", `${left} left`);
   check(
