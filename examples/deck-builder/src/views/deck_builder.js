@@ -120,8 +120,6 @@ const kept = () =>
     /** @type {Change[]} */ redo: [],
     /** @type {{ undo: Change[], redo: Change[] }} */ saved: { undo: [], redo: [] },
     /** @type {Moving | null} */ moving: null,
-    /** The deck line order shown in this page. The server stores counts, not presentation order. */
-    /** @type {string[]} */ order: [],
     /** @type {AbortSignal | undefined} */ signal: undefined,
     motion: 0,
   }));
@@ -164,7 +162,6 @@ export function start(parts, copies, browse, feed, signal) {
   }
   s.base = base;
   s.drawn = base;
-  s.order = [...base.keys()];
   s.theirs = new Map(base);
   s.theirGeneration = s.generation;
   s.theirVersion = s.version;
@@ -303,15 +300,12 @@ function draw(s, parts, deck, acceptFields = false) {
     const row = cards.get(id);
     if (row) items.push({ id, name: row.name, kind: row.kind, cost: row.cost, count, owned: row.owned });
   }
-  const order = s.order.filter((id) => deck.has(id));
-  const placed = new Set(order);
-  const added = items.filter((item) => !placed.has(item.id));
-  added.sort((a, b) => a.cost - b.cost || names.compare(a.name, b.name));
-  order.push(...added.map((item) => item.id));
-  s.order = order;
-  const position = new Map(order.map((id, index) => [id, index]));
-  items.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
   const lines = rows(parts.lines, DeckLine, parts.template);
+  // Only a player's reorder moves retained rows. A refusal can leave a focused native
+  // editor between two saved lines; moving its node would lose focus even with the same value.
+  const position = new Map(Array.from(lines, (line, i) => [line.id, i]));
+  items.sort((a, b) => (position.get(a.id) ?? position.size) - (position.get(b.id) ?? position.size)
+    || a.cost - b.cost || names.compare(a.name, b.name));
   // A feed update, refusal or reorder can arrive mid-keystroke. Fill new rows from the
   // template, but leave a retained input's native editor alone until we take its value.
   for (const line of lines) {
@@ -322,12 +316,6 @@ function draw(s, parts, deck, acceptFields = false) {
   }
   const missing = items.filter((item) => !lines.get(item.id));
   if (missing.length) lines.push(missing);
-  items.forEach((item, i) => {
-    if (lines.at(i)?.id !== item.id) {
-      const line = lines.get(item.id);
-      if (line) lines.swap(i, lines.indexOf(line));
-    }
-  });
   s.drawn = deck;
   for (const id of changed) {
     const card = cards.get(id);
@@ -801,27 +789,23 @@ function end(s, carry) {
  * @param {State} s @param {Parts} parts @param {string} id @param {string} targetId @param {boolean} after
  */
 function reorder(s, parts, id, targetId, after) {
-  const order = s.order.filter((lineId) => s.drawn.has(lineId));
-  const from = order.indexOf(id);
-  const target = order.indexOf(targetId);
-  if (from < 0 || target < 0 || from === target) return;
-  order.splice(from, 1);
-  const at = order.indexOf(targetId) + (after ? 1 : 0);
-  order.splice(at, 0, id);
-  s.order = order;
-  draw(s, parts, new Map(s.drawn));
+  const lines = rows(parts.lines, DeckLine);
+  const from = lines.get(id);
+  const target = lines.get(targetId);
+  if (!from || !target || id === targetId || !s.drawn.has(id) || !s.drawn.has(targetId)) return;
+  parts.lines.insertBefore(from.el, after ? target.el.nextSibling : target.el);
+  draw(s, parts, s.drawn);
 }
 
 /** @param {State} s @param {Parts} parts @param {string} id @param {-1 | 1} direction */
 function reorderBy(s, parts, id, direction) {
-  const order = s.order.filter((lineId) => s.drawn.has(lineId));
+  const order = Array.from(rows(parts.lines, DeckLine), (line) => line.id).filter((lineId) => s.drawn.has(lineId));
   const from = order.indexOf(id);
   const to = from + direction;
   if (from < 0 || to < 0 || to >= order.length) return false;
-  order.splice(from, 1);
-  order.splice(to, 0, id);
-  s.order = order;
-  draw(s, parts, new Map(s.drawn));
+  const target = order[to];
+  if (target === undefined) return false;
+  reorder(s, parts, id, target, direction > 0);
   return true;
 }
 
@@ -1008,19 +992,22 @@ export function tally(browse) {
 // One handler per column, so the markup names a column the compiler knows. The header is a link
 // to the same order from the server, for a browser without JavaScript.
 
-/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards */
-export function sortByName(event, link, cards) {
-  sort(event, link, cards, () => 0, "ascending");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse */
+export function sortByName(event, link, cards, field, normal, reverse) {
+  sort(event, link, cards, field, normal, reverse, () => 0, "ascending");
 }
 
-/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards */
-export function sortByCost(event, link, cards) {
-  sort(event, link, cards, (row) => row.cost, "ascending");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse */
+export function sortByCost(event, link, cards, field, normal, reverse) {
+  sort(event, link, cards, field, normal, reverse, (row) => row.cost, "ascending");
 }
 
-/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards */
-export function sortByOwned(event, link, cards) {
-  sort(event, link, cards, (row) => row.owned, "descending");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse */
+export function sortByOwned(event, link, cards, field, normal, reverse) {
+  sort(event, link, cards, field, normal, reverse, (row) => row.owned, "descending");
 }
 
 /**
@@ -1028,16 +1015,19 @@ export function sortByOwned(event, link, cards) {
  * order the server's link gives first, and the other way on the next click. Each row's keys are
  * read once, not at every comparison. A click that opens the link elsewhere is left to the browser.
  * @param {MouseEvent} event @param {HTMLAnchorElement} link
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse
  * @param {Holds<CollectionRow, HTMLTableSectionElement>} cards @param {(row: CollectionRow) => number} by
  * @param {"ascending" | "descending"} first
  */
-function sort(event, link, cards, by, first) {
+function sort(event, link, cards, field, normal, reverse, by, first) {
   if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
   event.preventDefault();
   const th = /** @type {HTMLTableCellElement} */ (link.closest("th"));
   const order = th.getAttribute("aria-sort") !== first ? first : first === "ascending" ? "descending" : "ascending";
   for (const other of Array.from(th.parentElement?.children ?? [])) other.removeAttribute("aria-sort");
   th.setAttribute("aria-sort", order);
+  field.value = order === first ? normal : reverse;
+  field.disabled = false;
   const dir = order === "ascending" ? 1 : -1;
   const keyed = Array.from(rows(cards, CollectionRow), (row) => ({ el: row.el, n: by(row), name: row.name }));
   // Names go the other way only when they are the order; under a number they stay A to Z.

@@ -278,8 +278,11 @@ pub struct DeckQuery {
 #[serde(rename_all = "kebab-case")]
 pub enum Sort {
     Name,
+    NameDesc,
     Cost,
+    CostDesc,
     Owned,
+    OwnedAsc,
 }
 
 /// The deck as its form posts it: each line's card and count (`card[i]` has `count[i]`), the

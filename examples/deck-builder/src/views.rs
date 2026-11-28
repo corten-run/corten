@@ -130,10 +130,14 @@ pub fn screen<'a>(
             in_deck: saved.get(&card.id).copied().unwrap_or(0),
         })
         .collect();
+    use std::cmp::Reverse;
     match view.sort {
         Some(Sort::Name) => cards.sort_by_cached_key(|s| s.card.name.to_lowercase()),
+        Some(Sort::NameDesc) => cards.sort_by_cached_key(|s| Reverse(s.card.name.to_lowercase())),
         Some(Sort::Cost) => cards.sort_by_cached_key(|s| (s.card.cost, s.card.name.to_lowercase())),
-        Some(Sort::Owned) => cards.sort_by_cached_key(|s| (std::cmp::Reverse(s.card.owned), s.card.name.to_lowercase())),
+        Some(Sort::CostDesc) => cards.sort_by_cached_key(|s| (Reverse(s.card.cost), s.card.name.to_lowercase())),
+        Some(Sort::Owned) => cards.sort_by_cached_key(|s| (Reverse(s.card.owned), s.card.name.to_lowercase())),
+        Some(Sort::OwnedAsc) => cards.sort_by_cached_key(|s| (s.card.owned, s.card.name.to_lowercase())),
         None => {}
     }
     let mut lines: Vec<Line> =

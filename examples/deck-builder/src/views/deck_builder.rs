@@ -63,7 +63,7 @@ pub fn DeckBuilder<'a>(
     let (cards_zone, deck_zone, rows, grip, add, all, picked, shown, none) = refs();
     let (lines_ref, template, lift, copies, form, version_ref, total, bars, tallies, kinds) = refs();
     let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
-    let (unsure, previews, query, save_query) = refs();
+    let (unsure, previews, query, save_query, save_sort) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
     let parts = js::Parts {
@@ -105,7 +105,11 @@ pub fn DeckBuilder<'a>(
         over_cards: "Over the collection.",
     };
     let filter = view.q.as_deref().unwrap_or("");
-    let sorted = |by: Sort| view.sort == Some(by);
+    let sorted = |asc, desc| match view.sort {
+        Some(by) if by == asc => Some("ascending"),
+        Some(by) if by == desc => Some("descending"),
+        _ => None,
+    };
     let size: u32 = lines.iter().map(|l| l.count).sum();
     let mut curve = [0u32; TOP_COST as usize + 1];
     for line in lines.iter() {
@@ -181,27 +185,27 @@ pub fn DeckBuilder<'a>(
                                     >
                                 </th>
                                 <th><span class={Hidden}>"Move"</span></th>
-                                <th aria-sort={sorted(Sort::Name).then_some("ascending")}>
+                                <th aria-sort={sorted(Sort::Name, Sort::NameDesc)}>
                                     <a
                                         href={url::Home { view: DeckQuery { q: view.q.clone(), sort: Some(Sort::Name) } }}
-                                        on:click={js::sortByName(event, target, rows)}
+                                        on:click={js::sortByName(event, target, rows, save_sort, Sort::Name.as_ref(), Sort::NameDesc.as_ref())}
                                     >
                                         "Card"
                                     </a>
                                 </th>
-                                <th aria-sort={sorted(Sort::Cost).then_some("ascending")}>
+                                <th aria-sort={sorted(Sort::Cost, Sort::CostDesc)}>
                                     <a
                                         href={url::Home { view: DeckQuery { q: view.q.clone(), sort: Some(Sort::Cost) } }}
-                                        on:click={js::sortByCost(event, target, rows)}
+                                        on:click={js::sortByCost(event, target, rows, save_sort, Sort::Cost.as_ref(), Sort::CostDesc.as_ref())}
                                     >
                                         "Cost"
                                     </a>
                                 </th>
                                 <th>"Type"</th>
-                                <th aria-sort={sorted(Sort::Owned).then_some("descending")}>
+                                <th aria-sort={sorted(Sort::OwnedAsc, Sort::Owned)}>
                                     <a
                                         href={url::Home { view: DeckQuery { q: view.q.clone(), sort: Some(Sort::Owned) } }}
-                                        on:click={js::sortByOwned(event, target, rows)}
+                                        on:click={js::sortByOwned(event, target, rows, save_sort, Sort::Owned.as_ref(), Sort::OwnedAsc.as_ref())}
                                     >
                                         "In deck"
                                     </a>
@@ -310,7 +314,7 @@ pub fn DeckBuilder<'a>(
                     {SubmitKey::field(f.submit)}
                     <input ref={draft} type="hidden" name={f.draft} value="0">
                     <input ref={save_query} type="hidden" name={f.q} value={filter}>
-                    if let Some(sort) = view.sort { <input type="hidden" name={f.sort} value={sort}> }
+                    <input ref={save_sort} type="hidden" name={f.sort} value={view.sort} disabled={view.sort.is_none()}>
                     <ul
                         ref={lines_ref}
                         class={Lines}

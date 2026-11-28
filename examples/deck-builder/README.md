@@ -34,16 +34,17 @@ form. Editing another count leaves the incomplete number alone; once corrected, 
 go in one save. Each send takes the counts actually in the form, even if a previous save was
 still on its way when the player corrected a focused field. Add and Add selected also leave an
 incomplete number and any selection alone.
-If a refusal leaves an unsaved card's count mid-edit, finishing it at zero removes the row
-without an autosave or undo entry.
+A refusal leaves incomplete fields in place, including the focused editor between reordered
+lines. Finishing an unsaved card's count at zero removes the row without an autosave or undo entry.
 An Add can save without touching the count fields. If autosave starts on that same form and reuses
 the native save's key, even with a count too large to parse, the server draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
 started, that document keeps its fields, focus, and native Save. Selections made before startup
 stay checked and count toward Add selected; the checkbox for selecting every visible card is
 disabled until the module can apply it. With the module running, Filter keeps the page, and a
-subsequent native Save returns to that filter. A refusal page displays the reason without
-notifying autosave. Only a patch answers a save that the queue sent. It uses the same
+subsequent native Save returns to that filter and the displayed sort column and direction.
+A refusal page displays the reason without notifying autosave. Only a patch answers a save
+that the queue sent. It uses the same
 `save_note.answered` binding as before. New pages load the note's script with the builder, not
 on the first autosave or retry. The smoke test blocks further script fetches and checks recovery
 of a lost reply without the live feed; it runs one build, not a deployment across two versions.
@@ -116,6 +117,10 @@ For the multi-field edit repair, a fresh Chromium context loaded the unfiltered 
 fresh app process once per build. Against `152b7c9b7`, startup HTML went from 161,562 to
 161,546 bytes; the 11 startup script bodies went from 92,128 to 92,857 bytes, all of the
 increase in `deck_builder.js` (23,127 to 23,856). These are decoded body sizes, not timings.
+
+For the focus and sort handoff changes, fetching the unfiltered 240-card page and its builder
+script from fresh app processes gave 161,546 to 161,700 HTML bytes and 23,936 to 23,784
+script bytes, compared with `6e7ee05dd`.
 
 ### Native save receipt cost
 

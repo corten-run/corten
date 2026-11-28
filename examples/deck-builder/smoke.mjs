@@ -346,6 +346,10 @@ async function withholdNativeRedirect(page, button) {
 async function delayedBuilder(scenario) {
   const context = await browser.newContext();
   const resume = Promise.withResolvers();
+  const sorting = {
+    cost: ["Cost", 1, "ascending"], "cost-desc": ["Cost", 2, "descending"],
+    "name-desc": ["Card", 1, "descending"], "owned-asc": ["In deck", 2, "ascending"],
+  }[scenario];
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(8_000);
@@ -372,7 +376,7 @@ async function delayedBuilder(scenario) {
     }, { times: 1 });
     await Promise.all([
       page.waitForRequest((request) => builderModule(new URL(request.url()))),
-      page.goto(home, { waitUntil: "commit" }),
+      page.goto(sorting ? new URL("?sort=name", home).href : home, { waitUntil: "commit" }),
     ]);
     const edited = (await count.inputValue()) === "2" ? "3" : "2";
     const incomplete = scenario === "incomplete";
@@ -416,7 +420,17 @@ async function delayedBuilder(scenario) {
       return;
     }
 
-    if (focused) {
+    let sortedIds;
+    const gridOrder = () => page.locator("tbody tr[data-key]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-key")));
+    if (sorting) {
+      const [label, clicks, direction] = sorting;
+      const link = page.getByRole("link", { name: label, exact: true });
+      for (let i = 0; i < clicks; i++) await link.click();
+      sortedIds = await gridOrder();
+      check(`${scenario}: sorting leaves the dirty form in its document`, new URL(page.url()).searchParams.get("sort") === "name" &&
+        await page.locator("form[data-patch]").count() === 0 && await count.inputValue() === edited &&
+        await link.locator("..").getAttribute("aria-sort") === direction);
+    } else if (focused) {
       check(`${scenario}: startup preserves the same focused field`, beforeStart?.focused &&
         await focused.evaluate((el, before) => el.isConnected && el.value === before && document.activeElement === el, beforeStart?.value));
       if (incomplete) await page.keyboard.type(edited);
@@ -433,7 +447,12 @@ async function delayedBuilder(scenario) {
     check(`${scenario}: Save stays native with the original form key and version`, saved.request().isNavigationRequest() &&
       saved.status() === 303 && saveFields(saved.request()).get("draft") === "0" &&
       saveFields(saved.request()).get("version") === String(previous) && saveFields(saved.request()).get("submit") === key);
-    if (!focused) {
+    if (sorting) {
+      check(`${scenario}: native Save posts the displayed sort and restores that order after the redirect`,
+        saveFields(saved.request()).get("sort") === scenario && new URL(page.url()).searchParams.get("sort") === scenario &&
+        await page.getByRole("link", { name: sorting[0], exact: true }).locator("..").getAttribute("aria-sort") === sorting[2] &&
+        JSON.stringify(await gridOrder()) === JSON.stringify(sortedIds));
+    } else if (!focused) {
       check(`${scenario}: native Save posts the local filter and returns to the matching row`,
         saveFields(saved.request()).get("q") === "oracle" && new URL(page.url()).searchParams.get("q") === "oracle" &&
         await visible.count() === 1 && await visible.first().getAttribute("data-key") === "salt-oracle");
@@ -456,7 +475,7 @@ const typeBadNumber = async (field) => {
 };
 
 /** A refusal can leave an unsaved row on screen until the player finishes its number. */
-async function refusedZeroRow() {
+async function refusedZeroRow(two = false) {
   const context = await browser.newContext();
   let release;
   try {
@@ -464,26 +483,40 @@ async function refusedZeroRow() {
     const page = await open(context);
     const before = await deck(page);
     const savedVersion = await version(page);
-    const id = await page.locator("tbody tr[data-key]").evaluateAll(
-      (rows, ids) => rows.find((row) => !ids.includes(row.getAttribute("data-key")))?.getAttribute("data-key"), Object.keys(before));
-    if (!id) throw new Error("refusal control needs a card not already in the deck");
+    const ids = (await page.locator("tbody tr[data-key]").evaluateAll(
+      (rows, ids) => rows.map((row) => row.getAttribute("data-key")).filter((id) => !ids.includes(id)), Object.keys(before))).slice(0, two ? 2 : 1);
+    if (ids.length !== (two ? 2 : 1)) throw new Error("refusal control needs unplayed cards");
     let posts = 0;
     page.on("request", (r) => { if (isSave(r)) posts++; });
     release = await holdSave(page);
     const gravel = countField(page, "gravel-sprite");
     const [sent] = await Promise.all([page.waitForRequest(isSave), gravel.fill("99").then(() => gravel.press("Tab"))]);
-    await row(page, id).getByRole("button", { name: "Add", exact: true }).click();
-    const field = countField(page, id);
-    await field.press("ControlOrMeta+a");
-    await field.pressSequentially("-");
+    for (const id of ids) await row(page, id).getByRole("button", { name: "Add", exact: true }).click();
+    if (two) {
+      for (const id of [...ids].reverse()) {
+        const position = (await lineOrder(page)).indexOf(id);
+        await page.locator(`li[data-key="${id}"] button`).press("Enter");
+        for (let i = 0; i < position; i++) await page.keyboard.press("ArrowUp");
+        await page.keyboard.press("Enter");
+      }
+      check("both unsaved rows are ahead of the saved rows before refusal", (await lineOrder(page)).slice(0, 2).join() === ids.join());
+    }
+    const fields = ids.map((id) => countField(page, id));
+    for (const field of fields) {
+      await field.press("ControlOrMeta+a");
+      await field.pressSequentially("-");
+    }
+    const active = fields.at(-1);
+    const editor = await active.elementHandle();
     const answer = page.waitForResponse((r) => r.request() === sent);
     release();
     const refusal = await answer;
     await settled(page, "Not saved:");
-    check("the refusal preserves the focused incomplete count on the unsaved row", refusal.status() === 422 &&
-      await field.evaluate((el) => el.validity.badInput && el === document.activeElement));
+    check("the refusal preserves the same focused editor and every incomplete count", refusal.status() === 422 &&
+      await editor.evaluate((el) => el === document.activeElement) &&
+      (await Promise.all(fields.map(numberInput))).every((input) => input.bad && input.value === ""));
 
-    await field.fill("0");
+    for (const field of fields) await field.fill("0");
     await page.locator(saveButton).click();
     const visibleDeck = await deck(page);
     check("correcting the refused row to zero removes it without a write or history entry", sameDeck(visibleDeck, before) &&
@@ -765,15 +798,29 @@ async function nativeRefusal(code) {
     } else {
       await count(page).fill("99");
     }
-    await page.route(builderModule, async (route) => { await resume.promise; await route.continue(); }, { times: 1 });
+    // An input or click can ask for the failed module again on the outgoing page. It
+    // must not consume the refusal document's hold, including its preload/import requests.
+    const onRefusal = (request) => builderModule(new URL(request.url())) && request.frame().url() === deckUrl;
+    await page.route(builderModule, async (route) => {
+      if (!onRefusal(route.request())) return route.fallback();
+      await resume.promise;
+      await route.continue();
+    });
+    if (code === 409) {
+      await Promise.all([
+        page.waitForEvent("requestfailed", { predicate: (r) => builderModule(new URL(r.url())) && r.frame().url() === home }),
+        page.getByRole("searchbox").fill("oracle"),
+      ]);
+    }
     const [refusal] = await Promise.all([
       page.waitForResponse((r) => isSave(r.request())),
-      page.waitForRequest((r) => builderModule(new URL(r.url()))),
+      page.waitForRequest(onRefusal),
       page.locator(saveButton).evaluate((el) => el.click()),
     ]);
     check(`native ${code}: the refusal is a full navigation with its reason`, refusal.status() === code &&
       refusal.request().isNavigationRequest() && (await page.textContent("#save-note")).includes("Not saved:"));
     check(`native ${code}: the notice has no autosave handler`, await page.locator("#save-note").getAttribute("data-on") === null);
+    check(`native ${code}: the refusal document's builder is still held`, await selectAll(page).isDisabled());
     const previous = Number(await version(page));
     const intended = code === 409 ? original : edited;
     if (code === 422) await count(page).fill(intended);
@@ -1354,7 +1401,7 @@ try {
     await successiveAutosaves();
     await successiveAutosaves(true);
   } else if (process.argv.includes("--validity-only")) {
-    await refusedZeroRow();
+    for (const two of [false, true]) await refusedZeroRow(two);
     for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();
@@ -1366,11 +1413,13 @@ try {
       await successiveAutosaves(true);
       await smoke();
     }
-    for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
+    for (const scenario of ["edited", "incomplete", "removed", "lost answer", "cost", "cost-desc", "name-desc", "owned-asc"]) {
+      await delayedBuilder(scenario);
+    }
     for (const selected of [false, true]) await nativeAddHandoff(selected);
     await nativeAddHandoff(false, true);
     for (const code of [409, 422]) await nativeRefusal(code);
-    await refusedZeroRow();
+    for (const two of [false, true]) await refusedZeroRow(two);
     for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();
