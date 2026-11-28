@@ -1665,7 +1665,8 @@ three runs:
    holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with
    the reason when `perf` does not fit that kernel, a required event (`instructions:u` or
    `instructions:k`) has no row or has even one row without a whole count, `perf` prints a row
-   the count would not read as an event of the set, or `perf` does not answer. In a round,
+   whose event name is unknown to the kit, or `perf` does not answer. A recognized event outside
+   the requested set is not flagged just for being outside it. In a round,
    `run-all.mjs` leaves `BENCH_COUNT_EVERY_EVENT` unset in the count even if its caller set it;
    when it was set, the launcher logs that it ignores the setting without giving its value.
    A fault the default probe checks in the first pass's whole set that `perf` answered for is

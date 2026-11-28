@@ -296,17 +296,7 @@ export function probeVerdict(names, r, every = false) {
   return whole && !r.error && !every ? { refuse: null, note: `${why}; the count goes on with the events it reads, and repeats its first load with ${REQUIRED.main} alone where that is unusable` } : { refuse: why, note: null };
 }
 
-/**
- * Aliases for the kit's one cache event, `L1-icache-load-misses:u`, which is also read as asked.
- * The perf 6.8.12 captures omit `:u`: the name is bare without `-A`, and has `[cpu]` with `-A`
- * on x86 with one core PMU. Issue #2232 reports the same names on 6.12.118.
- * In the source for x86 with one core PMU and `-A`, v6.1 to v6.7 leave the name bare, v6.8 to
- * v6.12 add `[cpu]`, v6.13 and v6.14 use `cpu/L1-icache-load-misses/`, and v6.15 and v6.16
- * exempt legacy cache events from renaming. In v6.8 to v6.12 the bracketed name can be an Arm
- * PMU's, and v6.8 uses `cpu_core/.../` or `cpu_atom/.../` on hybrid Intel (stat-display.c).
- * If the row has an unrecognized name, a round can keep its other events; under count-pairs.mjs
- * each invocation refuses at its probe, before its load. Add aliases only from captured rows.
- */
+// See README.md, Method 5, for the L1i aliases and their perf version history.
 const L1I_ROWS = Object.freeze(["L1-icache-load-misses", "L1-icache-load-misses [cpu]"]);
 const eventOf = (/** @type {string | undefined} */ event) => (event !== undefined && L1I_ROWS.includes(event) ? events.userL1iMissesPerRequest : event);
 
