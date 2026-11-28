@@ -980,7 +980,13 @@ try {
   const other = errors.filter((e) => !/Failed to load resource/.test(e));
   check("no console errors", other.length === 0, other.join(" | "));
 } finally {
-  await browser.close();
+  // Bounded like each engine's own close, so a close that never settles still ends the run.
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("close the Chromium browser timed out after 15 s")), 15_000);
+  });
+  await Promise.race([browser.close(), late]).finally(() => clearTimeout(timer));
 }
 for (const [name, value] of Object.entries(timings)) console.log(`time ${name}: ${value}`);
 console.log(failures.length ? `${failures.length} failed` : "all passed");
