@@ -146,7 +146,7 @@ impl Builder {
     /// `generation` and the rules allow it. On replay, the original draft identifies which
     /// scripted edit saved, but a native receipt does not name any scripted edit. A plain form
     /// only gets the original success if it sends the same deck.
-    pub fn save(&self, generation: &str, version: u64, deck: Deck, key: &SubmitKey, draft: u64) -> Outcome {
+    fn save(&self, generation: &str, version: u64, deck: Result<Deck, Refusal>, key: &SubmitKey, draft: u64) -> Outcome {
         let mut saves = self.lock();
         let at = Instant::now();
         while saves.order.front().is_some_and(|(applied, _)| at.duration_since(*applied) >= self.kept_for) {
@@ -156,7 +156,16 @@ impl Builder {
                 saves.forgotten_through = saves.forgotten_through.max(forgotten.version);
             }
         }
-        if let Some(applied) = saves.by_key.get(key) {
+        let applied = saves.by_key.get(key);
+        let deck = match deck {
+            Ok(deck) => deck,
+            // A malformed native resend still needs to say that the earlier save was made.
+            Err(_) if draft == 0 && generation == self.generation() && applied.is_some() => {
+                return Outcome::ChangedSubmit(self.deck.seq());
+            }
+            Err(refusal) => return Outcome::Refused(self.deck.seq(), refusal),
+        };
+        if let Some(applied) = applied {
             if draft != 0 && applied.draft == 0 {
                 return Outcome::NativeSubmit;
             }
@@ -328,10 +337,7 @@ fn deck_page(req: &Req, builder: &Builder, view: &DeckQuery, answer: &Answer, st
 /// draws the saved deck with a fresh key instead of asking the scripted queue to reconcile it.
 /// An ordinary form submit redirects after a save or draws the refusal.
 async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckInput>) -> HtmlResult {
-    let outcome = match builder.posted(&input) {
-        Ok(deck) => builder.save(&input.generation, input.version, deck, &input.submit, input.draft),
-        Err(refusal) => Outcome::Refused(builder.saved().0, refusal),
-    };
+    let outcome = builder.save(&input.generation, input.version, builder.posted(&input), &input.submit, input.draft);
     let (answer, status) = match &outcome {
         Outcome::Saved { version, draft } => (Answer::Saved { version: *version, draft: *draft }, StatusCode::OK),
         Outcome::Refused(version, refusal) => {
@@ -491,6 +497,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_malformed_retry_reconciles_the_saved_deck_but_a_fresh_key_gets_a_refusal() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let f = DeckInput::FIELDS;
+        let key = submit_key();
+        let mut deck = starter();
+        let lost = saving(&app, 0, &deck, &key).field(f.add, "salt-oracle").await;
+        assert_eq!(lost.status(), StatusCode::SEE_OTHER);
+
+        let invalid = |version, key: &SubmitKey| {
+            saving(&app, version, &deck[1..], key)
+                .field(f.card, "gravel-sprite")
+                .field(f.count, "0.5")
+                .field(f.add, "salt-oracle")
+        };
+        let retry = invalid(0, &key).await;
+        let (status, page) = read(&retry);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(page.contains("This form already saved a different edit."));
+        assert!(page.contains(r#"name="version" value="1""#));
+        assert!(page.contains(r#"name="card" value="salt-oracle""#));
+
+        let refused = invalid(1, &submit_key()).await;
+        let (status, page) = read(&refused);
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(page.contains("Enter a number of copies"));
+        assert_eq!((builder.saved().0, builder.saved().1.get("salt-oracle")), (1, Some(&1)));
+
+        deck[0].1 = 2;
+        deck.push(("salt-oracle", 1));
+        let corrected = saving(&app, 1, &deck, &submit_key()).await;
+        assert_eq!(corrected.status(), StatusCode::SEE_OTHER);
+        let (version, saved) = builder.saved();
+        assert_eq!((version, saved.get("gravel-sprite"), saved.get("salt-oracle")), (2, Some(&2), Some(&1)));
+    }
+
+    #[tokio::test]
     async fn autosave_cannot_acknowledge_a_native_save_as_its_own_draft() {
         let f = DeckInput::FIELDS;
         for submitter in ["Save", "Add", "Add selected"] {
@@ -538,7 +581,7 @@ mod tests {
         let deck = |extra: &str| {
             let mut deck: Deck = cards::STARTER.iter().map(|&(id, n)| (id.to_string(), n)).collect();
             deck.insert(extra.into(), 1);
-            deck
+            Ok(deck)
         };
         // A page saved twice before the restart: version 2.
         let before = Builder::from(60, Some("a"), KEPT_FOR);
@@ -566,14 +609,15 @@ mod tests {
         deck.insert("pearl-diver".into(), 1);
         // Keys forgotten at once: the first save's answer was lost, and it is sent again later.
         let builder = Builder::from(60, Some(GEN), Duration::ZERO);
-        assert_eq!(builder.save(GEN, 0, deck.clone(), &key(0), 1), Outcome::Saved { version: 1, draft: 1 });
-        assert_eq!(builder.save(GEN, 0, deck.clone(), &key(0), 2), Outcome::Stale { version: 1, unsure: true });
+        assert_eq!(builder.save(GEN, 0, Ok(deck.clone()), &key(0), 0), Outcome::Saved { version: 1, draft: 0 });
+        assert_eq!(builder.save(GEN, 0, Err(Refusal::NotANumber), &key(0), 0), Outcome::Refused(1, Refusal::NotANumber));
+        assert_eq!(builder.save(GEN, 0, Ok(deck.clone()), &key(0), 0), Outcome::Stale { version: 1, unsure: true });
         // Built on the version after that save, nothing forgotten could be it.
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        builder.save(GEN, 0, deck.clone(), &key(0), 1);
+        builder.save(GEN, 0, Ok(deck.clone()), &key(0), 1);
         deck.insert("pearl-diver".into(), 2);
-        builder.save(GEN, 1, deck.clone(), &key(1), 2);
-        assert_eq!(builder.save(GEN, 1, deck, &key(2), 3), Outcome::Stale { version: 2, unsure: false });
+        builder.save(GEN, 1, Ok(deck.clone()), &key(1), 2);
+        assert_eq!(builder.save(GEN, 1, Ok(deck), &key(2), 3), Outcome::Stale { version: 2, unsure: false });
     }
 
     #[tokio::test]

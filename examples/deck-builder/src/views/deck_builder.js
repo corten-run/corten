@@ -53,6 +53,7 @@ import { DeckPreviewChanged } from "corten/events";
  * @property {HTMLOutputElement} picked
  * @property {HTMLOutputElement} shown
  * @property {HTMLParagraphElement} none
+ * @property {HTMLInputElement} save_query
  * @property {Message<"shown" | "total">} found
  * @property {NumberFormat} number
  */
@@ -901,6 +902,7 @@ const texts = new WeakMap();
  * @param {HTMLInputElement} input @param {Browse} browse
  */
 export function filter(input, browse) {
+  browse.save_query.value = input.value;
   const query = input.value.trim().toLocaleLowerCase();
   let shown = 0;
   let total = 0;

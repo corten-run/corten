@@ -62,7 +62,7 @@ pub fn DeckBuilder<'a>(
     let (cards_zone, deck_zone, rows, grip, add, all, picked, shown, none) = refs();
     let (lines_ref, template, lift, copies, form, version_ref, total, bars, tallies, kinds) = refs();
     let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
-    let (unsure, previews, query) = refs();
+    let (unsure, previews, query, save_query) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
     let parts = js::Parts {
@@ -88,7 +88,7 @@ pub fn DeckBuilder<'a>(
         empty,
         number,
     };
-    let browse = js::Browse { cards: rows, all, picked, shown, none, found: t.js().grid_shown(), number };
+    let browse = js::Browse { cards: rows, all, picked, shown, none, save_query, found: t.js().grid_shown(), number };
     let carry = js::Carry {
         cards_zone,
         deck_zone,
@@ -307,7 +307,7 @@ pub fn DeckBuilder<'a>(
                     <input ref={version_ref} type="hidden" name={f.version} value={version}>
                     {SubmitKey::field(f.submit)}
                     <input ref={draft} type="hidden" name={f.draft} value="0">
-                    <input type="hidden" name={f.q} value={filter}>
+                    <input ref={save_query} type="hidden" name={f.q} value={filter}>
                     if let Some(sort) = view.sort { <input type="hidden" name={f.sort} value={sort}> }
                     <ul
                         ref={lines_ref}

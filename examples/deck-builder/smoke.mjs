@@ -354,6 +354,11 @@ async function delayedBuilder(scenario) {
     check(`${scenario}: Save stays native with the original form key and version`, saved.request().isNavigationRequest() &&
       saved.status() === 303 && saveFields(saved.request()).get("draft") === "0" &&
       saveFields(saved.request()).get("version") === String(previous) && saveFields(saved.request()).get("submit") === key);
+    if (!focused) {
+      check(`${scenario}: native Save posts the local filter and returns to the matching row`,
+        saveFields(saved.request()).get("q") === "oracle" && new URL(page.url()).searchParams.get("q") === "oracle" &&
+        await visible.count() === 1 && await visible.first().getAttribute("data-key") === "salt-oracle");
+    }
     if (removing) check("Save removes the cleared row from the page it leaves open", await other.count() === 0);
     else check(`${scenario}: Save leaves the intended count, not a second change`,
       await count.inputValue() === edited && (!incomplete || await other.inputValue() === otherEdited));

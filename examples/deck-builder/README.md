@@ -26,12 +26,14 @@ form and links the server answers.
 Filter and Save stay visible with scripting enabled. Until the builder starts, the browser
 submits the forms natively: successful writes redirect to the saved deck, and a refusal draws
 the page with its reason. If a first Save already committed, resending its key with different
-counts shows a conflict and asks the player to re-enter that edit on the saved deck. An Add
-can save without touching the count fields. If autosave starts on that same form and reuses
+or malformed counts shows a conflict and asks the player to re-enter that edit on the saved deck.
+Malformed counts under a fresh key are still a form error. An Add can save without touching
+the count fields. If autosave starts on that same form and reuses
 the native save's key, the server refuses the write and draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
 started, that document keeps its fields, focus, and native Save. Selections made before startup
-stay checked and count toward Add selected. With the module running, Filter keeps the page.
+stay checked and count toward Add selected. With the module running, Filter keeps the page,
+and a subsequent native Save returns to that filter.
 
 ## Run it
 
@@ -68,6 +70,28 @@ The routes and what each does are in the table at the top of [`src/app.rs`](src/
 | The save note, which tells the builder a save's answer | [`src/views/save_note.rs`](src/views/save_note.rs), [`src/views/save_note.js`](src/views/save_note.js) |
 
 Its browser test, which also times the screen: [`smoke.mjs`](smoke.mjs).
+
+### Byte comparison
+
+Compared with merge base `1b9c1b0dd8348228f705b240cd44b74027469292` on 2026-11-28, using
+real Windows dev builds on loopback HTTP, Chromium 159.0.8154.6, and fresh 240-card app and
+browser contexts. Each of the three readings per build was identical. The startup numbers
+are uncompressed response bodies for the first `GET /` and the scripts loaded by the time
+the builder requested the deck's live feed.
+
+| Bytes | Merge base | This change |
+|---|---:|---:|
+| Startup HTML | 164,146 | 161,230 |
+| `deck_builder.js` | 21,805 | 22,709 |
+| All 11 startup script bodies | 90,972 | 91,737 |
+| Native Save: POST, 303, redirected GET and its response | 169,454 | 166,538 |
+
+For native Save, JavaScript was off on both builds. From `/?q=oracle`, both posted Gravel
+Sprite's count from 3 to 2, then returned to the same one-row filter with the saved count.
+The total is HTTP request and response headers and bodies as reported by Playwright. Both
+POST bodies were 242 bytes and both 303 bodies were empty. The final GET returned 165,864
+versus 162,948 uncompressed HTML bytes. The total excludes the page open before Save,
+subresources, and transport framing. These are real app bytes, not a fixture or a speed claim.
 
 ## Nested Preview
 
