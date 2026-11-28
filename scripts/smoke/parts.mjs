@@ -1,204 +1,88 @@
-import { randomUUID } from "node:crypto";
-import { base, engine, skip, check, within } from "./helpers.mjs";
+import { base, engine, skip, check, steps, within } from "./helpers.mjs";
 
-/** An error's first line, or the value as text. @param {unknown} error */
+/** @param {unknown} error */
 const firstLine = (error) => (error instanceof Error ? error.message : String(error)).split("\n")[0];
 
 /**
- * Calls `probe` every 50 ms until `done` takes its answer or the deadline, each call bounded by
- * what is left, and says whether one was taken in time, with the last answer and the last
- * error a call threw: a failure reports what the page last showed and why a probe last failed,
- * not what one more probe after the deadline saw. An answer that comes after the deadline is none,
- * and a call the deadline cut off is the error only when no call failed for a reason of its own.
- * @template T @param {number} until @param {() => Promise<T>} probe @param {(seen: T) => boolean} done
- * @returns {Promise<{ ok: boolean, last: T | undefined, error: string }>}
+ * Follow the failed read's real link, with no earlier navigation or pointer activity in its context.
+ * @param {import("@playwright/test").Browser} browser
  */
-async function watch(until, probe, done) {
-  const cut = "the last probe was still running when the time ran out";
-  /** @type {T | undefined} */
-  let last;
-  let error = "";
-  for (;;) {
-    const left = until - performance.now();
-    if (left <= 0) return { ok: false, last, error };
-    try {
-      const seen = await within(left, cut, probe());
-      if (performance.now() >= until) return { ok: false, last, error: error || cut };
-      last = seen;
-      if (done(seen)) return { ok: true, last, error };
-    } catch (e) {
-      const why = firstLine(e);
-      if (why !== cut || !error) error = why;
-    }
-    const pause = Math.min(50, until - performance.now());
-    if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause));
-  }
-}
+export async function failedPartLink(browser) {
+  const home = new URL("/", base).href;
+  const target = new URL("/?picks=true", base).href;
+  /** @type {import("@playwright/test").Page | undefined} */
+  let page;
+  let step = "set up the failed part";
+  let failure = "";
+  try {
+    const setup = steps(10_000, "failed-part setup timed out");
+    const follow = await setup.step(() => browser.newPage());
+    page = follow;
+    // Neither the initial read nor any unexpected read at the destination can supply the picks.
+    await setup.step(() => follow.route((url) => url.href === home || url.href === target, (route) =>
+      route.request().headers().corten === "action" ? route.abort("internetdisconnected") : route.continue(),
+    ));
+    await setup.step(() => follow.goto(home, { waitUntil: "domcontentloaded", timeout: 10_000 }));
+    const link = follow.locator("#picks[data-corten-read-failed] a:visible");
+    await setup.step(() => link.waitFor({ state: "visible", timeout: 10_000 }));
+    const href = await setup.step(() => link.evaluate((a) => /** @type {HTMLAnchorElement} */ (a).href));
+    if (href !== target) throw new Error("link points to " + href + ", expected " + target);
 
-/**
- * Follows the waiting part's link to the page with the picks read in, and says which step did not
- * happen, or "" when every one did (#2246):
- * 1. one keyboard activation on a link to the exact Watchlist picks URL;
- * 2. the first request to that address after the click lands (a whole load or `corten: nav` or
- *    `page`) answers with the picks and no read template. Both steps have 10 s from invoking
- *    the key press, including any navigation that Playwright waits for;
- * 3. those picks drawn at that address: the page's address is the expected one when they are seen, the
- *    rows are the ones that answer carried, the waiting part is gone, and no part read
- *    (`corten: action`) was sent after the click that could have filled them. Drawing has 10 s
- *    from accepting the answer.
- * @param {import("@playwright/test").Page} page
- * @param {{ answerMs?: number, drawMs?: number }} [budgets] Shorter deadlines for fixture tests.
- */
-export async function followPicks(page, { answerMs = 10_000, drawMs = 10_000 } = {}) {
-  const target = new URL("/?picks=true", page.url()).href;
-  const marker = `smoke picks click ${randomUUID()}`;
-  let link = "";
-  try {
-    link = await within(
-      5000,
-      "not settled within 5 s",
-      page.evaluate(({ target, marker }) => {
-        const part = document.querySelector("#picks");
-        const a = part?.querySelector("a");
-        if (!(a instanceof HTMLAnchorElement)) return "";
-        if (a.href === target) {
-          /** @type {any} */ (part).__waitingPicks = true;
-          // Session storage keeps the capture-phase witness across a same-origin whole load.
-          /** @param {MouseEvent} event */
-          const land = (event) => {
-            if (!event.isTrusted || event.button !== 0 || !event.composedPath().includes(a) || a.href !== target) return;
-            window.removeEventListener("click", land, true);
-            sessionStorage.setItem(marker, String(performance.timeOrigin + performance.now()));
-          };
-          window.addEventListener("click", land, true);
-        }
-        return a.href;
-      }, { target, marker }),
-    );
+    // Arm before pressing Enter, so even a fast answer is seen. This fresh page has never
+    // hovered the link; the separate prefetch smoke still exercises real pointer hover and reuse.
+    const answered = follow.waitForResponse((response) => {
+      const request = response.request();
+      const { corten, purpose } = request.headers();
+      return response.url() === target && request.method() === "GET" && purpose !== "prefetch" &&
+        (request.isNavigationRequest() || corten === "nav" || corten === "page");
+    }, { timeout: 25_000 }).catch(firstLine);
+    step = "activate the failed-part link";
+    await within(12_000, "keyboard activation did not settle within 12 s", link.press("Enter", { noWaitAfter: true, timeout: 10_000 }));
+
+    step = "navigate to " + target;
+    const navigation = steps(10_000, "navigation timed out");
+    const response = await navigation.step(() => answered);
+    if (typeof response === "string") throw new Error(response);
+    if (!response.ok()) throw new Error("HTTP " + response.status());
+    await navigation.step(() => follow.waitForURL((url) => url.href === target, { waitUntil: "commit", timeout: 10_000 }));
+
+    step = "draw the picks";
+    const items = steps(10_000, "picks timed out");
+    const body = await items.step(() => response.text());
+    const expected = await items.step(() => follow.evaluate((html) => {
+      const doc = new DOMParser().parseFromString(__html(html), "text/html");
+      return {
+        rows: Array.from(doc.querySelectorAll("ul#picks > li"), (li) => li.textContent),
+        readNow: !!doc.querySelector("template[data-corten-read-now]"),
+      };
+    }, body));
+    if (expected.rows.length !== 2 || expected.readNow) {
+      throw new Error("the answer has " + expected.rows.length + " picks, read template " + expected.readNow);
+    }
+    let lastDraw = "no rendered picks observed";
+    await items.poll(async () => {
+      const drawn = await follow.evaluate(() => ({
+        at: location.href,
+        rows: Array.from(document.querySelectorAll("ul#picks > li"), (li) => li.textContent),
+        waiting: !!document.querySelector("#picks[data-corten-read-failed], template[data-corten-read-now]"),
+      }));
+      lastDraw = JSON.stringify(drawn);
+      return drawn.at === target && !drawn.waiting && JSON.stringify(drawn.rows) === JSON.stringify(expected.rows);
+    }).catch((error) => {
+      throw new Error(firstLine(error) + "; last draw: " + lastDraw);
+    });
+    await items.step(() => follow.locator("ul#picks").waitFor({ state: "visible", timeout: 10_000 }));
   } catch (error) {
-    return `the link could not be read (${firstLine(error)}), at ${page.url()}`;
-  }
-  if (!link) return `the waiting part has no link to follow, at ${page.url()}`;
-  if (link !== target) return `the waiting part links to ${link}, expected ${target}`;
-  /** @typedef {import("@playwright/test").Request} Request */
-  /** @typedef {import("@playwright/test").Response} Response */
-  /** @typedef {{ request: Request, how: string, response?: Response, parsed?: { rows: string[], readNow: boolean }, unread?: string }} Answer */
-  /** @type {Map<Request, Answer>} */
-  const candidates = new Map();
-  let reads = 0;
-  let until = 0;
-  let landed = 0;
-  /** @param {Request} r */
-  const onRequest = (r) => {
-    if (!until) return;
-    const { corten, purpose } = r.headers();
-    if (corten === "action") reads++;
-    if (purpose === "prefetch" || r.url() !== target || r.method() !== "GET") return;
-    const how = r.resourceType() === "document" ? "load" : corten === "nav" || corten === "page" ? corten : "";
-    if (how) candidates.set(r, { request: r, how });
-  };
-  /** @param {Response} res */
-  const onResponse = (res) => {
-    const a = candidates.get(res.request());
-    if (a) a.response = res;
-  };
-  // Keep arrivals before the page witness is read. Timing excludes requests already in flight
-  // at activation, not work caused by a hover. Without a response, Playwright may have no start
-  // time: keep that candidate for diagnostics and never let it stand in for an answer.
-  const afterClick = () => landed
-    ? [...candidates.values()].filter(({ request, response }) => !response || request.timing().startTime > landed)
-    : [];
-  /** The picks in an answer's markup, parsed by the browser. @param {string} body */
-  const parse = (body) =>
-    page.evaluate((body) => {
-      const html = /** @type {any} */ (window).__html?.(body) ?? body;
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      return { rows: Array.from(doc.querySelectorAll("ul#picks li"), (li) => li.textContent ?? ""), readNow: !!doc.querySelector("template[data-corten-read-now]") };
-    }, body);
-  const lateBody = "body not read in time";
-  /** @param {Answer} a */
-  const readAnswer = async (a) => {
-    if (!a.response?.ok()) return;
-    // The body read is bounded by the time left since invoking the key press.
-    try {
-      const left = until - performance.now();
-      if (left <= 0) throw new Error(lateBody);
-      const body = await within(left, lateBody, a.response.text());
-      // A document navigation can replace the evaluation context while parsing.
-      const parsed = await watch(until, () => parse(body), () => true);
-      if (parsed.ok) a.parsed = parsed.last;
-      else a.unread = parsed.error ? `body not parsed in time: ${parsed.error}` : lateBody;
-    } catch (error) {
-      a.unread = firstLine(error);
-    }
-  };
-  /** @param {Answer | undefined} a */
-  const carries = (a) => a?.parsed?.rows.length === 2 && !a.parsed.readNow;
-  /** @param {Answer} a */
-  const bodyStatus = (a) => {
-    if (a.parsed) return carries(a) ? "carries the picks" : "body lacks the picks";
-    if (a.response && !a.response.ok()) return "non-2xx response";
-    return a.request.failure()?.errorText ?? a.unread ?? (a.response ? lateBody : "no response");
-  };
-  /** The click's first answer, without its markup. @param {Answer} a */
-  const describe = (a) => ({
-    how: a.how,
-    status: a.response?.status(),
-    body: bodyStatus(a),
-    items: a.parsed?.rows.length,
-    readNow: a.parsed?.readNow,
-  });
-  /** @param {Answer | undefined} a */
-  const noAnswer = (a) =>
-    `no answer to the navigation to ${target} carried the picks (${answerMs / 1000} s from activation start, ${afterClick().length} click requests, answer ${JSON.stringify(a ? describe(a) : null)}), at ${page.url()}`;
-  page.on("request", onRequest);
-  page.on("response", onResponse);
-  try {
-    until = performance.now() + answerMs;
-    try {
-      // Focus and press Enter so the trusted click has no pointerover or pointerenter. The
-      // dedicated prefetch smoke exercises hover separately.
-      await page.press("#picks a", "Enter", { timeout: Math.max(1, Math.floor(until - performance.now())) });
-    } catch (error) {
-      return `keyboard activation of the link failed (${firstLine(error)}; ${answerMs / 1000} s activation budget), ${candidates.size} candidate requests for ${target}, at ${page.url()}`;
-    }
-    const activation = await watch(until, () => page.evaluate((key) => Number(sessionStorage.getItem(key)), marker), (at) => at > 0);
-    if (!activation.ok || !activation.last) {
-      const error = activation.error ? ` (${activation.error})` : "";
-      return `no keyboard click reached the link within ${answerMs / 1000} s${error}, at ${page.url()}`;
-    }
-    landed = activation.last;
-    const answered = await watch(
-      until,
-      async () => afterClick()[0],
-      (a) => !!a && !!(a.response || a.request.failure()),
-    );
-    const a = answered.last;
-    if (!answered.ok || !a) return noAnswer(a);
-    await readAnswer(a);
-    if (!carries(a)) return noAnswer(a);
-    const drawn = await watch(
-      performance.now() + drawMs,
-      () => page.evaluate(() => {
-        const part = document.querySelector("#picks");
-        return {
-          at: location.href,
-          rows: Array.from(document.querySelectorAll("ul#picks li"), (li) => li.textContent ?? ""),
-          readNow: !!document.querySelector("template[data-corten-read-now]"),
-          waiting: !!part && !!(/** @type {any} */ (part).__waitingPicks),
-        };
-      }),
-      (seen) => seen.at === target && !seen.readNow && !seen.waiting && reads === 0 && JSON.stringify(a.parsed?.rows) === JSON.stringify(seen.rows),
-    );
-    if (!drawn.ok) {
-      const error = drawn.error ? `; last probe error: ${drawn.error}` : "";
-      return `the picks the answer carried were not drawn at ${target} within ${drawMs / 1000} s of accepting it (last seen ${JSON.stringify(drawn.last ?? null)}, ${reads} part reads, ${afterClick().length} click requests, answer ${JSON.stringify(describe(a))}${error})`;
-    }
-    return "";
+    failure = step + ": " + firstLine(error) + " (at " + (page?.url() ?? "no page") + ")";
   } finally {
-    page.off("request", onRequest);
-    page.off("response", onResponse);
+    if (page) {
+      const context = page.context();
+      await within(5000, "context close timed out", context.close()).catch((error) => {
+        failure += (failure ? "; " : "") + "close the failed-part context: " + firstLine(error);
+      });
+    }
   }
+  return failure;
 }
 
 export async function partReads(page, browser, swaps, noSwaps) {
@@ -282,13 +166,12 @@ export async function partReads(page, browser, swaps, noSwaps) {
     await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
     const failed = await placeholder();
     check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
-    // Followed only when shown, so a link that is not fails the checks, not the run; the check says
-    // which step did not happen.
-    const followed = failed.link ? await followPicks(held) : "the link was not shown, so not followed";
-    check("the page it links to has the slow part read in, with JavaScript too", followed === "", followed || held.url());
     await held.unrouteAll({ behavior: "ignoreErrors" });
     await held.context().close();
   }
+  const followed = await failedPartLink(browser);
+  check("the page it links to has the slow part read in, with JavaScript too", followed === "", followed);
+
   // The part module does not load (a 503), though the page and the runtime do: no read starts, and
   // the waiting part shows its link, as without JavaScript: nothing marked it busy, which alone
   // hides the link (#1400).
