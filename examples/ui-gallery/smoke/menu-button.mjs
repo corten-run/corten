@@ -109,7 +109,7 @@ export async function menuButton(page, errors) {
   await page.keyboard.press("Escape");
   await expanded("false");
   await trigger.click();
-  const regionStayed = await liveRegion(page, "menu-result");
+  const { stayed: regionStayed } = await liveRegion(page, "menu-result");
   await page.getByRole("menuitem", { name: "Archive" }).click();
   await page.waitForFunction(() => document.querySelector("#menu-result")?.textContent === "Archived.");
   check("a form item posts and patches", true);

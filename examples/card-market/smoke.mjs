@@ -173,7 +173,7 @@ try {
   check("focus moves to the invalid field", await page.evaluate(() => document.activeElement?.getAttribute("name") === "target_price"));
   check("valid input survives the error patch", (await page.inputValue('input[name="email"]')) === "buyer@example.com");
   await page.fill('input[name="target_price"]', "4.5");
-  const alertRegionStayed = await liveRegion(page, "alert-message");
+  const { stayed: alertRegionStayed } = await liveRegion(page, "alert-message");
   await page.click('form[data-patch] button[type="submit"]');
   await page.waitForFunction(() => /Alert set/.test(document.getElementById("alert-message")?.textContent ?? ""));
   check("form action patches the message", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));

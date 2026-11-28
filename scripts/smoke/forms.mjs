@@ -846,7 +846,7 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   }, shadowing);
   // Clicked from the page: Playwright's own click reads the form's getAttribute, which the
   // control named getAttribute shadows.
-  const watchRegionStayed = await liveRegion(page, "watch-message");
+  const { stayed: watchRegionStayed } = await liveRegion(page, "watch-message");
   await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#shadowed button")).click());
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Globex"), null, { timeout: 4000 }).catch(() => {});
   check("a watch answer keeps the live region even when it replaces the form", await watchRegionStayed());

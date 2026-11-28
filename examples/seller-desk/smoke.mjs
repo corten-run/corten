@@ -262,7 +262,7 @@ try {
   check("Archive opens the dialog", await page.isVisible("dialog[open]"));
   const itemCount = () => page.textContent("#item-count");
   const countBefore = await itemCount();
-  const regionStayed = await liveRegion(page, "desk-status");
+  const { stayed: regionStayed } = await liveRegion(page, "desk-status");
   await page.click("dialog button[value=confirm]");
   await page.waitForFunction(() => /Archived/.test(document.getElementById("desk-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
   check("confirming archives the rows", (await page.textContent("#desk-status")) === "Archived 2 items.", await page.textContent("#desk-status"));

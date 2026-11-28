@@ -51,7 +51,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       );
       await page.goto(url);
       page.on("request", onPart);
-      const regionStayed = await liveRegion(page, "alert-status");
+      const { stayed: regionStayed } = await liveRegion(page, "alert-status");
       const waiting = await saved();
       await page.fill("input[name=above]", "123.45");
       await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));

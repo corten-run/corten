@@ -11,7 +11,7 @@ import { styles } from "./smoke/styles.mjs";
 import { viewHelpers } from "./smoke/views.mjs";
 import { modules } from "./smoke/modules.mjs";
 import { componentLifecycle } from "./smoke/component-lifecycle.mjs";
-import { liveFragments, streamCompression, streamRecovery } from "./smoke/live-streams.mjs";
+import { liveFragments, liveRegionControls, streamCompression, streamRecovery } from "./smoke/live-streams.mjs";
 import { partReads, partsInPatches } from "./smoke/parts.mjs";
 import { trustedTypes } from "./smoke/trusted-types.mjs";
 import { submitQueue } from "./smoke/submit-queue.mjs";
@@ -43,6 +43,7 @@ await runSmoke(async (browser) => {
   await viewHelpers(page, browser);
   const { prices } = await modules(browser, live, page);
   await componentLifecycle(page, live, prices, feedSources, signsIn);
+  await liveRegionControls(browser);
   await liveFragments(page);
   await partReads(page, browser, swaps, noSwaps);
   await streamCompression(page);

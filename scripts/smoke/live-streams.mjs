@@ -1,15 +1,42 @@
 import { engine, check } from "./helpers.mjs";
 import { liveRegion } from "./live-region.mjs";
 
+export async function liveRegionControls(browser) {
+  const page = await browser.newPage();
+  try {
+    for (const [name, ancestor, region, afterRole, expected, afterText = "After"] of [
+      ["an already rendered status accepts a replacement message", "", 'role="status"', "status", true],
+      ["a role added with the message does not count as a live region", "", "", "status", false],
+      ["an ancestor unhidden with the message does not count as rendered", "hidden", 'role="status"', "status", false],
+      ["aria-live off overrides the status role", "", 'role="status" aria-live="off"', "status", false],
+      ["the region must keep its live semantics", "", 'role="log"', "status", false],
+      ["the replacement wait follows the node even when the text is unchanged", "", 'role="alert"', "alert", true, "Before"],
+    ]) {
+      await page.setContent(`<div ${ancestor}><div ${region}><p id="message">Before</p></div></div>`);
+      const { text, stayed } = await liveRegion(page, "message");
+      await page.locator("#message").evaluate((message, { afterRole, afterText }) => {
+        const region = message.parentElement;
+        region.parentElement.removeAttribute("hidden");
+        region.setAttribute("role", afterRole);
+        const replacement = message.cloneNode();
+        replacement.textContent = afterText;
+        message.replaceWith(replacement);
+      }, { afterRole, afterText });
+      check(name, (await stayed(4000)) === expected && text === "Before");
+    }
+  } finally {
+    await page.close();
+  }
+}
+
 export async function liveFragments(page) {
   // <corten-live src>: the server streams fragments and the runtime swaps them in by id.
-  const firstTrade = await page.textContent("#last-trade");
-  const regionStayed = await liveRegion(page, "last-trade");
-  await page.waitForFunction((t) => document.getElementById("last-trade")?.textContent !== t, firstTrade, { timeout: 4000 }).catch(() => {});
+  const { text: firstTrade, stayed } = await liveRegion(page, "last-trade");
   // A trade a second: one drawn in four seconds is a fragment the runtime applied.
+  const regionStayed = await stayed(4000);
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
-  check("a trade replaces only the live region's message", await regionStayed());
+  check("a trade replaces only the live region's message", regionStayed);
 }
 
 export async function streamCompression(page) {

@@ -92,7 +92,7 @@ export async function button(page, floor, lastResult, floorGroup, qty) {
   check("InputGroup: a refused input draws the group's border in the destructive color", floorRefused.invalid, JSON.stringify(floorRefused));
   await floor.fill("5");
   await qty.fill("2");
-  const regionStayed = await liveRegion(page, "result");
+  const { stayed: regionStayed } = await liveRegion(page, "result");
   await page.getByRole("button", { name: "List for sale" }).click();
   await page.waitForFunction(() => document.querySelector("#result")?.textContent?.startsWith("Listed 2"), null, { timeout: 5000 }).catch(() => {});
   check("with a lowest offer the listing is sent", (await page.textContent("#result")) === "Listed 2 Near Mint Ashen Drake at $12.50 each, 0.7 oz to ship.", await page.textContent("#result"));
