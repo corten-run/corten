@@ -279,8 +279,10 @@ census. This keeps post-removal absence out of samples dated before the runner's
 terminal receipt. The observer reserves 50 ms for
 capture and 50 ms for storage yield when waiting; inside that reserve it only
 tries a nonblocking lock, and never renews an expired periodic deadline. After a
-recorded fault, finish gets one fresh gate budget of at most one second to record
-drain. The original sample times and fault remain; the fault still disqualifies the run.
+recorded fault, or if the settled command's ordinary final capture misses its
+deadline, finish gets one fresh gate budget of at most one second to record drain.
+Finish records faults without requesting another command stop. The original sample
+times and first fault remain; there is no clean terminal clock or qualification.
 The runner holds its exclusive lock from before the terminal participant receipt
 through the Docker CLI's `close`, including after a client timeout. That is not
 daemon acknowledgement: a late daemon removal can still create an observation

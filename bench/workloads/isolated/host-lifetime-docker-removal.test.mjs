@@ -14,7 +14,7 @@ import { groupQualificationPassed, OwnedDocker, run } from "../../fullstack-brow
 import { nativeAttemptCells, replayPrerequisite } from "../../fullstack-browser/verify.mjs";
 import { removeOwnedLiveContainer } from "../../live/parity.mjs";
 import { definition } from "../registry.mjs";
-import { browserDockerGateChildFd, browserDockerGateEnv, browserDockerGateIdentity, inspectBrowserParticipants,
+import { browserDockerGateChildFd, browserDockerGateEnv, browserDockerGateIdentity, composeHostProof, inspectBrowserParticipants,
   lockBrowserDocker, reopenBrowserDockerGate } from "./host-lifetime.mjs";
 import { supervise } from "./process.mjs";
 import { fixture, stat } from "./test-fixtures/host-lifetime-observer.mjs";
@@ -389,6 +389,68 @@ for (const group of [true, "live-delivery", "recoverable-live"]) test(`${group =
   assert.deepEqual(f.terminal.observerFailures.first, {
     phase: "interval", operation: "docker-gate", code: "unknown", at: previous + 900, samples: 2, lastSampleAt: previous,
   });
+});
+
+for (const mode of ["healthy", "late", "contended", "exhausted"]) {
+  test(`Browser terminal gate: ${mode}`, linux, async (t) => {
+    const { gate } = anchor(t), stop = new AbortController();
+    let faults = 0, lists = 0, settled = 0;
+    const f = await fixture(t, [], true, () => { faults++; stop.abort(); }, 0, false, null, gate, stop.signal);
+    f.clock += 100; await f.tick();
+    const previous = f.samples().at(-1).at;
+    const healthy = mode === "healthy", contended = mode === "contended", exhausted = mode === "exhausted";
+    f.clock += healthy ? 100 : contended ? 650 : 1001; // No interval fires before finish.
+    const attempts = [];
+    let unlock = (contended || exhausted) ? lockBrowserDocker(gate, true) : undefined;
+    f.docker = () => { lists++; return ""; };
+    f.flock = (args, options, acquire) => {
+      attempts.push([args, options.timeout]);
+      try { return acquire(); }
+      finally {
+        if (unlock) f.clock += options.timeout;
+        if (contended && unlock) { unlock(); unlock = undefined; }
+      }
+    };
+    let proof;
+    try { proof = await f.finish(!healthy, () => { settled++; }); }
+    finally { unlock?.(); delete f.flock; }
+    const attempt = (ms) => [["-s", "-E", "75", "-w", String(ms / 1000), "0"], ms];
+    assert.deepEqual(attempts, healthy ? [attempt(800)] : contended ? [attempt(250), attempt(1000)] : [attempt(1000)]);
+    assert.equal(lists, exhausted ? 0 : 1);
+    assert.equal(f.terminal.empty, !exhausted); assert.equal(f.terminal.terminal, !exhausted);
+    assert.equal(Boolean(f.removed), !exhausted); assert.equal(settled, exhausted ? 0 : 1);
+    assert.equal(f.terminal.command.success, true);
+    assert.equal(faults, 0); assert.equal(stop.signal.aborted, false);
+    assert.equal(proof.status, healthy ? "verified" : "blocked");
+    if (healthy) { assert.equal(f.terminal.observerFailures.count, 0); return; }
+    assert.equal(f.terminal.observerError, "host-observation-gap");
+    assert.equal(f.terminal.observerFailures.count, exhausted ? 2 : 1);
+    assert.deepEqual(f.terminal.observerFailures.first, {
+      phase: "finish", operation: "docker-gate", code: "unknown", at: previous + (contended ? 900 : 1001),
+      samples: 3, lastSampleAt: previous,
+    });
+    if (exhausted) assert.equal(f.terminal.observerFailures.last.at, previous + 2001);
+    assert.equal(f.samples().at(-1).at, exhausted ? previous : f.clock);
+    assert.equal(Object.hasOwn(f.terminal, "terminalClock"), false);
+    assert.equal(proof.checks.observer, false);
+    assert.equal(proof.checks.terminal, !exhausted); assert.equal(proof.checks.empty, !exhausted);
+    assert.equal(proof.checks.accounting, mode !== "late");
+    assert.equal(proof.cleanupComplete, false);
+    assert.deepEqual(composeHostProof({}, {}, proof), { resources: "blocked", cleanupComplete: false,
+      blockers: ["actual-host-subject-proof-incomplete"] });
+  });
+}
+
+test("Browser terminal gate: an independent abort still fences drain publication", linux, async (t) => {
+  const { gate } = anchor(t), stop = new AbortController();
+  let faults = 0, settled = 0;
+  const f = await fixture(t, [], true, () => { faults++; stop.abort(); }, 0, false, null, gate, stop.signal);
+  f.clock += 100; await f.tick();
+  f.clock += 1001;
+  f.docker = () => { stop.abort(); return ""; };
+  await assert.rejects(f.finish(true, () => { settled++; }), /host observation cancelled during storage drain/);
+  assert.equal(faults, 0); assert.equal(stop.signal.aborted, true);
+  assert.equal(f.hasTerminal(), false); assert.equal(f.removed, undefined); assert.equal(settled, 0);
 });
 
 test("a free gate at 950 ms uses nonblocking flock without spending the optional reserve", linux, async (t) => {

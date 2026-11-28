@@ -637,13 +637,16 @@ export function reopenBrowserDockerGate({ fd, identity }) {
   }
 }
 
+class BrowserSampleDeadline extends Error {}
+
 export function lockBrowserDocker(gate, removal = false, deadline, reserveMs = 0) {
   const fd = reopenBrowserDockerGate(gate);
   const timedOut = "Browser Docker gate acquisition timed out";
+  const timeoutError = () => removal ? new Error(timedOut) : new BrowserSampleDeadline(timedOut);
   let acquired = false;
   try {
     const remaining = removal ? 2250 : deadline - performance.now();
-    if (!Number.isFinite(remaining) || remaining < 1) throw new Error(timedOut);
+    if (!Number.isFinite(remaining) || remaining < 1) throw timeoutError();
     const immediate = !removal && remaining - reserveMs < 1;
     const waitMs = Math.floor(remaining - (immediate ? 0 : reserveMs));
     const timing = immediate ? ["-n"] : ["-w", removal ? "2" : String(waitMs / 1000)];
@@ -653,9 +656,10 @@ export function lockBrowserDocker(gate, removal = false, deadline, reserveMs = 0
         stdio: [fd, "ignore", "ignore"], timeout: waitMs, killSignal: "SIGKILL",
       });
     } catch (error) {
-      throw new Error(error.status === 75 || error.code === "ETIMEDOUT" ? timedOut : "Browser Docker gate acquisition failed");
+      if (error.status === 75 || error.code === "ETIMEDOUT") throw timeoutError();
+      throw new Error("Browser Docker gate acquisition failed");
     }
-    if (!removal && performance.now() >= deadline - (immediate ? 0 : reserveMs)) throw new Error(timedOut);
+    if (!removal && performance.now() >= deadline - (immediate ? 0 : reserveMs)) throw timeoutError();
     acquired = true;
     return () => closeSync(fd);
   } finally {
@@ -784,14 +788,27 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       at: Date.now(), samples, lastSampleAt, ...(catalog && timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
+  function finishFault(error) {
+    observerError ??= "host-observation-gap";
+    failure("finish", error);
+  }
   function sample(timing, terminalGateDeadline) {
     const previous = lastSampleAt;
     const capture = timing || terminalGateDeadline !== undefined ? () => collectSample(timing, terminalGateDeadline) : collectSample;
     const observed = pending ? pending.transaction(capture) : capture();
     // Admission and capture commit precede notification: startup cancellation
     // may dispose the observer, but must not close an active transaction.
-    if ((previous !== null && (observed.at < previous || observed.at - previous > maximumSampleGapMs))
-      || observed.docker?.gaps.length) notifyFault();
+    const discontinuity = previous !== null && (observed.at < previous || observed.at - previous > maximumSampleGapMs);
+    if (discontinuity || observed.docker?.gaps.length) {
+      if (closed && captureGate) {
+        // Finish owns settlement. Do not abort the settled command through
+        // onFault; retain the fault instead and leave external aborts fenced.
+        if (observerError === null) {
+          sampleOperation = discontinuity ? "sample-continuity" : "docker-inventory";
+          finishFault(new Error("Browser terminal observation gap"));
+        }
+      } else notifyFault();
+    }
   }
   function collectSample(timing, terminalGateDeadline) {
     sampleOperation = "snapshot";
@@ -810,8 +827,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     try {
       observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses, inline, gateDeadline);
       observedMono = captureGate ? performance.now() : undefined;
-      if (gateDeadline !== undefined && terminalGateDeadline === undefined && observedMono > gateDeadline)
-        throw new Error("Browser sample continuity deadline exceeded");
+      if (gateDeadline !== undefined && observedMono > gateDeadline)
+        throw new BrowserSampleDeadline("Browser sample continuity deadline exceeded");
       if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
         && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
       processes = observed.processes;
@@ -902,14 +919,21 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       assert.equal(closed, false); closed = true; stopSampling(); releaseStartup();
       let empty = false;
       try {
-        // A faulted interval can't renew its deadline. After the command has
-        // settled, give drain accounting one fresh gate budget, not a clean bill of health.
-        const terminalGateDeadline = captureGate && observerError !== null ? performance.now() + maximumSampleGapMs : undefined;
-        sample(undefined, terminalGateDeadline);
+        // A faulted interval can't renew its deadline. A settled command gets
+        // at most one fresh gate budget for drain, including a deadline first
+        // missed here. The original fault still disqualifies the observation.
+        const drainDeadline = () => performance.now() + maximumSampleGapMs;
+        const terminalGateDeadline = captureGate && observerError !== null ? drainDeadline() : undefined;
+        try { sample(undefined, terminalGateDeadline); }
+        catch (error) {
+          if (!result.terminal || terminalGateDeadline !== undefined || !(error instanceof BrowserSampleDeadline)) throw error;
+          finishFault(error);
+          sample(undefined, drainDeadline());
+        }
         sampleOperation = "terminal-empty";
         empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0");
       }
-      catch (error) { observerError = "host-observation-gap"; failure("finish", error); }
+      catch (error) { finishFault(error); }
       finally { closeCaptureGate(); }
       let stored;
       try { stored = await writer.finish(); assert.equal(stored.samples, samples); }
