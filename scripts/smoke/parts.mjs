@@ -10,13 +10,21 @@ const firstLine = (error) => (error instanceof Error ? error.message : String(er
 export async function failedPartLink(browser) {
   const home = new URL("/", base).href;
   const target = new URL("/?picks=true", base).href;
+  /** @type {Promise<import("@playwright/test").BrowserContext> | undefined} */
+  let opening;
+  /** @type {import("@playwright/test").BrowserContext | undefined} */
+  let context;
   /** @type {import("@playwright/test").Page | undefined} */
   let page;
   let step = "set up the failed part";
   let failure = "";
+  /** @param {import("@playwright/test").BrowserContext} owned */
+  const close = async (owned) => within(5000, "context close timed out", owned.close());
   try {
     const setup = steps(10_000, "failed-part setup timed out");
-    const follow = await setup.step(() => browser.newPage());
+    const owned = await setup.step(() => (opening = browser.newContext()));
+    context = owned;
+    const follow = await setup.step(() => owned.newPage());
     page = follow;
     // Neither the initial read nor any unexpected read at the destination can supply the picks.
     await setup.step(() => follow.route((url) => url.href === home || url.href === target, (route) =>
@@ -75,10 +83,14 @@ export async function failedPartLink(browser) {
   } catch (error) {
     failure = step + ": " + firstLine(error) + " (at " + (page?.url() ?? "no page") + ")";
   } finally {
-    if (page) {
-      const context = page.context();
-      await within(5000, "context close timed out", context.close()).catch((error) => {
+    if (context) {
+      await close(context).catch((error) => {
         failure += (failure ? "; " : "") + "close the failed-part context: " + firstLine(error);
+      });
+    } else if (opening) {
+      // Setup has already failed; do not wait for acquisition, but close its context if it arrives.
+      void opening.then(close, () => {}).catch((error) => {
+        console.error("close the late failed-part context: " + firstLine(error));
       });
     }
   }
