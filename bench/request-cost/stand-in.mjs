@@ -30,10 +30,12 @@
 //   STAND_IN_CLOSE_ON_SWEEP=<n>  close one held connection before replying to the nth sweep
 //   STAND_IN_SWEEP_LOG=1         emit ordinary stdout lines before the allocator reply
 //   STAND_IN_BAD_SWEEP=<n>        write an invalid observer frame before the nth valid reply
+//   STAND_IN_SWEEP_FRAME         split, eof, cr, or oversized final observer reply
 import { once } from "node:events";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import net from "node:net";
 import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const state = process.env.STAND_IN;
 if (!state) throw new Error("STAND_IN names no directory");
@@ -179,13 +181,39 @@ function serve() {
       }
       if (process.env.STAND_IN_SWEEP_LOG === "1") {
         process.stdout.write('INFO probe fixture is serving\n{"live":5,"threadNet":0,"active":123,"nanos":0}\n');
+        process.stdout.write(`IDLE_ALLOCATOR_LOG ${"x".repeat(64 * 1024)}\n`);
       }
       if (String(sweeps) === process.env.STAND_IN_BAD_SWEEP) {
         process.stdout.write('IDLE_ALLOCATOR {"live":5,"threadNet":0,"active":"123","nanos":246000}\n');
       }
       const open = sockets.size;
       const sample = { live: 50_000 + 123 * open, threadNet: 60_000 - 3 * open, active: 65_536 + 4096 * open, nanos: 246_000 + sweeps };
-      process.stdout.write(`IDLE_ALLOCATOR ${JSON.stringify(sample)}\n`);
+      const frame = `IDLE_ALLOCATOR ${JSON.stringify(sample)}`;
+      switch (sweeps === 3 && process.env.STAND_IN_SWEEP_FRAME) {
+        case "split":
+          process.stdout.write(frame.slice(0, 5));
+          await sleep(25);
+          process.stdout.write(frame.slice(5));
+          await sleep(25);
+          process.stdout.write("\n");
+          break;
+        case "eof":
+          writeSync(1, frame);
+          closeSync(1);
+          // End the pipe without changing the fixture's file count or closing its connections.
+          if (openSync("/dev/null", "w") !== 1) throw new Error("fixture did not replace stdout");
+          break;
+        case "cr":
+          process.stdout.write(`${frame}\r`);
+          // Allow the reader's 5 s deadline to fire but bound this fixture if the reader fails.
+          setTimeout(() => process.exit(1), 9000).unref();
+          break;
+        case "oversized":
+          process.stdout.write(`${frame}${" ".repeat(2048)}\n`);
+          break;
+        default:
+          process.stdout.write(`${frame}\n`);
+      }
     });
   }
   process.on("SIGTERM", () => {

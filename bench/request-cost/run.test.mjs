@@ -332,13 +332,27 @@ test("idle.mjs prints no figure when a connection's answer is not the case's", {
   assert.doesNotMatch(run.stdout, /bytes a connection/);
 });
 
-test("idle.mjs skips ordinary stdout lines, even JSON, before the observer frame", { skip }, async () => {
-  const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_SWEEP_LOG: "1" });
+test("idle.mjs skips unrelated logs and reads an observer frame split across writes", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_SWEEP_LOG: "1", STAND_IN_SWEEP_FRAME: "split" });
   assert.equal(run.status, 0, run.stderr);
   const { allocator, sweepNanos } = JSON.parse(run.stdout);
   assert.deepEqual(allocator, { live: 4920, threadNet: -120, active: 163840 });
   assert.deepEqual(sweepNanos, [246_002, 246_003]);
 });
+
+for (const [ending, error] of /** @type {const} */ ([
+  ["eof", /the probe did not give an idle allocator sample/],
+  ["cr", /the probe did not give an idle allocator sample/],
+  ["oversized", /the probe gave an invalid idle allocator sample/],
+])) {
+  test(`idle.mjs refuses a final observer frame with ${ending} and stops the probe`, { skip }, async () => {
+    const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_SWEEP_FRAME: ending });
+    assert.equal(run.status, 1, run.stderr || run.stdout);
+    assert.match(run.stderr, error);
+    assert.equal(run.stdout, "");
+    assert.equal(run.connections?.length, 90); // The probe's SIGTERM handler ran.
+  });
+}
 
 test("idle.mjs refuses an invalid observer frame even when a valid frame follows", { skip }, async () => {
   const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_SWEEP_LOG: "1", STAND_IN_BAD_SWEEP: "3" });

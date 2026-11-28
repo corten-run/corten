@@ -259,9 +259,10 @@ gate would let pass unseen.
 
 At the two resident readings, a kit-only signal asks the probe's serving thread for an allocator
 snapshot, with no extra connection or HTTP request. The reply starts with `IDLE_ALLOCATOR` and
-a space on the probe's stdout. The kit skips ordinary stdout logs and refuses a malformed
-observer reply. The observer is warmed once before the warm connections and is off for
-instruction and allocation counts. Each snapshot advances jemalloc's
+a space on the probe's stdout and ends with a line feed. The kit skips ordinary stdout logs
+and refuses an unterminated, malformed or oversized observer reply. The observer is warmed
+once before the warm connections and is off for instruction and allocation counts. Each
+snapshot advances jemalloc's
 `epoch` and reads process-wide live bytes (`stats.allocated` less
 `stats.arenas.4096.tcache_bytes`, the cache bytes across all arenas), the serving thread's net
 bytes (`thread.allocated` less `thread.deallocated`), and bytes in active pages (`stats.active`).

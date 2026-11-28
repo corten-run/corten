@@ -1,10 +1,9 @@
 // Starts the probe held to one CPU, under callgrind or not, and talks HTTP/1.1 to it.
 import { execFileSync, spawn } from "node:child_process";
-import { on, once } from "node:events";
+import { EventEmitter, on, once } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import { instructions } from "./allocations.mjs";
 import { COUNTED, WARM, alone } from "./figures.mjs";
 import { Answers, cases, masked, unexpected } from "./requests.mjs";
@@ -17,6 +16,32 @@ import { Answers, cases, masked, unexpected } from "./requests.mjs";
  */
 const ALLOCATOR = { LD_PRELOAD: "libjemalloc.so.2", MALLOC_CONF: "background_thread:false,tcache_max:524288", PROBE_ALLOCATOR: "jemalloc" };
 const IDLE_FRAME = "IDLE_ALLOCATOR";
+
+/** @param {import("node:stream").Readable} stdout */
+function idleFrames(stdout) {
+  const frames = new EventEmitter();
+  // Keep at most enough for the four decimal counters and their keys. Discard the rest of any
+  // stdout line through LF: an unrelated log can be arbitrarily long without losing the next reply.
+  const line = Buffer.alloc(256);
+  let bytes = 0;
+  stdout.on("data", (/** @type {Buffer} */ chunk) => {
+    for (let at = 0; at < chunk.length;) {
+      const lf = chunk.indexOf(0x0a, at);
+      const end = lf === -1 ? chunk.length : lf;
+      const keep = Math.min(end - at, line.length - bytes);
+      if (keep > 0) chunk.copy(line, bytes, at, at + keep);
+      bytes = Math.min(line.length + 1, bytes + end - at);
+      if (lf === -1) break; // Never emit a partial line, even if stdout ends here.
+      const text = line.toString("utf8", 0, Math.min(bytes, line.length)).replace(/\r$/, "");
+      if (text === IDLE_FRAME || text.startsWith(`${IDLE_FRAME} `)) {
+        frames.emit("frame", bytes > line.length ? "" : text.slice(IDLE_FRAME.length + 1));
+      }
+      bytes = 0;
+      at = lf + 1;
+    }
+  });
+  return frames;
+}
 
 /**
  * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`, with `HOSTS` set to
@@ -37,9 +62,10 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
     env,
     stdio: ["ignore", idleMemory ? "pipe" : "ignore", "pipe"],
   });
-  const samples = child.stdout && createInterface({ input: child.stdout });
+  const samples = child.stdout && idleFrames(child.stdout);
   const closed = new AbortController();
-  samples?.once("close", () => closed.abort());
+  child.stdout?.once("close", () => closed.abort());
+  child.stdout?.once("error", () => closed.abort());
   let said = "";
   let late;
   child.stderr.setEncoding("latin1");
@@ -68,14 +94,11 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
       const signal = AbortSignal.any([closed.signal, AbortSignal.timeout(5000)]);
       let payload;
       try {
-        const lines = on(samples, "line", { signal });
+        const replies = on(samples, "frame", { signal });
         if (!signal.aborted && !child.kill("SIGUSR1")) closed.abort();
-        for await (const [line] of lines) {
-          // Corten's ordinary logs use the same stdout. Only observer frames answer the signal.
-          if (line === IDLE_FRAME || line.startsWith(`${IDLE_FRAME} `)) {
-            payload = line.slice(IDLE_FRAME.length + 1);
-            break;
-          }
+        for await (const [frame] of replies) {
+          payload = frame;
+          break;
         }
       } catch {
         throw new Error(`the probe did not give an idle allocator sample:\n${said}`);
