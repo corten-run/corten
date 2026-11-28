@@ -2386,8 +2386,9 @@ snapshot and all archive and native checks are unchanged. The ordinary
 ownership, remote idle and archive checks still precede any DELETE. A timeout,
 interruption or unverified replay does not authorize a DELETE. Once custody is
 clear, a retry after a recorded deletion intent confirms absence without
-sending another DELETE. The recovery checks its extraction, saved reservation
-and operation lock again before recording intent and before provider dispatch.
+sending another DELETE. The recovery checks its extraction, saved reservation,
+operation lock and approved terminal seal again before recording intent and
+before provider dispatch.
 This mode does not pack, download or start a job. Other replay budgets are unchanged.
 
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign

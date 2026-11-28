@@ -1900,6 +1900,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (failedMonitorRecovery) assert.equal(observed.control.monitor.phase, "invalid", "foreground monitor has not settled");
       }
       return locked(async () => {
+        let requireApprovedSeal;
         if (sealedRecovery) {
           assert.ok(sealedCollectionCandidate(state), "sealed recovery requires a saved terminal archive");
           const saved = regular(statePath, 1024 * 1024);
@@ -1911,9 +1912,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal(state.archiveSha256, recoveryApproval.archiveSha256);
           assert.equal(state.evidenceSha256, recoveryApproval.evidenceSha256);
           const { sealedMonitor } = await import("./cloud-control-stream.mjs");
-          const { terminal } = sealedMonitor(local, state);
-          assert.equal(terminal.campaign, recoveryApproval.campaign);
-          assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
+          requireApprovedSeal = () => {
+            const { terminal } = sealedMonitor(local, state);
+            assert.ok(terminal.campaign === recoveryApproval.campaign && terminal.sealSha256 === recoveryApproval.sealSha256,
+              "approved terminal seal changed; preserve host");
+          };
+          requireApprovedSeal();
           assert.ok(regular(join(local, state.evidence, "exit-code"), 16).equals(Buffer.from("0\n")), "sealed recovery requires a successful exit marker");
           verifyArchive();
         }
@@ -2069,7 +2073,7 @@ else ${pack}; fi` : pack, 11 * 60000);
             const { hash, stamp } = await remoteHash(); assert.equal(hash, state.archiveSha256, "exit archive changed");
             const requireDispatchCustody = (includeTree = true) => {
               if (includeTree) treeUnchanged();
-              unchanged(); requireSealedState();
+              unchanged(); requireApprovedSeal(); requireSealedState();
             };
             // Account check, then transport's exact ownership check, then one short
             // SSH fence. The hashes and provider reads are outside its freshness budget.

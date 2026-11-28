@@ -333,7 +333,9 @@ test("approved sealed collection uses the measured replay and does not create or
   flags.reportStatus = "verified";
   const markerPath = join(h.local, saved.evidence, "exit-code"), marker = readFileSync(markerPath);
   const operationLock = join(h.local, "operation.lock");
-  for (const change of ["extraction", "operation lock"]) {
+  const changeTerminal = () => writeFileSync(terminalPath, JSON.stringify({ ...terminal, sealSha256: "e".repeat(64) }));
+  for (const [change, refusal] of [["terminal", /approved terminal seal|native campaign validation/],
+    ["extraction", /evidence changed|extraction/], ["operation lock", /operation\.lock (?:was replaced|changed)/]]) {
     const beforeProbe = readFileSync(h.statePath);
     assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
     let changed = false;
@@ -341,17 +343,19 @@ test("approved sealed collection uses the measured replay and does not create or
       if (changed || bin !== "ssh" || !args.at(-1).includes("CORTEN_IDLE") || !args.at(-1).includes("\nsystemctl show")) return;
       changed = true;
       if (change === "extraction") writeFileSync(markerPath, "1\n");
+      else if (change === "terminal") changeTerminal();
       else {
         renameSync(operationLock, operationLock + ".original");
         writeFileSync(operationLock, "replacement lock\n", { flag: "wx" });
       }
     };
-    await assert.rejects(run(), change === "extraction" ? /evidence changed|extraction/ : /operation\.lock (?:was replaced|changed)/);
+    await assert.rejects(run(), refusal);
     delete flags.hook;
     assert.ok(changed);
     assert.equal(h.deletes, 0);
     assert.equal(h.saved().deletionIntentAt, undefined);
     if (change === "extraction") writeFileSync(markerPath, marker);
+    else if (change === "terminal") writeFileSync(terminalPath, terminalBytes);
     else {
       assert.equal(readFileSync(operationLock, "utf8"), "replacement lock\n");
       unlinkSync(operationLock);
@@ -364,15 +368,15 @@ test("approved sealed collection uses the measured replay and does not create or
   let changedAtDispatch = false;
   p.deps.interrupted = () => {
     if (!changedAtDispatch && h.saved().deletionIntentAt) {
-      changedAtDispatch = true; writeFileSync(markerPath, "1\n");
+      changedAtDispatch = true; changeTerminal();
     }
     return interrupted();
   };
-  await assert.rejects(run(), /extraction/);
+  await assert.rejects(run(), /approved terminal seal/);
   assert.ok(changedAtDispatch && h.saved().deletionIntentAt);
   assert.equal(h.deletes, 0);
   p.deps.interrupted = interrupted;
-  writeFileSync(markerPath, marker); writeFileSync(h.statePath, beforeLateChange);
+  writeFileSync(terminalPath, terminalBytes); writeFileSync(h.statePath, beforeLateChange);
   const beforeDeleteReplays = replayed;
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const live = h.host();
