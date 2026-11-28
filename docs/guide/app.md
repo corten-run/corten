@@ -3452,9 +3452,9 @@ the same [cache policy as other answers that draw a key](#caching): `private, no
 `private, no-store`), with no CDN caching headers or `ETag`. This applies even if the error page
 discards the key or refuses and Corten sends plain text instead.
 
-That page for a handler's own failure (its 404, its `Error`) keeps what a middleware wrote,
-`CDN-Cache-Control` and `Surrogate-Control` included, as the handler's answer would: whether it
-may be shared is the app's policy. So a middleware that tells a CDN to keep every answer must not
+Subject to those cache rules, the page for a handler's own failure (its 404, its `Error`) keeps
+what a middleware wrote, `CDN-Cache-Control` and `Surrogate-Control` included, as the handler's
+answer would. So a middleware that tells a CDN to keep every answer must not
 do so for an error page that reads the raw `Cookie` or `Authorization` header itself (an
 extractor of the app's own, with no `Caller`): a CDN would keep one visitor's page and give it to
 the next. Have such a middleware leave failures alone (`res.status().is_client_error()` or

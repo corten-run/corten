@@ -54,6 +54,36 @@ async fn error_page_policy_uses_only_its_own_observation() {
 }
 
 #[tokio::test]
+async fn the_router_settles_the_error_pages_own_observation() {
+    use crate::http::header;
+
+    for observed in [false, true] {
+        let table = Table::new().route("/busy", get(|| async { StatusCode::TOO_MANY_REQUESTS }));
+        let router = App::new(Routes::from(table))
+            .error_page(
+                move |_: Failure, req: Req| async move {
+                    let mut res = req.test_page("Busy", "Constant error content")?;
+                    if observed {
+                        crate::form::DREW_KEY.set(true);
+                    }
+                    res.headers_mut().insert(header::CACHE_CONTROL, http::HeaderValue::from_static("private, no-cache"));
+                    res.headers_mut().insert("cdn-cache-control", http::HeaderValue::from_static("max-age=60"));
+                    res.headers_mut().insert(header::ETAG, http::HeaderValue::from_static("\"constant\""));
+                    Ok(res)
+                },
+                (),
+            )
+            .router();
+        let req = Request::get("/busy").header("accept", "text/html").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache");
+        assert_eq!(res.headers().contains_key(header::ETAG), !observed);
+        assert_eq!(res.headers().contains_key("cdn-cache-control"), !observed);
+    }
+}
+
+#[tokio::test]
 async fn error_page_refusal_keeps_the_observation_on_its_fallback() {
     use crate::cache::{self, Unrepeatable, Unshared};
     use crate::form::DREW_KEY;
