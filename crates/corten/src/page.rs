@@ -4699,6 +4699,14 @@ mod carried_tests {
         }
         // Both answers are among the lines, so neither reading is the same for all of them.
         assert!(decided.iter().all(|&n| n > 100), "{decided:?}");
+        // The quoted comma follows the semicolon, so neither reading lets it affect the media type.
+        for line in
+            [r#"application/json; p="a,b", text/html"#, r#"text/html; p="a,b", application/json"#, r#"application/json;p="a,b""#]
+        {
+            let value = HeaderValue::from_static(line);
+            let ((mode, _), _) = Mode::said(None, || Some(&value));
+            assert_eq!(mode == Mode::Data, whole(line), "{line:?}");
+        }
         // No line, and one that is not text, are no JSON.
         assert_eq!(Mode::said(None, || None).0, (Mode::Document, false));
         // Even bytes after the item's media type invalidate the entire line.
