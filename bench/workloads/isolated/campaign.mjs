@@ -162,13 +162,22 @@ export function createCampaign({ authorize }) {
         },
       });
     } finally {
-      try { captureStartupDiagnostic(false); }
-      finally {
-        try { if (browserDockerFd !== undefined) closeSync(browserDockerFd); }
-        finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
+      let failure;
+      const cleanup = (step) => {
+        try { step(); } catch (error) { failure ??= error; }
+      };
+      cleanup(() => captureStartupDiagnostic(false));
+      if (browserDockerFd !== undefined) cleanup(() => closeSync(browserDockerFd));
+      cleanup(() => fsyncSync(fd));
+      cleanup(() => closeSync(fd));
+      if (!failure && result) cleanup(() => c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) }));
+      if (failure) {
+        // There can be no terminal proof without the command log. In particular,
+        // don't leave an accepted observer timer and its own gate fd behind.
+        cleanup(disposeObserver);
+        throw failure;
       }
     }
-    c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;
     if (startupOutcome(result) === "accepted") {
       const manifest = await observer.finish(result, retainTerminalClock, settled); hostManifestSha256 = manifest.sha256;
