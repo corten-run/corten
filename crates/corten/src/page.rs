@@ -207,7 +207,7 @@ impl Mode {
         // JSON: the line starts with it after whitespace, and whitespace then ends the item or
         // starts its parameters. Read so, a line that starts otherwise is not looked at further.
         let json = accept.as_bytes().trim_ascii_start().split_at_checked(crate::api::JSON.len()).is_some_and(|(ty, rest)| {
-            ty.eq_ignore_ascii_case(crate::api::JSON.as_bytes())
+            (ty == crate::api::JSON.as_bytes() || ty.eq_ignore_ascii_case(crate::api::JSON.as_bytes()))
                 && matches!(rest.trim_ascii_start().first(), None | Some(b',' | b';'))
         });
         let mode = if json { Mode::Data } else { Mode::Document };
