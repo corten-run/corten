@@ -191,7 +191,7 @@ const MAP = (align, late = ".text.crc") => [row(0x1000, 0x400, 64, ".text"), row
   row(0x3000, 0x40, 8, ".data")].join("\n") + "\n";
 let made = 0;
 const PROBE = "fn main() {}\n";
-const binarySha = (name) => Buffer.from(name.padEnd(32, ".")).toString("hex");
+const binarySha = (name) => createHash("sha256").update(name).digest("hex");
 const numbered = (edit = () => {}) => (p) => { p.R = 2; p.workloads[0].K = 5; p.workloads[0].sizedFrom = "an A/A made up for a test"; p.pilot = { K: 30, why: "made up for a test" }; edit(p); };
 function results({ part = "gated", change = () => 0, edit = () => {}, align = 16, map = MAP(align), touch = () => {}, sizedFrom = null, dry = null, model = "Made-up CPU" } = {}) {
   const dir = join(tmp, `run-${++made}`), work = join(dir, "work"), res = join(work, "results");
@@ -712,34 +712,49 @@ test("run.sh stops before any turn when it cannot keep a shuffled run's list of 
   assert.equal(existsSync(join(res, "functions-head.txt.gz")), false);
 });
 
-test("run.sh keeps and verifies every planned shuffled map before continuing", { skip: process.platform !== "linux" && "runs run.sh's record step under sh" }, async (t) => {
+test("run.sh verifies the complete shuffled layout evidence before continuing", { skip: process.platform !== "linux" && "runs run.sh's record step under sh" }, async (t) => {
   const kit = readFileSync(join(here, "run.sh"), "utf8");
-  const step = kit.slice(kit.indexOf("# What build.sh checked,"), kit.indexOf("# The probe's source as build.sh built it,"));
-  assert.ok(step.includes("placements.sha256") || step.includes("keep-placements"));
-  const work = mkdtempSync(join(tmp, "shuffle-maps-")), bin = join(work, "bin"), maps = join(work, "maps");
-  t.after(() => rmSync(work, { recursive: true, force: true }));
-  for (const d of [maps, join(bin, "layout"), join(work, "capture", "base")]) mkdirSync(d, { recursive: true });
-  for (const f of ["bin/built-for.txt", "bin/layout/base-p320.txt", "bin/record-base.json", "capture/base/args.json", "build-base.env"]) writeFileSync(join(work, f), "");
-  writeFileSync(join(bin, "functions-base.txt"), "a\nb\n");
-  const names = ["base", "base-p320", "base-p384"], list = names.map((n) => `${mapSha(n)}  ${n}.map\n`).join("");
-  for (const name of names) writeFileSync(join(bin, name), name);
-  writeFileSync(join(bin, "sha256.txt"), names.map((name) => `${name} ${digest(name)} ${name.length} bytes\n`).join(""));
-  const target = join(maps, "base-p320.map.gz"), original = gzipSync("map of base-p320");
-  writeFileSync(join(maps, "placements.sha256"), list);
-  const base = join(maps, "base.map.gz");
-  writeFileSync(base, gzipSync("map of base"));
-  writeFileSync(join(maps, "base-p384.map.gz"), gzipSync("map of base-p384"));
+  const end = kit.indexOf("# The probe's source as build.sh built it,");
+  const step = kit.slice(kit.indexOf("# What build.sh checked,"), end);
+  for (const next of ["perf stat ", 'sh "$KIT/verify.sh"', 'say "== turns start']) assert.ok(kit.indexOf(next) > end, next);
+  const fixture = shuffledRun({ align: 32 }), work = dirname(fixture), bin = join(work, "bin"), maps = join(work, "maps");
+  const r = JSON.parse(readFileSync(join(fixture, "plan", "resolved.json"), "utf8"));
+  const manifest = readFileSync(join(fixture, "sha256.txt"), "utf8");
+  cpSync(join(fixture, "maps"), maps, { recursive: true });
+  cpSync(join(fixture, "layout"), join(bin, "layout"), { recursive: true });
+  writeFileSync(join(bin, "built-for.txt"), "");
+  for (const name of manifest.trim().split("\n").map((l) => l.split(" ")[0])) writeFileSync(join(bin, name), name);
+  for (const side of r.sides) {
+    cpSync(join(fixture, `record-${side}.json`), join(bin, `record-${side}.json`));
+    writeFileSync(join(bin, `functions-${side}.txt`), gunzipSync(readFileSync(join(fixture, `functions-${side}.txt.gz`))));
+    mkdirSync(join(work, "capture", side), { recursive: true });
+    writeFileSync(join(work, "capture", side, "args.json"), "{}\n");
+    writeFileSync(join(work, `build-${side}.env`), "");
+  }
+  writeFileSync(join(bin, "sha256.txt"), manifest);
+  const padsFile = join(bin, "second-pads.txt"), pads = readFileSync(join(fixture, "second-pads.txt"), "utf8");
+  writeFileSync(padsFile, pads);
+  const target = join(maps, "base-p320.map.gz"), original = readFileSync(target);
+  const base = join(maps, "base.map.gz"), baseOriginal = readFileSync(base);
+  const list = readFileSync(join(maps, "placements.sha256"), "utf8");
   const run = (name, shuffle = 1) => {
     const res = join(work, name);
     mkdirSync(res);
-    const r = spawnSync("sh", ["-c", `set -u\nfinish() { echo "$2"; exit "$1"; }\nKIT='${here}'; WORK='${work}'; B='${bin}'; RES='${res}'; SHUFFLE=${shuffle}; SIDES=base; PADS_P=320; PADS_Q=384\n${step}\necho CONTINUED`], { encoding: "utf8", env: { PATH: process.env.PATH } });
-    return { ...r, res };
+    cpSync(join(fixture, "plan"), join(res, "plan"), { recursive: true });
+    const state = `KIT='${here}'; WORK='${work}'; B='${bin}'; RES='${res}'; SHUFFLE=${shuffle}; SIDES='${r.sides.join(" ")}'; PADS_P='${r.P.join(" ")}'; PADS_Q='${r.Q.join(" ")}'`;
+    const check = spawnSync("sh", ["-c", `set -u\nfinish() { echo "$2"; exit "$1"; }\n${state}\n${step}\necho CONTINUED`], { encoding: "utf8", env: { PATH: process.env.PATH } });
+    return { ...check, res };
+  };
+  const refuses = (name, why) => {
+    const r = run(name);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout + r.stderr, why);
+    assert.doesNotMatch(r.stdout, /CONTINUED/);
   };
   await t.test("absent map", () => {
-    const r = run("missing");
-    assert.equal(r.status, 1, r.stdout + r.stderr);
-    assert.match(r.stderr, /base-p320: cannot read its gzipped placement map/);
-    assert.doesNotMatch(r.stdout, /CONTINUED/);
+    rmSync(target);
+    try { refuses("missing", /base-p320: cannot read its gzipped placement map/); }
+    finally { writeFileSync(target, original); }
   });
   await t.test("altered map", () => {
     writeFileSync(target, gzipSync("replacement"));
@@ -763,7 +778,7 @@ test("run.sh keeps and verifies every planned shuffled map before continuing", {
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stderr, /base: its unpadded map bytes do not match/);
     assert.doesNotMatch(r.stdout, /CONTINUED/);
-    writeFileSync(base, gzipSync("map of base"));
+    writeFileSync(base, baseOriginal);
   });
   await t.test("all valid", () => {
     writeFileSync(join(maps, "placements.sha256"), list);
@@ -776,23 +791,38 @@ test("run.sh keeps and verifies every planned shuffled map before continuing", {
   });
   await t.test("substituted executable", () => {
     writeFileSync(join(bin, "base-p320"), "different executable");
-    const r = run("altered-executable");
-    assert.equal(r.status, 1, r.stdout + r.stderr);
-    assert.match(r.stdout, /the shuffled run's executables do not match results\/sha256.txt/);
-    assert.doesNotMatch(r.stdout, /CONTINUED/);
-    writeFileSync(join(bin, "base-p320"), "base-p320");
+    try { refuses("altered-executable", /executables do not match results\/sha256.txt/); }
+    finally { writeFileSync(join(bin, "base-p320"), "base-p320"); }
+  });
+  await t.test("replacement and refreshed manifest leave a stale layout receipt", () => {
+    const name = "base-p320", replacement = "different executable";
+    writeFileSync(join(bin, name), replacement);
+    writeFileSync(join(bin, "sha256.txt"), manifest.replace(binarySha(name), digest(replacement)));
+    try { refuses("stale-layout", /base-p320: no passing shuffled layout check/); }
+    finally {
+      writeFileSync(join(bin, name), name);
+      writeFileSync(join(bin, "sha256.txt"), manifest);
+    }
+  });
+  for (const [name, why] of [
+    ["base-p320.txt", /base-p320: no passing shuffled layout check/],
+    ["head-p320-map.txt", /head-p320: no second pad's line with a passing map check/],
+    ["head-p320-alike.txt", /head-p320: no passing check that the names it compares with base-p320/],
+  ]) await t.test(`missing receipt ${name}`, () => {
+    const file = join(bin, "layout", name), bytes = readFileSync(file);
+    rmSync(file);
+    try { refuses(`missing-${name}`, why); }
+    finally { writeFileSync(file, bytes); }
   });
   await t.test("unshuffled with second pads", () => {
-    const pads = "base-p320: second pad 16\n";
-    const oldList = list.replace(/^.*  base\.map\n/m, "");
-    writeFileSync(join(bin, "second-pads.txt"), pads);
+    const oldList = list.replace(/^.*  (base|head)\.map\n/gm, "");
     writeFileSync(join(maps, "placements.sha256"), oldList);
     const r = run("second-pads", 0);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /^CONTINUED$/m);
     assert.equal(readFileSync(join(r.res, "second-pads.txt"), "utf8"), pads);
     assert.equal(readFileSync(join(r.res, "maps", "placements.sha256"), "utf8"), oldList);
-    rmSync(join(bin, "second-pads.txt"));
+    rmSync(padsFile);
   });
   await t.test("legacy unshuffled", () => {
     rmSync(join(maps, "placements.sha256"));

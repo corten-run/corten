@@ -9,7 +9,8 @@ they differ, they are right and the kit is wrong.
 A pull request's author writes one plan file, declares it as item 2 says, and runs the commands
 below on a quiet Linux host. Nothing here is part of the workspace or of `corten`; it needs a POSIX
 shell and its tools, GNU coreutils (`env -i`, `timeout`, `sha256sum -c`, `stat -c` and a `sleep`
-that takes fractions of a second), `taskset`, `gzip`, `tar`, Node (standard library only), `git`,
+that takes fractions of a second), `taskset`, `gzip`, `tar`, Node (Debian 13's Node 20 works;
+standard library only), `git`,
 `perf`, `wrk`, `curl`, a C compiler with binutils, and the Rust toolchain the plan names, whose LLD
 makes every link. [What is this host's alone](#what-is-this-hosts-alone) lists what the scripts
 assume beyond that.
@@ -373,10 +374,12 @@ that this run does not read it; both readings of the A/A; the benefit side when 
 whether the A/A records a spread; whether its placements are shuffled; every measure across
 placements; every placement; and each side's aligned sections, its list and the second pads' lines.
 
-For shuffled runs, `run.sh` verifies the unpadded and placed executables against the saved timing
-manifest (`sha256.txt`) before any turn. On replay, the `--order` and `--alike` receipts must name
-the same executable SHA-256s as that manifest, in addition to their ordering file and map digests.
-Replay does not need the executable files. Unshuffled receipts do not carry these fields.
+Before checking counters or starting a server for a shuffled run, `run.sh` uses the same layout
+check as replay. It verifies the staged maps, draws each ordering file from the staged function
+lists, and requires the layout, second-pad (when needed) and cross-side receipts to match those
+inputs and, for `--order` and `--alike`, the executable SHA-256s in the staged timing manifest
+(`sha256.txt`). The runner also hashes the live unpadded and placed executables against that
+manifest. Replay does not need the executable files. Unshuffled receipts do not carry these fields.
 
 ## What it does not do
 
@@ -543,8 +546,9 @@ field's refusals, the declaration, and a shuffled run's results and what is refu
 shared-name counts inconsistent with the saved function lists), and
 runs `build.sh`'s and `run.sh`'s start under `sh` (Linux) to show the plan alone sets
 `SHUFFLE`, that the plan's value stands after the cargo env file each sources, and that `run.sh`
-ends the run, refused, before any turn when it cannot keep a side's list of functions or verify
-every planned unpadded and placement map. No kept benchmark run has linked a shuffled placement of a real
+ends the run, refused, before counter or server verification when it cannot stage a side's
+function list, verify the planned maps and executables, or match a required layout receipt to
+the staged evidence. No kept benchmark run has linked a shuffled placement of a real
 build, and the selftest has no shuffled case.
 
 `answers.test.mjs` runs `answers.mjs` on servers of its own; its captures and comparisons need

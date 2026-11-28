@@ -10389,8 +10389,10 @@ rules something out.
     SHA-256 of its uncompressed bytes. Replay requires the same digests in the live layout
     receipts, including both maps in each second-pad check and all four in each cross-side check.
     The shuffled order and cross-side receipts also name the executables they checked by SHA-256.
-    Before any turn the runner verifies the binaries against the saved timing manifest, and replay
-    requires the receipt hashes and timing records to agree with that manifest.
+    Before counter or server verification, the runner checks the live binaries against the saved
+    timing manifest and uses replay's layout check to require that all planned receipts agree with
+    the staged maps, ordering files drawn from the staged function lists, and executable hashes.
+    Replay also requires the timing records to agree with that manifest.
     Whether shuffled placements spread
     wider or narrower than unshuffled ones has not been measured, so a shuffled plan is sized
     from a shuffled A/A alone.
@@ -11391,7 +11393,10 @@ rules something out.
     again by LLD 19.1.7 with six shuffled orders at seed 2026112701 and a second pad: every
     placement passed its order, base against head passed at each index and a placement against
     its own relink passed, 3,433 names compared and 34 left out, and base at index 1 against
-    head at index 2 was refused.
+    head at index 2 was refused; 2026-11-28 (UTC), the shared layout check on Debian 13's Node
+    20.19.2 accepted the complete synthetic shuffled evidence and refused missing receipts and
+    a replacement executable with a refreshed manifest but stale receipts, before counters or
+    server verification. Nothing was turned.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at

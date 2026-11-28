@@ -45,6 +45,7 @@
 //   gated        the A/A read twice and whether it resolves; the change's bound and whether the
 //                workload meets +1%; the benefit side when the plan declares a reduction
 //   shuffled     at each index, how many names both sides have head's check compared and left out
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -92,40 +93,18 @@ function readPairs(file) {
   });
 }
 
-/** A results directory as run.sh left it: { refused: [why] } or the run with its placements. */
-export function read(dir) {
-  const refused = [];
-  const need = ["run-id", "schedule.txt", "sha256.txt", "host-id.txt", join("plan", "plan.json"), join("plan", "resolved.json"), join("plan", "request.lua"), join("verify", "verdicts.txt")];
-  const missing = need.filter((f) => !existsSync(join(dir, f)));
-  if (missing.length) return { refused: [`no ${missing.join(", ")} in the results: not a complete record of a run`] };
-  const text = (f) => readFileSync(join(dir, f), "utf8");
-  const bytes = readFileSync(join(dir, "plan", "plan.json")), planSha = createHash("sha256").update(bytes).digest("hex");
-  let plan, saved;
-  try { plan = JSON.parse(bytes.toString("utf8")); saved = JSON.parse(text(join("plan", "resolved.json"))); } catch (e) { return { refused: [`the results' plan is not JSON: ${e.message}`] }; }
-  const bad = problems(plan);
-  if (bad.length) return { refused: bad.map((x) => `plan.json: ${x}`) };
-  if (saved.plan !== planSha) refused.push(`resolved.json was written for plan ${saved.plan}, not the results' plan.json (${planSha})`);
-  // What the plan names by path, as the results hold it, against the list plan.mjs resolved.
-  const expect = join(dir, "plan", "expect.txt");
-  let list;
-  try { list = inputs(join(dir, "probe"), join(dir, "plan", "request.lua"), existsSync(expect) ? expect : null); } catch (e) { return { refused: [...refused, e.message] }; }
-  if (list.sha256 !== saved.inputs) refused.push(`the results' probe, request script and expected answer are not the files plan.mjs resolved (inputs sha256 ${list.sha256}, resolved ${saved.inputs})`);
-  const hostId = Object.fromEntries(text("host-id.txt").replace(/\n$/, "").split("\n").map((l) => [l.split(" ")[0], l.slice(l.indexOf(" ") + 1).trim()]));
-  if (saved.sized && saved.sized.model !== hostId.model) refused.push(`K was checked from an A/A read on "${saved.sized.model}", and this run's host is "${hostId.model}": an A/A sizes a run on its own setup`);
-  const runId = text("run-id").trim();
-  if (!/^[0-9a-f-]{36}$/.test(runId)) refused.push("run-id is not a run's id");
-  const dry = saved.dry ?? null;
-  if (existsSync(join(dir, "DRYRUN")) !== Boolean(dry)) refused.push("the results and their plan do not agree on whether this is a dry run");
-  let r;
-  try { r = resolve(plan, saved.part, saved.workload, { K: saved.declaredK === "pilot" ? saved.sized?.K : undefined, dry }); } catch (e) { return { refused: [...refused, `plan.mjs gives no run for the results' plan: ${e.message}`] }; }
-  for (const k of ["K", "R", "seconds", "seed", "P", "Q", "schedule", "shuffle"]) if (!same(r[k], saved[k])) refused.push(`resolved.json's ${k} is not what plan.mjs gives for the plan`);
-  if (text("schedule.txt") !== scheduleLines(r.schedule)) refused.push(`schedule.txt is not the seeded order of ${r.part} ${r.workload}, K = ${r.K}, seed ${r.seed}`);
-  const { part, workload: W, K, R, P, Q } = r;
+const resolveSaved = (plan, saved) => resolve(plan, saved.part, saved.workload, { K: saved.declaredK === "pilot" ? saved.sized?.K : undefined, dry: saved.dry ?? null });
+const resolvedDifferences = (r, saved) => ["K", "R", "seconds", "seed", "P", "Q", "schedule", "shuffle"].filter((k) => !same(r[k], saved[k])).map((k) => `resolved.json's ${k} is not what plan.mjs gives for the plan`);
 
-  const used = new Set(), alike = [];
+// The build evidence only: no server starts, answers or counts are needed. The runner also
+// copies the shuffled maps here, verifying the destination bytes in the same pass.
+function layoutEvidence(dir, r, mapSource) {
+  const { part, K, P, Q } = r, text = (f) => readFileSync(join(dir, f), "utf8");
+  const used = new Set(), alike = [], refused = [];
   for (const c of r.comparisons) for (let i = 1; i <= K; i++) for (const b of sides(c, i, P, Q)) used.add(b);
-  const maps = r.shuffle ? placementMaps(join(dir, "maps"), [...r.sides, ...used]) : null;
-  if (maps?.why.length) return { refused: [...refused, ...maps.why] };
+  const names = new Set([...r.sides, ...used]), mapDir = join(dir, "maps");
+  const maps = r.shuffle ? placementMaps(mapSource ?? mapDir, names, mapSource ? mapDir : undefined) : null;
+  if (maps?.why.length) return { refused: maps.why };
 
   // Each side's record of code aligned beyond 16 bytes, from its unpadded link's map.
   const records = {};
@@ -147,11 +126,10 @@ export function read(dir) {
     }
   }
   const shas = new Map();
-  for (const l of text("sha256.txt").trim().split("\n")) { const [name, s] = l.split(" "); shas.set(name, s); }
-  const verified = new Map();
-  for (const l of text(join("verify", "verdicts.txt")).trim().split("\n")) {
-    const m = /^(\S+) as (\S+): answers: same;/.exec(l);
-    if (m) verified.set(m[1], m[2]);
+  for (const l of text("sha256.txt").trim().split("\n")) {
+    const [name, s] = l.split(" ");
+    if (r.shuffle && (!names.has(name) || shas.has(name))) return { refused: [...refused, "sha256.txt has an unplanned or repeated executable entry"] };
+    shas.set(name, s);
   }
   const check = (file, want) => {
     if (!existsSync(join(dir, file))) return false;
@@ -173,11 +151,11 @@ export function read(dir) {
     try { return createHash("sha256").update(order(lists.get(side), r.seed, i)).digest("hex"); } catch { return null; }
   };
   const namesOf = (side) => new Set(lists.get(side)?.map(thinName).filter((n) => !PADS.includes(n)));
-  const shared = r.shuffle && part === "gated" ? namesOf("base").intersection(namesOf("head")).size : 0;
+  const head = r.shuffle && part === "gated" ? namesOf("head") : null;
+  const shared = head ? [...namesOf("base")].filter((n) => head.has(n)).length : 0;
   for (const b of used) {
     const side = b.replace(/-p\d+$/, ""), pad = Number(b.replace(/^.*-p/, ""));
     if (!shas.has(b)) { refused.push(`${b}: not in sha256.txt`); continue; }
-    if (verified.get(b) !== side) refused.push(`${b}: not verified to answer as its unpadded binary (verify/verdicts.txt)`);
     if (r.shuffle && !lists.has(side)) continue;
     const unpaddedBinary = shas.get(side), placedBinary = shas.get(b);
     if (r.shuffle && !(isSha(unpaddedBinary) && isSha(placedBinary))) { refused.push(`${b}: no valid executable digest for it or its unpadded binary in sha256.txt`); continue; }
@@ -203,6 +181,46 @@ export function read(dir) {
     }
   }
   alike.sort((x, y) => x.i - y.i);
+  return { refused, used, shas, records, second, secondPads, alike };
+}
+
+/** A results directory as run.sh left it: { refused: [why] } or the run with its placements. */
+export function read(dir) {
+  const refused = [];
+  const need = ["run-id", "schedule.txt", "sha256.txt", "host-id.txt", join("plan", "plan.json"), join("plan", "resolved.json"), join("plan", "request.lua"), join("verify", "verdicts.txt")];
+  const missing = need.filter((f) => !existsSync(join(dir, f)));
+  if (missing.length) return { refused: [`no ${missing.join(", ")} in the results: not a complete record of a run`] };
+  const text = (f) => readFileSync(join(dir, f), "utf8");
+  const bytes = readFileSync(join(dir, "plan", "plan.json")), planSha = createHash("sha256").update(bytes).digest("hex");
+  let plan, saved;
+  try { plan = JSON.parse(bytes.toString("utf8")); saved = JSON.parse(text(join("plan", "resolved.json"))); } catch (e) { return { refused: [`the results' plan is not JSON: ${e.message}`] }; }
+  const bad = problems(plan);
+  if (bad.length) return { refused: bad.map((x) => `plan.json: ${x}`) };
+  if (saved.plan !== planSha) refused.push(`resolved.json was written for plan ${saved.plan}, not the results' plan.json (${planSha})`);
+  // What the plan names by path, as the results hold it, against the list plan.mjs resolved.
+  const expect = join(dir, "plan", "expect.txt");
+  let list;
+  try { list = inputs(join(dir, "probe"), join(dir, "plan", "request.lua"), existsSync(expect) ? expect : null); } catch (e) { return { refused: [...refused, e.message] }; }
+  if (list.sha256 !== saved.inputs) refused.push(`the results' probe, request script and expected answer are not the files plan.mjs resolved (inputs sha256 ${list.sha256}, resolved ${saved.inputs})`);
+  const hostId = Object.fromEntries(text("host-id.txt").replace(/\n$/, "").split("\n").map((l) => [l.split(" ")[0], l.slice(l.indexOf(" ") + 1).trim()]));
+  if (saved.sized && saved.sized.model !== hostId.model) refused.push(`K was checked from an A/A read on "${saved.sized.model}", and this run's host is "${hostId.model}": an A/A sizes a run on its own setup`);
+  const runId = text("run-id").trim();
+  if (!/^[0-9a-f-]{36}$/.test(runId)) refused.push("run-id is not a run's id");
+  const dry = saved.dry ?? null;
+  if (existsSync(join(dir, "DRYRUN")) !== Boolean(dry)) refused.push("the results and their plan do not agree on whether this is a dry run");
+  let r;
+  try { r = resolveSaved(plan, saved); } catch (e) { return { refused: [...refused, `plan.mjs gives no run for the results' plan: ${e.message}`] }; }
+  refused.push(...resolvedDifferences(r, saved));
+  if (text("schedule.txt") !== scheduleLines(r.schedule)) refused.push(`schedule.txt is not the seeded order of ${r.part} ${r.workload}, K = ${r.K}, seed ${r.seed}`);
+  const { workload: W, K, R, P, Q } = r;
+  const { refused: layoutProblems, used, shas, records, second, secondPads, alike } = layoutEvidence(dir, r);
+  refused.push(...layoutProblems);
+  const verified = new Map();
+  for (const l of text(join("verify", "verdicts.txt")).trim().split("\n")) {
+    const m = /^(\S+) as (\S+): answers: same;/.exec(l);
+    if (m) verified.set(m[1], m[2]);
+  }
+  for (const b of used ?? []) if (shas.has(b) && verified.get(b) !== b.replace(/-p\d+$/, "")) refused.push(`${b}: not verified to answer as its unpadded binary (verify/verdicts.txt)`);
   if (refused.length) return { refused };
 
   const seqOf = new Map(r.schedule.map((s) => [`${s.comparison} ${s.i}`, s.seq]));
@@ -368,8 +386,35 @@ export function report(dir) {
   return { exit: json.exit, json, md: out.join("\n") };
 }
 
+// run.sh calls this before running the servers; replay checks the same evidence without binaries.
+function preflight(dir, maps, bin) {
+  const bytes = readFileSync(join(dir, "plan", "plan.json"));
+  const plan = JSON.parse(bytes.toString("utf8")), saved = JSON.parse(readFileSync(join(dir, "plan", "resolved.json"), "utf8"));
+  const bad = problems(plan);
+  if (bad.length) return bad;
+  if (saved.plan !== createHash("sha256").update(bytes).digest("hex")) return ["resolved.json was not written for the staged plan.json"];
+  const r = resolveSaved(plan, saved);
+  if (!r.shuffle) return ["the staged plan does not declare shuffled placements"];
+  const differences = resolvedDifferences(r, saved);
+  if (differences.length) return differences;
+  const { refused, shas } = layoutEvidence(dir, r, maps);
+  if (refused.length) return refused;
+  const hashes = [...shas].map(([name, sha]) => `${sha}  ${name}\n`).join("");
+  const check = spawnSync("sha256sum", ["--quiet", "-c", "-"], { cwd: bin, input: hashes, stdio: ["pipe", "inherit", "inherit"] });
+  if (check.error) throw check.error;
+  return check.status === 0 ? [] : ["the shuffled run's executables do not match results/sha256.txt"];
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = process.argv.slice(2);
+  if (args[0] === "--check-shuffled") {
+    if (args.length !== 4) { console.error("usage: node report.mjs --check-shuffled <staged results> <work maps> <work binaries>"); process.exit(3); }
+    try {
+      const bad = preflight(...args.slice(1));
+      for (const why of bad) console.error(`report.mjs: ${why}`);
+      process.exit(bad.length ? 2 : 0);
+    } catch (e) { console.error(`report.mjs: ${e.message}`); process.exit(3); }
+  }
   if (args.length !== 1 || !existsSync(args[0]) || !statSync(args[0]).isDirectory()) { console.error("usage: node report.mjs <results dir>"); process.exit(3); }
   let r;
   try { r = report(args[0]); } catch (e) { console.error(e.stack ?? String(e)); process.exit(3); }

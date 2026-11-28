@@ -26,7 +26,8 @@
 #                (checked again against plan/inputs.sha256), and each build's environment;
 #                for a workload the plan shuffles, each side's list of its functions
 #                (functions-<side>.txt.gz), from which report.mjs draws every ordering file again,
-#                and every placement map, checked against its recorded hash before use;
+#                and every placement map, checked along with layout receipts and executable
+#                hashes before verification starts;
 #                host.txt names cargo's config files outside the probe, which nothing checks
 #   verify       every placement answers as its side's unpadded binary (verify.sh); a failure
 #                stops the run
@@ -79,6 +80,28 @@ echo "$RUN_ID" >"$RES/run-id"
 cp -R "$PL" "$RES/plan"
 say() { echo "$*" | tee -a "$RES/progress.log"; }
 
+# What build.sh checked, in the results before any turn, so a report has it whatever happens later.
+cp "$B/sha256.txt" "$B/built-for.txt" "$RES/"
+bin_shas=$B/sha256.txt
+mkdir -p "$RES/layout" "$RES/maps" && cp "$B"/layout/*.txt "$RES/layout/"
+for s in $SIDES; do
+    cp "$B/record-$s.json" "$RES/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
+    [ "$SHUFFLE" = 1 ] || cp "$WORK/maps/$s.map.gz" "$RES/maps/"
+done
+[ ! -f "$B/second-pads.txt" ] || cp "$B/second-pads.txt" "$RES/"
+[ "$SHUFFLE" = 0 ] || for s in $SIDES; do { [ -s "$B/functions-$s.txt" ] && gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; } || finish 1 "refused: a shuffled run's list of $s's functions, bin/functions-$s.txt, from which report.mjs draws every ordering file again, could not be kept in the results"; done
+if [ "$SHUFFLE" = 1 ]; then
+    bin_shas=$RES/sha256.txt
+    # Keep the maps and check the staged layout receipts against the manifest timing will use.
+    node "$KIT/report.mjs" --check-shuffled "$RES" "$WORK/maps" "$B" || finish 1 "refused: the shuffled run's layout evidence could not be kept and verified (see above)"
+elif [ -f "$B/second-pads.txt" ]; then
+    cp "$WORK/maps/placements.sha256" "$RES/maps/"
+fi
+# The probe's source as build.sh built it, beside the request script and the expected answer in
+# plan/: the files the plan names by path, still what plan.mjs listed.
+sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$PL/inputs.sha256" | while IFS= read -r f; do mkdir -p "$RES/$(dirname "$f")"; cp "$WORK/$f" "$RES/$f"; done
+(cd "$RES" && sha256sum --quiet -c plan/inputs.sha256) >"$RES/inputs-check.txt" 2>&1 || { cat "$RES/inputs-check.txt"; finish 1 "refused: the probe as built, the request script or the expected answer is not what plan.mjs resolved (plan/inputs.sha256)"; }
+
 # The counters, counted for a process that is attached to as a turn's server is, all at 100%.
 pf=$RES/preflight; mkdir -p "$pf"
 ok=1
@@ -91,44 +114,6 @@ for e in $(echo "$EVENTS" | tr ',' ' '); do
 done
 [ $ok = 1 ] || { cat "$pf/counts.perf" 2>/dev/null; finish 1 "perf-preflight-failed: perf cannot count $EVENTS, each above zero and at 100%, here (results/preflight/counts.perf)"; }
 
-# What build.sh checked, in the results before any turn, so a report has it whatever happens later.
-cp "$B/sha256.txt" "$B/built-for.txt" "$RES/"
-bin_shas=$B/sha256.txt
-mkdir -p "$RES/layout" "$RES/maps" && cp "$B"/layout/*.txt "$RES/layout/"
-for s in $SIDES; do
-    cp "$B/record-$s.json" "$RES/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
-    [ "$SHUFFLE" = 1 ] || cp "$WORK/maps/$s.map.gz" "$RES/maps/"
-done
-[ ! -f "$B/second-pads.txt" ] || cp "$B/second-pads.txt" "$RES/"
-if [ "$SHUFFLE" = 1 ]; then
-    bin_shas=$RES/sha256.txt
-    (
-        set -- $SIDES
-        for n in $PADS_P $PADS_Q; do set -- "$@" "base-p$n"; done
-        case " $SIDES " in *" head "*) for n in $PADS_P; do set -- "$@" "head-p$n"; done ;; esac
-        node "$KIT/map.mjs" keep-placements "$WORK/maps" "$RES/maps" "$@" || exit 1
-        # Check only planned binary names. Timing uses this same saved manifest, not a second copy.
-        hashes=$(awk -v names="$*" '
-            BEGIN { split(names, files, " "); for (i in files) want[files[i]] = 1 }
-            !($1 in want) || length($2) != 64 || $2 !~ /^[0-9a-f]+$/ { exit 1 }
-            { delete want[$1]; print $2 "  " $1 }
-            END { for (name in want) exit 1 }
-        ' "$bin_shas") || exit 2
-        printf '%s\n' "$hashes" | (cd "$B" && sha256sum --quiet -c -) || exit 2
-    )
-    case $? in
-        0) ;;
-        1) finish 1 "refused: the shuffled run's unpadded and placement maps could not be kept and verified (results/maps/)" ;;
-        *) finish 1 "refused: the shuffled run's executables do not match results/sha256.txt" ;;
-    esac
-elif [ -f "$B/second-pads.txt" ]; then
-    cp "$WORK/maps/placements.sha256" "$RES/maps/"
-fi
-[ "$SHUFFLE" = 0 ] || for s in $SIDES; do { [ -s "$B/functions-$s.txt" ] && gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; } || finish 1 "refused: a shuffled run's list of $s's functions, bin/functions-$s.txt, from which report.mjs draws every ordering file again, could not be kept in the results"; done
-# The probe's source as build.sh built it, beside the request script and the expected answer in
-# plan/: the files the plan names by path, still what plan.mjs listed.
-sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$PL/inputs.sha256" | while IFS= read -r f; do mkdir -p "$RES/$(dirname "$f")"; cp "$WORK/$f" "$RES/$f"; done
-(cd "$RES" && sha256sum --quiet -c plan/inputs.sha256) >"$RES/inputs-check.txt" 2>&1 || { cat "$RES/inputs-check.txt"; finish 1 "refused: the probe as built, the request script or the expected answer is not what plan.mjs resolved (plan/inputs.sha256)"; }
 cargo_configs() { # the files cargo reads from the directories above the probe's copy and from its home
     d=$WORK
     while :; do

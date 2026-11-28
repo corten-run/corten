@@ -72,7 +72,7 @@ export function placementMaps(dir, expected, keep) {
       bytes = gunzipSync(readFileSync(join(keep ?? dir, map)));
     } catch { why.push(`${b}: cannot read its gzipped ${kind(b)} map (maps/${map})`); continue; }
     if (createHash("sha256").update(bytes).digest("hex") !== digest) why.push(`${b}: its ${kind(b)} map bytes do not match maps/placements.sha256`);
-    else if (!keep && kind(b) === "unpadded") unpadded.set(b, bytes);
+    else if (kind(b) === "unpadded") unpadded.set(b, bytes);
   }
   if (keep && !why.length) writeFileSync(join(keep, file), list);
   return { digests, unpadded, why };
@@ -258,15 +258,6 @@ export function check(unpadded, placed, pad, second, shuffled = false) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  if (process.argv[2] === "keep-placements") {
-    const [dir, keep, ...expected] = process.argv.slice(3);
-    if (!dir || !keep || !expected.length) { console.error("usage: node map.mjs keep-placements <work maps> <results maps> <map stems...>"); process.exit(2); }
-    try {
-      const { why } = placementMaps(dir, expected, keep);
-      for (const problem of why) console.error(`map.mjs: ${problem}`);
-      process.exit(why.length ? 1 : 0);
-    } catch (e) { console.error(`map.mjs: ${e.message}`); process.exit(1); }
-  }
   const args = process.argv.slice(2), shuffled = args[0] === "check" && args.at(-1) === "--shuffled";
   const [mode, a, b, padArg, secondArg] = shuffled ? args.slice(0, -1) : args;
   const load = (file) => readMap(mapText(readFileSync(file)));
