@@ -46,12 +46,13 @@ A connection `serve` accepted keeps one timer for its requests' deadlines once i
 up, rather than making one a request
 ([design.md, Choice 77](../design.md#choice-deadline-timer)). While warming up, the connection
 counts its own polls that return pending after at least one deadline made its own timer in that
-poll: on a connection that serves one request at a time, each request that waits is one. On the
-second such poll it makes a timer, if its runtime has a time driver. A deadline can borrow that
-timer only during its connection's poll and only when it is there to take; otherwise it makes
-its own, as every deadline did. One that borrows it sets it again and, as a rule, leaves it
-set. A connection with only one such poll, as one a proxy opens for each request it sends,
-keeps no timer. A deadline fires when it did. What an app can see of the kept timer:
+poll. On the second such poll it makes a timer, if its runtime has a time driver. On its first
+wait, a deadline borrows the connection's timer if it is there to take in that poll; otherwise
+it tries to make one on the runtime it is polled on, as every deadline did. One that borrows
+it sets it again and, as a rule, leaves it set. A connection with only one such poll keeps no
+timer. A deadline fires when it did. What an app can see of the kept timer (the counts of
+requests below are those of the workloads measured, where each request that waited was one
+such poll; they are not the rule):
 
 - Every connection asks its allocator for 128 bytes more, and for 240 more from its second
   request that waited until it closes. Those are bytes asked for, counted by DHAT on the
@@ -82,13 +83,14 @@ keeps no timer. A deadline fires when it did. What an app can see of the kept ti
 - A handler that serves a request on a runtime of its own, inside a connection `serve` polls
   (`block_in_place` and `block_on`), has that request's deadline wait on the timer of the runtime
   around it when the deadline borrows the connection's timer (by the rule above, whichever
-  requests the connection warmed up on). The borrowed timer is due at the same time as one on
-  the handler's runtime would be, while the runtime around it runs and the two runtimes' clocks
-  agree. If the runtime around it shuts down and the request, still waiting, polls the borrowed
-  timer again, that poll panics and the request is answered 500, where a timer of its own would
-  have gone on waiting (a test serves such a request, waits until its deadline has borrowed the
-  timer and shuts the outer runtime down). A deadline that made its own timer is not stopped by
-  that shutdown; if it fires, its request is answered as any whose deadline fires.
+  requests the connection warmed up on). The borrowed timer is set to the deadline instant the
+  handler's runtime would use; the driver of the runtime around it runs it, so the two runtimes'
+  clocks must agree for it to follow the handler's runtime's deadline. Once that driver has shut
+  down, a poll of the borrowed timer that reaches tokio's check of its driver panics, and the
+  request is answered 500, where a timer of its own would have gone on waiting (a test serves
+  such a request, waits until its deadline has borrowed the timer and shuts the outer runtime
+  down). A deadline that made its own timer is not stopped by that shutdown; if it fires, its
+  request is answered as any whose deadline fires.
 
 Routes that start their answer later than pages should (an upstream that answers in minutes, a
 report, large uploads) get a deadline of their own where they are mounted, so the rest of the

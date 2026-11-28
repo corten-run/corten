@@ -12038,7 +12038,8 @@ rules something out.
     connection only one of whose polls ends so makes none. The connection's task
     owns the timer and lends it to the thread only while the connection is polled, under a number
     of the connection's own, so a deadline finds it there and gives it back only to the
-    connection that made it. A deadline that finds none makes its own and drops it, whether the
+    connection that made it. A deadline that finds none tries to make its own on the runtime it
+    is polled on, as every deadline did, and drops it, whether the
     connection has not made a timer, another deadline is using it, or the request is polled
     anywhere else (`app.router()` served another way, a call a layer moved to another task).
 
@@ -12243,12 +12244,12 @@ rules something out.
        to the deadline, an hour under an area's long one.
     6. A handler can serve a request on a runtime of its own inside a connection's poll
        (`block_in_place` and `block_on`, which a test here treats as supported). If the inner
-       deadline borrows the connection's timer, it waits on the outer runtime's timer: its time
-       is read on the inner runtime's clock and the outer runtime's driver runs it, so the
-       borrowed timer is due at the same time as one on the inner runtime while the outer
-       runtime runs and the two clocks agree. If the outer runtime shuts down and the request,
-       still waiting, polls the borrowed timer again, that poll panics inside the handler's
-       catch and the inner request is answered 500. If the deadline instead made a timer on its
+       deadline borrows the connection's timer, it waits on the outer runtime's timer: the
+       borrowed timer is set to the deadline instant the inner runtime would use, and the outer
+       driver runs it, so the clocks must agree for it to follow the inner runtime's deadline.
+       Once that driver has shut down, a poll of the timer that reaches tokio's check of its
+       driver panics inside the handler's catch, and the inner request is answered 500. If the
+       deadline instead made a timer on its
        own runtime, the outer runtime's shutdown does not stop that timer; if the deadline
        fires, the request is answered as any whose deadline fires
        ([design Choice 30](#choice-deadline-body)). The test waits for the borrow and the
