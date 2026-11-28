@@ -7792,6 +7792,111 @@ async fn settle_fill_fails(req: Req) -> Response {
     Response::from_parts(head, body)
 }
 
+#[tokio::test]
+async fn tag_canonicalizes_a_drained_whole_body() {
+    use http_body::Body as _;
+
+    let mut body = Body::from("already read");
+    assert_eq!(body.frame().await.unwrap().unwrap().into_data().unwrap(), "already read");
+    assert!(body.is_end_stream());
+    assert!(body.held().unwrap().is_empty());
+    assert_ne!(body.boxed_size(), 0);
+
+    let tagged = crate::cache::tag(Response::new(body), &[], None).await;
+    let empty = crate::cache::tag(Response::new(Body::empty()), &[], None).await;
+    assert_eq!(tagged.headers()[header::ETAG], empty.headers()[header::ETAG]);
+    assert_eq!(tagged.body().boxed_size(), 0);
+}
+
+#[tokio::test]
+async fn tag_an_empty_body() {
+    use http_body::Body as _;
+
+    let fresh = || Response::new(Body::empty());
+    assert!(fresh().body().held().unwrap().is_empty());
+    let tagged = crate::cache::tag(fresh(), &[], None).await;
+    assert_eq!(tagged.status(), StatusCode::OK);
+    assert!(tagged.body().is_end_stream());
+    assert_eq!(tagged.body().size_hint().exact(), Some(0));
+    assert_eq!(tagged.body().boxed_size(), 0);
+    let tag = tagged.headers()[header::ETAG].clone();
+    let again = crate::cache::tag(fresh(), std::slice::from_ref(&tag), None).await;
+    assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(again.headers()[header::ETAG], tag);
+    assert_eq!(again.body().size_hint().exact(), None);
+}
+
+#[tokio::test]
+async fn tag_agrees_for_held_bytes_and_several_frames_with_an_exact_size() {
+    use bytes::Bytes;
+    use http_body::{Body as _, Frame, SizeHint};
+    use std::{
+        convert::Infallible,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    struct Frames(std::array::IntoIter<Bytes, 2>);
+    impl http_body::Body for Frames {
+        type Data = Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+            Poll::Ready(self.0.next().map(|bytes| Ok(Frame::data(bytes))))
+        }
+
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::with_exact(self.0.as_slice().iter().map(|bytes| bytes.len() as u64).sum())
+        }
+    }
+
+    let answer =
+        |body| Response::builder().header(header::CONTENT_TYPE, "text/plain").header("corten-test", "value").body(body).unwrap();
+    let frames = Body::new(Frames([Bytes::from_static(b"hello "), Bytes::from_static(b"world")].into_iter()));
+    assert_eq!(frames.size_hint().exact(), Some(11));
+    assert!(frames.held().is_none());
+    let multi = crate::cache::tag(answer(frames), &[], None).await;
+    let whole = crate::cache::tag(answer(Body::from("hello world")), &[], None).await;
+    assert_eq!(multi.headers(), whole.headers());
+    assert_eq!(multi.headers()[header::ETAG], whole.headers()[header::ETAG]);
+
+    let distinct = crate::cache::tag(answer(Body::from("hello there")), &[], None).await;
+    assert_ne!(whole.headers()[header::ETAG], distinct.headers()[header::ETAG]);
+    for response in [whole, multi] {
+        let mut body = response.into_body();
+        assert_eq!(body.frame().await.unwrap().unwrap().into_data().unwrap(), "hello world");
+        assert!(body.frame().await.is_none());
+    }
+}
+
+#[cfg(all(feature = "compress", feature = "json"))]
+#[tokio::test]
+async fn tag_leaves_a_held_values_stored_form_available_to_compression() {
+    use crate::compress::{finish, negotiate};
+    use crate::json::Raw;
+
+    let json = format!("[{}0]", "1,".repeat(2048));
+    let raw = Raw::new(json).unwrap();
+    let fresh = || crate::JsonResponse::from(crate::Json(raw.clone())).into_response();
+    let mut request = http::HeaderMap::new();
+    request.insert(header::ACCEPT_ENCODING, http::HeaderValue::from_static("br, zstd"));
+    let accepts = negotiate(&request);
+    assert_eq!(finish(fresh(), accepts).await.headers()[header::CONTENT_ENCODING], "zstd");
+    finish(fresh(), accepts).await;
+    raw.wait_stored();
+    let stored = finish(fresh(), accepts).await;
+    assert_eq!(stored.headers()[header::CONTENT_ENCODING], "br");
+    let stored = stored.into_body().collect().await.unwrap().to_bytes();
+
+    let tagged = crate::cache::tag(fresh(), &[], None).await;
+    assert_eq!(tagged.body().held().unwrap().as_ptr(), raw.as_bytes().as_ptr());
+    let tag = tagged.headers()[header::ETAG].clone();
+    let sent = finish(tagged, accepts).await;
+    assert_eq!(sent.headers()[header::CONTENT_ENCODING], "br");
+    assert_eq!(sent.headers()[header::ETAG], tag);
+    assert_eq!(sent.into_body().collect().await.unwrap().to_bytes(), stored);
+}
+
 /// A body that says it is 4 KiB long and fails as it is read: a page Corten cannot send.
 struct CutOff;
 

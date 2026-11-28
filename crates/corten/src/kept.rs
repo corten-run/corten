@@ -1635,7 +1635,7 @@ where
     F: FnOnce(Verdict) + Send + Unpin + 'static,
 {
     let Some(&ToRead(lifetime)) = signal.found::<ToRead>().get() else { return res };
-    if res.body().is_whole() {
+    if res.body().held().is_some() {
         tell(Verdict::Kept { lifetime, read: false });
         return res;
     }
