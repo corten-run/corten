@@ -94,15 +94,8 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     };
     let group = |links: &[String]| {
         let groups: Vec<_> = links.iter().map(|link| group_token(link)).collect();
-        assert!(
-            groups.len() <= 4
-                && groups
-                    .iter()
-                    .zip(b"-012")
-                    .all(|(g, digit)| g.len() == 7 && g.starts_with(&groups[0][..6]) && g.as_bytes()[6] == *digit),
-            "{groups:?}"
-        );
-        groups[0][..6].to_string()
+        assert!(groups[0].len() == 8 && groups.iter().all(|g| *g == groups[0]), "{groups:?}");
+        groups[0].to_string()
     };
     let marked = |path: &str| {
         let links = written(nav_links(
@@ -113,7 +106,11 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
         links
             .into_iter()
             .zip(b"-012")
-            .map(|(link, digit)| link.replace(&format!(r#" data-nav-group="{group}{}""#, *digit as char), ""))
+            .map(|(link, digit)| {
+                let attrs = format!(r#" data-nav-group="{group}" data-nav-order="{}""#, *digit as char);
+                assert!(link.contains(&attrs), "{link}");
+                link.replace(&attrs, "")
+            })
             .collect::<Vec<_>>()
     };
     assert_eq!(
@@ -303,14 +300,13 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
         "/catalog/integrations/governance",
         vec![NavTo::section(&Catalog), NavTo::page(&Settings).also(&Governance).also(&old)],
     );
-    let token = group_token(&links[1]);
-    assert!(token.len() == 8 && token.ends_with("+0"), "a group with other addresses says so: {token}");
-    let group = &token[..7];
-    assert_eq!(links[0], format!(r#" href="/catalog" data-nav="section" data-nav-group="{group}-""#));
+    let group = group_token(&links[1]);
+    assert_eq!(group, "98f797a1+", "preserve the exact group and alias marker older runtimes read");
+    assert_eq!(links[0], format!(r#" href="/catalog" data-nav="section" data-nav-group="{group}" data-nav-order="-""#));
     assert_eq!(
         links[1],
         format!(
-            r#" href="/catalog/integrations/settings" data-nav data-nav-group="{token}" data-nav-also="/catalog/integrations/governance /old/settings" aria-current="page""#
+            r#" href="/catalog/integrations/settings" data-nav data-nav-group="{group}" data-nav-also="/catalog/integrations/governance /old/settings" data-nav-order="0" aria-current="page""#
         ),
         "the other addresses are written by their paths alone, the query and fragment left out"
     );
@@ -339,9 +335,8 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
         "which entry an address belongs to names the group too"
     );
 
-    // A nav with no other addresses still hashes to 0xb6f787d3, now written in six digits and
-    // followed by the first entry's order digit.
-    assert_eq!(group(written("/", vec![NavTo::page(&Settings)])), "1qxsUI-");
+    // A nav with no other addresses keeps the same exact group as before entry order existed.
+    assert_eq!(group(written("/", vec![NavTo::page(&Settings)])), "b6f787d3");
 
     // A route written by hand whose path has a space is written with it encoded, as the browser
     // asks for it, so the runtime can split the attribute on spaces.
@@ -355,7 +350,9 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
     }
     let links = written("/old%20settings", vec![NavTo::page(&Settings).also(&Spaced).also(&Governance)]);
     assert!(
-        links[0].contains(r#" data-nav-also="/old%20settings /catalog/integrations/governance" aria-current="page""#),
+        links[0].contains(
+            r#" data-nav-also="/old%20settings /catalog/integrations/governance" data-nav-order="-" aria-current="page""#
+        ),
         "{links:?}"
     );
 
@@ -372,7 +369,7 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
     }
     let links = written("/old/caf%C3%A9/menu%7C", vec![NavTo::section(&Catalog), NavTo::section(&Settings).also(&Cafe)]);
     assert!(!links[0].contains("aria-current"), "{links:?}");
-    assert!(links[1].ends_with(r#" data-nav-also="/old/caf%C3%A9/menu%7C" aria-current="page""#), "{links:?}");
+    assert!(links[1].ends_with(r#" data-nav-also="/old/caf%C3%A9/menu%7C" data-nav-order="0" aria-current="page""#), "{links:?}");
     let under = written("/old/caf%C3%A9/menu%7C/more", vec![NavTo::section(&Settings).also(&Cafe)]);
     assert!(under[0].ends_with(r#" aria-current="page""#), "a section under it too: {under:?}");
 
@@ -386,7 +383,9 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
     );
     assert!(links[0].contains(r#" data-nav-also="/seller-desk""#), "{links:?}");
     assert!(
-        links[1].ends_with(r#" data-nav-also="/old/a&amp;copy;&#39;b /catalog/integrations/governance" aria-current="page""#),
+        links[1].ends_with(
+            r#" data-nav-also="/old/a&amp;copy;&#39;b /catalog/integrations/governance" data-nav-order="0" aria-current="page""#
+        ),
         "{links:?}"
     );
 }
@@ -506,7 +505,11 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         link.render_attrs(&mut out);
         out
     };
-    assert!(at("/old%7Chome").ends_with(r#" data-nav-also="/old%7Chome" aria-current="page""#), "{}", at("/old%7Chome"));
+    assert!(
+        at("/old%7Chome").ends_with(r#" data-nav-also="/old%7Chome" data-nav-order="-" aria-current="page""#),
+        "{}",
+        at("/old%7Chome")
+    );
     assert!(at("/old%7chome").contains("aria-current") && at("/old|home").contains("aria-current"));
     assert!(!at("/old%7Chomes").contains("aria-current") && !at("/old%257chome").contains("aria-current"));
     let local = Local::parse("/old|x").unwrap();
@@ -588,7 +591,7 @@ fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
     let (link, ()) = nav.links().next().unwrap();
     let mut out = String::new();
     link.render_attrs(&mut out);
-    assert!(out.ends_with(r#"+-" data-nav-also="/old/b" aria-current="page""#), "{out}");
+    assert!(out.ends_with(r#"+" data-nav-also="/old/b" data-nav-order="-" aria-current="page""#), "{out}");
     // An escape of a reserved character, or of `%`, is not the character.
     assert!(!marked("/old/a/b", "/old/a%2fb") && marked("/old/a%2Fb", "/old/a%2fb"));
     // `%252e` is `%` and the text `2e`, which no browser asks for as `%252E`.
@@ -604,7 +607,7 @@ fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
     // The check is made once the `.` and `..` segments are resolved, escaped or not, as every
     // engine resolves them: `/old/%2e%2e/x` is `/x`, and kept.
     assert!(
-        drawn("/x", "/old/%2e%2e/x").ends_with(r#"+-" data-nav-also="/x" aria-current="page""#),
+        drawn("/x", "/old/%2e%2e/x").ends_with(r#"+" data-nav-also="/x" data-nav-order="-" aria-current="page""#),
         "{}",
         drawn("/x", "/old/%2e%2e/x")
     );
@@ -776,7 +779,7 @@ fn a_ranked_nav_breaks_ties_by_own_url_then_entry_order() {
         let (link, item) = last.next().unwrap();
         let mut out = String::new();
         link.render_attrs(&mut out);
-        assert_eq!(group_token(&out).get(6..), Some(suffix));
+        assert!(out.contains(&format!(r#" data-nav-order="{suffix}""#)), "{out}");
         assert_eq!(*item, index);
         assert_eq!(link.is_current(), index == 63);
     }
@@ -1013,7 +1016,7 @@ fn a_nav_entry_with_a_nul_in_its_url_is_ranked_where_the_link_goes() {
     // The address written with the escape is kept, and current where every engine asks for it.
     let escaped = Hand("/older%00x");
     let links = drawn("/older%00x", NavTo::page(&here).also(&escaped));
-    assert!(links[1].1.contains(r#" data-nav-also="/older%00x" aria-current="page""#), "{links:?}");
+    assert!(links[1].1.contains(r#" data-nav-also="/older%00x" data-nav-order="0" aria-current="page""#), "{links:?}");
     assert_eq!(marked("/older", NavTo::page(&here).also(&escaped)), ["Root"]);
 }
 
@@ -1065,7 +1068,8 @@ fn an_empty_nav_url_does_not_write_the_entry_before_its_other_addresses() {
 /// asked for at `/n/3` or at `/old/3`. With `NAV_ALSO=escaped` that other address is the `Local`
 /// `/old/a&copy;`, which `data-nav-also` writes escaped, and the page is asked for there. Counting it
 /// under callgrind at two numbers of requests gives the instructions per request. Run in release:
-/// `NAV_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_a_nav_of_costs`
+/// `NAV_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_a_nav_of_costs --nocapture`
+/// prints elapsed time. Set `NAV_PAGES=1` to sample the response for byte counts.
 #[test]
 #[ignore]
 fn what_a_page_with_a_nav_of_costs() {
@@ -1140,12 +1144,17 @@ fn what_a_page_with_a_nav_of_costs() {
     };
     let router = app(routes, None);
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let start = std::time::Instant::now();
     runtime.block_on(async {
         for _ in 0..pages {
             let (status, _, body) = call_with(router.clone(), "GET", at, None, None).await;
             assert!(status == StatusCode::OK && body.matches(r#"aria-current="page""#).count() == 1, "{body}");
+            if pages == 1 {
+                println!("NAV_HTML {body}");
+            }
         }
     });
+    println!("{pages} eight-entry responses in {:?}", start.elapsed());
 }
 
 async fn steps() -> &'static str {

@@ -1683,8 +1683,8 @@ impl Cursor {
                         return err(span, "data-key is printed by Corten: write key={item.id} to give a keyed ref its key");
                     }
                     // HTML attribute names are case-insensitive: `data-Vars` is `data-vars`.
-                    if lower == "data-nav" || lower == "data-nav-group" || lower == "data-nav-also" {
-                        return err(span, format!("{name} is printed by Corten: write <a {{..req.nav(&url::News)}}> (or req.nav_section, or a link of req.nav_of), which writes href, data-nav, data-nav-group, data-nav-also and aria-current from one mention of the route"));
+                    if matches!(lower.as_str(), "data-nav" | "data-nav-group" | "data-nav-also" | "data-nav-order") {
+                        return err(span, format!("{name} is printed by Corten: write <a {{..req.nav(&url::News)}}> (or req.nav_section, or a link of req.nav_of), which writes the link's href and current-page attributes from one mention of the route"));
                     }
                     if lower == "data-ref" || lower == "data-on" || lower == "data-scope" {
                         return err(span, "data-ref, data-on and data-scope are printed by Corten: write ref={rows} (with let (rows) = refs();) or on:click={js::show(rows)}");

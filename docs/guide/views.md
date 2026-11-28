@@ -562,8 +562,9 @@ A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link
 that stays current on the pages under it). The full load renders `aria-current`, and the runtime
 moves it after each client navigation, so the header is right without rendering again. It does
-the same after a patch that puts a nav link on the page, which the server marked against the
-request that made the patch (a form's action), not the page. A link it makes current, or finds
+the same after a patch that adds, removes or replaces a nav link. An added link was marked
+against the request that made the patch (a form's action), not the page; removing a
+winner can make a surviving link current. A link it makes current, or finds
 current when it first sees it (on a full load, or in a row a write's page or a patch draws
 again), is put in the middle of the nearest box around it that overflows sideways and scrolls
 (a nav row wider than the bar), or its start at the box's when it is wider, when it is shown and
@@ -628,10 +629,12 @@ the keys as plain text, so for every address Corten writes they mark the same en
 and after a client navigation in Playwright's Chromium, Firefox and WebKit builds, where these
 spellings were measured. A nav without other addresses compares the paths as written, as before.
 The runtime reads `data-nav-also` and compares by key only in a nav with other addresses.
-The `data-nav-group` token the server uses to tell the runtime this, group the links and preserve
-their order is internal. Like `data-nav`, `html!` refuses
-`data-nav-also` written as an attribute by hand; a spread of pairs passes it through, as it does
-`data-nav` and `data-nav-group`.
+The group token (`data-nav-group`) and entry order (`data-nav-order`) are internal. The group
+token and its trailing `+` for aliases stay the same across deploys. An older runtime still
+marks all deepest entries in a tie. A new runtime reading mixed markup also marks all deepest
+entries if any of those entries lacks an order; other groups are unaffected. Like `data-nav`,
+`html!` refuses `data-nav-also`, `data-nav-group` and `data-nav-order` written by hand; a
+spread of pairs passes them through.
 
 WebKit asks for an escape of a letter, a digit, `-`, `.`, `_` or `~` decoded (`/old/%2e%2ex` as
 `/old/..x`) while its `location.pathname` keeps it, so Corten never writes one: a typed route writes

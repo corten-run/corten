@@ -1124,6 +1124,7 @@ async function apply(html, signal, sent, took, own, asked, within) {
         changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
         elementOwn.append.call(target, el.content);
       } else {
+        navs ||= holdsNav(target);
         const parent = parentElementOf(target);
         if (parent) changedIn(parent, ["r", id, [el]]);
         replacements?.set(target, el);
@@ -1132,8 +1133,8 @@ async function apply(html, signal, sent, took, own, asked, within) {
       }
     }
     // The server marked a nav link in the patch against the request that made it (a form's action),
-    // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
-    // only looks through what it put.
+    // not this page: mark it as a navigation would. A patch can also take away a winner without
+    // drawing any nav links. Only look across the page if the patch changed some.
     if (navs || put.some(holdsNav)) markCurrent();
     for (const el of put) setVars(el);
   } finally {
@@ -2187,8 +2188,9 @@ const holdsNav = (el) => matchesOf(el, NAV) || !!queryOne(el, NAV);
  * (`isPath`) is never current, and its URL is not parsed: one no browser can parse (`//[`) does not
  * stop the rest from being ranked. Of the links of one `data-nav-group` (`Req::nav_of`),
  * only the deepest entry that holds the page is current. On a tie, its own URL beats an alias,
- * then the order in the group token breaks the tie, not DOM order. Copies of the same entry
- * agree. A `+` after the group prefix enables comparison keys and `data-nav-also` (`alsoRank`).
+ * then `data-nav-order` breaks the tie, not DOM order. Copies of the same entry agree. If any
+ * deepest link has no order (markup from an older server), all deepest links stay current as
+ * before. A trailing `+` in the group enables comparison keys and `data-nav-also` (`alsoRank`).
  * The shell is not re-rendered by client
  * navigation, so its menu would otherwise keep pointing at the first page. A link made current,
  * or current when first seen (the server's mark on a full load, or in a row a write's page or a
@@ -2201,31 +2203,34 @@ const holdsNav = (el) => matchesOf(el, NAV) || !!queryOne(el, NAV);
  */
 function markCurrent(kept = []) {
   const here = location.pathname;
-  /** Each link, group (itself when ungrouped), rank, and entry order. @type {[Element, Element | string, number, string][]} */
+  /** Each link, group (itself when ungrouped), rank, and entry order. @type {[Element, Element | string, number, string | null][]} */
   const links = [];
-  /** The winning entry in each group. @type {Map<Element | string, [number, string]>} */
+  /** Winning rank and order per group; null order means a tie is resolved by depth alone. @type {Map<Element | string, [number, string | null]>} */
   const winners = new Map();
   /** The comparison key of `here`, made for the first group with other addresses. @type {string | undefined} */
   let page;
-  for (const link of Array.from(document.querySelectorAll(NAV))) {
+  for (const link of document.querySelectorAll(NAV)) {
     const named = link.getAttribute("data-nav-group");
-    const aliased = named?.[6] === "+";
-    const prefix = aliased ? 7 : 6;
-    const group = named?.slice(0, prefix) ?? link;
-    const order = named?.slice(prefix) ?? "";
+    const group = named ?? link;
     let rank = -1;
     // Tested before the URL is parsed, which one that is not a path (`//[`) may fail.
     if (isPath(link)) {
       const path = new URL(/** @type {HTMLAnchorElement} */ (link).href).pathname;
       const section = link.getAttribute("data-nav") === "section";
-      if (aliased) rank = alsoRank(link, path, (page ??= keyOf(here)), section);
+      if (named?.endsWith("+")) rank = alsoRank(link, path, (page ??= keyOf(here)), section);
       else rank = 2 * navDepth(here, path, section) + 1;
     }
+    const order = rank < 0 || named === null ? null : link.getAttribute("data-nav-order");
     links.push([link, group, rank, order]);
     if (rank < 0) continue;
     const best = winners.get(group);
-    // The server writes unsigned entry numbers as ASCII-ordered digits, shortest first.
-    if (!best || rank > best[0] || (rank === best[0] && (order.length < best[1].length || (order.length === best[1].length && order < best[1])))) {
+    const depth = navRankDepth(rank);
+    const bestDepth = best ? navRankDepth(best[0]) : -1;
+    if (!best || depth > bestDepth) {
+      winners.set(group, [rank, order]);
+    } else if (depth === bestDepth && best[1] !== null &&
+      // The server writes unsigned entry numbers as ASCII-ordered digits, shortest first.
+      (order === null || rank > best[0] || (rank === best[0] && (order.length < best[1].length || (order.length === best[1].length && order < best[1]))))) {
       winners.set(group, [rank, order]);
     }
   }
@@ -2233,7 +2238,7 @@ function markCurrent(kept = []) {
   const made = [];
   for (const [link, group, rank, order] of links) {
     const best = winners.get(group);
-    if (best && rank === best[0] && order === best[1]) {
+    if (rank >= 0 && best && (best[1] === null ? navRankDepth(rank) === navRankDepth(best[0]) : rank === best[0] && order === best[1])) {
       if (link.getAttribute("aria-current") !== "page") {
         link.setAttribute("aria-current", "page");
         made.push([link, []]);
@@ -2244,6 +2249,9 @@ function markCurrent(kept = []) {
   // In the next frame, once the page is laid out.
   if (made.length) requestAnimationFrame(() => made.forEach(([link, leave]) => inView(link, leave)));
 }
+
+/** @param {number} rank */
+const navRankDepth = (rank) => Math.floor(rank / 2);
 
 /**
  * How deep an entry is, with own URL breaking a tie at that depth. The low bit of the rank

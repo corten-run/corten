@@ -674,9 +674,9 @@ pub struct NavLinks<T> {
     winner: Option<usize>,
     /// The group the runtime ranks these links in (`data-nav-group`): 32 bits of a hash of the
     /// entries, so a patch's nav does not join another of the page's, and two equal navs agree
-    /// anyway. Navs made to collide only mark the wrong link in the browser. Each link adds its
-    /// original entry index, after a `+` in a nav with other addresses.
-    group: [u8; 6],
+    /// anyway. Navs made to collide only mark the wrong link in the browser. A trailing `+` marks
+    /// a group with other addresses. Keep both parts stable across runtime and server rollouts.
+    group: [u8; 8],
     /// The entries' other addresses ([`NavTo::also`]), when one has some; none, and the nav is drawn
     /// as it was before they existed.
     also: Option<Box<Also>>,
@@ -697,11 +697,11 @@ struct Also {
 
 impl Also {
     /// Writes the group and its `+`, then for each entry in `ends` the escaped `data-nav-also`
-    /// text after that same prefix. A link inserts its order after the prefix, before any aliases.
+    /// text after that same prefix.
     #[cold]
     #[inline(never)]
-    fn write_text(&mut self, group: &[u8; 6]) {
-        let group = std::str::from_utf8(group).expect("ASCII group");
+    fn write_text(&mut self, group: &[u8; 8]) {
+        let group = std::str::from_utf8(group).expect("hex digits");
         let Also { paths, ends, text } = self;
         *text = paths.len();
         paths.push_str(group);
@@ -728,7 +728,7 @@ impl Also {
     #[cold]
     #[inline(never)]
     fn group(&self, url: &str, url_end: usize) -> &str {
-        let plain = self.text..self.text + 7;
+        let plain = self.text..self.text + 9;
         match self.ends.binary_search_by_key(&url_end, |&(of, ..)| of) {
             Ok(i) if !url.is_empty() => {
                 let start = if i == 0 { plain.end } else { self.ends[i - 1].2 };
@@ -745,7 +745,7 @@ impl<T> NavLinks<T> {
     /// runtime ranks the links in the page, the server ranked them all.
     pub fn links(&self) -> impl Iterator<Item = (NavLink<'_>, &T)> {
         let mut start = 0;
-        let plain = std::str::from_utf8(&self.group).expect("ASCII group");
+        let plain = std::str::from_utf8(&self.group).expect("hex digits");
         let also = self.also.as_deref();
         self.entries.iter().enumerate().map(move |(index, (end, section, _, item, prefetch))| {
             let url = &self.urls[start..*end];
@@ -769,7 +769,7 @@ impl<T> NavLinks<T> {
     }
 }
 
-/// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, for an entry with other
+/// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, `data-nav-order`, for an entry with other
 /// addresses `data-nav-also` ([`NavTo::also`]), when current `aria-current="page"`, and
 /// `data-no-prefetch` for a URL its route says a hover may not fetch ([`crate::Route::may_prefetch`]).
 pub struct NavLink<'a> {
@@ -792,7 +792,7 @@ impl NavLink<'_> {
 impl crate::view::__private::Writes for NavLink<'_> {
     type Static = NavLink<'static>;
     const WRITES: &'static [&'static str] =
-        &["href", "data-nav", "data-nav-group", "data-nav-also", "aria-current", "data-no-prefetch"];
+        &["href", "data-nav", "data-nav-group", "data-nav-order", "data-nav-also", "aria-current", "data-no-prefetch"];
 }
 
 impl crate::view::Attrs for NavLink<'_> {
@@ -802,15 +802,14 @@ impl crate::view::Attrs for NavLink<'_> {
         out.push('"');
         out.push_str(if self.order_and_flags & 1 != 0 { r#" data-nav="section""# } else { " data-nav" });
         out.push_str(r#" data-nav-group=""#);
-        let (group, also) = self.group.split_at(self.group.len().min(7));
-        out.push_str(group);
+        out.push_str(self.group);
+        out.push_str(r#"" data-nav-order=""#);
         let order = self.order_and_flags >> 3;
         if order < NAV_DIGITS.len() {
             out.push(NAV_DIGITS[order] as char);
         } else {
             write_nav_order(order, out);
         }
-        out.push_str(also);
         out.push('"');
         if self.is_current() {
             out.push_str(r#" aria-current="page""#);
@@ -960,7 +959,7 @@ fn key(path: &str) -> std::borrow::Cow<'_, str> {
 
 /// Ranks every entry of a nav with other addresses ([`NavTo::also`]) by comparison keys: the page's
 /// path's ([`key`]) with each entry's own URL's and each of its other addresses' ([`pathname`]), as
-/// the runtime does in a group with a `+` marker, so the server and the runtime mark the
+/// the runtime does in a group named with a trailing `+`, so the server and the runtime mark the
 /// same entry whether an engine asks for and shows a `|` or an escape's hex digits in one case or
 /// another. An entry whose URL is its own key ([`own_key`]) on a page whose path is its own keeps
 /// the depth it was ranked with as written, which is the same; one whose URL is not a path on this
@@ -1028,7 +1027,7 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
         })
         .collect();
     // The URLs, which are sections and any other addresses name the group; its 32 low bits, as
-    // six attribute-safe digits. A nav with no other addresses still hashes the low 16 bits
+    // hex. A nav with no other addresses still hashes the low 16 bits
     // of where each URL ends. One with them hashes where each URL ends in full, which entry each
     // other address belongs to (where its URL ends) and where its paths end, so no two layouts of
     // the same text share a group: the runtime would clear the mark of one of them.
@@ -1055,10 +1054,9 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
             })
         }
     };
-    let mut group = [0; 6];
-    let hash = hash as u32;
+    let mut group = [0; 8];
     for (i, digit) in group.iter_mut().enumerate() {
-        *digit = NAV_DIGITS[(hash >> (30 - 6 * i) & 63) as usize];
+        *digit = b"0123456789abcdef"[(hash >> (28 - 4 * i) & 15) as usize];
     }
     if let Some(also) = &mut also {
         also.write_text(&group);
@@ -2581,12 +2579,18 @@ impl Req {
     /// let _ = corten::NavTo::page(&"/account/desk");
     /// ```
     ///
-    /// Nor can a link join a group by hand, which the server did not rank:
+    /// Nor can a link join a group or set its order by hand, which the server did not rank:
     ///
     /// ```compile_fail
     /// use corten::prelude::*;
     ///
     /// let link = html! { <a data-nav-group="a">"News"</a> };
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// let link = html! { <a data-nav-order="0">"News"</a> };
     /// ```
     pub fn nav_of<'a, T>(&self, entries: impl IntoIterator<Item = (NavTo<'a>, T)>) -> NavLinks<T> {
         nav_links(self.uri.path(), entries)

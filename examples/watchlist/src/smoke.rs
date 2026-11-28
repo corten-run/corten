@@ -216,6 +216,9 @@ fn team_nav(req: Req) -> HtmlResult {
 #[derive(Id)]
 struct NavTieCopiesId;
 
+#[derive(Id)]
+struct NavTieSeparateId;
+
 async fn nav_tie_page(req: Req, Params(_): Params<url::NavTiePage<'_>>) -> HtmlResult {
     let settings = url::NavTiePage { name: "settings" };
     let old = url::NavTiePage { name: "before" };
@@ -230,7 +233,9 @@ async fn nav_tie_page(req: Req, Params(_): Params<url::NavTiePage<'_>>) -> HtmlR
     };
     let copies = [ranked(), ranked()];
     let other = req.nav_of([(NavTo::page(&legacy), "Separate"), (NavTo::page(&first), "Separate later")]);
-    let other: Vec<_> = other.links().collect();
+    let mut other = other.links();
+    let (separate, label) = other.next().expect("the separate nav's first entry");
+    let (later, later_label) = other.next().expect("the other entry");
     let desktop: Vec<_> = copies[0].links().collect();
     let mobile: Vec<_> = copies[1].links().collect();
     let independent = req.nav(&legacy);
@@ -245,7 +250,10 @@ async fn nav_tie_page(req: Req, Params(_): Params<url::NavTiePage<'_>>) -> HtmlR
                     </section>
                 }
             </div>
-            <nav>for (link, item) in other.into_iter().rev() { <a {..link}>{*item}</a> }</nav>
+            <nav>
+                <a {..later}>{*later_label}</a>
+                <span id={NavTieSeparateId}><a {..separate}>{*label}</a></span>
+            </nav>
             <a {..independent}>"Independent"</a>
             <a href={old}>"Earlier page"</a>
         </Layout>
