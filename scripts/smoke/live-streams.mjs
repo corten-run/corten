@@ -1,12 +1,15 @@
 import { engine, check } from "./helpers.mjs";
+import { liveRegion } from "./live-region.mjs";
 
 export async function liveFragments(page) {
   // <corten-live src>: the server streams fragments and the runtime swaps them in by id.
   const firstTrade = await page.textContent("#last-trade");
+  const regionStayed = await liveRegion(page, "last-trade");
   await page.waitForFunction((t) => document.getElementById("last-trade")?.textContent !== t, firstTrade, { timeout: 4000 }).catch(() => {});
   // A trade a second: one drawn in four seconds is a fragment the runtime applied.
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
+  check("a trade replaces only the live region's message", await regionStayed());
 }
 
 export async function streamCompression(page) {

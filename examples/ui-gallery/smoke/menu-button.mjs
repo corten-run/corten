@@ -1,4 +1,5 @@
 import { base, check } from "./helpers.mjs";
+import { liveRegion } from "../../../scripts/smoke/live-region.mjs";
 
 export async function menuButton(page, errors) {
   // MenuButton
@@ -108,9 +109,11 @@ export async function menuButton(page, errors) {
   await page.keyboard.press("Escape");
   await expanded("false");
   await trigger.click();
+  const regionStayed = await liveRegion(page, "menu-result");
   await page.getByRole("menuitem", { name: "Archive" }).click();
   await page.waitForFunction(() => document.querySelector("#menu-result")?.textContent === "Archived.");
   check("a form item posts and patches", true);
+  check("a menu action keeps the live region and replaces its message", await regionStayed());
   await expanded("false");
   check("using an item closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
   // Enter and Space on a focused item are the browser's click on it: the menu's keys (a letter

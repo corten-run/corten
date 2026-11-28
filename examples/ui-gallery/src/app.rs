@@ -447,7 +447,7 @@ fn maximum_ratio_rule(t: Msg) -> impl Render + std::fmt::Display {
 
 async fn help(req: Req) -> HtmlResult {
     let example = ExampleBounds { minimum_ratio: 0.002.into(), maximum_ratio: 0.5.into() };
-    help_page(&req, RatioExample { t: req.t(), example: &example, errors: None, result: "" })
+    help_page(&req, RatioExample { t: req.t(), example: &example, errors: None }, "")
 }
 
 async fn check_bounds(req: Req, Form(form): Form<ExampleBounds>) -> HtmlResult {
@@ -460,15 +460,18 @@ async fn check_bounds(req: Req, Form(form): Form<ExampleBounds>) -> HtmlResult {
     if MAXIMUM_RATIO.read(&form.maximum_ratio).is_none() {
         errors.add(f.maximum_ratio, maximum_ratio_rule(t).to_string());
     }
-    if !errors.is_empty() {
-        let view = || RatioExample { t, example: &form, errors: Some(&errors), result: "" };
-        return req.invalid(&errors, view(), || async { help_page(&req, view()) }).await;
-    }
-    let view = || RatioExample { t, example: &form, errors: None, result: "Both ratios are in range." };
-    req.patch_or(view(), || async { help_page(&req, view()) }).await
+    let valid = errors.is_empty();
+    let result = if valid { "Both ratios are in range." } else { "" };
+    let view = || RatioExample { t, example: &form, errors: (!valid).then_some(&errors) };
+    let patch = html! {
+        {view()}
+        <OrderResult text={result} />
+    };
+    let page = || async { help_page(&req, view(), result) };
+    if valid { req.patch_or(patch, page).await } else { req.invalid(&errors, patch, page).await }
 }
 
-fn help_page(req: &Req, ratios: impl Render) -> HtmlResult {
+fn help_page(req: &Req, ratios: impl Render, result: &str) -> HtmlResult {
     let f = SellForm::FIELDS;
     let t: Msg = req.t();
     let discount = Entry::from(1e-20);
@@ -508,13 +511,14 @@ fn help_page(req: &Req, ratios: impl Render) -> HtmlResult {
                 <button>"Try listing with this discount"</button>
             </form>
             {ratios}
+            <p role="status"><OrderResult text={result} /></p>
             <p><a href={url::Home { tab: None, sale: None, period: None, sold: None, sales: None }}>"Back to the draft"</a></p>
         </Layout>
     })
 }
 
 #[component]
-fn RatioExample<'a>(t: Msg, example: &'a ExampleBounds, errors: Option<&'a Errors>, result: &'a str) -> impl Patch {
+fn RatioExample<'a>(t: Msg, example: &'a ExampleBounds, errors: Option<&'a Errors>) -> impl Patch {
     let f = ExampleBounds::FIELDS;
     let e = errors.map_or_else(|| Within::none(ExampleBoundsId), |errors| errors.within(ExampleBoundsId));
     html! {
@@ -540,7 +544,6 @@ fn RatioExample<'a>(t: Msg, example: &'a ExampleBounds, errors: Option<&'a Error
             <p id={HintId(&e.id(f.maximum_ratio))}>{maximum_ratio_rule(t)}</p>
             {e.message(f.maximum_ratio)}
             <button>"Check the example ratios"</button>
-            <OrderResult text={result} />
         </form>
     }
 }
@@ -674,7 +677,7 @@ mod tests {
         let patch = listed().mode(Mode::Action).await;
         assert_eq!(
             patch.text(),
-            r#"<p id="result" role="status">Listed 2 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship.</p>"#
+            r#"<span id="result">Listed 2 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship.</span>"#
         );
         // Without JavaScript the page comes back at the draft's own address, which answers a GET.
         let page = listed().await;
@@ -694,13 +697,13 @@ mod tests {
             read(&listed),
             (
                 StatusCode::OK,
-                r#"<p id="result" role="status">Listed 1 Lightly Played Ashen Drake at $1.00 each, 1.0 oz to ship, 37.5% off two or more.</p>"#
+                r#"<span id="result">Listed 1 Lightly Played Ashen Drake at $1.00 each, 1.0 oz to ship, 37.5% off two or more.</span>"#
             )
         );
         for (discount, status) in [("0.001", StatusCode::OK), ("99.999", StatusCode::OK), ("", StatusCode::OK)] {
             assert_eq!(sent(discount).mode(Mode::Action).await.status(), status, "{discount}");
         }
-        let refused = r#"<p id="result" role="status">Enter a discount above 0 and below 100 percent, or none.</p>"#;
+        let refused = r#"<span id="result">Enter a discount above 0 and below 100 percent, or none.</span>"#;
         for discount in ["0", "100", "-1", "1e3", "half"] {
             let res = sent(discount).mode(Mode::Action).await;
             assert_eq!(read(&res), (StatusCode::UNPROCESSABLE_ENTITY, refused), "{discount}");
@@ -721,10 +724,7 @@ mod tests {
             (listing(&app, "1.2.3", &[Region::Ca], Pricing::Fixed, ""), "Enter a price, such as 12.50."),
         ] {
             let res = sent.mode(Mode::Action).await;
-            assert_eq!(
-                read(&res),
-                (StatusCode::UNPROCESSABLE_ENTITY, &*format!(r#"<p id="result" role="status">{message}</p>"#))
-            );
+            assert_eq!(read(&res), (StatusCode::UNPROCESSABLE_ENTITY, &*format!(r#"<span id="result">{message}</span>"#)));
         }
         let res = listing(&app, "$1,299.50", &[Region::Ca], Pricing::Offers, "5").mode(Mode::Action).await;
         assert_eq!(res.status(), StatusCode::OK);

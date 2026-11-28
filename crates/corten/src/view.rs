@@ -1217,8 +1217,8 @@ fn mark_head_tags(html: &str, out: &mut String) {
 ///
 /// let row = html! { <tr id={RowId("i7")}><td>"Lamp"</td></tr> };
 /// assert_eq!(row.to_html(), r#"<tr id="row-i7"><td>Lamp</td></tr>"#);
-/// let status = html! { <p id={DeskStatusId} role="status">"Saved"</p> };
-/// assert_eq!(status.to_html(), r#"<p id="desk-status" role="status">Saved</p>"#);
+/// let status = html! { <div role="status"><p id={DeskStatusId}>"Saved"</p></div> };
+/// assert_eq!(status.to_html(), r#"<div role="status"><p id="desk-status">Saved</p></div>"#);
 /// assert_eq!(html! { {Remove(RowId("i7"))} }.to_html(), r#"<template id="row-i7" data-remove></template>"#);
 /// ```
 ///
@@ -1471,7 +1471,7 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 ///
 /// #[component]
 /// fn Status(text: &str) -> impl Patch {
-///     html! { <p id={StatusId} role="status">{text}</p> }
+///     html! { <p id={StatusId}>{text}</p> }
 /// }
 ///
 /// fn archived<'a>(done: &'a [&'a str]) -> impl Patch + 'a {
@@ -1480,6 +1480,9 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 ///         <Status text="Archived." />
 ///     }
 /// }
+/// // The page keeps the live region; the patch sends only its child.
+/// let page = html! { <div role="status"><Status text="" /></div> };
+/// assert_eq!(page.to_html(), r#"<div role="status"><p id="status"></p></div>"#);
 /// # let _ = archived(&["7"]);
 /// ```
 ///
@@ -1534,7 +1537,7 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// use corten::prelude::*;
 /// #[component]
 /// fn Status(text: &str) -> impl Patch {
-///     html! { <p role="status">{text}</p> }
+///     html! { <p>{text}</p> }
 /// }
 /// ```
 ///
@@ -1546,7 +1549,7 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// struct StatusId;
 /// #[component]
 /// fn Status(text: &str) -> impl Patch {
-///     html! { <p id={StatusId} role="status">{text}</p> }
+///     html! { <p id={StatusId}>{text}</p> }
 /// }
 /// #[component]
 /// fn Counted(n: u32) -> impl Patch {
@@ -1556,7 +1559,9 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 ///     }
 /// }
 /// fn send(view: impl Patch) -> String { view.to_html() }
-/// assert_eq!(send(Counted { n: 3 }), r#"<p id="status" role="status">3</p>"#);
+/// let page = html! { <div role="status"><Status text="" /></div> };
+/// assert_eq!(page.to_html(), r#"<div role="status"><p id="status"></p></div>"#);
+/// assert_eq!(send(Counted { n: 3 }), r#"<p id="status">3</p>"#);
 /// ```
 ///
 /// A loop over rows known from data is written where the rest of the patch is, with its

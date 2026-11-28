@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
+import { liveRegion } from "../../scripts/smoke/live-region.mjs";
 
 const base = process.argv[2];
 if (!base) throw new Error("usage: node examples/seller-desk/smoke.mjs <base url>");
@@ -261,9 +262,11 @@ try {
   check("Archive opens the dialog", await page.isVisible("dialog[open]"));
   const itemCount = () => page.textContent("#item-count");
   const countBefore = await itemCount();
+  const regionStayed = await liveRegion(page, "desk-status");
   await page.click("dialog button[value=confirm]");
   await page.waitForFunction(() => /Archived/.test(document.getElementById("desk-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
   check("confirming archives the rows", (await page.textContent("#desk-status")) === "Archived 2 items.", await page.textContent("#desk-status"));
+  check("archiving keeps the live region and replaces its message", await regionStayed());
   const left = await page.$$eval(ids.map((id) => `#${id}`).join(","), (rows) => rows.length);
   check("the patch removed the archived rows and the selection is clear", left === 0 && (await count()) === "0", `${left} left`);
   check(

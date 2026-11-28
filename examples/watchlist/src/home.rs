@@ -78,10 +78,15 @@ fn home_view<'a>(home: &'a Home, t: Msg, notice: Option<&'a Notice>) -> impl Ren
                 <LivePrices stocks={&home.stocks} t={t} />
             </section>
             <aside class={stack(Space::_5)}>
-                <WatchForm others={&home.others} message={&home.message} notice={notice} />
+                <div class={(card(), stack(Space::_3))}>
+                    <WatchForm others={&home.others} />
+                    <div aria-live="polite"><WatchMessage message={&home.message} notice={notice} /></div>
+                </div>
                 <section class={(card(), stack(Space::_2))}>
                     <h2>"Market activity"</h2>
-                    <corten-live src={url::Trades} since={home.trades_seen}><LastTrade text={&home.last_trade} /></corten-live>
+                    <corten-live src={url::Trades} since={home.trades_seen} aria-live="polite">
+                        <LastTrade text={&home.last_trade} />
+                    </corten-live>
                 </section>
                 <section class={(card(), stack(Space::_2))}>
                     <h2>"Picks for you"</h2>
@@ -192,20 +197,26 @@ struct PricesId;
 #[derive(Id)]
 struct WatchFormId;
 
-/// The outcome of the last watch or removal, in the form.
+/// The outcome of the last watch or removal, beside the form.
 #[derive(Id)]
 struct WatchMessageId;
 
-/// Adds a stock to the list: the stocks not watched yet, and what the last change did (`message`
-/// in a patch, `notice` on the page a change without JavaScript was sent back to). The rows'
-/// Remove buttons belong to it too. A change that got no answer (the network failed) leaves the
+/// What the last change did, or the notice on the page it redirects to without JavaScript.
+#[component]
+fn WatchMessage<'a>(message: &'a str, notice: Option<&'a Notice>) -> impl Patch {
+    html! {
+        <p id={WatchMessageId}>
+            {message}
+            if let Some(notice) = notice { {notice} }
+        </p>
+    }
+}
+
+/// Adds a stock to the list. The rows' Remove buttons belong to it too.
+/// A change that got no answer (the network failed) leaves the
 /// page as it was, and the form says so (`on:corten:error`); the next answer replaces it.
 #[component(js)]
-pub(crate) fn WatchForm<'a>(
-    others: &'a [(&'static str, &'static str)],
-    message: &'a str,
-    notice: Option<&'a Notice>,
-) -> impl Patch {
+pub(crate) fn WatchForm<'a>(others: &'a [(&'static str, &'static str)]) -> impl Patch {
     let f = StockForm::FIELDS;
     let unanswered = refs();
     html! {
@@ -214,7 +225,7 @@ pub(crate) fn WatchForm<'a>(
             method="post"
             action={url::Watch}
             data-patch
-            class={(card(), stack(Space::_3))}
+            class={stack(Space::_3)}
             on:corten:error={js::failed(unanswered)}
         >
             <h2>"Watch a stock"</h2>
@@ -227,12 +238,6 @@ pub(crate) fn WatchForm<'a>(
                 </label>
                 <button class={w_full()}>"Watch"</button>
             }
-            <p id={WatchMessageId} aria-live="polite">
-                {message}
-                if let Some(notice) = notice {
-                    {notice}
-                }
-            </p>
             <p ref={unanswered} role="alert" hidden>"That change did not reach the market. Try again."</p>
         </form>
     }
@@ -245,7 +250,7 @@ struct LastTradeId;
 
 #[component]
 fn LastTrade(text: &str) -> impl Render {
-    html! { <p id={LastTradeId} aria-live="polite">{text}</p> }
+    html! { <p id={LastTradeId}>{text}</p> }
 }
 
 /// The visitor's picks: drawn waiting in the home page, and replaced by the patch the runtime
@@ -383,7 +388,10 @@ async fn not_listed(req: &Req, viewer: Option<&Viewer>, market: &Market, watchin
     let mut errors = Errors::new();
     errors.add_form(NOT_LISTED);
     let home = &Home::new(market, watching, NOT_LISTED.into(), None);
-    let form = WatchForm { others: &home.others, message: &home.message, notice: None };
+    let form = html! {
+        <WatchForm others={&home.others} />
+        <WatchMessage message={&home.message} notice={None} />
+    };
     req.invalid(&errors, form, || async move { Ok(watching.with_cookie(home_screen(req, viewer, home)?)) }).await
 }
 
@@ -398,7 +406,8 @@ fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut W
         let home = Home::new(market, watching, message, None);
         let res = action.patch(html! {
             <LivePrices stocks={&home.stocks} t={req.t()} />
-            <WatchForm others={&home.others} message={&home.message} notice={None} />
+            <WatchForm others={&home.others} />
+            <WatchMessage message={&home.message} notice={None} />
         })?;
         return Ok(watching.with_cookie(res));
     }
@@ -486,7 +495,7 @@ mod tests {
         assert!(body.contains(r#"<option value="HLTH">Halcyon Health (HLTH)</option>"#), "the others are the form's choices");
         assert!(!body.contains(r#"<option value="ACME">"#), "a watched stock is not offered again");
         assert!(body.contains(
-            r#"<corten-live src="/live/trades" since="0"><p id="last-trade" aria-live="polite">No trades yet.</p></corten-live>"#
+            r#"<corten-live src="/live/trades" since="0" aria-live="polite"><p id="last-trade">No trades yet.</p></corten-live>"#
         ));
     }
 
@@ -648,7 +657,7 @@ mod tests {
         assert!(patch.contains(r#"data-on='corten:error:watch_form.failed(@unanswered)'"#), "{patch}");
         assert!(
             patch.ends_with(concat!(
-                r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p>"#,
+                r#"<p id="watch-message">Watching Halcyon Health at $88.40.</p>"#,
                 r#"<p data-ref="unanswered" role="alert" hidden>That change did not reach the market. Try again.</p></form>"#
             )),
             "{patch}"
@@ -660,7 +669,10 @@ mod tests {
         let notice = sent.cookie("__Host-corten-notice").unwrap();
         let page = app.get(&url::Home::default()).cookie("visitor", VISITOR).cookie("__Host-corten-notice", notice).await;
         let page = page.text();
-        assert!(page.contains(r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p>"#), "{page}");
+        assert!(
+            page.contains(r#"<div aria-live="polite"><p id="watch-message">Watching Halcyon Health at $88.40.</p></div>"#),
+            "{page}"
+        );
         assert_eq!(rows(page), ["ACME", "GLBX", "INIT", "HLTH"], "{page}");
         let data = watch(Mode::Data).await;
         assert_eq!(data.headers()["content-type"], "application/json");
@@ -683,7 +695,7 @@ mod tests {
         let notice = removed.cookie("__Host-corten-notice").unwrap();
         let page = app.get(&url::Home::default()).cookie("visitor", VISITOR).cookie("__Host-corten-notice", notice).await;
         let page = page.text();
-        assert!(page.contains(r#"<p id="watch-message" aria-live="polite">Stopped watching Globex.</p>"#), "{page}");
+        assert!(page.contains(r#"<p id="watch-message">Stopped watching Globex.</p>"#), "{page}");
         assert_eq!(rows(page), ["ACME", "INIT"]);
         let watch =
             app.post(&url::Watch).mode(Mode::Document).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "ZZZZ").await;
@@ -696,7 +708,7 @@ mod tests {
         for refused in [watch, unwatch] {
             let page = refused.text();
             assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY, "{page}");
-            assert!(page.contains(r#"<p id="watch-message" aria-live="polite">That stock is not on the market.</p>"#), "{page}");
+            assert!(page.contains(r#"<p id="watch-message">That stock is not on the market.</p>"#), "{page}");
             assert_eq!(rows(page), ["ACME", "INIT"], "the list as it was");
         }
         // With JavaScript the refusal is the form, as a patch with the refusal's status; to a data

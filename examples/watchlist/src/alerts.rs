@@ -181,15 +181,15 @@ pub(crate) struct RemoveInput {
 #[derive(Id)]
 struct AlertFormId;
 
-/// The alert form: the stock, the price, and what became of the last write. After a refused
-/// submit `input` and `errors` are its, so the form comes back as the user left it; after a
+/// The alert form: the stock and the price. After a refused submit `input` and `errors`
+/// are its, so the form comes back as the user left it; after a
 /// save they are empty, as the page shows them.
 #[component]
-fn AlertForm<'a>(input: &'a AlertInput, errors: &'a Errors, status: Status) -> impl Patch {
+fn AlertForm<'a>(input: &'a AlertInput, errors: &'a Errors) -> impl Patch {
     let f = AlertInput::FIELDS;
     let e = errors.within(AlertFormId);
     html! {
-        <form id={AlertFormId} method="post" action={url::Alerts { saved: None }} data-patch class={(card(), stack(Space::_3))}>
+        <form id={AlertFormId} method="post" action={url::Alerts { saved: None }} data-patch class={stack(Space::_3)}>
             <h2>"New alert"</h2>
             {errors.form_message()}
             <label class={stack(Space::_1)}>
@@ -204,7 +204,6 @@ fn AlertForm<'a>(input: &'a AlertInput, errors: &'a Errors, status: Status) -> i
             </label>
             {e.message(f.above)}
             <button id={SaveAlertId}>"Save alert"</button>
-            <AlertStatus status={status} />
         </form>
     }
 }
@@ -299,7 +298,10 @@ fn alerts_page(
             </div>
             // The form beside the list on a wide screen, above it on a phone.
             <div class={(display_grid(), columns(Responsive::new(Columns::_1).md(Columns::_2)), gap_5(), items_start())}>
-                <AlertForm input={input} errors={errors} status={read.status} />
+                <div class={(card(), stack(Space::_3))}>
+                    <AlertForm input={input} errors={errors} />
+                    <div role="status"><AlertStatus status={read.status} /></div>
+                </div>
                 <AlertList t={req.t()} alerts={&read.alerts} />
             </div>
             {parts}
@@ -367,7 +369,10 @@ pub(crate) async fn save_first(
     }
     let Some(receipt) = saved.filter(|_| errors.is_empty()) else {
         let read = store.read(Instant::now(), visitor.known(), None);
-        let form = AlertForm { input: &input, errors: &errors, status: Status::None };
+        let form = html! {
+            <AlertForm input={&input} errors={&errors} />
+            <AlertStatus status={Status::None} />
+        };
         let here = url::Alerts { saved: None };
         return req
             .invalid(&errors, form, || async { alerts_page(&req, viewer.as_deref(), &here, &read, &input, &errors) })
@@ -380,7 +385,8 @@ pub(crate) async fn save_first(
     let again = ReadAgain { after: Duration::from_secs(1) }.from(&from);
     let (empty, none) = (AlertInput::default(), Errors::new());
     let form = html! {
-        <AlertForm input={&empty} errors={&none} status={Status::Saving} />
+        <AlertForm input={&empty} errors={&none} />
+        <AlertStatus status={Status::Saving} />
         {again}
     };
     let res = req.patch_or(form, || async { req.redirect(&from) }).await?;
@@ -429,7 +435,7 @@ fn AlertStatus(status: Status) -> impl Patch {
         Status::Saving => "Saving...",
         Status::Saved => "Saved.",
     };
-    html! { <p id={AlertStatusId} role="status">{text}</p> }
+    html! { <p id={AlertStatusId}>{text}</p> }
 }
 
 #[cfg(test)]
@@ -512,7 +518,7 @@ mod tests {
             // The whole form, unmarked, as the user left it.
             assert!(patch.starts_with(r#"<form id="alert-form""#) && !patch.contains("aria-invalid"), "{price}: {patch}");
             let waits = format!(
-                r#"<p id="alert-status" role="status">Saving...</p></form><template data-corten-read-again="1" data-from="/alerts?saved={}">"#,
+                r#"</form><p id="alert-status">Saving...</p><template data-corten-read-again="1" data-from="/alerts?saved={}">"#,
                 n + 1
             );
             assert!(patch.contains(&waits), "{price}: {patch}");
@@ -521,7 +527,7 @@ mod tests {
         let again = app.get(&url::Alerts { saved: Some(4) }).mode(Mode::Action).cookie("visitor", VISITOR).await;
         let again = again.text();
         assert!(
-            again.starts_with(r#"<p id="alert-status" role="status">Saving...</p><section id="alert-list""#)
+            again.starts_with(r#"<p id="alert-status">Saving...</p><section id="alert-list""#)
                 && again.contains("No alerts yet.")
                 && again.contains(r#"data-from="/alerts?saved=4""#),
             "{again}"
@@ -538,7 +544,7 @@ mod tests {
         save(&app, "ACME", "150").await;
         let landed = app.get(&url::Alerts { saved: Some(1) }).mode(Mode::Action).cookie("visitor", VISITOR).await;
         let landed = landed.text();
-        assert!(landed.starts_with(r#"<p id="alert-status" role="status">Saved.</p>"#), "{landed}");
+        assert!(landed.starts_with(r#"<p id="alert-status">Saved.</p>"#), "{landed}");
         assert!(landed.contains("<span>ACME above $150.00</span>") && !landed.contains("data-corten-read-again"), "{landed}");
         assert!(landed.contains(r#"<input type="hidden" name="alert" value="1">"#), "{landed}");
         let page = listed(&app, None).await;
@@ -548,9 +554,17 @@ mod tests {
         let removed =
             app.post(&url::RemoveAlert).mode(Mode::Action).cookie("visitor", VISITOR).field(RemoveInput::FIELDS.alert, 1).await;
         let removed = removed.text();
-        assert!(removed.starts_with(r#"<p id="alert-status" role="status">Saving...</p><template data-corten-read-again="1" data-from="/alerts?saved=2">"#), "{removed}");
+        assert!(
+            removed.starts_with(
+                r#"<p id="alert-status">Saving...</p><template data-corten-read-again="1" data-from="/alerts?saved=2">"#
+            ),
+            "{removed}"
+        );
         let page = listed(&app, Some(2)).await;
-        assert!(page.contains("No alerts yet.") && page.contains(r#"role="status">Saved.</p>"#), "{page}");
+        assert!(
+            page.contains("No alerts yet.") && page.contains(r#"<div role="status"><p id="alert-status">Saved.</p></div>"#),
+            "{page}"
+        );
     }
 
     #[tokio::test]
@@ -641,7 +655,7 @@ mod tests {
     async fn a_receipt_the_store_did_not_give_is_not_waited_for() {
         let page = listed(&client(), Some(999)).await;
         assert!(
-            !page.contains("data-corten-read-again") && page.contains(r#"<p id="alert-status" role="status"></p>"#),
+            !page.contains("data-corten-read-again") && page.contains(r#"<div role="status"><p id="alert-status"></p></div>"#),
             "{page}"
         );
     }

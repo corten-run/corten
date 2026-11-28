@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
+import { liveRegion } from "../../scripts/smoke/live-region.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18410";
 const failures = [];
@@ -172,9 +173,11 @@ try {
   check("focus moves to the invalid field", await page.evaluate(() => document.activeElement?.getAttribute("name") === "target_price"));
   check("valid input survives the error patch", (await page.inputValue('input[name="email"]')) === "buyer@example.com");
   await page.fill('input[name="target_price"]', "4.5");
+  const alertRegionStayed = await liveRegion(page, "alert-message");
   await page.click('form[data-patch] button[type="submit"]');
   await page.waitForFunction(() => /Alert set/.test(document.getElementById("alert-message")?.textContent ?? ""));
   check("form action patches the message", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));
+  check("the price-alert patch keeps the live region and replaces its message", await alertRegionStayed());
 
   const registration = await page.evaluate(async () => {
     const reg = await navigator.serviceWorker.ready;
