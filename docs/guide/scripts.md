@@ -185,12 +185,12 @@ handler can filter as the user types or save as they edit, but the button still 
 handler does not load. [The deck-builder smoke](../../examples/deck-builder/smoke.mjs) blocks the
 builder's module in Chromium, Firefox and WebKit, then filters, saves, and checks that Add
 followed by Save keeps the added card. A fallback Save leaves the submitted rows in place so
-edits made while it was pending can still be sent. Add changes only the affected rows, with a
-typed ID per card so the runtime can match its count in a replacement. The answer draws the
-version and note, and refreshes the total, cost curve, kind counts, collection counts and plan
-previews from the saved deck. The smoke compares those readouts and the text export to a fresh
-GET after Add. An identical retry does not write twice. If its write committed but the deck
-has moved on, the fallback returns 409 "Saved, but the deck has since changed" and draws the
+edits made while it was pending can still be sent. Add changes only the affected deck rows.
+The answer draws the version, note, total, cost curve and kind counts. Its export patch carries
+one saved count snapshot; a separate module updates the collection counts and plan previews
+without replacing the collection rows or preview owners. The smoke compares the readouts and
+text export to a fresh GET after Add. An identical retry does not write twice. If its write
+committed but the deck has moved on, the fallback returns 409 "Saved, but the deck has since changed" and draws the
 newer deck. A changed retry under the same key also gets a conflict and the saved deck, but
 the changed submission did not commit. A stale form likewise draws the current deck.
 The app compares the payload:

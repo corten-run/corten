@@ -4,7 +4,7 @@ use corten::{
 };
 use corten_ui::CopyButton;
 
-use super::deck_preview::DeckPreviewChanged;
+use super::deck_preview::{DeckPreviewChanged, SavedCounts};
 use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, SaveNote, Shown, curve_cost, deck_list};
 use crate::{
     app::{DeckInput, DeckQuery, Slot, Sort, url},
@@ -112,9 +112,7 @@ pub fn DeckTotal(bundle: DeckBuilderRefs, total: u32, t: Msg) -> impl Patch {
 }
 
 #[component(js = super::deck_preview::DeckPreview)]
-pub fn DeckExport(bundle: DeckBuilderRefs, text: &str, preview_total: Option<u32>) -> impl Patch {
-    let refresh = preview_total.is_some();
-    let total = preview_total.unwrap_or_default();
+pub fn DeckExport(bundle: DeckBuilderRefs, text: &str, total: u32, counts: SavedCounts) -> impl Patch {
     html! {
         <textarea
             ref={bundle.list()}
@@ -122,7 +120,7 @@ pub fn DeckExport(bundle: DeckBuilderRefs, text: &str, preview_total: Option<u32
             readonly
             rows="8"
             aria-label="Deck list"
-            on:connect={js::refresh(target, bundle.previews(), total, refresh)}
+            on:connect={js::refresh(target, bundle.previews(), total, bundle.rows(), counts)}
         >
             {text}
         </textarea>
@@ -220,7 +218,8 @@ pub fn DeckBuilder<'a>(
     view: &'a DeckQuery,
     answer: &'a Answer,
 ) -> impl Render {
-    let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
+    let (cards_zone, deck_zone, pick, grip, add, all, picked, shown, none) = refs();
+    let rows: Ref<el::HTMLTableSectionElement, RowsOf<{ view_id("CollectionRow") }>> = refs();
     let (template, form) = refs();
     let bars: Ref<el::SVGElement, NoRows, NoValue, Keyed> = refs();
     let tallies: Ref<el::HTMLSpanElement, NoRows, NoValue, Keyed> = refs();
@@ -466,7 +465,7 @@ pub fn DeckBuilder<'a>(
                 </template>
                 <details class={Export}>
                     <summary>"Deck list"</summary>
-                    <DeckExport bundle={DeckBuilderRefs} text={&text} preview_total={None} />
+                    <DeckExport bundle={DeckBuilderRefs} text={&text} total={0} counts={SavedCounts(None)} />
                     <CopyButton text={DeckListId} label="Copy" copied="Copied" class={()} />
                     <DeckPreview bundle={DeckBuilderRefs} instance="a" label="Plan A" total={size} text={&text} />
                     <DeckPreview bundle={DeckBuilderRefs} instance="b" label="Plan B" total={size} text={&text} />

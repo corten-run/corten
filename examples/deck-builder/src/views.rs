@@ -20,13 +20,13 @@ mod draft_notes;
 mod preview_export;
 mod save_note;
 
-pub use collection_row::{CollectionRow, InDeck};
+pub use collection_row::CollectionRow;
 pub use deck_builder::{
     CostCurve, DeckBuilder, DeckBuilderRefs, DeckEmpty, DeckExport, DeckFormId, DeckGeneration, DeckLines, DeckLinesId,
     DeckTotal, DeckVersion, KindCounts, SavedLine,
 };
 pub use deck_line::DeckLine;
-pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
+pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp, SavedCounts};
 pub use draft_notes::DraftNotes;
 pub use preview_export::PreviewExport;
 pub use save_note::{Answer, DeckAnswered, SaveNote};

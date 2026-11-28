@@ -27,8 +27,12 @@ If only the builder module fails to load, the runtime still enhances the form. S
 the submitted rows in place, including cleared counts that can be edited again before a reload.
 Add appends new lines or replaces just the lines it changes. The total, cost curve, kind counts,
 collection counts, main text export and both plan previews reflect the same saved snapshot.
+The export patch carries the saved counts once; its independent readout handler updates the
+collection rows in place, without replacing their checkboxes or adding an ID per count.
 An identical retry cannot add cards twice. If the deck has moved on, the conflict says the
 original write saved and shows the newer deck. A changed retry under the same key did not save.
+The receipt keeps the effective counts and additions as collection indices, so a Save and an
+Add that produce the same deck are still different writes.
 
 ## Run it
 

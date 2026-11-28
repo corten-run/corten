@@ -8,7 +8,7 @@
 //! | `POST /deck` | the deck as its form holds it, with the version it was built on: saved once per submit key, refused by the rules (422) or when another tab saved first, or the server restarted (409) |
 //! | `GET /feed/deck`, `/feed/deck/live` | the saved deck, which the page follows to notice another tab's save |
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -25,7 +25,7 @@ use crate::{
     text::Msg,
     views::{
         self, Answer, CostCurve, DeckBuilderRefs, DeckEmpty, DeckExport, DeckGeneration, DeckLines, DeckLinesId, DeckTotal,
-        DeckVersion, InDeck, KindCounts, SaveNote, SavedLine,
+        DeckVersion, KindCounts, SaveNote, SavedCounts, SavedLine,
     },
 };
 
@@ -66,9 +66,18 @@ struct Saves {
 /// A save that was applied: which of the page's sends it was, and the version it made.
 struct Applied {
     base: u64,
-    edit: DeckEdit,
+    cards: Box<[AppliedCard]>,
     draft: u64,
     version: u64,
+}
+
+/// The collection is fixed for a generation, so an exact receipt can use its indices instead
+/// of owning card names or map nodes. Entries keep the deck map's order for retry comparison.
+#[derive(Clone, Copy, PartialEq)]
+struct AppliedCard {
+    index: usize,
+    count: u32,
+    added: u32,
 }
 
 /// How long an applied save's key is remembered: a page sends a lost save again within moments,
@@ -97,7 +106,7 @@ pub type Deck = BTreeMap<String, u32>;
 
 /// The effective mutation, not the fields used only to draw the page. Keep Add separately so a
 /// Save and an Add that happen to produce the same deck cannot replay each other's answer.
-#[derive(Default, PartialEq)]
+#[derive(Default)]
 struct DeckEdit {
     deck: Deck,
     added: Deck,
@@ -150,6 +159,13 @@ impl Builder {
         (self.deck.seq(), self.deck.read(|rows| rows.values().map(|s| (s.id.clone(), s.count)).collect()))
     }
 
+    fn applied_cards<'a>(&'a self, edit: &'a DeckEdit) -> impl Iterator<Item = Option<AppliedCard>> + 'a {
+        // Every addition also has a positive count in the effective deck.
+        edit.deck.iter().map(|(id, &count)| {
+            Some(AppliedCard { index: *self.index.get(id)?, count, added: edit.added.get(id).copied().unwrap_or(0) })
+        })
+    }
+
     /// Saves the edit if the deck is still at its base version and the rules allow it. A retry
     /// of the same edit returns the original receipt. Draft labels attempts in the script, not
     /// mutations: the receipt always names the original draft.
@@ -169,7 +185,7 @@ impl Builder {
             return Outcome::Stale { version: now, unsure: false };
         }
         if let Some(applied) = saves.by_key.get(key) {
-            return if applied.base == base && applied.edit == edit {
+            return if applied.base == base && self.applied_cards(&edit).eq(applied.cards.iter().copied().map(Some)) {
                 Outcome::Saved { version: applied.version, draft: applied.draft }
             } else {
                 Outcome::KeyConflict { version: applied.version, draft: applied.draft }
@@ -182,6 +198,7 @@ impl Builder {
         if let Err(refusal) = cards::check(deck, |id| self.card(id)) {
             return Outcome::Refused(now, refusal);
         }
+        let cards = self.applied_cards(&edit).map(|card| card.expect("validated collection card")).collect();
         // Read before the write: every save holds the lock, so nothing writes in between.
         let gone: Vec<String> = self.deck.read(|rows| rows.keys().filter(|id| !deck.contains_key(*id)).cloned().collect());
         self.deck.write(|tx| {
@@ -195,7 +212,7 @@ impl Builder {
             }
         });
         let version = self.deck.seq();
-        saves.by_key.insert(key.clone(), Applied { base, edit, draft, version });
+        saves.by_key.insert(key.clone(), Applied { base, cards, draft, version });
         saves.order.push_back((at, key.clone()));
         Outcome::Saved { version, draft }
     }
@@ -395,10 +412,6 @@ fn fallback(
     let lines = lines.as_slice();
     let total = lines.iter().map(|line| line.count).sum();
     let text = views::deck_list(lines);
-    let saved = &saved;
-    // A submitted line can have been removed; a saved line can be new. Leave the rest
-    // of the collection (including the checkboxes and current filter) alone.
-    let counts = input.card.iter().filter(|id| builder.card(id).is_some()).chain(saved.keys()).collect::<BTreeSet<_>>();
     let mut appended = Vec::new();
     let mut updated = Vec::new();
     if status.is_success() {
@@ -431,10 +444,7 @@ fn fallback(
             <DeckTotal bundle={bundle} total={total} t={t} />
             <CostCurve bundle={bundle} lines={lines} t={t} />
             <KindCounts bundle={bundle} lines={lines} t={t} />
-            for id in counts {
-                <InDeck id={id} count={saved.get(id).copied().unwrap_or(0)} />
-            }
-            <DeckExport bundle={bundle} text={&text} preview_total={Some(total)} />
+            <DeckExport bundle={bundle} text={&text} total={total} counts={SavedCounts(Some(saved))} />
             <SaveNote answer={&answer} />
         },
     )
@@ -570,6 +580,44 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(patch.contains(r#"id="deck-line-gravel-sprite""#) && !patch.contains("data-append"), "{patch}");
         assert_eq!((builder.deck.seq(), builder.saved().1.get("gravel-sprite")), (0, Some(&3)));
+    }
+
+    #[tokio::test]
+    async fn a_receipt_compares_counts_and_additions_even_when_the_result_is_the_same() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let f = DeckInput::FIELDS;
+        let key = submit_key();
+        let mut deck = starter();
+        let first = saving(&app, 0, &deck, &key).field(f.add, "salt-oracle").mode(Mode::Action).await;
+        assert_eq!(first.status(), StatusCode::OK);
+
+        // The same effective DeckEdit: row order, split counts, and which Add button posted
+        // the same single addition do not affect the receipt.
+        deck.reverse();
+        deck.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap().1 -= 1;
+        deck.push(("gravel-sprite", 1));
+        let retry = saving(&app, 0, &deck, &key).field(f.pick, "salt-oracle").field(f.add_picked, "1").mode(Mode::Action).await;
+        assert_eq!(retry.status(), StatusCode::OK);
+
+        // The exact same destination deck posted as a Save is not the original write.
+        deck.push(("salt-oracle", 1));
+        let save = saving(&app, 0, &deck, &key).mode(Mode::Action).await;
+        assert_eq!(save.status(), StatusCode::CONFLICT);
+        assert!(save.text().contains("this submit key was already used for a different save"));
+
+        // Nor is changing the addition multiplicity while compensating in the posted count.
+        let mut other = starter();
+        other.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap().1 -= 2;
+        let add_two = saving(&app, 0, &other, &key)
+            .field(f.add, "salt-oracle")
+            .field(f.pick, "gravel-sprite")
+            .field(f.pick, "gravel-sprite")
+            .field(f.add_picked, "1")
+            .mode(Mode::Action)
+            .await;
+        assert_eq!(add_two.status(), StatusCode::CONFLICT);
+        assert_eq!((builder.deck.seq(), builder.saved().1.get("salt-oracle")), (1, Some(&1)));
     }
 
     fn edit(deck: Deck) -> DeckEdit {
@@ -711,6 +759,7 @@ mod tests {
         let (status, page) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert_eq!(page.matches(r#"<tr data-key=""#).count(), 60, "every card is a CollectionRow");
+        assert!(!page.contains(r#"id="in-deck-"#), "collection counts do not need per-card patch IDs");
         assert_eq!(page.matches(r#"id="deck-line-"#).count(), cards::STARTER.len() + 1);
         assert!(page.contains(r#"id="deck-line-""#), "the template has its own empty key");
         assert!(page.contains("/scripts/deck_builder.js\">") && page.contains("/scripts/save_note.js\">"), "{page}");

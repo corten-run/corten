@@ -8,6 +8,9 @@
  */
 export type SaveOutcome = "Loaded" | "Saved" | "KeyConflict" | "Refused" | "Stale";
 
+/** Only a fallback patch carries a snapshot for the readouts already on the page. */
+export type SavedCounts = Record<string, number> | null;
+
 /** A card in the saved deck and its copies: the rows of the deck's feed. */
 export interface Slot {
   count: number;

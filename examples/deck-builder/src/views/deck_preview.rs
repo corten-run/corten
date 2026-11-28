@@ -1,5 +1,7 @@
 use corten::prelude::*;
 
+use crate::app::Deck;
+
 use super::{
     DeckBuilderRefs, DraftNotes, PreviewExport,
     draft_notes::{DraftEdited, DraftOpened},
@@ -11,6 +13,11 @@ pub struct DeckPreviewChanged {
     pub total: u32,
     pub text: String,
 }
+
+/// Only a fallback patch carries a snapshot for the readouts already on the page.
+#[derive(ToJson)]
+#[serde(transparent)]
+pub struct SavedCounts(pub Option<Deck>);
 
 #[derive(Id)]
 struct PreviewEditorId<'a>(&'a str);

@@ -671,6 +671,8 @@ try {
         const beforeAdd = await deck(blocked);
         const addedCard = (await drawnKeys(blocked, "tbody tr", "data-key")).find((id) => id && beforeAdd[id] === undefined);
         if (!addedCard) throw new Error("no collection card outside the saved deck");
+        const selection = row(blocked, addedCard).getByRole("checkbox");
+        await selection.check();
         await blocked.getByText("Deck list", { exact: true }).click();
         const plan = blocked.getByRole("region", { name: "Plan A" });
         await plan.getByRole("textbox", { name: "Notes" }).fill("Keep this draft");
@@ -704,6 +706,7 @@ try {
         await plan.getByRole("button", { name: "Edit draft" }).click();
         check(`${name} fallback Add keeps the preview's mode and draft note`,
           summaryKept === "true" && (await plan.getByRole("textbox", { name: "Notes" }).inputValue()) === "Keep this draft");
+        check(`${name} fallback Add keeps the collection selection`, await selection.isChecked());
         const save = await submit(blocked.locator(saveButton));
         const cards = save.fields.getAll("card");
         const savedCount = save.fields.getAll("count")[cards.indexOf(addedCard)];
@@ -755,6 +758,13 @@ try {
           posted(queuedFields, "moth-court-herald") === otherCopies &&
           stored["gravel-sprite"] === 1 && stored["moth-court-herald"] === Number(otherCopies),
           `queued POST ${queued.status()}; sent ${posted(queuedFields, "gravel-sprite")}, ${posted(queuedFields, "moth-court-herald")}; stored ${stored["gravel-sprite"]}, ${stored["moth-court-herald"]}`);
+
+        await blocked.fill(countOf(addedCard), "");
+        const cleared = await submit(blocked.locator(saveButton));
+        const afterClear = await readouts(blocked);
+        check(`${name} fallback Save clears the collection count and keeps the editable row and selection`,
+          cleared.status === 200 && afterClear.collection[addedCard] === "0" &&
+          await blocked.inputValue(countOf(addedCard)) === "" && await selection.isChecked());
 
         // Drop two committed Add answers. An identical retry must be safe; a changed one with
         // the same key is a visible conflict and must not write over the already saved deck.
