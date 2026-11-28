@@ -176,6 +176,31 @@ for (const group of ["live-delivery", "recoverable-live"]) {
 
   test(`${group}: removal outside the gate leaves a gap after a clean census`, linux, (t) =>
     externalRemoval(t, anchor(t).gate, group));
+
+  test(`${group}: a late terminal Docker census blocks replay even after a clean drain`, linux, async (t) => {
+    const { gate } = anchor(t);
+    const f = await fixture(t, [], group, undefined, 0, false, null, gate);
+    f.clock += 100; await f.tick();
+    const previous = f.samples().at(-1).at, lists = [], budgets = [];
+    f.flock = (_args, options, acquire) => { budgets.push(options.timeout); return acquire(); };
+    f.docker = (args) => {
+      assert.deepEqual(args.slice(3), ["ls", "-aq", "--no-trunc"]);
+      lists.push(f.clock - previous);
+      if (lists.length === 1) f.clock += 201;
+      return "";
+    };
+    f.clock = previous + 800;
+    const proof = await f.finish();
+    assert.equal(f.terminal.terminal, true);
+    assert.equal(f.terminal.empty, true);
+    assert.equal(f.removed, true);
+    assert.deepEqual({ status: proof.status, observer: proof.checks.observer, cleanupComplete: proof.cleanupComplete,
+      error: f.terminal.observerError, faults: f.terminal.observerFailures.count, lists, budgets },
+    { status: "blocked", observer: false, cleanupComplete: false, error: "host-observation-gap", faults: 1,
+      lists: [800, 1001], budgets: [100, 1000] });
+    assert.equal(proof.checks.terminal, true);
+    assert.equal(proof.checks.empty, true);
+  });
 }
 
 test("a gated Live removal refuses a synchronous timeout even with exit status zero", linux, (t) => {
