@@ -73,6 +73,10 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | SSE | `<corten-live src>` | `corten::live(stream_of_views)` | applies each like a patch |
 | `GET {feed}`, `{feed}/live` | a handler's `subscribe()`, or `Replica` | `feed.snapshot()`, `feed.live(since)` | snapshot, then ordered patches |
 
+For a page request without a recognized `corten` mode, put `application/json` first in
+`Accept` to ask for data. The media type ignores ASCII case: `Application/JSON` asks for the
+same data, but `text/html, application/json` still asks for the document.
+
 One handler serves every mode, and `req.mode` says which. A `data-patch` form's handler answers
 both of its rows with `req.patch_or(view, || async { req.page(..) }).await`: the patch with
 JavaScript, and otherwise the page (or a redirect), whose closure runs only then, so the patch

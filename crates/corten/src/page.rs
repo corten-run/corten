@@ -206,10 +206,10 @@ impl Mode {
         // The first item's media type, without its parameters and the whitespace around it, is
         // JSON: the line starts with it after whitespace, and whitespace then ends the item or
         // starts its parameters. Read so, a line that starts otherwise is not looked at further.
-        let json = accept
-            .trim_ascii_start()
-            .strip_prefix(crate::api::JSON)
-            .is_some_and(|rest| matches!(rest.trim_ascii_start().as_bytes().first(), None | Some(b',' | b';')));
+        let json = accept.as_bytes().trim_ascii_start().split_at_checked(crate::api::JSON.len()).is_some_and(|(ty, rest)| {
+            (ty == crate::api::JSON.as_bytes() || ty.eq_ignore_ascii_case(crate::api::JSON.as_bytes()))
+                && matches!(rest.trim_ascii_start().first(), None | Some(b',' | b';'))
+        });
         let mode = if json { Mode::Data } else { Mode::Document };
         ((mode, false), accept)
     }
@@ -5181,7 +5181,8 @@ mod carried_tests {
     /// is decided both ways, and with a runtime's header, which `Accept` never overrides.
     #[test]
     fn the_first_accept_item_is_json_as_reading_the_whole_item_says() {
-        let whole = |line: &str| crate::api::media_type(line.split(',').next().unwrap_or("")) == crate::api::JSON;
+        let whole =
+            |line: &str| crate::api::media_type(line.split(',').next().unwrap_or("")).eq_ignore_ascii_case(crate::api::JSON);
         let before = ["", " ", "\t", " \t "];
         let types = [
             "application/json",
@@ -5190,6 +5191,9 @@ mod carried_tests {
             "application/json/",
             "application/jso",
             "Application/JSON",
+            "application/JSON",
+            "APPLICATION/JSON",
+            "Application/JSONx",
             "application/problem+json",
             "text/html",
             "*/*",
