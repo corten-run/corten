@@ -8808,7 +8808,8 @@ rules something out.
     `compile_fail` doctest); a status, a file, a relay, a live stream, a feed), and
     one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
     what that one does, a tuple what each part's refusal does too, since a part that refuses
-    answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
+    answers in the body's place. A raw HTTP response says yes: it can be a converted `Public`
+    answer even when it is the error type of a tuple part. (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
     header where it was, so the watch must still see a `Public` answer under it); a type of the app's own always says yes, since Corten cannot see what its
     `into_response` makes (an enum with a `Public` variant beside a private one), and the type
     it returns is one an app cannot name, so it cannot say no, nor return what one of Corten's
@@ -8816,8 +8817,10 @@ rules something out.
     constant: a constant would make `dyn IntoResponse` fail to compile, and with it an app's own
     trait over `IntoResponse` that answers from a box (`self: Box<Self>`), both of which compiled
     before the watch (a doctest); such a box is a type of the app's own, so it is watched.
-    A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
-    app's or the upstream's, as it was. The watch wraps such a route in every build and whatever
+    A `Relay` and headers alone say no. An array of headers as a tuple part can refuse with a
+    raw `Response`, so that tuple is watched even when header conversion succeeds. A handler
+    returning a raw `Response` directly is watched too, including on an unstaged route.
+    The watch wraps a route whose answer type says yes in every build and whatever
     the store does (none kept, `corten dev`, a body route that leaves the store out, a build
     without `compress`), staged or `unstaged`: an unstaged route has no stage to settle its
     caching, so one whose handler drew a key is made `private, no-cache` there, with no caching

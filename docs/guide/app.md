@@ -1405,12 +1405,13 @@ any `*-cache-control` header and the other caching headers a CDN reads first tha
 visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
 staged answer does: another app of Corten's whose staged middleware relays it inline and takes
 the cookie off still sends it as that visitor's ([Caching](#caching)).
-A `Public` answer, or one of an answer type of the app's own or a JSON answer (`JsonResponse`,
-whose response the handler may replace with a `Public` one), whose handler drew a form's new
-submit key ([Caching](#caching)), in `NoStore` or a tuple of headers too, goes out as one that
-sets a cookie does, carrying that with it to an app that relays it inline as that one does, and
-also loses a tag (`ETag`) it was given: its handler is watched for one, as a staged route's is,
-and any other unstaged handler runs with nothing around it.
+When an unstaged handler draws a form's new submit key, its answer must not be shared
+([Caching](#caching)). Corten watches handlers that return `Public`, a raw `Response`, an
+app-defined answer type, or a JSON answer (`JsonResponse` can replace its response). It also
+watches these types inside `NoStore` or a tuple, including a tuple whose header part can
+return a raw `Response` on error. A watched answer whose handler drew a key goes out like one
+that sets a cookie, even when another app relays it inline, and loses any `ETag` it was given.
+An unstaged handler returning plain text alone runs without this watch.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1640,6 +1641,8 @@ one does, in every build, with or without the app's kept answers, and on a route
 `Answer`), since it may hold a `Public` answer on one branch, and of `NoStore` or a tuple of
 headers around either (a `no-store` there does not take away a CDN's own caching header), or a
 tuple whose header part of the app's own refuses with one, since a refusal is the whole answer.
+That includes a part returning a raw `Response`: it may have been converted from `Public`, so
+a handler that drew a fresh submit key still makes it private.
 So is the handler of a page or a JSON answer (`HtmlResult`, `PageOr`, `JsonResponse`, and
 `JsonResult<T>`, whose `JsonError` may hold a `JsonResponse`): its `DerefMut` lets the handler
 put a `Public` answer it converted in its place (`*page = Public::new(..).into_response()`). The
