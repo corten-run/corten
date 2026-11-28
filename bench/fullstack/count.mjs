@@ -246,7 +246,7 @@ const pending = waiting ? ` (installed, waiting for a reboot: ${waiting})` : "";
 // The CPUs perf counts on, each of which must give its own row in a count: -C's list, or every online CPU for -a.
 const cpus = selectedCpus(countCpus, existsSync("/sys/devices/system/cpu/online") ? readFileSync("/sys/devices/system/cpu/online", "utf8") : undefined);
 const kernelFile = join(dir, "count-kernel.txt");
-const modeLine = everyEvent ? `${EVERY_EVENT}=1: every event is required` : "";
+const modeLine = everyEvent ? `${EVERY_EVENT}=1: every event is required at the probe` : "";
 writeFileSync(kernelFile, `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\ncpu ${cpu}\n${modeLine ? `${modeLine}\n` : ""}`);
 console.log(`counting on kernel ${kernel}${pending}, cpu ${cpu}, perf stat ${countCpus.join(" ")}`);
 for (const names of PROBE_SETS) {

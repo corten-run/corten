@@ -769,7 +769,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
       else {
         // Written before count.mjs starts, so a restart that finds no exit after it refuses to go on.
         appendFileSync(file, JSON.stringify({ name: inv.name, dispatched: now() }) + "\n");
-        const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env: countEnv });
+        const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env: { ...countEnv } });
         // Its exit first, before anything here that can fail: a halt is in the ledger whatever follows.
         const exited = { name: inv.name, exited: now(), rc: r.status, signal: r.signal ?? null };
         appendFileSync(file, JSON.stringify(exited) + "\n");

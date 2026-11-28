@@ -1637,12 +1637,16 @@ three runs:
    holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with
    the reason when `perf` does not fit that kernel, a required event (`instructions:u` or
    `instructions:k`) has no row or has even one row without a whole count, `perf` prints a row
-   the count would not read as an event of the set, or `perf` does not answer. With
-   `BENCH_COUNT_EVERY_EVENT` unset (a round's default), a fault in the first pass's whole set
-   that `perf` answered for is noted, not refused: the count goes on with the events it reads
-   and repeats that load with `instructions:u` alone where that is unusable.
+   the count would not read as an event of the set, or `perf` does not answer. In a round,
+   `run-all.mjs` leaves `BENCH_COUNT_EVERY_EVENT` unset in the count even if its caller set it.
+   A fault the default probe checks in the first pass's whole set that `perf` answered for is
+   noted, not refused: the count goes on with the events it reads and repeats that load with
+   `instructions:u` alone where that is unusable. A recognized optional row with
+   `<not supported>` can pass the default probe without a note.
    `count-pairs.mjs` sets `BENCH_COUNT_EVERY_EVENT=1` for every invocation, requiring every
-   event. `count-kernel.txt` records this mode when enabled; the variable must be `1` or unset.
+   event at the probe. An optional event that passes the probe but fails under load can still
+   produce a null count, which the paired runner marks not valid. `count-kernel.txt` records
+   this mode when enabled; for a direct `count.mjs` the variable must be `1` or unset.
    When a probe under `count-pairs.mjs` refuses because an event lacks a whole count or a row
    the count reads, that invocation exits before its load and is recorded as not valid, with the
    reason in its log. The runner starts the next invocation and goes to its end; if all

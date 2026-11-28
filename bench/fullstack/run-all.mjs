@@ -37,6 +37,7 @@ import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
 import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
+import { EVERY_EVENT } from "./count-perf.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -82,8 +83,11 @@ const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
 // started holds open after it exits is released (round.mjs, superviseCall).
 const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
   console.log(now(), "node", args.join(" "));
+  // Only count-pairs.mjs sets this mode. A round never passes it to count.mjs.
+  const env = args[0] === "count.mjs" ? { ...process.env } : undefined;
+  if (env) delete env[EVERY_EVENT];
   // Unattended, its output passes through here so a quiet call can be told from a busy one.
-  const child = spawn("node", args, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
+  const child = spawn("node", args, { cwd: here, env, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
   const result = await superviseCall(child, {
     label: args[0],
     limitMs: unattended ? limit * minute : Infinity,

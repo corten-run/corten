@@ -7,11 +7,12 @@ import fs, { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkd
 import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
 import { EVERY_EVENT } from "./count-perf.mjs";
+import { k6Provenance } from "../load-tool.mjs";
 import { EventEmitter } from "node:events";
 import { BAND, compare, complete, COUNTS, DAEMON_LOCK, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, RELEASE_MS, resolution, runPairs, schedule, spawnBounded, spawnExec, within } from "./count-pairs.mjs";
 
@@ -259,6 +260,28 @@ test("the runner pins each image's ID, tags by it, runs each invocation once and
     // Run again, nothing is counted again.
     await runPairs(options(s, h));
     assert.equal(h.state.counted.length, 7 * 4);
+  } finally {
+    s.done();
+  }
+});
+
+test("an executor that changes its count environment cannot change later calls or the ledger", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    const modes = [];
+    const exec = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {Parameters<typeof spawnExec>[2]} */ opts) => {
+      if (cmd === process.execPath) {
+        assert.ok(opts?.env);
+        modes.push(opts.env[EVERY_EVENT]);
+        if (modes.length === 1) delete opts.env[EVERY_EVENT];
+      }
+      return h.exec(cmd, args, opts);
+    };
+    await runPairs(options(s, h, { exec }));
+    const ledger = JSON.parse(readFileSync(join(s.results, "t1", "run.json"), "utf8"));
+    assert.equal(ledger.env[EVERY_EVENT], "1");
+    assert.deepEqual(modes, ledger.schedule.map(() => ledger.env[EVERY_EVENT]));
   } finally {
     s.done();
   }
@@ -1052,6 +1075,8 @@ test("user plus kernel cycles past 2^53 - 1 are not an exact count, so a sum tha
 // count.mjs itself, with stand-ins for docker and perf on its PATH and the app's port answered here:
 // what perf attaches to, what the load reached, and what is removed. POSIX only: the stand-ins are
 // scripts that a spawn without a shell runs by their #! line.
+const fakeK6Id = "sha256:" + "a".repeat(64);
+const fakeK6Version = "k6 v2.4.0 (stand-in)";
 const fakeDocker = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const file = path.join(process.env.FAKE_DIR, "docker.json");
@@ -1065,8 +1090,8 @@ s.calls.push(a);
 let out = "", status = 0;
 const env = {};
 for (let i = 0; i < a.length; i++) if (a[i] === "-e") { const [k, ...v] = a[i + 1].split("="); env[k] = v.join("="); }
-if (a[0] === "image") out = JSON.stringify([{ Id: "sha256:" + "a".repeat(64), RepoDigests: [process.env.FAKE_K6], Os: "linux", Architecture: "amd64" }]);
-else if (a[0] === "run" && a.at(-1) === "version") out = "k6 v2.4.0 (stand-in)";
+if (a[0] === "image") out = JSON.stringify([{ Id: "${fakeK6Id}", RepoDigests: [process.env.FAKE_K6], Os: "linux", Architecture: "amd64" }]);
+else if (a[0] === "run" && a.at(-1) === "version") out = "${fakeK6Version}";
 else if (a[0] === "run" && process.env.FAKE_PROBE_ONLY) status = 1;
 else if (a[0] === "run" && a[1] === "-d") { const id = hex(++s.made); s.names[a[a.indexOf("--name") + 1]] = id; out = id; if (process.env.FAKE_ALIAS === "start") leftover(); }
 else if (a[0] === "network" && a[1] === "inspect") out = JSON.stringify(net) + " " + JSON.stringify(Object.fromEntries(Object.values(s.names).map((id) => [id, { Name: "x" }])));
@@ -1215,19 +1240,46 @@ test("the runner records each real count.mjs probe refusal before load and goes 
   assert.ok(!existsSync(join(root, "perf.jsonl")));
 });
 
-test("count.mjs refuses BENCH_COUNT_EVERY_EVENT values other than 1 before probing", posixStandIns, async (t) => {
+test("count.mjs refuses BENCH_COUNT_EVERY_EVENT values other than 1 before probing", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "count-mjs-mode-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const { kit, bin, k6Image } = await standInCountKit(root);
   for (const value of ["0", ""]) {
-    const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: root, FAKE_K6: k6Image, FAKE_PROBE_ONLY: "1", [EVERY_EVENT]: value };
+    const env = { PATH: [bin, dirname(process.execPath)].join(delimiter), FAKE_DIR: root, FAKE_K6: k6Image, FAKE_PROBE_ONLY: "1", [EVERY_EVENT]: value };
     const r = spawnExec(process.execPath, [join(kit, "count.mjs"), "bad-mode", "1", "corten", "json"], { env });
     assert.equal(r.status, 1, r.stderr);
     assert.ok(r.stderr?.includes(`BENCH_COUNT_EVERY_EVENT is 1 or unset, not ${JSON.stringify(value)}`), r.stderr);
+    assert.ok(!existsSync(join(root, "docker.json")));
     assert.ok(!existsSync(join(root, "probe.jsonl")));
     assert.ok(!existsSync(join(kit, "results", "bad-mode")));
   }
 });
+
+for (const value of ["0", "1"]) {
+  test(`a round ignores inherited ${EVERY_EVENT}=${value} instead of summarizing an old count`, { skip: process.platform !== "linux" && "the count step runs only on Linux" }, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "count-round-mode-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const { kit, bin, k6Image } = await standInCountKit(root);
+    for (const name of ["run-all.mjs", "summarize.mjs", "edge.mjs", "mixed.mjs", "pack.mjs", "passes.mjs", "ssr.mjs"]) {
+      copyFileSync(join(import.meta.dirname, name), join(kit, name));
+    }
+    const dir = join(kit, "results", "r1");
+    mkdirSync(dir, { recursive: true });
+    const k6 = k6Provenance({ Id: fakeK6Id, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" }, fakeK6Version);
+    writeFileSync(join(dir, "tools.json"), JSON.stringify({ k6 }));
+    writeFileSync(join(dir, "instructions.json"), JSON.stringify({ "corten/json": [goodRow({ userPerRequest: 123456 })] }));
+    // Unread L1i distinguishes default from strict. After the default probe's note, the stand-in
+    // Docker fails the app start, so the stale successful count must be replaced by a failure.
+    const env = { PATH: `${bin}:${process.env.PATH}`, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", FAKE_DIR: root, FAKE_K6: k6Image, FAKE_PROBE_ONLY: "1", FAKE_PERF_L1I: "cpu/L1-icache-load-misses/", [EVERY_EVENT]: value };
+    const result = spawnExec(process.execPath, [join(kit, "run-all.mjs"), "r1", "10", "count", "count"], { env, timeout: 10000 });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+    assert.deepEqual(summary.instructions["corten/json"], { failed: "docker run failed (1): " }, result.stderr || result.stdout);
+    assert.match(readFileSync(join(dir, "count-kernel.txt"), "utf8"), /note: .*printed a row for "cpu\/L1-icache-load-misses\/"/);
+    assert.match(result.stdout ?? "", /all done/);
+    assert.doesNotMatch(result.stdout ?? "", /step failed with/);
+  });
+}
 
 test("count.mjs attaches perf to the container docker run gave by its ID, and refuses a load fsw-corten may route to another container, by its name or an alias, before perf attaches or after it stops", posixStandIns, async () => {
   const root = mkdtempSync(join(tmpdir(), "count-mjs-"));
@@ -1344,9 +1396,12 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       assert.equal(round.code, 0);
       assert.ok(Array.isArray(round.row) && round.row[0].userPerRequest === 100000 && round.row[0].userCyclesPerRequest === 100000 && round.row[0].userL1iMissesPerRequest === null, JSON.stringify(round.row));
       assert.equal(round.row[0].perfDiagnostics["L1-icache-load-misses:u"], "no perf row");
+      const loggedProbes = (/** @type {string} */ log) => Array.from(log.matchAll(/^\S+ probing perf (.*)$/gm), ([, args]) => args);
+      const probeArgs = (/** @type {string[][]} */ calls) => calls.map((args) => args.join(" "));
       const roundLog = readFileSync(join(kit, "results", "l1i-unread", "count-kernel.txt"), "utf8");
       assert.match(roundLog, /note: .*printed a row for "cpu\/L1-icache-load-misses\/"/);
       assert.match(roundLog, /probing perf stat .* -A .* -e /);
+      assert.deepEqual(loggedProbes(roundLog), probeArgs(round.probe));
       assert.ok(!roundLog.includes(EVERY_EVENT));
       const dir = join(root, "l1i-every");
       mkdirSync(dir);
@@ -1360,8 +1415,10 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       assert.ok(!existsSync(join(dir, "perf.jsonl")), "no load is counted once the probe refuses");
       assert.ok(!existsSync(join(kit, "results", "l1i-every", "instructions.json")));
       const strictLog = readFileSync(join(kit, "results", "l1i-every", "count-kernel.txt"), "utf8");
-      assert.match(strictLog, /^BENCH_COUNT_EVERY_EVENT=1: every event is required$/m);
-      assert.match(strictLog, /refused: .*printed a row for "cpu\/L1-icache-load-misses\/"/);
+      assert.match(strictLog, /^BENCH_COUNT_EVERY_EVENT=1: every event is required at the probe$/m);
+      assert.match(strictLog, /refused: .*printed a row for "cpu\/L1-icache-load-misses\/".*every event is required at the probe/);
+      const strictProbes = readFileSync(join(dir, "probe.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      assert.deepEqual(loggedProbes(strictLog), probeArgs(strictProbes));
     }
     // Each pass's perf must be counting before its load starts and still counting when it ends
     // (#2183): one that starts late is waited for, and one that exits during its load fails the
