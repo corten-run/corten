@@ -1397,8 +1397,8 @@ three runs:
    droplet; the unit starts again at boot and the round goes on from the next step.
    `run-all.mjs` syncs `count-failed.txt` before recording the count step's start. A clean exit 0
    must produce a fresh file in a private directory, with every requested app and target's
-   repeats or an explicit failure for that target. Only after publishing both that file as
-   `instructions.json` and its new `summary.json` does the round clear the marker. A restart
+   repeats with numeric user and kernel counts, or an explicit failure for that target. The round
+   clears the marker only after publishing both `instructions.json` and its new `summary.json`. A restart
    before publication does not adopt the staging files. On an ordinary count error, including
    incomplete output, later steps and the summary still run, but the round exits non-zero.
    With the marker present, `summarize.mjs` omits instructions and reports `countFailed: true`,
@@ -1484,11 +1484,12 @@ three runs:
    keeps the earlier log, so an old `all done` cannot turn a failed recount into a finished
    round. The other suites still use their log's completion line. None of these records
    substitutes for the unit snapshots. If a prior partial download left a local `count-failed.txt`,
-   the collector removes it only after a finished fullstack archive supplies both
-   `instructions.json` and `summary.json` without the marker, extraction succeeds, and the same
-   ended unit is confirmed again. An incomplete download or a changed unit leaves the fence in
-   place. Listing and extraction share the same local five-minute bound. The
-   upload leaves out the working tree's own
+   the collector removes it only when the `finished count` record names the ended systemd
+   invocation and gives the SHA-256 of both published files. The archive must supply those exact
+   `instructions.json` and `summary.json` files without the marker, and the same ended unit must
+   still be confirmed after extraction. A legacy finish, a continuation without a new count, an
+   unidentifiable or changed invocation, or missing or mismatched files leaves the fence in place.
+   Listing and extraction share the same local five-minute bound. The upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.
    A droplet

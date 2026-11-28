@@ -13,7 +13,7 @@
 // results/<round>` brings the files back for a look at one run.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdtempSync, openSync, readSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,6 +145,13 @@ export const sha256File = (path) => {
     closeSync(fd);
   }
   return hash.digest("hex");
+};
+
+/** Hashes of the two published count files in journal order, or null without both regular files.
+ * @param {string} dir */
+export const countPublicationOf = (dir) => {
+  const files = [join(dir, "instructions.json"), join(dir, "summary.json")];
+  return files.every((file) => lstatSync(file, { throwIfNoEntry: false })?.isFile()) ? files.map(sha256File).join(" ") : null;
 };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

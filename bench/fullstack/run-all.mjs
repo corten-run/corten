@@ -35,7 +35,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
-import { COUNT_FAILED_FILE } from "./pack.mjs";
+import { COUNT_FAILED_FILE, countPublicationOf } from "./pack.mjs";
 import { passesOf } from "./passes.mjs";
 import { appendLine, buildStep, calls, countRestartError, countStageArg, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
@@ -55,6 +55,9 @@ const now = () => new Date().toISOString();
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8", timeout: 5 * minute });
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 const progressFile = join(here, `results-${round}.progress`);
+const invocation = process.env.INVOCATION_ID;
+const invocationId = /^(?!0{32}$)[0-9a-f]{32}$/.test(invocation ?? "") ? invocation : null;
+let publishedCount = "";
 const syncDir = (/** @type {string} */ path) => {
   const dir = openSync(path, "r");
   try { fsyncSync(dir); } finally { closeSync(dir); }
@@ -69,7 +72,8 @@ const progress = (/** @type {string} */ what) => {
   if (!unattended) return;
   const created = !existsSync(progressFile);
   const fd = openSync(progressFile, "a+");
-  const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd() : what;
+  const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd()
+    : what === "finished" && publishedCount ? `${what} ${publishedCount}` : what;
   try { appendLine(fd, `${now()} ${line}`); fsyncSync(fd); } finally { closeSync(fd); }
   if (created) syncDir(here);
 };
@@ -93,8 +97,7 @@ function completeCount(stage, args) {
     const count = (/** @type {unknown} */ n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
     return Object.values(rows).every((runs) => Array.isArray(runs)
       ? runs.length === Number(repeats) && runs.every((row) => row && count(row.failed)
-        && (row.userPerRequest === null || count(row.userPerRequest))
-        && (row.kernelPerRequest === null || count(row.kernelPerRequest))
+        && count(row.userPerRequest) && count(row.kernelPerRequest)
         && (row.kernelPass == null || count(row.kernelPass.failed)))
       : typeof runs?.failed === "string" && runs.failed.trim().length > 0);
   } catch {
@@ -293,6 +296,8 @@ try {
         syncDir(here);
       } else {
         if (!countedStage) throw new Error("no staged count to publish");
+        const publication = unattended && invocationId ? countPublicationOf(countedStage) : null;
+        if (unattended && invocationId && !publication) throw new Error("the staged count is missing publication files");
         // The two closed files were synced by their writers. If interrupted before either rename
         // is durable, both readers still see the marker and show no instruction counts.
         renameSync(join(countedStage, "instructions.json"), join(results, "instructions.json"));
@@ -300,6 +305,7 @@ try {
         syncDir(results);
         rmSync(countFailureFile);
         syncDir(results);
+        if (publication) publishedCount = `count ${invocationId} ${publication}`;
       }
     },
     reset: () => { if (unattended) reset(); },

@@ -1,6 +1,7 @@
 // Tests for round.mjs: node --test bench/fullstack/round.test.mjs (npm run check runs it).
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readlinkSync, rmdirSync, rmSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,8 @@ import { COUNT_FAILED_FILE } from "./pack.mjs";
 import { roundsIn } from "./trend.mjs";
 import { maxPasses } from "./passes.mjs";
 import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, snapshotsEnded, startMinutes, startSettled, startUnit, steps, stepsUntil, superviseCall, takeLaunch, unit, unitSnapshot } from "./round.mjs";
+
+const countInvocation = "a".repeat(32);
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -351,7 +354,7 @@ const fakeSystemctl = [
   '      s=$(state); job=; if [ -n "$FAKE_JOBS" ] && [ -e "$FAKE_JOBS" ]; then read -r job rest < "$FAKE_JOBS"; fi',
   '      echo "ActiveState=$s"; case "$s" in active) echo "SubState=running" ;; *) echo "SubState=dead" ;; esac',
   '      [ -n "$FAKE_JOBS_FAIL" ] || echo "Job=$job"',
-  '      if [ -n "$started" ]; then echo "InvocationID=bbbb"; echo "StateChangeTimestampMonotonic=2000"; else echo "InvocationID=aaaa"; echo "StateChangeTimestampMonotonic=1000"; fi',
+  '      if [ -n "$started" ]; then echo "InvocationID=bbbb"; echo "StateChangeTimestampMonotonic=2000"; else echo "InvocationID=${FAKE_INVOCATION-aaaa}"; echo "StateChangeTimestampMonotonic=1000"; fi',
   "      exit 0",
   "    fi",
   '    case "$3" in',
@@ -1158,18 +1161,24 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
     const remoteResult = join(dirname(remoteProgress), "results", "r1");
     const localResult = join(fullstack, "results", "r1");
     const localMarker = join(localResult, COUNT_FAILED_FILE);
-    const summary = JSON.stringify({ instructions: { "corten/page": { user: 123456 } } });
-    const collectCount = (/** @type {{ result?: string, oldFence?: boolean, incomingFence?: boolean, both?: boolean, fake?: Record<string, string> }} */
-      { result = "finished", oldFence = true, incomingFence = false, both = true, fake = {} } = {}) => {
-      const { argv, options } = prepare({ log: done, progress: end(result), collect: true, fast: true, fake });
+    const counted = countFixture(t, `writeFileSync(output, ${JSON.stringify(fullInstructions)});`);
+    const measured = counted.run();
+    assert.equal(measured.status, 0, measured.said);
+    const proof = readFileSync(join(counted.here, "results-r1.progress"), "utf8");
+    const instructions = readFileSync(counted.instructions, "utf8");
+    const summary = readFileSync(counted.summary, "utf8");
+    const collectCount = (/** @type {{ progress?: string, oldFence?: boolean, incomingFence?: boolean, both?: boolean, changedFile?: string, fake?: Record<string, string> }} */
+      { progress = proof, oldFence = true, incomingFence = false, both = true, changedFile, fake = {} } = {}) => {
+      const { argv, options } = prepare({ log: done, progress, collect: true, fast: true, fake: { FAKE_INVOCATION: countInvocation, ...fake } });
       if (oldFence) {
         mkdirSync(localResult, { recursive: true });
         writeFileSync(localMarker, "old failure\n");
-        writeFileSync(join(localResult, "instructions.json"), "{}");
+        writeFileSync(join(localResult, "instructions.json"), instructions);
       }
       mkdirSync(remoteResult, { recursive: true });
       writeFileSync(join(remoteResult, "summary.json"), summary);
-      if (both) writeFileSync(join(remoteResult, "instructions.json"), "{}");
+      if (both) writeFileSync(join(remoteResult, "instructions.json"), instructions);
+      if (changedFile) writeFileSync(join(remoteResult, changedFile), "{}");
       if (incomingFence) writeFileSync(join(remoteResult, COUNT_FAILED_FILE), "new failure\n");
       return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
     };
@@ -1181,9 +1190,32 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.ok(!existsSync(localMarker), "the complete downloaded recount is still fenced by the local marker");
       assert.match(good.stdout, /trend saw no count fence/);
 
-      const failed = collectCount({ result: "failed", incomingFence: true, oldFence: false });
+      for (const [why, setup] of /** @type {const} */ ([
+        ["legacy finish without proof", { progress: end("finished") }],
+        ["unrelated invocation", { fake: { FAKE_INVOCATION: "b".repeat(32) } }],
+        ["invocation not observable", { fake: { FAKE_INVOCATION: "" } }],
+        ["different instructions", { changedFile: "instructions.json" }],
+        ["different summary", { changedFile: "summary.json" }],
+      ])) {
+        const ambiguous = collectCount(setup);
+        assert.equal(ambiguous.status, 0, ambiguous.stdout + ambiguous.stderr);
+        assert.match(ambiguous.stdout, /trend saw the count fence/, why);
+        assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", why);
+      }
+      const continued = counted.run([], "conform");
+      assert.equal(continued.status, 0, continued.said);
+      const withoutCount = collectCount({ progress: readFileSync(join(counted.here, "results-r1.progress"), "utf8") });
+      assert.equal(withoutCount.status, 0, withoutCount.stdout + withoutCount.stderr);
+      assert.match(withoutCount.stdout, /trend saw the count fence/);
+      assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "continuing after count does not publish one");
+
+      const failed = collectCount({ progress: end("failed"), incomingFence: true, oldFence: false });
       assert.equal(failed.status, 1, failed.stdout + failed.stderr);
       assert.match(failed.stdout, /the round stopped before it finished/);
+      assert.equal(readFileSync(localMarker, "utf8"), "new failure\n");
+
+      const marked = collectCount({ incomingFence: true });
+      assert.match(marked.stdout, /trend saw the count fence/);
       assert.equal(readFileSync(localMarker, "utf8"), "new failure\n");
 
       const short = collectCount({ both: false });
@@ -1191,7 +1223,7 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.match(short.stdout, /trend saw the count fence/);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "a local stale instructions file is not archive membership");
 
-      const early = collectCount({ result: "failed" });
+      const early = collectCount({ progress: end("failed") });
       assert.equal(early.status, 1, early.stdout + early.stderr);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "a markerless partial download does not clear the fence");
 
@@ -1407,6 +1439,7 @@ function countFixture(t, /** @type {string} */ script, /** @type {string | undef
   }
   const here = join(root, "fullstack");
   const round = "r1";
+  const progress = join(here, `results-${round}.progress`);
   const results = join(here, "results", round);
   mkdirSync(results, { recursive: true });
   const instructions = join(results, "instructions.json");
@@ -1422,13 +1455,16 @@ ${script}
   const call = (/** @type {string[]} */ args) => {
     const r = spawnSync(process.execPath, args, {
       cwd: here, encoding: "utf8", timeout: 15_000,
-      env: { PATH: dirname(process.execPath), HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" },
+      env: { PATH: dirname(process.execPath), HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", INVOCATION_ID: countInvocation },
     });
     assert.ifError(r.error);
     return { status: r.status, signal: r.signal, said: r.stdout + r.stderr };
   };
   return {
-    run: (/** @type {string[]} */ nodeArgs = []) => call([...nodeArgs, "run-all.mjs", round, "10", "count", "conform", "--unattended"]),
+    run: (/** @type {string[]} */ nodeArgs = [], from = "count") => {
+      if (from !== "count") rmSync(progress);
+      return call([...nodeArgs, "run-all.mjs", round, "10", from, "conform", "--unattended"]);
+    },
     replay: () => call(["summarize.mjs", round]),
     here, results, summary: join(results, "summary.json"), marker: join(results, COUNT_FAILED_FILE), instructions,
   };
@@ -1464,6 +1500,9 @@ for (const [kind, script, prior] of [
     writeFileSync(output, JSON.stringify(rows));`, fullInstructions],
   ["a missing repeat", `const rows = JSON.parse(${JSON.stringify(fullInstructions)});
     rows["corten/json"].pop(); writeFileSync(output, JSON.stringify(rows));`, fullInstructions],
+  ...["userPerRequest", "kernelPerRequest"].map((required) => [`null ${required}`, `const rows = JSON.parse(${JSON.stringify(fullInstructions)});
+    for (const row of rows["corten/json"]) row[${JSON.stringify(required)}] = null;
+    writeFileSync(output, JSON.stringify(rows));`, fullInstructions]),
 ]) {
   test(`count review: exit 0 with ${kind} count output fails with a marked summary`, linuxCount, (t) => {
     const f = countFixture(t, script, prior);
@@ -1499,6 +1538,10 @@ console.log("the old summary was still fenced after count");
   assert.equal(saved.countFailed, undefined);
   assert.equal(saved.instructions["corten/json"].user, 123456);
   assert.equal(readFileSync(f.instructions, "utf8"), fullInstructions);
+  const hashes = [f.instructions, f.summary].map((file) => createHash("sha256").update(readFileSync(file)).digest("hex"));
+  const progressText = readFileSync(join(f.here, "results-r1.progress"), "utf8");
+  assert.equal(progressText.split("\n").at(-2)?.split(" ").slice(1).join(" "), `finished count ${countInvocation} ${hashes.join(" ")}`);
+  assert.equal(resumeAt(progressText).ended, "finished");
 });
 
 test("a crash immediately after syncing count start leaves old instructions ineligible for replay", linuxCount, (t) => {

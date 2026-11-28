@@ -57,7 +57,7 @@ import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps, buildArgs } from "./apps.mjs";
-import { ARCHIVE, COUNT_FAILED_FILE, pack } from "./pack.mjs";
+import { ARCHIVE, COUNT_FAILED_FILE, countPublicationOf, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
 import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, parseSnapshot, snapshotsEnded, startSettled, startUnit, steps, takeLaunch, unit, unitSnapshot } from "./round.mjs";
@@ -269,23 +269,23 @@ const progressFile = `/bench/bench/fullstack/results-${round}.progress`;
 const localCountFence = join(here, "results", round, COUNT_FAILED_FILE);
 // host.txt: the CPU model and the rest, since droplets of one size are not all the same machine.
 const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --version; npx playwright --version)";
-const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, checkCountFence = false) => {
+const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, /** @type {string | null} */ countPublication = null) => {
   const local = join(here, "..", localName, "results");
   mkdirSync(local, { recursive: true });
   await retry(3, () => remote(`cd ${remoteDir} && mkdir -p results/${round} && (cp ${log} results/${round}/run.log 2>/dev/null || true) && ${hostInfo} > results/${round}/host.txt 2>&1; tar -czf /tmp/results.tgz -C results ${round}`, 5));
-  // Listing and extraction must read the same download. Only a finished fullstack round with a
-  // local fence needs the extra pass; share the original five-minute extraction budget.
-  const inspecting = checkCountFence && existsSync(localCountFence);
+  // Listing and extraction must read the same download. Only a proved publication with a local
+  // fence needs the extra pass; share the original five-minute extraction budget.
+  const inspecting = countPublication !== null && existsSync(localCountFence);
   const archive = join(local, inspecting ? `.results-${randomUUID()}.tgz` : ".results.tgz");
   let extracted = false;
   try {
     await retry(3, () => scp(`root@${host}:/tmp/results.tgz`, archive));
     const deadline = performance.now() + 5 * minute;
-    let replacesCount = false;
+    let hasCountFiles = false;
     if (inspecting) {
       const listed = run("tar", ["-tzf", archive], { quiet: true, timeout: 5 * minute });
       const members = new Set(listed.stdout.split(/\r?\n/));
-      replacesCount = !members.has(`${round}/${COUNT_FAILED_FILE}`)
+      hasCountFiles = !members.has(`${round}/${COUNT_FAILED_FILE}`)
         && members.has(`${round}/instructions.json`) && members.has(`${round}/summary.json`);
     }
     const remaining = inspecting ? Math.floor(deadline - performance.now()) : 5 * minute;
@@ -293,13 +293,13 @@ const download = async (/** @type {string} */ remoteDir, /** @type {string} */ l
     run("tar", ["-xzf", archive, "-C", local], { timeout: remaining });
     extracted = true;
     console.log(`${label} in ${join(local, round)}`);
-    return replacesCount;
+    return hasCountFiles && countPublicationOf(join(local, round)) === countPublication;
   } finally {
     if (inspecting || extracted) remove(archive);
   }
 };
-const downloadAll = async (/** @type {string} */ label, checkCountFence = false) => {
-  const replacesCount = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, checkCountFence);
+const downloadAll = async (/** @type {string} */ label, /** @type {string | null} */ countPublication = null) => {
+  const replacesCount = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, countPublication);
   if (suite === "browser") await download("/bench/bench/browser", "browser", label);
   return replacesCount;
 };
@@ -581,22 +581,26 @@ const watch = async (/** @type {boolean} */ once) => {
       const [uptime = "", beforeLine = "", ...rest] = all;
       const afterLine = rest.pop() ?? "";
       const terminal = suite === "fullstack"
-        ? /^progress \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (finished|failed)$/.exec(rest.shift() ?? "")?.[1]
-        : undefined;
+        ? /^progress \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (finished(?: count ((?!0{32} )[0-9a-f]{32}) ([0-9a-f]{64} [0-9a-f]{64}))?|failed)$/.exec(rest.shift() ?? "")
+        : null;
       const before = beforeLine.startsWith("before ") ? beforeLine.slice(7) : "unreadable";
       const after = afterLine.startsWith("after ") ? afterLine.slice(6) : "unreadable";
       const text = rest.join("\n");
       const lines = text.split("\n").filter((l) => /^\d{4}-|step failed|step \S+ skipped|all done|round failed|browser suite|^\|/.test(l));
       for (const l of lines.slice(once ? Math.max(shown, lines.length - 8) : shown)) console.log(l);
       shown = lines.length;
-      const unreadable = !parseSnapshot(before) || !parseSnapshot(after);
+      const beforeFields = parseSnapshot(before);
+      const unreadable = !beforeFields || !parseSnapshot(after);
       const ended = snapshotsEnded(before, after);
-      if (ended && (suite === "fullstack" ? terminal === "finished" : doneMarker.test(text))) return { state: "finished", snapshot: before.trim() };
+      if (ended && (suite === "fullstack" ? terminal?.[1].startsWith("finished") : doneMarker.test(text))) {
+        const countPublication = terminal?.[2] === beforeFields?.InvocationID ? terminal?.[3] ?? null : null;
+        return { state: "finished", snapshot: before.trim(), countPublication };
+      }
       // The unit has ended and the round did not finish. A full-stack round's droplet that
       // restarted less than five minutes ago may not have started the unit again yet, and the unit
       // may be between states, so this has to hold for three polls.
       stopped = ended && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
-      if (stopped >= 3 || (stopped && (suite === "fullstack" ? terminal === "failed" : /round failed/.test(text)))) return { state: "stopped", snapshot: before.trim() };
+      if (stopped >= 3 || (stopped && (suite === "fullstack" ? terminal?.[1] === "failed" : /round failed/.test(text)))) return { state: "stopped", snapshot: before.trim() };
       if (once && !stopped) return { state: unreadable ? "unknown" : "running", snapshot: null };
       if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its queued job could not be read (${before}; ${after}): round ${round} is watched until it reads as ended`);
       unreadableSaid = unreadable;
@@ -636,7 +640,7 @@ try {
       process.exit(0);
     }
   }
-  const { state, snapshot } = await watch(collect);
+  const { state, snapshot, countPublication } = await watch(collect);
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
   if (state === "finished" || state === "stopped") startUnconfirmed = false;
   if (state === "running" || state === "unknown") {
@@ -649,7 +653,7 @@ try {
     let confirmed = true;
     if (state === "finished") {
       console.log("downloading the results");
-      const replacesCount = await downloadAll("results", suite === "fullstack");
+      const replacesCount = await downloadAll("results", countPublication);
       if (replacesCount) {
         // The incoming files alone cannot retire the fence if a different invocation could have
         // supplied them. Keep the existing final custody check after packing and trend as well.
