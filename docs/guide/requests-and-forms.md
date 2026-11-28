@@ -2267,13 +2267,17 @@ A marked answer that draws another page, a page answer (`<main>`, another route'
 included) or a patch whose address is on another path (once that address commits, where a
 script's `navigate` listener holds the replace), is a turn as a visit to that page is: a submit of
 another form sent from the page before it and still on its way (a Save) draws nothing and fires no
-`corten:error` when its answer comes. The runtime checks the address before acting on an old
-answer, even if a listener stopped the held replace's `currententrychange` event. A write cut off
-before its answer came makes the next navigation read the page whole, as one a link cuts off.
+`corten:error` when its answer comes, even if it was sent after the draw while the old address was
+still in place. The runtime checks the committed address before acting on an answer, press or
+retry, and when the held replace settles. Those checks end old submits and update the current nav
+link even if a listener stopped `currententrychange`. A write cut off before its answer came makes
+the next navigation read the page whole, as one a link cuts off.
 A GET or POST the answer's own draw queues behind a write it cuts off (a layout form an element
 presses as it connects) is the new page's and is sent once that write has ended, subject to the
-usual checks on queued reads. A press made after the draw while the replace still holds the old
-address is not replayed on the new page. A marked answer that changes only the
+usual checks on queued reads. A source press is not replayed on the new page, even if its write
+already finished and scheduled the retry before commit. A press made at the new address, including
+from a `currententrychange` listener registered before the runtime's, does not wait for an old
+write of the same form. A marked answer that changes only the
 query, a patch, is no turn. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
 draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and one

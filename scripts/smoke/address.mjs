@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { gzipped, keep } from "../readme-size.mjs";
 import { base, skip, check } from "./helpers.mjs";
 
 // A GET data-patch form marked data-address (#1406): its answer is the page at the address it asked
@@ -738,6 +740,8 @@ export async function dataAddress(browser) {
       );
   }
   await markedBoundaries(browser, errors);
+  await heldBoundaryPresses(browser, errors);
+  runtimeSize();
   const kept = await pressesKept(browser);
   if (!kept) skip("a form's press is let go once it settles", "no DevTools heap query (Chromium only)");
   else
@@ -3555,6 +3559,164 @@ async function heldCommitMarks(page) {
   const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
   await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
   return { held, drawn, during, ended, after: await where() };
+}
+
+/** @param {import("@playwright/test").Browser} browser @param {string[]} errors */
+export async function heldBoundaryPresses(browser, errors) {
+  const source = "/smoke/address";
+  const destination = "/smoke/address-elsewhere";
+  const to = `${destination}?scope=far`;
+  const names = {
+    retry: "a source POST retry already scheduled before a held replace commits is not sent to the destination",
+    late: "a source POST sent after the marked patch drew cannot paint after its held replace commits",
+    commit: "a trusted commit listener can submit a layout form at the destination even while its source write is pending",
+    fresh: "a trusted commit listener without a pending write submits the same layout form at the destination",
+    draw: "a POST sent by the marked patch's own draw can still paint after its held replace commits",
+    nav: "a held replace marks the destination link current even when an earlier listener stops its commit event",
+  };
+  for (const [kind, name] of Object.entries(names)) {
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => errors.push(`held boundary ${kind}: ${e.message}`));
+    try {
+      await page.addInitScript(({ kind, destination }) => {
+        const w = /** @type {any} */ (window);
+        w.navigation?.addEventListener("currententrychange", (/** @type {any} */ event) => {
+          if (!event.isTrusted || event.navigationType !== "replace" || location.pathname !== destination) return;
+          w.__heardCommit = true;
+          if (kind === "commit" || kind === "fresh") w.__post("second");
+          if (kind === "nav") event.stopImmediatePropagation();
+        });
+      }, { kind, destination });
+      await page.goto(base + source);
+      if (!(await page.evaluate(() => "NavigationPrecommitController" in window))) {
+        skip(name, "no precommitHandler");
+        continue;
+      }
+      /** @type {() => void} */
+      let release = () => {};
+      const writing = new Promise((resolve) => (release = () => resolve(undefined)));
+      /** @type {string[]} */
+      const posts = [];
+      await page.route((url) => [source, destination].includes(url.pathname), async (route) => {
+        const req = route.request();
+        if (req.headers()["corten"] !== "action") return route.fallback();
+        if (req.method() === "GET" && req.url() === base + to)
+          return route.fulfill({ headers: { "corten-patch": "1", "content-type": "text/html" }, body: `<p id="held-boundary-panel">destination${kind === "draw" ? "<smoke-held-write></smoke-held-write>" : ""}</p>` });
+        if (req.method() !== "POST") return route.fallback();
+        const body = req.postData();
+        posts.push(`${req.url().slice(base.length)} ${body}`);
+        if (body === "v=first") await writing;
+        await route.fulfill(kind === "late" || kind === "draw"
+          ? { headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<p id="held-boundary-panel">written</p>' }
+          : { status: 204 }).catch(() => {});
+      });
+      await page.evaluate(({ kind, source, destination, to }) => {
+        const w = /** @type {any} */ (window);
+        const main = /** @type {HTMLElement} */ (document.querySelector("main"));
+        const panel = document.createElement("p");
+        panel.id = "held-boundary-panel";
+        panel.textContent = "source";
+        const go = document.createElement("form");
+        go.id = "held-boundary-go";
+        go.action = destination;
+        go.dataset.patch = go.dataset.address = "";
+        const scope = document.createElement("input");
+        scope.name = "scope";
+        scope.value = "far";
+        go.append(scope);
+        main.append(panel, go);
+        const write = document.createElement("form");
+        write.id = "held-boundary-write";
+        write.method = "post";
+        write.dataset.patch = "";
+        const v = document.createElement("input");
+        v.name = "v";
+        write.append(v);
+        document.body.append(write);
+        w.__post = (/** @type {string} */ value) => {
+          v.value = value;
+          write.requestSubmit();
+        };
+        customElements.define("smoke-held-write", class extends HTMLElement {
+          connectedCallback() { w.__post("first"); }
+        });
+        // Hold the retry task, not the response: the old write must have left `submits` while the
+        // source address is still current. Restore the native timer as soon as we catch that task.
+        if (kind === "retry") {
+          const timeout = w.setTimeout;
+          w.setTimeout = (/** @type {() => void} */ callback, /** @type {number | undefined} */ delay, /** @type {unknown[]} */ ...args) => {
+            if (delay === undefined && w.__catchRetry && !write.hasAttribute("aria-busy")) {
+              w.__retry = callback;
+              w.setTimeout = timeout;
+              return 0;
+            }
+            return timeout.call(window, callback, delay, ...args);
+          };
+        }
+        const held = new Promise((resolve) => { w.__commit = resolve; });
+        const finishing = kind === "nav" ? new Promise((resolve) => { w.__finish = resolve; }) : undefined;
+        w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+          if (event.navigationType !== "replace" || new URL(event.destination.url).pathname + new URL(event.destination.url).search !== to) return;
+          event.intercept({ precommitHandler: () => held, handler: () => finishing });
+          w.__holding = true;
+        });
+        if (location.pathname !== source) throw new Error("held replacement fixture is not on its source page");
+      }, { kind, source, destination, to });
+      const initial = kind === "retry" || kind === "commit";
+      const writes = initial || kind === "late" || kind === "draw";
+      const first = writes ? page.waitForRequest((r) => r.url() === base + source && r.method() === "POST" && r.postData() === "v=first", { timeout: 5000 }).then(() => true, () => false) : true;
+      if (initial) {
+        await page.evaluate(() => /** @type {any} */ (window).__post("first"));
+        await first;
+      }
+      await page.evaluate(() => /** @type {HTMLFormElement} */ (document.getElementById("held-boundary-go")).requestSubmit());
+      const state = () => page.evaluate(() => ({
+        at: location.pathname + location.search,
+        panel: document.getElementById("held-boundary-panel")?.textContent,
+        current: Array.from(document.querySelectorAll("main nav a[aria-current=page]"), (a) => a.getAttribute("href")).join(),
+        heard: !!(/** @type {any} */ (window).__heardCommit),
+      }));
+      await page.waitForFunction(() => /** @type {any} */ (window).__holding && document.getElementById("held-boundary-panel")?.textContent === "destination", undefined, { timeout: 5000 });
+      const during = await state();
+      if (kind === "late") await page.evaluate(() => /** @type {any} */ (window).__post("first"));
+      const firstSent = await first;
+      if (kind === "retry") {
+        await page.evaluate(() => {
+          const w = /** @type {any} */ (window);
+          w.__post("second");
+          w.__catchRetry = true;
+        });
+        release();
+        await page.waitForFunction(() => typeof (/** @type {any} */ (window).__retry) === "function", undefined, { timeout: 5000 });
+      }
+      const destinationPost = kind === "commit" || kind === "fresh";
+      const second = destinationPost ? page.waitForRequest((r) => r.url() === base + to && r.method() === "POST" && r.postData() === "v=second", { timeout: 2000 }).then(() => true, () => false) : false;
+      await page.evaluate(() => /** @type {any} */ (window).__commit());
+      await page.waitForFunction((to) => location.pathname + location.search === to, to, { timeout: 5000 });
+      if (kind === "retry") await page.evaluate(() => /** @type {any} */ (window).__retry());
+      if (kind === "nav") await page.evaluate(() => /** @type {any} */ (window).__finish());
+      const secondSent = await second;
+      release();
+      await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition) && !document.getElementById("held-boundary-write")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 });
+      const after = await state();
+      const expected = [...(writes ? [`${source} v=first`] : []), ...(destinationPost ? [`${to} v=second`] : [])];
+      check(name, during.at === source && during.panel === "destination" && firstSent && after.at === to && after.heard &&
+        after.panel === (kind === "draw" ? "written" : "destination") && secondSent === destinationPost && posts.join() === expected.join() &&
+        (kind !== "nav" || (during.current === source && after.current === destination)), JSON.stringify({ during, firstSent, after, posts, secondSent }));
+    } finally {
+      await page.close();
+    }
+  }
+}
+
+export function runtimeSize() {
+  const repo = (/** @type {string} */ path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+  const readme = repo("README.md");
+  const [phrase, size] = readme.match(/An? (\d+\.\d KB) \(gzip\) runtime\./) ?? [];
+  check("the runtime's measured gzip figure agrees with the README and the site's surface", !!size &&
+    !keep(readme, gzipped(repo("crates/corten/js/dist/corten.js")), true).error &&
+    repo("examples/corten-site/src/surface.rs").includes(`${size} gzipped`) &&
+    repo("examples/corten-site/src/held.rs").includes(`"${size} gzipped", README, "${phrase}"`), phrase);
 }
 
 /**

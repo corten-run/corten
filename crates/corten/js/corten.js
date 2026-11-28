@@ -2704,7 +2704,7 @@ navigation
       // The navigation that held a marked answer's replace ({@link held}) commits its address: the
       // nav link to it is current from now, as the address is, not from when the answer was drawn,
       // and an address on another path is a turn from now too ({@link turnAt}).
-      if (event.navigationType && held && held !== true) markCurrent(), turnAt?.();
+      if (event.isTrusted && event.navigationType && held && held !== true && !turnAt?.()) markCurrent();
     })
   : // Every `popstate` the browser fires is a move, its address changed or not (Back between two
     // entries of one address, each with a null state), counted once: not again where its change of
@@ -2747,10 +2747,10 @@ const unreplaced = (seen) => same(seen, exact());
 /**
  * A marked answer's draw, which a press made by it keeps ({@link drawingFor}): the entry the
  * answer's own replace found and the one it left ({@link exact}), set only where nothing else
- * changed the entry inside that `replaceState`. A plain object, so a press keeps neither the
- * answer nor the press it answered, and a chain of presses each made by the last one's draw keeps
- * no answer that has settled.
- * @typedef {{ found?: unknown[], left?: unknown[] }} Draw
+ * changed the entry inside that `replaceState`; and the page it drew, if it was a turn. A plain
+ * object, so a press keeps neither the answer nor the press it answered, and a chain of presses
+ * each made by the last one's draw keeps no answer that has settled.
+ * @typedef {{ found?: unknown[], left?: unknown[], page?: number }} Draw
  */
 /**
  * The draw of the marked answer drawing now, by the call that puts its address in ({@link apply},
@@ -3363,7 +3363,7 @@ addEventListener("pagehide", () => (left += 1));
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for. A read is also dropped by a newer press of
  * the form drawn in its place ({@link pressed}).
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, kept?: Press, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextPress?: Press | null, here?: Press, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, page: number, draw?: Draw | null, write: boolean, went: boolean, answered: boolean, kept?: Press, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextPress?: Press | null, here?: Press, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 /**
@@ -3419,12 +3419,15 @@ let held;
 let heldFor;
 
 /**
- * For a held replace of a patch to an address on another path ({@link held}), the turn it is once
- * that address commits, as for one the replace put in at once ({@link leaveSubmits}): a write sent
- * from the page it leaves draws nothing over it. Set and cleared with the hold.
- * @type {(() => void) | undefined}
+ * For a patch's replace to another path, reconcile its turn once the address commits, even if no
+ * event reached the runtime. It may commit inside the call or while a listener holds it.
+ * @type {(() => boolean) | undefined}
  */
 let turnAt;
+/** A count of marked turns, independent of visits, whose submit queue is unchanged. */
+let addressPage = 0;
+/** A retry belongs to the page it was pressed on, or the marked draw that made the press. @param {Press | null | undefined} press */
+const onAddressPage = (press) => !press || press.page === addressPage || press.by?.page === addressPage;
 
 /**
  * Whether the runtime's `replaceState` call is still running, or the navigation that holds the
@@ -3447,19 +3450,19 @@ const holding = (press) => {
 };
 
 /**
- * A press of a form: its id ({@link presses}) and the marked answer's draw that made it, if any
- * ({@link drawingFor}); for a `data-address` form with an id also the entry
+ * A press of a form: its id ({@link presses}), its page ({@link addressPage}) and the marked
+ * answer's draw that made it, if any ({@link drawingFor}); for a `data-address` form with an id also the entry
  * it was made on ({@link entry}), null for a write made while a visit of the runtime's or a held
  * replace ({@link held}) was on its way (a read made then is {@link refused}), and that entry
  * exactly ({@link exact}), and when it was made
  * (`performance.now()`), for a move the browser made before
  * it and says so only after it ({@link moves}). A marked form without an id cannot tell its latest
  * press from an older one, and is pressed as an unmarked form is: its answer leaves the address.
- * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: Draw | null, t?: number }} Press
+ * @typedef {{ id: string | null, page: number, at?: number | null, seen?: unknown[], by?: Draw | null, t?: number }} Press
  */
 
 /** A marked read refused as it is made ({@link pressed}). @type {Press} */
-const refused = { id: null, at: null };
+const refused = { id: null, at: null, page: -1 };
 
 /**
  * Takes a press of `form` by its id, which the form a patch draws in its place keeps, as the
@@ -3473,11 +3476,13 @@ const refused = { id: null, at: null };
  * @returns {Press}
  */
 function pressed(form, read) {
+  // An earlier commit listener can press before the runtime hears the new address.
+  turnAt?.();
   const id = idOf(form);
   const marked = id && hasAttr(form, "data-address");
   const away = marked && (reading.size > 0 || holding());
   if (away && read) return refused;
-  const press = marked ? { id, at: away ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id, by: drawingFor };
+  const press = marked ? { id, page: addressPage, at: away ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id, page: addressPage, by: drawingFor };
   if (id) presses.set(id, press);
   return press;
 }
@@ -3598,9 +3603,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // `?`, below), so neither is the other's request.
   const key = `${read?.at === undefined ? "" : "address "}${method} ${url.href} ${fields} ${Array.from(data.values(), (v) => (typeof v === "string" ? "" : `${v.size}/${v.lastModified}`))}`;
   // A marked form's one a navigation aborted is over, though its own code has not yet run to say so:
-  // nothing waits for it or takes it over. An unmarked form's is as before the mark.
+  // nothing waits for it or takes it over. Neither does any press wait for a submit from before a
+  // marked turn, even if the cut-off has yet to abort it.
+  turnAt?.();
+  if (!onAddressPage(press)) return void settled(press);
   let previous = submits.get(form);
-  if (previous?.controller.signal.aborted && press?.at !== undefined) previous = undefined;
+  if (previous && (previous.page !== addressPage || (previous.controller.signal.aborted && press?.at !== undefined))) previous = undefined;
   if (previous?.write) {
     // Sent once the write's answer is in; the same values as the write's again send nothing. A
     // button that waits is busy with the write's marks, one it replaced no longer.
@@ -3636,7 +3644,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", went: false, answered: false, kept: /** @type {Press | undefined} */ (undefined), n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: read ?? undefined, mine, busy, by: submitter };
+  const pending = { key, controller, page: addressPage, draw: press?.by, write: method !== "GET", went: false, answered: false, kept: /** @type {Press | undefined} */ (undefined), n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: read ?? undefined, mine, busy, by: submitter };
   // Its presses are let go at once too: nothing is sent or drawn for them now, and what it awaits
   // (a stylesheet a patch's element needs) may never end. The exact press the next page's draw
   // queued is still to be sent.
@@ -3662,11 +3670,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // A marked answer's: puts its address in, and ends the submits of the page it leaves ({@link send}).
   /** @type {(() => void) | undefined} */
   let done;
-  // The submits on their way as a marked answer's draw began: those it ends if it draws another
-  // page, but its own. A press its draw queued behind one can still be sent.
-  /** @type {Set<NonNullable<ReturnType<typeof submits.get>>> | undefined} */
-  let earlier;
-  const drawIn = () => ((passed = here()) && done && (earlier = new Set(submits.values())), passed);
+  const drawIn = () => (passed = here());
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3794,8 +3798,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
         // write has ended, as a press waiting for a write is.
         const leave = () => {
           turns += 1;
-          for (const other of earlier ?? []) if (other.next !== undefined && other.nextPress?.by === draw) other.kept = other.nextPress;
-          leaveSubmits((other) => other === pending || !earlier?.has(other));
+          draw.page = pending.page = ++addressPage;
+          for (const other of submits.values()) {
+            if (other.draw === draw) other.page = addressPage;
+            else if (other.next !== undefined && other.nextPress?.by === draw) other.kept = other.nextPress;
+          }
+          leaveSubmits((other) => other.page === addressPage);
         };
         done = function replace() {
           // The draw is over: history listeners and abort callbacks are not part of it.
@@ -3865,6 +3873,15 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // whatever the call ends in.
           heldFor = pending.here;
           held = true;
+          turnAt = patch ? () => {
+            if (location.pathname === path || location.href !== to || (navigation && where() !== key)) return false;
+            turnAt = undefined;
+            leave();
+            // An immediate replace is marked by apply after this call; a held commit must do it
+            // here, even if a listener stopped the trusted event.
+            if (held !== true) markCurrent();
+            return true;
+          } : undefined;
           try {
             try {
               history.replaceState(kept, "", to);
@@ -3906,7 +3923,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
             // Read again at the new address, which without the Navigation API goes by the path; a
             // patch's address on another path is another page.
             if (location.pathname !== path) {
-              if (patch) leave();
+              turnAt?.();
               readAgainLater();
             }
           } finally {
@@ -3924,7 +3941,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
             } catch {
               now = null;
             }
-            held = heldFor = turnAt = undefined;
+            held = heldFor = undefined;
             // Let go as that navigation's own `finished` settles ({@link held}), so nothing of it is
             // kept, nor read again for a press after it. A navigation without one cannot be followed
             // to its end, and is not held.
@@ -3937,13 +3954,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               };
               held = was;
               heldFor = pending.here;
-              if (patch && location.pathname === path) turnAt = () => location.pathname !== path && location.href === to && ((turnAt = undefined), leave());
               try {
                 was.finished.then(end, end);
               } catch {
                 end();
               }
-            }
+            } else turnAt = undefined;
           }
         };
         draws.set(done, draw);
@@ -4037,7 +4053,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       // navigation cut it off, unless a marked answer that drew another page did, and its draw made
       // the press ({@link send}).
       const { next, nextWithin, nextPress } = pending;
-      if (next !== undefined && (!signal.aborted || (nextPress && nextPress === pending.kept))) setTimeout(() => (left === leftAt ? sendAgain(form, next, nextWithin, nextPress) : settled(nextPress)));
+      if (next !== undefined && (!signal.aborted || (nextPress && nextPress === pending.kept))) setTimeout(() => {
+        turnAt?.();
+        if (left === leftAt && onAddressPage(nextPress)) sendAgain(form, next, nextWithin, nextPress);
+        else settled(nextPress);
+      });
       else settled(nextPress);
     } else settled(pending.nextPress);
   }

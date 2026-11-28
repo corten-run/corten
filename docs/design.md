@@ -12648,18 +12648,19 @@ rules something out.
     another route's `<main>` included, and a 5xx's, which puts no address in) as it is drawn, and a
     patch once its address on another path is in (where a page's `navigate` listener holds the
     replace, as the held navigation commits that address). It checks the committed address before
-    an answer can act and when the held navigation settles, even if the page stops
-    `currententrychange`. The runtime does what it does as a visit begins, with the same code:
-    it ends every submit of another form on its way as the draw
-    began (not one the draw itself made, which is the new page's), numbering a write it cut off
+    a submit's press, answer or retry can act and when the held navigation settles, even if the page
+    stops `currententrychange`; the same check updates nav links on a held commit. It ends every
+    submit of the old page, even one sent after the draw and before the commit, sparing its own
+    submit and those the draw made. It uses the same code as a visit to number a write it cut off
     before its answer came, so the next navigation reads the page whole, and counts the turn by
     which a failed write is said only on a form drawn with no navigation to another address since
     its press. A press the draw made of a form whose write it ends (an element's
     `connectedCallback` that presses a form of the layout), which waits for that write as any press
-    of the form does, is the new page's too. Only a press attributed to the draw itself is kept,
-    not one a history listener makes or one made later while the old address is still active.
-    Aborting the write leaves that exact queued press current, so a GET can pass the usual
-    checks for a queued read. So a Save on its way draws nothing on
+    of the form does, is the new page's too. Aborting the write leaves that exact queued press
+    current, so a GET can pass the usual checks for a queued read. A source press is not retried
+    across the turn even if the old write finished and scheduled the retry before commit. A press
+    made at the new address, even from a `currententrychange` listener registered earlier, belongs
+    to the new page and does not wait for the old write. So a Save on its way draws nothing on
     the other page once its 200 patch comes, though that page has an element of the id it patches,
     and its 503 fires `corten:error` on no form there, though one has its id, `action` and
     `method`. A patch that changes only the query draws on the same page, and is no turn: a write
@@ -12928,9 +12929,12 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 3,824 bytes larger raw (46,502 to 50,326), 1,539
-    with gzip (16,718 to 18,257) and 1,385 with brotli (15,106 to 16,491), paid once a release by
-    every user (81, 21 and 26 larger than `e281140d6`, which replayed a later press as the draw's,
+    What it costs: the runtime every page loads is 4,031 bytes larger raw (46,502 to 50,533), 1,626
+    with gzip (16,718 to 18,344) and 1,467 with brotli (15,106 to 16,573), paid once a release by
+    every user (207, 87 and 82 larger than `4465e4303`, which missed source writes and retries
+    outside the draw-time snapshot, dropped a destination press behind a source write, and left
+    the nav link stale when a listener stopped the commit event; that build was 81, 21 and 26
+    larger than `e281140d6`, which replayed a later press as the draw's,
     dropped a marked read queued by the draw, and could let an old write draw if a listener stopped
     the commit event; that build was 225, 85 and 81 larger than the build before it, which, as a
     marked answer drew another page, dropped a press its draw made of a form whose write it ended;
