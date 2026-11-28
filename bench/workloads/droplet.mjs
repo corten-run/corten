@@ -63,7 +63,7 @@ function handoffStateSnapshot(path) {
 const createErroredStop = () => Object.assign(new Error("provider create errored; exact allocation verified absent; no DELETE or replacement create"),
   { providerDiagnostic: { code: "create-errored-absent" } });
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
+  inspect, captureReplay = captureValidation, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
   inspectPreCreateInventory, preCreateCensusTargets = [],
   renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now(),
@@ -100,7 +100,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   // and a check that it is still the file this process created, unchanged. An ordinary
   // operation holds operation.lock; an invalid-monitor recovery holds stream-recovery.lock
   // and never takes the original operation.lock it finds.
-  let heldLock;
+  let heldLock, sealedStateBytes;
   let exitOneFenceFinishedAtMs;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -125,15 +125,23 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
   const stateStage = (kind, suffix) => kind ? `${statePath}.${kind}-${suffix ?? randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
   const stateBytes = (value) => `${JSON.stringify(value, null, 2)}\n`;
+  const requireSealedState = () => {
+    if (!sealedStateBytes) return;
+    heldLock.own();
+    assert.ok(regular(statePath, 1024 * 1024).equals(sealedStateBytes), "sealed reservation changed; preserve custody");
+  };
   const writeState = (value, replace = renameSync, kind = value.control?.monitor?.phase === "invalid" ? "revoked" : undefined) => {
     controllerState(value, options.round);
     // An interrupted ordinary save can leave its exclusive staging file behind.
     // Never consume it or let it prevent a failure-only write under retained custody.
-    const staging = stateStage(kind);
+    const staging = stateStage(kind ?? (sealedStateBytes ? "sealed-replay" : undefined));
     const bytes = stateBytes(value);
     if (!pinnedRetirement) {
+      requireSealedState();
       durable(staging, bytes);
+      requireSealedState();
       replace(staging, statePath); syncDirectory(local);
+      if (sealedStateBytes) sealedStateBytes = Buffer.from(bytes);
       return;
     }
     // A terminal SSH acknowledgement still owns only the exact pending state
@@ -254,7 +262,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
       }
       // After the account preflight and the proof's deadline, the last local check before run().
-      beforeDispatch?.();
+      // The sealed intent checked its tree in the same turn. Only repeat the
+      // scan after the transport awaits; its other local checks still run here.
+      beforeDispatch?.(false);
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r === unsentCreate) {
@@ -874,7 +884,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       original(); archiveUnchanged();
       state.destroyedAt = new Date().toISOString(); save("destroyed"); return 0;
     });
-  async function validateEvidence(confirmedAbsent = false, start) {
+  async function validateEvidence(confirmedAbsent = false, start, pinTree) {
     state.fullGroupQualified = false;
     let extracted, exitCode;
     try {
@@ -899,7 +909,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (sealedRecovery) start = (input) => {
         const root = realpathSync(options.sealedMeasuredCheckout);
         assert.equal(root, recoveryApproval.measuredRoot, "measured checkout changed");
-        return validationTask(input, { snapshot: captureValidation(input.commit, { root }) });
+        return validationTask(input, { snapshot: captureReplay(input.commit, { root }) });
       };
       replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect, start };
     } catch { throw collectRefusal("collect-native-replay-start"); }
@@ -925,7 +935,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     } catch { throw collectRefusal("collect-native-report-refused"); }
     // Never retain/print native assertion messages: they may contain private raw values.
     try {
-      assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
+      if (pinTree) pinTree(pinEvidenceTree(extracted, state.evidenceSha256, "validator mutated evidence"));
+      else assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence");
+      verifyArchive();
     } catch (error) {
       throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
     }
@@ -1890,7 +1902,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       return locked(async () => {
         if (sealedRecovery) {
           assert.ok(sealedCollectionCandidate(state), "sealed recovery requires a saved terminal archive");
-          assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked sealed reservation changed");
+          const saved = regular(statePath, 1024 * 1024);
+          assert.equal(digest(saved), recoveryApproval.reservationSha256, "locked sealed reservation changed");
+          assert.equal(stateBytes(JSON.parse(saved)), stateBytes(state), "locked sealed reservation differs from loaded state");
+          sealedStateBytes = saved;
           assert.equal(state.commit, recoveryApproval.measuredCommit);
           assert.equal(state.id, recoveryApproval.hostId);
           assert.equal(state.archiveSha256, recoveryApproval.archiveSha256);
@@ -2047,17 +2062,27 @@ else ${pack}; fi` : pack, 11 * 60000);
         }
         state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
         await withVerifiedArchive(archive, state.archiveSha256, async unchanged => {
-          await validateEvidence();
+          let treeUnchanged;
+          await validateEvidence(false, undefined, sealedRecovery ? pin => { treeUnchanged = pin; } : undefined);
           const deletion = ["compute", "droplet", "delete", state.id, "--force"];
           if (sealed) {
             const { hash, stamp } = await remoteHash(); assert.equal(hash, state.archiveSha256, "exit archive changed");
+            const requireDispatchCustody = (includeTree = true) => {
+              if (includeTree) treeUnchanged();
+              unchanged(); requireSealedState();
+            };
             // Account check, then transport's exact ownership check, then one short
             // SSH fence. The hashes and provider reads are outside its freshness budget.
-            await execute("doctl", deletion, 120000, true, { unchanged, async expiresAt() {
+            await execute("doctl", deletion, 120000, true, { unchanged, ...(sealedRecovery ? {
+              publishIntent() {
+                requireDispatchCustody();
+                state.deletionIntentAt = new Date().toISOString(); save("deletion-intent");
+              },
+            } : {}), async expiresAt() {
               const proof = await ssh(idleScript(false, stamp) + "\n" + query, 60000, true);
               assert.ok(proof.status === 0 && !proof.error && sealedUnit(proof.stdout, state), "idle archive or terminal unit changed");
               return proof.startedAtMs + 60000;
-            } });
+            } }, undefined, undefined, sealedRecovery ? requireDispatchCustody : undefined);
           } else {
             assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check(); unchanged();
             state.deletionIntentAt = new Date().toISOString(); save("deletion-intent"); await execute("doctl", deletion, 120000);

@@ -6,12 +6,12 @@ import fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { controllerPaths, nativePaths, parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { benchPackagePaths, publicError } from "./droplet.mjs";
-import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
+import { captureValidation, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
@@ -287,7 +287,8 @@ test("approved sealed collection uses the measured replay and does not create or
   await withFixtureGitEnv(() => assert.rejects(preview(), /native campaign validation unavailable or invalid/));
   assert.ok(p.calls.every(([bin]) => bin === "git"));
   writeFileSync(h.statePath, before); delete flags.measuredHead;
-  p.deps.captureReplay = (source, { root }) => { assert.equal(source, commit); assert.equal(root, measuredRoot); };
+  const requireMeasured = (source, { root }) => { assert.equal(source, commit); assert.equal(root, measuredRoot); };
+  p.deps.captureReplay = requireMeasured;
   assert.equal(await preview(), 3);
   const plan = p.stdout.at(-1);
   assert.equal(plan.controllerCommit, head);
@@ -314,16 +315,71 @@ test("approved sealed collection uses the measured replay and does not create or
     replayed++; assert.equal(input.commit, commit); elapsed += 16 * 60_000; return h.report();
   } });
   flags.reportStatus = "blocked";
-  await assert.rejects(run(), e => e.controllerStage === "collect-native-report-refused");
-  assert.equal(h.deletes, 0); assert.equal(h.creates, 1); assert.equal(replayed, 1);
+  // Run the actual worker with a synthetic stand-in for the measured source.
+  // The controller checkout's default capture cannot replay this synthetic commit.
+  const installed = spawnSync("git", ["rev-parse", "HEAD"], { cwd: fileURLToPath(new URL("../..", import.meta.url)),
+    encoding: "utf8", env: fixtureGitEnv(), timeout: 10000 });
+  assert.equal(installed.status, 0);
+  const snapshot = withFixtureGitEnv(() => captureValidation(installed.stdout.trim()));
+  snapshot.root = pathToFileURL(measuredRoot + "/").href;
+  const validator = snapshot.sources.find(row => row.path === "bench/workloads/isolated/campaign-verify.mjs");
+  validator.source = `export function validateCampaign() { return ${JSON.stringify(h.report())}; }`;
+  validator.sha256 = digest(validator.source);
+  p.deps.captureReplay = (...args) => { requireMeasured(...args); return snapshot; };
+  await assert.rejects(productionMain(approved, { ...p.deps, inspect: undefined }), e => e.controllerStage === "collect-native-report-refused");
+  p.deps.captureReplay = requireMeasured;
+  assert.equal(h.deletes, 0); assert.equal(h.creates, 1); assert.equal(replayed, 0);
   // A read-only terminal probe extends the monitor ledger, so print a new approval.
   flags.reportStatus = "verified";
+  const markerPath = join(h.local, saved.evidence, "exit-code"), marker = readFileSync(markerPath);
+  const operationLock = join(h.local, "operation.lock");
+  for (const change of ["extraction", "operation lock"]) {
+    const beforeProbe = readFileSync(h.statePath);
+    assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+    let changed = false;
+    flags.hook = (bin, args) => {
+      if (changed || bin !== "ssh" || !args.at(-1).includes("CORTEN_IDLE") || !args.at(-1).includes("\nsystemctl show")) return;
+      changed = true;
+      if (change === "extraction") writeFileSync(markerPath, "1\n");
+      else {
+        renameSync(operationLock, operationLock + ".original");
+        writeFileSync(operationLock, "replacement lock\n", { flag: "wx" });
+      }
+    };
+    await assert.rejects(run(), change === "extraction" ? /evidence changed|extraction/ : /operation\.lock (?:was replaced|changed)/);
+    delete flags.hook;
+    assert.ok(changed);
+    assert.equal(h.deletes, 0);
+    assert.equal(h.saved().deletionIntentAt, undefined);
+    if (change === "extraction") writeFileSync(markerPath, marker);
+    else {
+      assert.equal(readFileSync(operationLock, "utf8"), "replacement lock\n");
+      unlinkSync(operationLock);
+      writeFileSync(h.statePath, beforeProbe); // discard this synthetic command's interrupted receipt
+    }
+  }
+  const beforeLateChange = readFileSync(h.statePath);
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const interrupted = p.deps.interrupted;
+  let changedAtDispatch = false;
+  p.deps.interrupted = () => {
+    if (!changedAtDispatch && h.saved().deletionIntentAt) {
+      changedAtDispatch = true; writeFileSync(markerPath, "1\n");
+    }
+    return interrupted();
+  };
+  await assert.rejects(run(), /extraction/);
+  assert.ok(changedAtDispatch && h.saved().deletionIntentAt);
+  assert.equal(h.deletes, 0);
+  p.deps.interrupted = interrupted;
+  writeFileSync(markerPath, marker); writeFileSync(h.statePath, beforeLateChange);
+  const beforeDeleteReplays = replayed;
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const live = h.host();
   flags.deleteLost = true;
   await assert.rejects(run(), /provider control failed/);
   assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
-  assert.equal(h.deletes, 1); assert.equal(replayed, 3);
+  assert.equal(h.deletes, 1); assert.equal(replayed, beforeDeleteReplays + 2);
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const retryStart = p.calls.length;
   await assert.rejects(run(), { code: "EEXIST" });
@@ -332,11 +388,11 @@ test("approved sealed collection uses the measured replay and does not create or
   unlinkSync(join(h.local, "operation.lock"));
   h.hosts([live]);
   await assert.rejects(run(), /deletion not confirmed; outcome uncertain/);
-  assert.equal(h.deletes, 1); assert.equal(replayed, 3);
+  assert.equal(h.deletes, 1); assert.equal(replayed, beforeDeleteReplays + 2);
   h.hosts([]);
   assert.equal(await run(), 0);
   assert.equal(h.saved().validation.status, "verified"); assert.ok(h.saved().destroyedAt);
-  assert.equal(h.deletes, 1); assert.equal(h.creates, 1); assert.equal(replayed, 4);
+  assert.equal(h.deletes, 1); assert.equal(h.creates, 1); assert.equal(replayed, beforeDeleteReplays + 3);
   assert.ok(p.calls.slice(retryStart).every(([bin]) => bin !== "ssh" && bin !== "sftp"));
 });
 
