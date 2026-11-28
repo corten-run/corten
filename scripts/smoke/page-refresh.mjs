@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import { drawScript } from "./draws.mjs";
 import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, steps, pollAsync, cleanUp, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
 
 /**
@@ -11,35 +13,6 @@ const AGAIN_SECONDS = 1;
 /** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
 const savedLine = '<p id="alert-status" role="status">Saved.</p>';
 const savingLine = '<p id="alert-status" role="status">Saving...</p>';
-
-/**
- * The runtime inserts an already formed note, with its text and marker set, directly or inside
- * an added subtree in a connected document. MutationObserver delivers records after the task,
- * with live node references; it cannot recover text, attributes or connectedness at insertion.
- * Page-script detachment of main, insertion into detached subtrees, and same-task rewrites of
- * a note's text or marker after insertion are outside this check.
- * @param {MutationRecord[]} records @param {string} selector
- * @param {(element: Element) => boolean} [accept]
- */
-function firstAddedMatch(records, selector, accept = () => true) {
-  for (const { addedNodes } of records) {
-    for (const node of addedNodes) {
-      if (!(node instanceof Element)) continue;
-      if (Element.prototype.matches.call(node, selector) && accept(node)) return node;
-      for (const child of Element.prototype.querySelectorAll.call(node, selector)) {
-        if (accept(child)) return child;
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Pass the same scan to each Playwright script, which runs without the Node module's scope.
- * @template T
- * @param {(firstAdded: typeof firstAddedMatch, arg: T) => unknown} observe @param {T} arg
- */
-const drawScript = (observe, arg) => `(${observe})(${firstAddedMatch}, ${JSON.stringify(arg)})`;
 
 /**
  * Exercise the real note in a separate document so the control cannot supply the case's first draw.
@@ -58,20 +31,253 @@ async function checkSameTaskSaved(page, kind, addNote, firstMark) {
       route.fulfill({ contentType: "text/html", body: "<!doctype html><main></main>" }),
     ));
     await within(5000, `the ${kind} control note was not added within 5 s`, addNote(control));
-    await actWithin(`the ${kind} control page load`, control.goto(url));
-    await readWithin(`the ${kind} same-task draws`, control.evaluate((mark) => {
-      const first = document.createElement("p");
-      first.id = "alert-status";
-      first.textContent = "Saved.";
-      const later = /** @type {Element} */ (first.cloneNode(true));
-      later.setAttribute(mark, "later");
-      document.querySelector("main")?.append(first);
-      first.replaceWith(later);
+    for (const changesText of [false, true]) {
+      await actWithin(`the ${kind} control page load`, control.goto(url));
+      await readWithin(`the ${kind} same-task draws`, control.evaluate(({ mark, changesText }) => {
+        const first = document.createElement("p");
+        first.id = "alert-status";
+        const text = document.createTextNode(changesText ? "Saving..." : "Saved.");
+        first.append(text);
+        const later = /** @type {Element} */ (first.cloneNode(false));
+        later.textContent = "Saved.";
+        later.setAttribute(mark, "later");
+        document.querySelector("main")?.append(first);
+        if (changesText) text.data = "Saved.";
+        first.replaceWith(later);
+        if (changesText) text.data = "Rewritten.";
+      }, { mark: kind === "part" ? "data-smoke-read" : "data-smoke-full", changesText }));
+      const mark = await readWithin(`the ${kind} control's first draw`, firstMark(control));
+      check(`the ${kind} note keeps the first Saved. in the same task${changesText ? " when connected text changes" : ""}`,
+        mark === null, `first mark: ${JSON.stringify(mark)}`);
+      await control.evaluate(() => sessionStorage.clear());
+    }
+    await control.unroute(url);
+    await actWithin(`the ${kind} patch control page load`, control.goto(url));
+    const replaced = await readWithin(`the ${kind} wrapper and child patch`, control.evaluate(async (mark) => {
+      const { patch } = await import("corten");
+      const { __html } = /** @type {any} */ (window);
+      document.getElementById("alert-status")?.remove();
+      const target = document.createElement("div");
+      target.id = "smoke-draw-target";
+      document.body.append(target);
+      await patch(__html(`<div id="smoke-draw-target"><p id="alert-status">Saved.</p></div><p id="alert-status" ${mark}="later">Saved.</p>`));
+      return document.querySelector("#smoke-draw-target > #alert-status")?.getAttribute(mark) === "later";
     }, kind === "part" ? "data-smoke-read" : "data-smoke-full"));
-    const mark = await readWithin(`the ${kind} control's first draw`, firstMark(control));
-    check(`the ${kind} note keeps the first Saved. in the same task`, mark === null, `first mark: ${JSON.stringify(mark)}`);
+    const patched = await readWithin(`the ${kind} first draw inside the patched wrapper`, firstMark(control));
+    check(`the ${kind} note keeps the first Saved. when a patch replaces only the child`, replaced && patched === null,
+      `later child drew: ${replaced}; first mark: ${JSON.stringify(patched)}`);
   } finally {
     await closeContext(context, `the ${kind} first-draw control context`);
+  }
+}
+
+/** @param {{text: string, read: string | null} | null} note @param {number} loadAt */
+const fullLoadDraw = (note, loadAt) => loadAt >= 0 && note?.text === "Saving..." && note.read === String(loadAt);
+
+/** @param {import("@playwright/test").Page} page @param {string} note @param {string} key */
+async function checkStreamedStatus(page, note, key) {
+  /** @type {import("node:http").ServerResponse | undefined} */
+  let response;
+  const server = createServer((req, res) => {
+    if (req.url !== "/alerts") { res.writeHead(204).end(); return; }
+    response = res;
+    // Send enough for the parser to start, but hold the text until the element exists.
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy": "script-src 'none'; require-trusted-types-for 'script'; trusted-types 'none'",
+    });
+    res.write(`<!doctype html><!--${" ".repeat(4096)}--><head><script type="application/json" src="/smoke-script">{"status":"fixture"}</script></head><main><p id="alert-status" data-smoke-full="0" data-smoke-full-document>`);
+  });
+  const browser = page.context().browser();
+  if (!browser) throw new Error("the streamed status control has no browser");
+  const context = await opened("the streamed status control context", browser.newContext());
+  try {
+    await within(5000, "the streamed status server did not listen within 5 s", new Promise((resolve, reject) =>
+      server.once("error", reject).listen(0, "127.0.0.1", resolve)));
+    const { port } = /** @type {import("node:net").AddressInfo} */ (server.address());
+    const control = await opened("the streamed status control page", context.newPage());
+    /** @type {string[]} */
+    const errors = [];
+    control.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    control.on("pageerror", (error) => errors.push(error.message));
+    await within(5000, "the streamed status note was not added within 5 s", control.addInitScript(note));
+    for (const removeMark of [false, true]) {
+      await actWithin("the streamed status navigation", control.goto(`http://127.0.0.1:${port}/alerts`, { waitUntil: "commit" }));
+      const status = control.locator("#alert-status");
+      await status.waitFor({ state: "attached", timeout: 5000 });
+      const before = await readWithin("the still empty streamed status", status.textContent());
+      if (removeMark) await readWithin("removing the streamed status receipt mark", status.evaluate((el) => el.removeAttribute("data-smoke-full")));
+      response?.end("Saving...</p></main>");
+      await actWithin("the end of the streamed status load", control.waitForLoadState("load"));
+      const saved = await readWithin("the streamed status receipt", control.evaluate((key) => sessionStorage.getItem(key), key));
+      const initial = saved === null ? null : JSON.parse(saved);
+      check(removeMark ? "the full-load check does not count a missing receipt mark as answer zero" :
+        "the full-load note records Saving... when its marked opening tag arrives before its text", before === "" &&
+        initial?.text === "Saving..." && initial.read === (removeMark ? null : "0") && fullLoadDraw(initial, 0) === !removeMark, `initial: ${saved}`);
+      await control.evaluate(() => sessionStorage.clear());
+    }
+    check("replaying the streamed page does not write to a Trusted Types sink", errors.length === 0, errors.join(" | "));
+  } finally {
+    response?.destroy();
+    server.close();
+    server.closeAllConnections();
+    await closeContext(context, "the streamed status control context");
+  }
+}
+
+/** @param {string} url @param {string} token @param {boolean} go */
+const navDraw = (url, token, go) => drawScript((watch, { url, token, go }) => {
+  const w = /** @type {any} */ (window);
+  const nav = w.navigation;
+  let atURL = location.href;
+  // The URL is not a DOM mutation. Drain the old URL's records at the entry change, before
+  // attributing further records to the new URL.
+  const commit = () => {
+    seen.take();
+    atURL = location.href;
+  };
+  const stop = () => {
+    seen.disconnect();
+    nav.removeEventListener("currententrychange", commit, true);
+  };
+  const note = { token, saving: false, drawnAt: /** @type {number | null} */ (null), by: performance.now() + 5000, stop };
+  w.__smokeGo?.stop();
+  w.__smokeGo = note;
+  const seen = watch(["id", "data-smoke-nav"], ({ appeared, at }) => {
+    if (atURL !== url) return;
+    appeared("#alert-status", (status) => status.textContent === "Saving..." && status.getAttribute("data-smoke-nav") === token,
+      () => () => { note.saving = true; note.drawnAt = at; });
+  }, () => { if (note.saving) stop(); });
+  nav.addEventListener("currententrychange", commit, true);
+  if (go) nav.navigate(url);
+}, { url, token, go });
+
+/** @param {string} address @param {number} pastBy */
+const leaveDraw = (address, pastBy) => drawScript((watch, { address, pastBy }) => {
+  const w = /** @type {any} */ (window);
+  w.__smokeLeave?.observer?.disconnect();
+  const selector = "main template[data-corten-read-again][data-from]";
+  const base = new URL(address, location.origin);
+  const ours = (/** @type {Element} */ tag) => {
+    const from = tag.getAttribute("data-from");
+    if (from === null) return false;
+    const u = new URL(from, base);
+    return u.pathname + u.search === address;
+  };
+  /** @type {{ kind: "draw" | "leave", at: number }[]} */
+  const batch = [];
+  const observer = watch(["data-corten-read-again", "data-from"], ({ appeared, tree, at }) => {
+    if (note.drawn === null) appeared(selector, ours, () => () => { batch.push({ kind: "draw", at }); });
+    if (tree.title === "News | Watchlist" && tree.querySelector("main h1")?.textContent === "Market news" &&
+        !Array.from(tree.querySelectorAll(selector)).some(ours)) batch.push({ kind: "leave", at });
+  }, (observer) => {
+    for (let i = batch.length - 1; i >= 0; i--) {
+      const { kind, at } = batch[i];
+      if (kind === "draw") note.drawn ??= at;
+      else if (note.drawn !== null) {
+        note.left = at;
+        observer.disconnect();
+        setTimeout(() => (note.past = performance.now()), pastBy);
+        break;
+      }
+    }
+    batch.length = 0;
+  });
+  const note = { drawn: /** @type {number | null} */ (null), left: /** @type {number | null} */ (null), past: /** @type {number | null} */ (null), observer };
+  w.__smokeLeave = note;
+}, { address, pastBy });
+
+const savingDraw = drawScript((watch) => {
+  const w = /** @type {any} */ (window);
+  w.__smokeSavingSeen?.disconnect();
+  w.__smokeSaving = false;
+  w.__smokeSavingSeen = watch(["id"], ({ appeared, at }) => {
+    appeared("#alert-status", (status) => status.textContent === "Saving...", () => () => { w.__smokeSaving = at; });
+  }, (observer) => { if (w.__smokeSaving !== false) observer.disconnect(); });
+}, null);
+
+/** @param {import("@playwright/test").Page} page @param {boolean} swaps */
+async function checkDrawOrdering(page, swaps) {
+  const browser = page.context().browser();
+  if (!browser) throw new Error("the draw ordering control has no browser");
+  const context = await opened("the draw ordering control context", browser.newContext());
+  try {
+    const control = await opened("the draw ordering control page", context.newPage());
+    const url = `${base}/alerts`;
+    await within(5000, "the draw ordering control route was not set within 5 s", control.route(url, (route) =>
+      route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Alerts | Watchlist</title><main><p id="alert-status">Saving...</p></main>' }),
+    ));
+    await actWithin("the draw ordering control load", control.goto(url));
+    await readWithin("arming the Saving... draw control", control.evaluate(savingDraw));
+    const saving = await readWithin("unchanged then redrawn Saving...", control.evaluate(async () => {
+      const w = /** @type {any} */ (window);
+      const status = document.getElementById("alert-status");
+      if (!status) throw new Error("missing status in the Saving... control");
+      status.append(document.createComment("not a draw"));
+      await Promise.resolve();
+      const unchanged = w.__smokeSaving;
+      status.textContent = "Waiting.";
+      status.textContent = "Saving...";
+      await Promise.resolve();
+      return { unchanged, redrawn: w.__smokeSaving };
+    }));
+    check("the Saving... note ignores an unchanged line and sees a new draw", saving.unchanged === false && typeof saving.redrawn === "number", JSON.stringify(saving));
+
+    await readWithin("arming the departure draw control", control.evaluate(leaveDraw("/alerts", 0)));
+    const leave = await readWithin("a replaced part tag then departure", control.evaluate(async () => {
+      const w = /** @type {any} */ (window);
+      const main = document.querySelector("main");
+      if (!main) throw new Error("missing main in the departure control");
+      const first = document.createElement("template");
+      first.setAttribute("data-corten-read-again", "");
+      first.setAttribute("data-from", "/alerts");
+      main.append(first);
+      const replacement = first.cloneNode();
+      first.replaceWith(replacement);
+      await Promise.resolve();
+      const { drawn, left: replaced } = w.__smokeLeave;
+      main.removeChild(replacement);
+      await Promise.resolve();
+      const missing = w.__smokeLeave.left;
+      main.append(replacement);
+      await Promise.resolve();
+      const restored = w.__smokeLeave.left;
+      document.title = "News | Watchlist";
+      const news = document.createElement("h1");
+      news.textContent = "Market news";
+      main.replaceChildren(news);
+      await Promise.resolve();
+      return { drawn, replaced, missing, restored, left: w.__smokeLeave.left };
+    }));
+    check("replacing or removing the first part tag is not leaving its page", typeof leave.drawn === "number" &&
+      leave.replaced === null && leave.missing === null && leave.restored === null && typeof leave.left === "number", JSON.stringify(leave));
+
+    if (!swaps) skip("the navigation note pairs a draw with its own URL", "no Navigation API: navigations are full page loads");
+    else {
+      const target = `${url}?smoke-draw=after`;
+      await readWithin("arming the navigation draw control", control.evaluate(navDraw(target, "control", false)));
+      const nav = await readWithin("draws on opposite sides of a navigation commit", control.evaluate(async ({ target, url }) => {
+        const w = /** @type {any} */ (window);
+        const main = document.querySelector("main");
+        if (!main) throw new Error("missing main in the navigation control");
+        const status = document.createElement("p");
+        status.id = "alert-status";
+        status.setAttribute("data-smoke-nav", "control");
+        status.textContent = "Saving...";
+        main.append(status);
+        status.remove();
+        history.replaceState(null, "", target);
+        await Promise.resolve();
+        const premature = w.__smokeGo.saving;
+        main.append(status);
+        history.replaceState(null, "", url);
+        await Promise.resolve();
+        return { premature, counted: w.__smokeGo.saving };
+      }, { target, url }));
+      check("the navigation note pairs a draw with its own URL", nav.premature === false && nav.counted === true, JSON.stringify(nav));
+    }
+  } finally {
+    await closeContext(context, "the draw ordering control context");
   }
 }
 
@@ -234,6 +440,7 @@ function readAgainTagsIn(page, answers, part, whole) {
 }
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
+  await checkDrawOrdering(page, swaps);
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
   // however it was reached: a full load, or the runtime's navigation (a link, or a data-patch
   // form's corten-location, which navigates the same way). Each read is the same URL in place of
@@ -304,26 +511,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await within(
           15000,
           "the page was not asked to navigate within 15 s",
-          page.evaluate(
-            ({ url, token }) => {
-              const w = /** @type {any} */ (window);
-              /** @type {{ token: string, saving: boolean, drawnAt: number | null, by: number, stop: () => void }} */
-              const note = { token, saving: false, drawnAt: null, by: performance.now() + 5000, stop: () => seen.disconnect() };
-              w.__smokeGo = note;
-              const look = () => {
-                const status = document.getElementById("alert-status");
-                if (location.href === url && status?.getAttribute("data-smoke-nav") === token && status.textContent === "Saving...") {
-                  note.drawnAt = performance.now();
-                  note.saving = true;
-                  seen.disconnect();
-                }
-              };
-              const seen = new MutationObserver(look);
-              seen.observe(document, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-nav"] });
-              w.navigation.navigate(url);
-            },
-            { url, token },
-          ),
+          page.evaluate(navDraw(url, token, true)),
         );
         // A full load ends the wait too: its document has no record of this navigation. The wait only
         // ends the look (the page's clock decides), bounded to 15 s as the rest of the plumbing is.
@@ -764,7 +952,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // ends (`__smokeOff`) the script does nothing in the document it ran in, and nothing in a
         // later one (`offKey`).
         const partNote = drawScript(
-          (firstAdded, { movedFrom, offKey }) => {
+          (watch, { movedFrom, offKey }) => {
             try {
               if (sessionStorage.getItem(offKey)) return;
             } catch {
@@ -779,14 +967,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               { once: true },
             );
             if (location.pathname !== "/alerts") return;
-            const observer = new MutationObserver((records) => {
+            let first;
+            const observer = watch(["id", "data-smoke-read"], ({ appeared }) => {
+              appeared("#alert-status", (status) => status.textContent === "Saved.", (status) => {
+                const mark = status.getAttribute("data-smoke-read");
+                return () => { first = mark; };
+              });
+            }, (observer) => {
               if (w.__smokeOff) return;
               // The first `Saved.` drawn is noted whatever drew it, with its answer's mark or null
               // for none, so a later marked `Saved.` cannot stand in for an unmarked first one.
-              if (w.__firstSaved === undefined) {
-                const saved = firstAdded(records, "#alert-status", (status) => status.textContent === "Saved.");
-                if (saved) w.__firstSaved = saved.getAttribute("data-smoke-read");
-              }
+              if (w.__firstSaved === undefined && first !== undefined) w.__firstSaved = first;
               // Moving a tag is separate from noting the first Saved.: it acts on the live page.
               if (w.__moved === undefined) {
                 const read = document.getElementById("alert-status")?.getAttribute("data-smoke-read");
@@ -799,7 +990,6 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               if (w.__moved !== undefined && w.__firstSaved !== undefined) observer.disconnect();
             });
             w.__smokeObserver = observer;
-            observer.observe(document, { childList: true, subtree: true });
           },
           { movedFrom, offKey },
         );
@@ -1268,37 +1458,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 attempts.push(attempt);
                 await readWithin(
                   "the page's note of its part's tag",
-                  page.evaluate(
-                    ({ address, pastBy }) => {
-                      const w = /** @type {any} */ (window);
-                      w.__smokeLeave?.observer?.disconnect();
-                      /** @type {{ drawn: number | null, left: number | null, past: number | null, observer: MutationObserver | null }} */
-                      const note = { drawn: null, left: null, past: null, observer: null };
-                      /** The part's tag of the page at `address`, once drawn. @type {Element | null} */
-                      let tag = null;
-                      const ours = (/** @type {Element} */ t) => {
-                        const from = t.getAttribute("data-from");
-                        if (from === null) return false;
-                        const u = new URL(from, document.baseURI);
-                        return u.pathname + u.search === address;
-                      };
-                      const observer = new MutationObserver(() => {
-                        if (!tag) {
-                          tag = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]")).find(ours) ?? null;
-                          if (tag) note.drawn = performance.now();
-                        }
-                        if (tag && !tag.isConnected) {
-                          note.left = performance.now();
-                          observer.disconnect();
-                          setTimeout(() => (note.past = performance.now()), pastBy);
-                        }
-                      });
-                      note.observer = observer;
-                      observer.observe(document, { childList: true, subtree: true });
-                      w.__smokeLeave = note;
-                    },
-                    { address: attempt.address, pastBy },
-                  ),
+                  page.evaluate(leaveDraw(attempt.address, pastBy)),
                 );
                 await goTo(to, LEAVE_SECONDS);
                 // Bounded as `leaveForNews` is (30 s each): whether the attempt left in time is the
@@ -1500,7 +1660,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const fullLoad = full >= 0 && request.isNavigationRequest() && !fullReads.slice(0, full).some((r) => r.isNavigationRequest());
       /** Sends `body` as the answer, within 5 s. @param {number} status @param {Record<string, string>} headers @param {string} body */
       const answer = (status, headers, body) =>
-        ex.send(5000, "its fulfill", () => route.fulfill({ status, headers, body: full < 0 ? body : body.replace('id="alert-status"', `data-smoke-full="${full}" id="alert-status"`) }));
+        ex.send(5000, "its fulfill", () => route.fulfill({
+          status, headers,
+          body: full < 0 ? body : body.replace('id="alert-status"',
+            `data-smoke-full="${full}"${request.isNavigationRequest() ? " data-smoke-full-document" : ""} id="alert-status"`),
+        }));
       try {
         await answerWhole(route, ex, answer, { mode, address, placeLoad, fullLoad, read, token, navigation, at });
       } catch {}
@@ -1598,28 +1762,34 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const initialKey = `${firstKey}-initial`;
         fullReads.length = 0;
         fullLoadAnswer = null;
-        const fullNote = drawScript((firstAdded, { key, initialKey }) => {
+        const fullNote = drawScript((watch, { key, initialKey }) => {
           if (window !== window.top) return;
-          const observer = new MutationObserver((records) => {
+          /** @type {{ text: string, read: string | null } | undefined} */
+          let initial;
+          /** @type {string | null | undefined} */
+          let firstSaved;
+          watch(["id", "data-smoke-full", "data-smoke-full-document"], ({ appeared }) => {
+            // The first status drawn by the document response is a separate receipt from the
+            // first Saved., which a runtime answer can draw.
+            appeared("#alert-status[data-smoke-full-document]", (status) => status.textContent === "Saving..." || status.textContent === "Saved.", (status) => {
+              const note = { text: status.textContent ?? "", read: status.getAttribute("data-smoke-full") };
+              return () => { initial = note; };
+            });
+            appeared("#alert-status", (status) => status.textContent === "Saved.", (status) => {
+              const mark = status.getAttribute("data-smoke-full");
+              return () => { firstSaved = mark; };
+            });
+          }, (observer) => {
             try {
-              if (sessionStorage.getItem(initialKey) === null) {
-                const initial = firstAdded(records, "#alert-status[data-smoke-full]", (status) =>
-                  status.textContent === "Saving..." || status.textContent === "Saved.",
-                );
-                if (initial) sessionStorage.setItem(initialKey, JSON.stringify({ text: initial.textContent, read: initial.getAttribute("data-smoke-full") }));
-              }
-              if (sessionStorage.getItem(key) === null) {
-                const saved = firstAdded(records, "#alert-status", (status) => status.textContent === "Saved.");
-                if (!saved) return;
-                // A null mark is still a first draw; a later marked answer cannot take its place.
-                sessionStorage.setItem(key, JSON.stringify({ read: saved.getAttribute("data-smoke-full") }));
-              }
+              if (initial !== undefined && sessionStorage.getItem(initialKey) === null) sessionStorage.setItem(initialKey, JSON.stringify(initial));
+              if (firstSaved !== undefined && sessionStorage.getItem(key) === null) sessionStorage.setItem(key, JSON.stringify({ read: firstSaved }));
+              if (sessionStorage.getItem(initialKey) !== null && sessionStorage.getItem(key) !== null) observer.disconnect();
             } catch {
               // If storage is unavailable, no note can be read by the check.
+              observer.disconnect();
             }
-            observer.disconnect();
+            initial = firstSaved = undefined;
           });
-          observer.observe(document, { childList: true, subtree: true });
         }, { key: firstKey, initialKey });
         await checkSameTaskSaved(page, "full-load", (control) => control.addInitScript(fullNote), (control) =>
           control.evaluate((key) => {
@@ -1627,6 +1797,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             return note === null ? undefined : /** @type {{ read: string | null }} */ (JSON.parse(note)).read;
           }, firstKey),
         );
+        await checkStreamedStatus(page, fullNote, initialKey);
         const noting = page.addInitScript(fullNote);
         noting.catch(() => {});
         /** The `sessionStorage` key of the case's count of documents, its own each run. */
@@ -1660,7 +1831,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const load = (await actWithin("the pending write's page load", page.goto(target)))?.request();
           const loadedAs = await documentNumber();
           const loadAt = load === undefined ? -1 : fullReads.indexOf(load);
-          /** The first status line the page drew, as the init script noted it the moment it was drawn. @type {{ text: string, read: string } | null} */
+          /** The first status line the page drew, as the init script noted it the moment it was drawn. @type {{ text: string, read: string | null } | null} */
           const initial = await readWithin(
             "the page's note of the first status line it drew",
             page.evaluate((key) => {
@@ -1668,7 +1839,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               return noted === null ? null : JSON.parse(noted);
             }, initialKey),
           ).catch(() => null);
-          const drewSaving = !!fullLoadAnswer?.saving && initial?.text === "Saving..." && loadAt >= 0 && Number(initial.read) === loadAt;
+          const drewSaving = !!fullLoadAnswer?.saving && fullLoadDraw(initial, loadAt);
           const waiting = initial === null ? "no status line noted" : `${initial.text} (drawn from answer ${initial.read}, the load's ${loadAt})`;
           // The page's note of the first `Saved.` it drew, as it drew it, with the mark of the answer
           // that drew it (null for an answer with none), seen within 6 s of the load: the wait
@@ -2431,7 +2602,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       }
     };
     /** @param {string | null} button If given, record the first click of this button in the page's clock. */
-    const noteTerminalDraw = (button = null) => readWithin("arming the note of the first Saved. draw", page.evaluate(drawScript((firstAdded, { run, button }) => {
+    const noteTerminalDraw = (button = null) => readWithin("arming the note of the first Saved. draw", page.evaluate(drawScript((watch, { run, button }) => {
       const w = /** @type {any} */ (window);
       if (w.__smokeTerminalOff === run) return;
       w.__smokeTerminalObserver?.disconnect();
@@ -2444,14 +2615,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         addEventListener("click", w.__smokeTerminalClick, true);
       }
       delete w.__smokeTerminalDraw;
-      const observer = new MutationObserver((records) => {
-        const saved = firstAdded(records, "#alert-status", (status) => status.textContent === "Saved.");
-        if (!saved) return;
-        w.__smokeTerminalDraw = { at: performance.now(), mark: saved.getAttribute("data-smoke-terminal") };
-        observer.disconnect();
-      });
-      w.__smokeTerminalObserver = observer;
-      observer.observe(document, { subtree: true, childList: true });
+      w.__smokeTerminalObserver = watch(["id", "data-smoke-terminal"], ({ appeared, at }) => {
+        appeared("#alert-status", (status) => status.textContent === "Saved.", (status) => {
+          const note = { at, mark: status.getAttribute("data-smoke-terminal") };
+          return () => { w.__smokeTerminalDraw = note; };
+        });
+      }, (observer) => { if (w.__smokeTerminalDraw !== undefined) observer.disconnect(); });
     }, { run: terminalMark, button })));
     /** @typedef {{ at: number, mark: string | null }} TerminalDraw */
     /** Read the first draw against the page's own press time, regardless of driver acknowledgement. @param {number | null} pressed */
@@ -2493,19 +2662,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * `Saved.`; `notedSaving` reads the note, the time the page drew it by its own monotonic clock
      * (`performance.now()` there). Armed before the press that draws it.
      */
-    const noteSaving = () =>
-      page.evaluate(() => {
-        const w = /** @type {any} */ (window);
-        w.__smokeSavingSeen?.disconnect();
-        w.__smokeSaving = false;
-        const seen = new MutationObserver(() => {
-          if (document.getElementById("alert-status")?.textContent !== "Saving...") return;
-          w.__smokeSaving = performance.now();
-          seen.disconnect();
-        });
-        w.__smokeSavingSeen = seen;
-        seen.observe(document, { subtree: true, childList: true, characterData: true });
-      });
+    const noteSaving = () => page.evaluate(savingDraw);
     /** When the page noted `Saving...` drawn since `noteSaving` (`performance.now()` there), or false. */
     const notedSaving = () => page.evaluate(() => /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving));
     /**
@@ -2606,30 +2763,46 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     errors.splice(errorsAtShadowed);
     await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7)));
     try {
-      for (const nested of [false, true]) {
+      for (const mode of ["direct", "wrapper", "replace child", "rewrite text", "draw by text", "add marker"]) {
         await noteTerminalDraw();
-        const firstDraw = await readWithin("the same-task Saved. draw control", page.evaluate(async (nested) => {
+        const firstDraw = await readWithin("the same-task Saved. draw control", page.evaluate(async (mode) => {
+          const { patch } = await import("corten");
+          const w = /** @type {any} */ (window);
           const previous = document.getElementById("alert-status");
           const first = document.createElement("p");
           first.id = "alert-status";
-          first.textContent = "Saved.";
+          const text = document.createTextNode(mode === "draw by text" ? "Saving..." : "Saved.");
+          first.append(text);
+          if (mode === "rewrite text") first.setAttribute("data-smoke-terminal", "original");
           const marked = /** @type {Element} */ (first.cloneNode(true));
+          marked.textContent = "Saved.";
           marked.setAttribute("data-smoke-terminal", "later");
-          const inserted = nested ? document.createElement("div") : first;
-          if (nested) inserted.append(first);
+          const insideWrapper = mode === "wrapper" || mode === "replace child";
+          const inserted = insideWrapper ? document.createElement("div") : first;
+          if (mode === "wrapper") inserted.append(first);
+          if (mode === "replace child") inserted.id = "smoke-terminal-target";
           if (previous) previous.replaceWith(inserted);
           else document.body.append(inserted);
-          inserted.replaceWith(marked);
           try {
-            // Both replacements are in one batch. Read the note only after its delivery.
+            if (mode === "replace child") {
+              await patch(w.__html(`<div id="${inserted.id}">${first.outerHTML}</div>${marked.outerHTML}`));
+              if (document.querySelector("#smoke-terminal-target > #alert-status")?.getAttribute("data-smoke-terminal") !== "later") return "patch did not replace the child";
+            } else if (mode === "rewrite text") text.data = "Rewritten.";
+            else if (mode === "add marker") first.setAttribute("data-smoke-terminal", "later");
+            else {
+              if (mode === "draw by text") text.data = "Saved.";
+              inserted.replaceWith(marked);
+              if (mode === "draw by text") text.data = "Rewritten.";
+            }
             await Promise.resolve();
-            return /** @type {any} */ (window).__smokeTerminalDraw?.mark;
+            return w.__smokeTerminalDraw?.mark;
           } finally {
-            if (previous) marked.replaceWith(previous);
-            else marked.remove();
+            const finalTarget = mode === "replace child" ? document.getElementById(inserted.id) : marked.isConnected ? marked : inserted;
+            if (previous) finalTarget?.replaceWith(previous);
+            else finalTarget?.remove();
           }
-        }, nested));
-        check(`the terminal-patch note keeps the first Saved. in the same task${nested ? " when inserted inside a wrapper" : ""}`, firstDraw === null, `first mark: ${JSON.stringify(firstDraw)}`);
+        }, mode));
+        check(`the terminal-patch note keeps the first Saved. in the same task (${mode})`, firstDraw === (mode === "rewrite text" ? "original" : null), `first mark: ${JSON.stringify(firstDraw)}`);
       }
       await within(5000, "the terminal-patch route was not set within 5 s", page.route(alertsPath, markTerminal));
       await noteTerminalDraw(save);
@@ -3050,22 +3223,35 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         /** @param {string | undefined} fault */
         const noteHeldDraw = (fault) => readWithin(
           "the News page's note of the held answer",
-          page.evaluate(drawScript(async (firstAdded, { mark, fault }) => {
+          page.evaluate(drawScript(async (watch, { mark, fault }) => {
             const w = /** @type {any} */ (window);
             w.__smokeHeldSeen?.disconnect();
             const selector = `[data-smoke-held="${mark}"]`;
             w.__smokeHeldDrawn = !!document.querySelector(selector);
-            const seen = new MutationObserver((records) => {
-              if (firstAdded(records, selector)) w.__smokeHeldDrawn = true;
+            w.__smokeHeldSeen = watch(["data-smoke-held"], ({ appeared }) => {
+              appeared(selector, () => true, () => () => { w.__smokeHeldDrawn = true; });
             });
-            w.__smokeHeldSeen = seen;
-            seen.observe(document, { subtree: true, childList: true });
-            if (fault === "transient-draw") {
+            if (fault === "detach-child") {
+              const { patch } = await import("corten");
+              const target = document.createElement("div");
+              target.id = "smoke-held-target";
+              document.body.append(target);
+              try {
+                await patch(w.__html(`<div id="${target.id}"><p id="smoke-held-child" data-smoke-held="${mark}"></p></div><template id="smoke-held-child" data-remove></template>`));
+                if (!document.getElementById(target.id) || document.getElementById("smoke-held-child")) throw new Error("the News control patch did not remove only the child");
+              } finally {
+                document.getElementById(target.id)?.remove();
+              }
+            } else if (fault === "transient-draw" || fault === "mark-connected") {
               const subtree = document.createElement("div");
               const line = document.createElement("p");
-              line.setAttribute("data-smoke-held", mark);
+              if (fault === "transient-draw") line.setAttribute("data-smoke-held", mark);
               subtree.append(line);
               document.body.append(subtree);
+              if (fault === "mark-connected") {
+                line.setAttribute("data-smoke-held", mark);
+                line.removeAttribute("data-smoke-held");
+              }
               subtree.remove();
               await Promise.resolve();
             }
@@ -3073,6 +3259,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           }, { mark: heldMark, fault })),
         );
         check("the News note sees a marked subtree inserted and removed in the same task", await noteHeldDraw("transient-draw"));
+        check("the News note sees a child drawn by a patch that removes only the child", await noteHeldDraw("detach-child"));
+        check("the News note sees a mark briefly set on a connected child", await noteHeldDraw("mark-connected"));
         await noteHeldDraw(departureFault === "transient-draw" ? departureFault : undefined);
         releasedAt = performance.now();
         letGo();

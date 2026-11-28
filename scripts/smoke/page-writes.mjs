@@ -1,4 +1,5 @@
 import { base, skip, check, pollRecord, pollAsync, cleanUp, steps, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
+import { drawScript } from "./draws.mjs";
 
 export async function pageWrites(page, browser) {
   /** Whether the browser has the Navigation API, read within 5 s. */
@@ -348,66 +349,89 @@ export async function pageWrites(page, browser) {
    * place in `seen.asked`) as the page draws it, so a draw that the next one replaces is seen too:
    * the time the page's observer saw that draw (`performance.now()` in the page), what the header said had
    * failed at the moment of the draw itself (its `data-failed`, or null), and the mark of the failure
-   * event that said it (its `data-failed-mark`, or null, where a case marks its failures). The one
-   * observer sees the marks and the header's changes in the order they were made: a failure shown
-   * after the draw, though before the observer ran (a promise reaction queued before the draw), is
-   * undone for that draw by its record's old value, so it is not taken as shown at the draw. A header
-   * put in after the draw said nothing then. `drawnBy` reads them. Set up within 5 s.
+   * event that said it (its `data-failed-mark`, or null, where a case marks its failures).
+   * `drawnBy` reads them. Set up within 5 s.
    * @param {import("@playwright/test").Page} own
    */
   const watchMarks = (own) =>
     within(
       5000,
       "the page did not start noting its draws within 5 s",
-      own.evaluate(() => {
+      own.evaluate(drawScript((watch) => {
         /** @typedef {{ time: number, failed: string | null, mark: string | null }} Drawn */
         /** @type {Record<string, Drawn>} */
         const marks = Object.create(null);
         (/** @type {any} */ (window)).__marks = marks;
-        /** Each marked element in or at `node`. @param {Node} node @returns {Element[]} */
-        const marked = (node) =>
-          node instanceof Element ? [...(node.hasAttribute("data-smoke-at") ? [node] : []), ...Array.from(node.querySelectorAll("[data-smoke-at]"))] : [];
-        /** @param {MutationRecord[]} records */
-        const note = (records) => {
-          const time = performance.now();
-          const header = document.querySelector("header");
-          // The header's state now, taken back record by record, last first, to each draw's moment.
-          let failed = header?.getAttribute("data-failed") ?? null;
-          let mark = header?.getAttribute("data-failed-mark") ?? null;
-          /** This batch's draws, the earliest kept. @type {Record<string, Drawn>} */
-          const batch = Object.create(null);
-          for (let i = records.length - 1; i >= 0; i--) {
-            const r = records[i];
-            if (r.type === "attributes" && r.attributeName !== "data-smoke-at") {
-              if (r.target !== header) continue;
-              if (r.attributeName === "data-failed") failed = r.oldValue;
-              else if (r.attributeName === "data-failed-mark") mark = r.oldValue;
-              continue;
-            }
-            const drawn = r.type === "attributes" ? marked(r.target) : Array.from(r.addedNodes).flatMap(marked);
-            for (const el of drawn) batch[/** @type {string} */ (el.getAttribute("data-smoke-at"))] = { time, failed, mark };
-            // Before the header now in the page was put in, it said nothing.
-            if (header && r.type === "childList" && Array.from(r.addedNodes).some((n) => n === header || n.contains(header))) failed = mark = null;
+        const selector = "[data-smoke-at]";
+        /** @param {Document} tree @param {Element[]} drawn @param {Record<string, Drawn>} notes @param {number} time */
+        const note = (tree, drawn, notes, time) => {
+          const header = tree.querySelector("header");
+          for (const el of drawn) {
+            const at = Element.prototype.getAttribute.call(el, "data-smoke-at");
+            if (at === null) continue;
+            notes[at] = {
+              time,
+              failed: header?.getAttribute("data-failed") ?? null,
+              mark: header?.getAttribute("data-failed-mark") ?? null,
+            };
           }
-          for (const at in batch) marks[at] ??= batch[at];
         };
-        for (const el of Array.from(document.querySelectorAll("[data-smoke-at]"))) {
-          const header = document.querySelector("header");
-          marks[/** @type {string} */ (el.getAttribute("data-smoke-at"))] ??= {
-            time: performance.now(),
-            failed: header?.getAttribute("data-failed") ?? null,
-            mark: header?.getAttribute("data-failed-mark") ?? null,
-          };
-        }
-        new MutationObserver(note).observe(document.documentElement, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeOldValue: true,
-          attributeFilter: ["data-smoke-at", "data-failed", "data-failed-mark"],
+        note(document, Array.from(document.querySelectorAll(selector)).reverse(), marks, performance.now());
+        /** @type {Record<string, Drawn>} */
+        let batch = Object.create(null);
+        watch(["data-smoke-at", "data-failed", "data-failed-mark"], ({ tree, target, attribute, added, at }) => {
+          const drawn = attribute === "data-smoke-at" && target instanceof Element ? [target] : added(selector);
+          if (drawn.length) note(tree, drawn.reverse(), batch, at);
+        }, () => {
+          for (const at in batch) marks[at] ??= batch[at];
+          batch = Object.create(null);
         });
-      }),
+      }, null)),
     );
+  {
+    const context = await opened("the failure header draw control context", browser.newContext());
+    try {
+      const control = await opened("the failure header draw control page", context.newPage());
+      await actWithin("the failure header draw control load", control.goto(`${base}/alerts`));
+      await watchMarks(control);
+      const notes = await readWithin("the same-task failure header draws", control.evaluate(async () => {
+        const header = document.querySelector("header");
+        if (!header) throw new Error("the failure header control has no header");
+        const wrapper = document.createElement("div");
+        const draw = (/** @type {string} */ mark) => {
+          const el = document.createElement("p");
+          el.setAttribute("data-smoke-at", mark);
+          return el;
+        };
+        header.setAttribute("data-failed", "503");
+        header.setAttribute("data-failed-mark", "old");
+        document.body.append(wrapper);
+        header.removeAttribute("data-failed");
+        header.removeAttribute("data-failed-mark");
+        document.body.append(draw("direct"));
+        wrapper.append(draw("nested"));
+        header.setAttribute("data-failed", "503");
+        header.setAttribute("data-failed-mark", "old");
+        // Deliver the nested draw before replacing the header in a separate batch.
+        await Promise.resolve();
+        document.body.append(draw("beforeReplacement"));
+        header.replaceWith(document.createElement("header"));
+        await Promise.resolve();
+        const { direct, nested, beforeReplacement } = (/** @type {any} */ (window)).__marks;
+        return { direct, nested, beforeReplacement };
+      }));
+      for (const how of ["direct", "nested"]) {
+        const note = notes[how];
+        check(`the ${how} write draw keeps the failure header from its own record`,
+          note?.failed === null && note.mark === null, JSON.stringify(note));
+      }
+      const old = notes.beforeReplacement;
+      check("a write draw keeps the preceding header's failure after the header is replaced in the same task",
+        old?.failed === "503" && old.mark === "old", JSON.stringify(old));
+    } finally {
+      await closeContext(context, "the failure header draw control context");
+    }
+  }
   /**
    * The page's record of its draw of the answer to `seen.asked[at]` (`watchMarks`), if the page drew
    * it by `by`, a time by the page's own monotonic clock (`performance.now()` there, as the record's),
@@ -492,22 +516,18 @@ export async function pageWrites(page, browser) {
     within(
       5000,
       "the page did not start noting the write's <main> within 5 s",
-      own.evaluate(
-        ({ brand, inMain }) => {
+      own.evaluate(drawScript(
+        (watch, { brand, inMain }) => {
           const w = /** @type {any} */ (window);
           w.__writtenSeen = null;
-          const drawn = () =>
-            !!document.querySelector("main")?.textContent?.includes("Written by the form's own page.") &&
-            !document.querySelector(inMain ? "main[aria-busy], main [aria-busy]" : "[aria-busy]") &&
-            (brand === null || document.querySelector("header span")?.textContent === brand);
-          new MutationObserver((_, observer) => {
-            if (!drawn()) return;
-            w.__writtenSeen = performance.now();
-            observer.disconnect();
-          }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["aria-busy"] });
+          watch(["aria-busy"], ({ tree, at }) => {
+            if (tree.querySelector("main")?.textContent?.includes("Written by the form's own page.") &&
+                !tree.querySelector(inMain ? "main[aria-busy], main [aria-busy]" : "[aria-busy]") &&
+                (brand === null || tree.querySelector("header span")?.textContent === brand)) w.__writtenSeen = at;
+          }, (observer) => { if (w.__writtenSeen !== null) observer.disconnect(); });
         },
         { brand: brand ?? null, inMain },
-      ),
+      )),
     );
   /**
    * Whether `watchWritten` saw the write's own page drawn after the press that sends the write and
@@ -1136,8 +1156,8 @@ export async function pageWrites(page, browser) {
       await within(
         5000,
         "the page's failure and body notes were not set within 5 s",
-        own.evaluate(
-          ({ overlap, status, complete }) => {
+        own.evaluate(drawScript(
+          (watch, { overlap, status, complete }) => {
             const state = /** @type {any} */ (window);
             // The form that sends the first write (the first submitted from here on), noted as it is
             // submitted, before any handler of the page's.
@@ -1173,21 +1193,20 @@ export async function pageWrites(page, browser) {
             // failure's mark (`__failedMark`) as the one the poll and the later look must still show.
             const expected = complete ? 503 : 0;
             const note = complete ? "completed" : "cut";
-            new MutationObserver((_, observer) => {
+            watch(["aria-busy", "data-failed", "data-failed-mark"], ({ tree, at }) => {
               const first = errors[0];
               const shown =
                 state.__bodyAfterHeaders === note &&
                 first?.status === expected &&
                 first.body === note &&
                 first.onHeldForm &&
-                document.querySelector("header")?.getAttribute("data-failed") === String(expected) &&
-                document.querySelector("header")?.getAttribute("data-failed-mark") === first.mark &&
-                !document.querySelector("[aria-busy]");
+                tree.querySelector("header")?.getAttribute("data-failed") === String(expected) &&
+                tree.querySelector("header")?.getAttribute("data-failed-mark") === first.mark &&
+                !tree.querySelector("[aria-busy]");
               if (!shown) return;
-              state.__failedAt = performance.now();
+              state.__failedAt = at;
               state.__failedMark = first.mark;
-              observer.disconnect();
-            }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-busy", "data-failed", "data-failed-mark"] });
+            }, (observer) => { if (state.__failedAt !== undefined) observer.disconnect(); });
             const fetch_ = window.fetch;
             let cut = false;
             window.fetch = async function (input, init) {
@@ -1229,7 +1248,7 @@ export async function pageWrites(page, browser) {
             };
           },
           { overlap, status, complete },
-        ),
+        )),
       );
       // The write whose body is cut (or given): the page's next read of itself follows its answer, or,
       // with a second write, the body's release, before which it cannot fail.
@@ -1784,30 +1803,21 @@ export async function pageWrites(page, browser) {
     const watchPatch = () =>
       readWithin(
         "the watch for the patch's element",
-        own.evaluate(() => {
+        own.evaluate(drawScript((watch) => {
           const w = /** @type {any} */ (window);
           const MARK = "[data-smoke-patch]";
-          /** @param {Node} node */
-          const holds = (node) => node instanceof Element && (node.matches(MARK) || !!node.querySelector(MARK));
           const record = { kept: true, drawn: !!document.querySelector(MARK), take: () => {} };
-          /** @param {MutationRecord[]} records */
-          const note = (records) => {
-            for (const r of records) {
-              // An attribute record is the mark set on, or taken off, an element in the page: either way
-              // it was there.
-              if (r.type === "attributes" || Array.from(r.addedNodes).some(holds)) record.drawn = true;
-            }
-          };
-          const observer = new MutationObserver(note);
-          observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-smoke-patch"] });
-          record.take = () => note(observer.takeRecords());
+          const observer = watch(["data-smoke-patch"], ({ target, attribute, added }) => {
+            if (added(MARK).length || (attribute !== null && Element.prototype.hasAttribute.call(target, attribute))) record.drawn = true;
+          });
+          record.take = observer.take;
           setTimeout(() => {
             record.take();
             observer.disconnect();
             record.kept = false;
           }, 120000);
           w.__smokePatch = record;
-        }),
+        }, null)),
       );
     /** What the watch saw (`watchPatch`): `{ kept, drawn }`, with the records not yet delivered read. */
     const patchDrawn = () =>
