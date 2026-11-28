@@ -268,7 +268,7 @@ function statusOf(options) {
   });
 }
 
-test("an answer that breaks off after its head settles as a response error, not a status or a hang", async (t) => {
+test("an answer that breaks off after its head settles as a response error, not a status or a hang", { timeout: 5000 }, async (t) => {
   const server = createServer();
   server.on("connection", (socket) => socket.once("data", () => {
     socket.write("HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc");
@@ -314,7 +314,7 @@ test("the upstream records each request's idle, answers before the close and res
   assert.equal(closed[0].lastPath, "/a");
 });
 
-test("the upstream takes a request's arrival from the read that completed its head, before any answer is prepared", async (t) => {
+test("the upstream takes a request's arrival before any answer is prepared", async (t) => {
   // Only the double's response work is slow: a serializer that spins 280 ms.
   let serializing = null;
   const slow = { toJSON() { serializing = performance.now(); while (performance.now() - serializing < 280); return { a: 1 }; } };
