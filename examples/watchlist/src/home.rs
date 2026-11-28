@@ -657,13 +657,13 @@ mod tests {
         assert!(patch.contains(r#"data-on='corten:error:watch_form.failed(@unanswered)'"#), "{patch}");
         assert!(
             patch.ends_with(concat!(
-                r#"<p id="watch-message">Watching Halcyon Health at $88.40.</p>"#,
-                r#"<p data-ref="unanswered" role="alert" hidden>That change did not reach the market. Try again.</p></form>"#
+                r#"<p data-ref="unanswered" role="alert" hidden>That change did not reach the market. Try again.</p></form>"#,
+                r#"<p id="watch-message">Watching Halcyon Health at $88.40.</p>"#
             )),
             "{patch}"
         );
-        // Without JavaScript `/watch` has no page of its own: back to the watchlist, whose form
-        // says what changed, once.
+        // Without JavaScript `/watch` has no page of its own: back to the watchlist, whose
+        // status line says what changed, once.
         let sent = watch(Mode::Document).cookie("visitor", VISITOR).await;
         assert_eq!((sent.status(), sent.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/"));
         let notice = sent.cookie("__Host-corten-notice").unwrap();
