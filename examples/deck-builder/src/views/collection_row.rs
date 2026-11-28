@@ -4,16 +4,16 @@ use super::{DeckFormId, deck_builder::MoveHelpId};
 use crate::app::DeckInput;
 
 /// A card of the collection. `view` makes `CollectionRow` in `corten/views`, whose holes the
-/// builder's script reads and writes by name: `selected` (the checkbox and the row's mark),
+/// builder's script reads and writes by name: `selected` (the live checkbox),
 /// `hidden` (the filter), `name`, `set` and `kind` (the filter and the sort), `cost` and `owned`
 /// (the sort, and a new deck line's data) and `in_deck` (how many copies the deck has, which
 /// every change writes).
 ///
 /// Its checkbox and its Add button belong to the deck's form (`form=`), so without JavaScript Add
 /// posts the deck with this card added, and Add selected the deck with every checked card. The
-/// grip is what a pointer drags and a keyboard picks up; it has no use without JavaScript, so the
-/// stylesheet hides it then (`scripting: none`). `pick`, `grip` and `add` are the builder's refs:
-/// its handlers on the table body get the one an event came from (`pick.closest()`).
+/// grip is what a pointer drags and a keyboard picks up; the stylesheet hides it until the
+/// builder owns the deck form. `grip` and `add` let the handlers on the table body find the
+/// control an event came from.
 #[component(view)]
 pub fn CollectionRow<'a>(
     id: &'a str,
@@ -26,16 +26,14 @@ pub fn CollectionRow<'a>(
     in_deck: u32,
     selected: bool,
     hidden: bool,
-    pick: Ref<el::HTMLInputElement>,
     grip: Ref<el::HTMLButtonElement>,
     add: Ref<el::HTMLButtonElement>,
 ) -> impl Render {
     let f = DeckInput::FIELDS;
     html! {
-        <tr key={id} data-selected={selected} data-rarity={rarity} hidden={hidden}>
+        <tr key={id} data-rarity={rarity} hidden={hidden}>
             <td>
                 <input
-                    ref={pick}
                     type="checkbox"
                     name={f.pick}
                     value={id}

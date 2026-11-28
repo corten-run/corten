@@ -66,6 +66,8 @@ const comesToShow = (page, id, count) =>
       () => false,
     );
 const row = (page, id) => page.locator(`tbody tr[data-key="${id}"]`);
+const selectedCount = (page) => page.locator("[class$=__picks] output").textContent();
+const selectAll = (page) => page.getByRole("checkbox", { name: "Select every card shown" });
 const version = (page) => page.inputValue("input[name=version]");
 const saveButton = 'form[method=post] button:text-is("Save")';
 const filterButton = "form[role=search] button";
@@ -394,7 +396,13 @@ async function nativeAddHandoff(selected) {
     const add = row(page, id).getByRole("button", { name: "Add", exact: true });
     const pick = row(page, id).getByRole("checkbox");
     const button = selected ? page.getByRole("button", { name, exact: true }) : add;
-    if (selected) await pick.check();
+    if (selected) {
+      const background = () => row(page, id).evaluate((el) => getComputedStyle(el).backgroundColor);
+      const unselected = await background();
+      await pick.check();
+      await page.mouse.move(0, 0);
+      check("a checkbox checked before startup highlights its row", unselected !== await background());
+    }
     const sent = await withholdNativeRedirect(page, button);
     const fields = saveFields(sent.request);
     check(`${name}: native POST committed while the count controls stayed pristine`,
@@ -407,12 +415,13 @@ async function nativeAddHandoff(selected) {
     resumeModule.resolve(undefined);
     await started;
     if (selected) {
-      await pick.uncheck();
-      await pick.check();
+      check("startup keeps the checked card, selected count and mixed select-all state",
+        await pick.isChecked() && await selectedCount(page) === "1" &&
+        await selectAll(page).evaluate((box) => !box.checked && box.indeterminate));
     }
     const [reply] = await Promise.all([
       page.waitForResponse((r) => isSave(r.request())),
-      button.evaluate((el) => el.click()),
+      button.click(),
     ]);
     const retry = saveFields(reply.request());
     resumeFeed.resolve(undefined);
@@ -423,7 +432,8 @@ async function nativeAddHandoff(selected) {
     const headers = reply.headers();
     const preserved = reply.status() === 409 && "corten-shell" in headers && !("corten-patch" in headers) && !("corten-page" in headers) &&
       !reply.request().isNavigationRequest() && retry.get("draft") === "1" && retry.get("submit") === key &&
-      retry.get("version") === String(previous) && await drawn(note) && !(await keep.isVisible()) &&
+      retry.get("version") === String(previous) && retry.getAll("count")[retry.getAll("card").indexOf(id)] === "1" &&
+      await drawn(note) && !(await keep.isVisible()) &&
       (await deck(page))[id] === 1 && Number(await version(page)) === previous + 1 && nextKey !== key;
     check(`${name}: autosave cannot acknowledge or merge the native write; the new form shows one copy`, preserved);
     if (!preserved) return;
@@ -461,11 +471,14 @@ async function smoke() {
   const page = await open(context);
   const nav = await page.evaluate(() => {
     const t = /** @type {PerformanceNavigationTiming} */ (performance.getEntriesByType("navigation")[0]);
-    return { ready: performance.now(), dcl: t.domContentLoadedEventEnd, rows: document.querySelectorAll("tbody tr").length, bytes: t.transferSize };
+    return { observed: performance.now(), dcl: t.domContentLoadedEventEnd, rows: document.querySelectorAll("tbody tr").length, bytes: t.transferSize };
   });
-  timings["first load: DOMContentLoaded / scripts ready"] = `${nav.dcl.toFixed(0)} / ${nav.ready.toFixed(0)} ms, ${nav.rows} rows, ${(nav.bytes / 1024).toFixed(0)} KB transferred`;
+  timings["first load: DOMContentLoaded end / smoke sample after load and deck live request"] =
+    `${nav.dcl.toFixed(0)} / ${nav.observed.toFixed(0)} ms, ${nav.rows} rows, ${(nav.bytes / 1024).toFixed(0)} KB transferred`;
   const start = await deck(page);
   check("the page shows the collection and the saved deck", nav.rows === 240 && start["gravel-sprite"] === 3 && (await total(page)) === "10", JSON.stringify(start));
+  check("an untouched first load starts with no cards selected",
+    await selectedCount(page) === "0" && await selectAll(page).evaluate((box) => !box.checked && !box.indeterminate));
 
   // Filter and sort, in the page.
   await time(page, "filter 240 rows", () => {
@@ -552,7 +565,7 @@ async function smoke() {
   check("checking rows counts them", (await page.textContent("[class$=__picks] output")) === "2");
   await page.click("button:has-text('Add selected')");
   const picked = await deck(page);
-  check("Add selected adds one of each and clears the selection", picked["lantern-warden"] === 3 && picked["moth-court-herald"] === 3 && (await page.textContent("[class$=__picks] output")) === "0", JSON.stringify(picked));
+  check("Add selected adds one of each and clears the selection", picked["lantern-warden"] === 3 && picked["moth-court-herald"] === 3 && await selectedCount(page) === "0", JSON.stringify(picked));
   await settled(page);
 
   // A change the rules refuse is rolled back, with their words.

@@ -137,10 +137,12 @@ const names = new Intl.Collator(document.documentElement.lang || undefined);
  * and original key stay with the browser until a native submission replaces the document.
  * A native Add can leave even a clean form with a spent key. Keep that key so the server
  * can refuse the handoff rather than acknowledge a scripted draft it never applied.
- * @param {Parts} parts @param {HTMLInputElement[]} copies
+ * @param {Parts} parts @param {HTMLInputElement[]} copies @param {Browse} browse
  * @param {FeedUrl<Slot>} feed @param {AbortSignal} signal
  */
-export function start(parts, copies, feed, signal) {
+export function start(parts, copies, browse, feed, signal) {
+  // The server draws zero selected. Only tally if a control changed before startup.
+  if (browse.all.checked || browse.all.indeterminate || browse.cards.querySelector("input:checked")) tally(browse);
   if (copies.some((input) => input.value !== input.defaultValue || input.validity.badInput)) return;
   const s = kept();
   s.signal = signal;
@@ -924,14 +926,6 @@ export function applyFilter(event, input, browse) {
   event.preventDefault();
 }
 
-/** @param {HTMLInputElement} box @param {Browse} browse */
-export function pick(box, browse) {
-  const row = rows(browse.cards, CollectionRow).of(box);
-  if (!row) return;
-  row.selected = box.checked;
-  tally(browse);
-}
-
 /** Checks (or clears) every row shown. @param {Browse} browse */
 export function pickAll(browse) {
   for (const row of rows(browse.cards, CollectionRow)) if (!row.hidden) row.selected = browse.all.checked;
@@ -949,7 +943,8 @@ export function clearPicks(browse) {
  * indeterminate when some are.
  * @param {Browse} browse
  */
-function tally({ cards, all, picked, number }) {
+export function tally(browse) {
+  const { cards, all, picked, number } = browse;
   let n = 0;
   let visible = 0;
   let visibleChecked = 0;

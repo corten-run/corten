@@ -59,7 +59,7 @@ pub fn DeckBuilder<'a>(
     view: &'a DeckQuery,
     answer: &'a Answer,
 ) -> impl Render {
-    let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
+    let (cards_zone, deck_zone, rows, grip, add, all, picked, shown, none) = refs();
     let (lines_ref, template, lift, copies, form, version_ref, total, bars, tallies, kinds) = refs();
     let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
     let (unsure, previews, query) = refs();
@@ -116,7 +116,7 @@ pub fn DeckBuilder<'a>(
     html! {
         <div
             class={Builder}
-            on:connect={js::start(parts, copies, url::DeckFeed, signal)}
+            on:connect={js::start(parts, copies, browse, url::DeckFeed, signal)}
             on:keydown={js::keys(event, parts, carry)}
             on:document:keydown={js::shortcut(event, parts)}
             on:dragend={js::dropped(carry)}
@@ -209,7 +209,7 @@ pub fn DeckBuilder<'a>(
                         </thead>
                         <tbody
                             ref={rows}
-                            on:change={js::pick(pick.closest(), browse)}
+                            on:change={js::tally(browse)}
                             on:click={js::add(event, add.closest(), parts)}
                             on:dragstart={js::lift(event, grip.closest(), parts, carry)}
                             on:keydown={js::pickUp(event, grip.closest(), parts, carry)}
@@ -226,7 +226,6 @@ pub fn DeckBuilder<'a>(
                                     in_deck={shown.in_deck}
                                     selected={false}
                                     hidden={shown.hidden}
-                                    pick={pick}
                                     grip={grip}
                                     add={add}
                                 />

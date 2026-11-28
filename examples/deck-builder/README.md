@@ -8,7 +8,7 @@ saves it as the user works.
 
 | In the browser | How |
 |---|---|
-| Filter, sort and select the collection | a handler per column; the rows are `CollectionRow` views, read and written by name |
+| Filter, sort and select the collection | a handler per column; `CollectionRow` reads selection from the live checkbox, which also styles the row |
 | Add a card, add the selected ones, type a count | a change: the next deck is drawn (`rows(lines, DeckLine, template).replace`) and saved |
 | Drag a card onto the deck, or a line back out | HTML drag and drop on a grip; the same change |
 | Reorder deck lines | drag a deck grip onto another line; the presentation order stays in this page while the server continues to own counts |
@@ -30,8 +30,8 @@ counts shows a conflict and asks the player to re-enter that edit on the saved d
 can save without touching the count fields. If autosave starts on that same form and reuses
 the native save's key, the server refuses the write and draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
-started, that document keeps its fields, focus, and native Save. With the module running,
-Filter keeps the page.
+started, that document keeps its fields, focus, and native Save. Selections made before startup
+stay checked and count toward Add selected. With the module running, Filter keeps the page.
 
 ## Run it
 
