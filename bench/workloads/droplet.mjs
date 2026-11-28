@@ -1940,8 +1940,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           && state.control.ledger.length === 0), "unused bootstrap requires an approved pinned observation");
         assert.equal(!!state.preBootstrapTerminal, setupCandidate, "pre-bootstrap reservation changed; preserve host");
         if (setupCandidate) assert.ok(beforeRegistration(state), "ambiguous pre-bootstrap custody; preserve host");
-        // ownedR21 above excludes both retired and pre-bootstrap reservations.
-        if (setupCandidate) await resumeDrainWithdrawal();
+        // ownedR21 above already excludes retired and pre-bootstrap reservations; the r21
+        // test stays so the resume never runs for a measured checkout if that changes.
+        if (setupCandidate && !options.r21MeasuredCheckout) await resumeDrainWithdrawal();
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();
