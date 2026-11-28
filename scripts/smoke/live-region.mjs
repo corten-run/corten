@@ -37,10 +37,11 @@ export async function liveRegion(page, id) {
   async function after(timeout) {
     try {
       if (timeout === undefined) return await before.evaluate(({ replacement }) => replacement()?.textContent ?? null);
+      // WebKit can apply stream patches while Playwright's animation-frame polling stalls.
       const changed = await page.waitForFunction(({ replacement, text }) => {
         const next = replacement();
         return next && next.textContent !== text && { text: next.textContent };
-      }, before, { timeout });
+      }, before, { timeout, polling: 50 });
       try {
         return (await changed.jsonValue()).text;
       } finally {
