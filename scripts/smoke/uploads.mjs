@@ -1,4 +1,5 @@
-import { base, engine, skip, check } from "./helpers.mjs";
+import { base, engine, skip, check, steps, within } from "./helpers.mjs";
+import { liveRegion } from "./live-region.mjs";
 
 export async function patchUploads(errors, page, part) {
   const errorsBeforeUpload = errors.length;
@@ -72,21 +73,39 @@ export async function uploads(page, live, errors, signsIn) {
   // A multipart form is sent as FormData. /watch reads a URL-encoded form, so `Form` rejects it with
   // plain text, which a browser never sees: it gets the app's error page.
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
-  /** @type {string[]} */
-  const types = [];
-  const onRequest = (/** @type {import("@playwright/test").Request} */ r) => r.url().endsWith("/watch") && types.push(r.headers()["content-type"] ?? "");
-  page.on("request", onRequest);
+  /** @type {import("@playwright/test").Request[]} */
+  const posts = [];
+  const watch = new URL("/watch", base).href;
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
       __html('<form id="multipart" method="post" action="/watch" enctype="multipart/form-data" data-patch><input type="hidden" name="id" value="ACME"><button>Watch</button></form>'),
     ),
   );
-  await page.click("#multipart button");
-  await page.waitForFunction(() => document.title !== "Stocks | Watchlist", null, { timeout: 4000 }).catch(() => {});
-  page.off("request", onRequest);
-  check("a multipart form is posted as multipart/form-data", types.length === 1 && types[0].startsWith("multipart/form-data"), types.join());
-  check("a request the server rejects shows the app's error page, in its layout", (await page.textContent("main h1")) === "Something went wrong" && (await page.title()) === "Something went wrong | Watchlist", await page.title());
+  const onRequest = (/** @type {import("@playwright/test").Request} */ r) => {
+    if (r.method() === "POST" && r.url() === watch) posts.push(r);
+  };
+  page.on("request", onRequest);
+  try {
+    const press = steps(5000, "5 s from the multipart press elapsed");
+    let phase = "press the multipart button";
+    try {
+      await press.step(() => page.locator("#multipart button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click(), undefined, { timeout: 5000 }));
+      phase = "observe POST /watch";
+      await press.poll(async () => posts.length !== 0);
+    } catch (error) {
+      throw new Error(phase + ": " + String(error).split("\n")[0]);
+    }
+    const draw = steps(5000, "multipart form: POST arrived but its error page was not drawn within 5 s");
+    const answer = await draw.step(() => posts[0].response());
+    const errorPage = await draw.poll(() => page.evaluate(() => document.title === "Something went wrong | Watchlist" && document.querySelector("main h1")?.textContent === "Something went wrong"));
+    const types = posts.map((r) => r.headers()["content-type"] ?? "");
+    const action = posts.length === 1 && !posts[0].isNavigationRequest() && posts[0].headers().corten === "action";
+    check("a multipart form is posted as multipart/form-data", action && types[0].startsWith("multipart/form-data"), `action=${action}, ${types.join()}`);
+    check("a request the server rejects shows the app's error page, in its layout", answer?.status() === 415 && errorPage, "HTTP " + answer?.status());
+  } finally {
+    page.off("request", onRequest);
+  }
 
   // A form with a file, read as it arrives in each engine's multipart body: the account page's
   // picture. Its type is read from its bytes, and the answer shows it in the header and on the
@@ -634,8 +653,10 @@ export async function uploads(page, live, errors, signsIn) {
   {
     const nameForm = page.locator("main form:has(input[name=name])");
     await nameForm.locator("input[name=name]").fill("Grace");
+    const { stayed: nameRegionStayed } = await liveRegion(page, "name-result");
     const [sent] = await Promise.all([page.waitForRequest((r) => r.method() === "POST"), nameForm.locator("button").click()]);
     await page.waitForFunction(() => document.querySelector("#name-result")?.textContent === "Your pages now say Grace.", null, { timeout: 5000 }).catch(() => {});
+    check("saving the name keeps the live region and replaces its message", await nameRegionStayed());
     const type = (await sent.headerValue("content-type")) ?? "";
     const badge = (await page.textContent("#viewer-badge")) ?? "";
     check(
@@ -654,8 +675,10 @@ export async function uploads(page, live, errors, signsIn) {
       JSON.stringify(named),
     );
     await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+    const { stayed: pictureRegionStayed } = await liveRegion(page, "avatar-result");
     const [upload] = await Promise.all([page.waitForRequest((r) => r.method() === "POST"), page.click("main form[enctype] button")]);
     await page.waitForFunction(() => document.querySelector("#avatar-result")?.textContent === "Saved card.png as your picture.", null, { timeout: 8000 }).catch(() => {});
+    check("saving the picture keeps the live region and replaces its message", await pictureRegionStayed());
     const uploadType = (await upload.headerValue("content-type")) ?? "";
     check(
       "the same page's multipart post goes to do=picture, and its handler reads the body",
@@ -665,38 +688,77 @@ export async function uploads(page, live, errors, signsIn) {
   }
   {
     const noScript = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext({ javaScriptEnabled: false });
-    await noScript.addCookies(await page.context().cookies());
-    const plainAccount = await noScript.newPage();
-    await plainAccount.goto(`${base}/account`);
-    /** Presses `button` and gives the post's answer once the page it leads to has loaded. @param {string} button */
-    const post = (button) =>
-      Promise.all([plainAccount.waitForResponse((r) => r.request().method() === "POST"), plainAccount.waitForNavigation(), plainAccount.click(button)]).then(([answer]) => answer);
-    const nameButton = "main form:has(input[name=name]) button";
-    await plainAccount.fill("main input[name=name]", "Ada");
-    const renamed = await post(nameButton);
-    const at = new URL(plainAccount.url());
-    check(
-      "without JavaScript the name's urlencoded post goes to do=name and the browser back to the page",
-      new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "" && ((await plainAccount.textContent("main")) ?? "").includes("Signed in as Ada."),
-      `${renamed.url()} ${renamed.status()} ${plainAccount.url()}`,
-    );
-    await plainAccount.fill("main input[name=name]", " ");
-    const refused = await post(nameButton);
-    check(
-      "without JavaScript a refused name is the page at its post's address, the reason in it",
-      refused.status() === 422 && new URL(plainAccount.url()).search === "?do=name" && (await plainAccount.textContent("#name-result")) === "Choose a name of 1 to 40 characters.",
-      `${refused.status()} ${plainAccount.url()} ${await plainAccount.textContent("#name-result")}`,
-    );
-    // From the page drawn at do=name, the picture's form still posts to its own address.
-    await plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
-    const uploadedPlain = await post("main form[enctype] button");
-    const plainType = (await uploadedPlain.request().headerValue("content-type")) ?? "";
-    check(
-      "without JavaScript the picture's multipart post goes to do=picture, from the page drawn at do=name",
-      new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && (await plainAccount.textContent("#avatar-result")) === "Saved card.png as your picture.",
-      `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${await plainAccount.textContent("#avatar-result")}`,
-    );
-    await noScript.close();
+    let failed = false;
+    try {
+      await noScript.addCookies(await page.context().cookies());
+      const plainAccount = await noScript.newPage();
+      await plainAccount.goto(`${base}/account`);
+      /** Return the POST response from this main-frame navigation, not an unrelated POST seen while it loads.
+       * @param {string} button @param {string} action */
+      const post = async (button, action) => {
+        const budget = steps(30_000, "native account form exceeded 30 s");
+        const target = new URL("/account?do=" + action, base).href;
+        let phase = "load the previous document";
+        try {
+          await budget.step(() => plainAccount.waitForLoadState("load"));
+          // Arm before activating. The catch also handles page closure if the press fails.
+          const loaded = plainAccount.waitForNavigation({ waitUntil: "load", timeout: 30_000 }).catch(() => null);
+          const sent = plainAccount.waitForRequest((r) => r.isNavigationRequest() && r.frame() === plainAccount.mainFrame() && r.method() === "POST" && r.url() === target,
+            { timeout: 30_000 }).catch(() => null);
+          phase = "activate submit";
+          await budget.step(() => plainAccount.locator(button).press("Enter", { noWaitAfter: true, timeout: 30_000 }));
+          phase = "observe the form POST";
+          const request = await budget.step(() => sent);
+          if (!request) throw new Error("no matching request");
+          phase = "load the POST destination";
+          const navigation = await budget.step(() => loaded);
+          let origin = navigation?.request();
+          while (origin?.redirectedFrom()) origin = origin.redirectedFrom();
+          if (origin !== request) throw new Error("loaded navigation did not originate at the form POST");
+          phase = "read the POST response";
+          const response = await budget.step(() => request.response());
+          if (!response) throw new Error("no POST response");
+          return response;
+        } catch (error) {
+          throw new Error("native account " + action + ": " + phase + ": " + String(error).split("\n")[0]);
+        }
+      };
+      const nameButton = "main form:has(input[name=name]) button";
+      await plainAccount.fill("main input[name=name]", "Ada");
+      const renamed = await post(nameButton, "name");
+      const at = new URL(plainAccount.url());
+      check(
+        "without JavaScript the name's urlencoded post goes to do=name and the browser back to the page",
+        new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "" && ((await plainAccount.textContent("main")) ?? "").includes("Signed in as Ada."),
+        `${renamed.url()} ${renamed.status()} ${plainAccount.url()}`,
+      );
+      await plainAccount.fill("main input[name=name]", " ");
+      const refused = await post(nameButton, "name");
+      check(
+        "without JavaScript a refused name is the page at its post's address, the reason in it",
+        refused.status() === 422 && new URL(plainAccount.url()).search === "?do=name" && (await plainAccount.textContent("#name-result")) === "Choose a name of 1 to 40 characters.",
+        `${refused.status()} ${plainAccount.url()} ${await plainAccount.textContent("#name-result")}`,
+      );
+      // From the page drawn at do=name, the picture's form still posts to its own address.
+      await plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+      const uploadedPlain = await post("main form[enctype] button", "picture");
+      const plainType = (await uploadedPlain.request().headerValue("content-type")) ?? "";
+      check(
+        "without JavaScript the picture's multipart post goes to do=picture, from the page drawn at do=name",
+        new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && (await plainAccount.textContent("#avatar-result")) === "Saved card.png as your picture.",
+        `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${await plainAccount.textContent("#avatar-result")}`,
+      );
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      try {
+        await within(30_000, "native account form: context did not close", noScript.close());
+      } catch (error) {
+        if (!failed) throw error;
+        console.error("native account form cleanup:", error);
+      }
+    }
   }
   errors.splice(failedOnPurpose, errors.length, ...errors.slice(failedOnPurpose).filter((e) => !/ERR_FAILED|ERR_ABORTED|NS_BINDING_ABORTED|cancelled/i.test(e)));
   if (!signsIn) await page.context().clearCookies({ name: "session" });

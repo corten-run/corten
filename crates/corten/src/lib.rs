@@ -1493,6 +1493,11 @@ impl From<Refused> for Error {
 pub(crate) struct Failed(pub Arc<str>);
 
 impl IntoResponse for Error {
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         match self.source.downcast::<caller::AsError>() {
             // A handler's refusal (`From<Refused>`): answered as an extractor's is.

@@ -28,3 +28,7 @@ const catalog = {
 };
 Object.values(catalog).forEach(Object.freeze);
 export const allApps = Object.freeze(catalog);
+
+// Native ports for individual workload groups, not historical fullstack apps.
+export const catalogPeers = Object.freeze({ proa: Object.freeze({ label: "Proa 0.4 (Rust, compiled SSR on axum)", port: 18431, image: "cb-proa" }) });
+export const jsonPeers = Object.freeze({ ntex: Object.freeze({ label: "ntex 4 (Rust, native JSON)", port: 18432, image: "cb-ntex", pages: false }) });

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { parseStatsSample, summarizeSamples } from "./stats.mjs";
-import { leanApps, leanProfile } from "./contract.mjs";
+import { leanApps, leanProfile, recordedLeanApps } from "./contract.mjs";
 import { workerAware, workerPhaseSchema, workerCommand, verifyWorkers, workerHeadroom } from "./apparatus.mjs";
 import { observeLoadLimits, verifyLoadLimits } from "./cgroup.mjs";
 
@@ -138,7 +138,7 @@ export function verifyTimedPhase(summary, subject, { readJson, readText }, previ
     healthy(runtime, summary, appName, summary.apps[app].imageId, "app", 2 ** 30, "running");
     execution(runtime, summary.apps[app].imageExecution);
     const profile = summary.measurement.leanProfile;
-    if (profile !== undefined) same(profile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
+    if (profile !== undefined) same(profile, { name: leanProfile, apps: recordedLeanApps(summary) }, "catalog lean configuration differs");
     same(runtime.env, [`CATALOG_SOURCE=${source}`, "CATALOG_FIXTURE_PATH=/fixtures/catalog.json", `API_BASE=http://${upstreamName}:8080`,
       ...(profile !== undefined && leanApps.includes(app) ? [`PROFILE=${leanProfile}`] : [])].sort(), "timed source environment differs");
     same(runtime.mounts, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures")], "timed app mounts differ");

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe } from "./contract.mjs";
+import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe, sharedSourceSha256 } from "./contract.mjs";
 import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, nativeArtifactRoot } from "../registry.mjs";
 import { catalogFleetPlacement, jsonFleetPlacementFor } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
-import { djangoAsgi } from "../../mixed-production/source-audit.mjs";
+import { springWebflux } from "../../mixed-production/source-audit.mjs";
 import { nativeControlPartition } from "./native-roles.mjs";
 
 export const campaignSchema = "benchmark-isolated-campaign/v1";
@@ -75,19 +75,24 @@ export function bindGroupCampaign(input, mode = "dedicated") {
 }
 function bindNativeCampaign(input, order, schema, mode) {
   const rounds = campaignRounds(input.round);
-  const dedicatedRecipe = schema === groupCampaignSchema && (order[0] === "mixed-production" ? djangoAsgi.recipe
+  const dedicatedRecipe = schema === groupCampaignSchema && (order[0] === "mixed-production" ? springWebflux.recipe
     : order[0] === "client-heavy" ? clientComparisonRecipe : null);
   const recipes = dedicatedRecipe ? { ...productionRecipes, [order[0]]: dedicatedRecipe } : productionRecipes;
   const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
     recipe: recipes[group], review: null }, mode));
   const first = bindings[0];
-  assert.ok(bindings.every((b) => b.sources.sha256 === first.sources.sha256), "source changed while binding campaign");
+  // The all-group header binds the common manifest; the campaign hash also
+  // binds Hardening's full app closure through its binding.
+  const sourceIdentity = (b) => schema === campaignSchema && b.request.group === "hardening"
+    ? sharedSourceSha256(b.sources.files) : b.sources.sha256;
+  const sourceSha256 = sourceIdentity(first);
+  assert.ok(bindings.every((b) => sourceIdentity(b) === sourceSha256), "source changed while binding campaign");
   const procedures = ["bench/catalog/README.md", "bench/json-api/README.md", "bench/marketplace/nightly.md",
     "bench/mixed-production/README.md", "bench/fullstack-browser/README.md", "bench/client-heavy/README.md",
     "bench/live/README.md", "bench/recoverable-live/README.md", "bench/hardening/README.md"]
     .map((path) => { const entry = first.sources.files.find((e) => e.path === path); assert.ok(entry, `missing procedure ${path}`); return entry; });
   const body = { schema, ...input, bindings, procedures, recipes,
-    sourceSha256: first.sources.sha256, order: [...order], ready: false, executionAuthorized: false };
+    sourceSha256, order: [...order], ready: false, executionAuthorized: false };
   return freeze({ ...body, campaignSha256: deploymentSha256(body) });
 }
 export function validateCampaign(plan) {

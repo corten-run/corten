@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
 import { hostTerminalClock, processIdentity, processRecordKey, terminalClockPolicy } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { executableProofFailure, executableProofFailureMessage, executableReference, participantExecutables } from "./participant-executables.mjs";
+import { executableIdentity, executableProofFailure, executableProofFailureMessage, executableReference, hashExecutableDescriptor, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
 import { commandCpuSet as boundCommandCpuSet, cpuRanges, cpuSetWithin, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
 
@@ -17,8 +17,12 @@ const serial = (v) => `${JSON.stringify(v)}\n`;
 const fields = ["cgroup.procs", "cgroup.events", "cpu.stat", "cpu.max", "cpuset.cpus.effective", "memory.current", "memory.peak", "memory.max", "memory.events"];
 const root = "/sys/fs/cgroup";
 const sampleIntervalMs = 100, maximumSampleGapMs = 1000;
+const browserStorageYieldMs = 50;
 const observationOperations = new WeakMap();
+const executableRecheckReasons = new WeakMap();
 const executableSuccessors = new WeakMap();
+const inlineImages = new WeakMap();
+const censusImage = (record) => record.executableRef ?? inlineImages.get(record);
 function observing(operation, action) {
   try { return action(); }
   catch (error) {
@@ -44,9 +48,11 @@ function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
 }
-function readGroup(path, keys = fields) {
+function readGroup(path, keys = fields, directories) {
   const actual = join(root, path);
-  assert.ok(!lstatSync(actual).isSymbolicLink());
+  const directory = lstatSync(actual);
+  assert.ok(!directory.isSymbolicLink());
+  directories?.push([actual, directory.dev, directory.ino]);
   return { path, files: Object.fromEntries(keys.map((key) => {
     try { return [key, readFileSync(join(actual, key), "utf8")]; }
     catch (error) { if (error.code === "ENOENT") return [key, null]; throw error; }
@@ -89,9 +95,9 @@ export function requireNativeContainerCpuSet(info, cpuset) {
   assert.equal(readFileSync(membership, "utf8"), cgroup, "native container left its cgroup");
 }
 export { requireNativeCommandCpuSet as requireBrowserCommandCpuSet, requireNativeContainerCpuSet as requireBrowserContainerCpuSet };
-function parents(path) {
+function parents(path, directories) {
   const values = [];
-  for (;;) { values.push(readGroup(path)); if (path === "/") return values; path = posix.dirname(path); }
+  for (;;) { values.push(readGroup(path, fields, directories)); if (path === "/") return values; path = posix.dirname(path); }
 }
 function effectiveControls(files) {
   const cpu = files["cpu.max"], cpus = files[cpusetField], memory = files["memory.max"];
@@ -100,18 +106,74 @@ function effectiveControls(files) {
   if (cpus !== null) cpuRanges(cpus);
   return cpu !== null && cpus !== null && memory !== null;
 }
-function executableHash(at, executables) {
-  const executable = observing("executable-link", () => readlinkSync(`${at}/exe`));
+function executableLookup(at, executables) {
+  const link = observing("executable-link", () => readlinkSync(`${at}/exe`));
   const inode = observing("executable-stat", () => statSync(`${at}/exe`));
-  const key = `${executable}:${inode.dev}:${inode.ino}:${inode.size}:${inode.mtimeMs}:${inode.ctimeMs}`;
-  let hash = executables.get(key);
-  if (!hash) { hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`))); executables.set(key, hash); }
-  return hash;
+  const { dev, ino, size, mtimeMs, ctimeMs } = inode;
+  const key = `${link}:${dev}:${ino}:${size}:${mtimeMs}:${ctimeMs}`;
+  let lookup = executables.get(key);
+  if (!lookup) {
+    const hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`)));
+    lookup = { hash, link, dev, ino };
+    executables.set(key, lookup);
+  }
+  return lookup;
 }
-function scopeGroups(path, keys = fields) {
+function differentInode(opening, closing) {
+  return opening.dev !== closing.dev || opening.ino !== closing.ino;
+}
+function executableMismatch(reason) {
+  const error = new assert.AssertionError({ message: "executable differs between census bookends" });
+  executableRecheckReasons.set(error, reason);
+  return error;
+}
+function recheckExecutable(opening, closing) {
+  if (opening.hash === closing.hash) return;
+  // The same lookup key always returns the same digest. If file identity
+  // and link agree, only the size/mtime/ctime part of the key can differ.
+  throw executableMismatch(differentInode(opening, closing) ? "device-or-inode" : opening.link !== closing.link ? "link" : "metadata");
+}
+function openInlineExecutable(at, inline, fresh = false) {
+  const path = `${at}/exe`, fd = observing("executable-capture", () => openSync(path, "r"));
+  try {
+    const identity = observing("executable-inline-coherence", () => executableIdentity(fd)), ref = executableReference(identity);
+    const cached = fresh ? undefined : inline.attempt.get(ref) ?? inline.admitted.get(ref);
+    const hash = cached ?? observing("executable-hash", () => hashExecutableDescriptor(fd, identity, inline.checkDeadline));
+    const current = observing("executable-stat", () => statSync(path, { bigint: true }));
+    observing("executable-inline-coherence", () => {
+      assert.ok(current.isFile() && Object.keys(identity).every((key) => String(current[key]) === identity[key]),
+        "executable no longer matches the opened descriptor");
+    });
+    inline.attempt.set(ref, hash);
+    return { ref, hash, dev: identity.dev, ino: identity.ino, image: `${ref}:${hash}`,
+      check() {
+        observing("executable-inline-coherence", () => {
+          assert.ok(executableReference(executableIdentity(fd)) === ref, "opened executable changed during census");
+        });
+      },
+      checkHash() {
+        if (cached === undefined) return; // This descriptor was already hashed at open.
+        observing("executable-inline-coherence", () => {
+          assert.ok(hashExecutableDescriptor(fd, identity, inline.checkDeadline) === hash, "opened executable digest changed");
+        });
+      },
+      close() { closeSync(fd); },
+    };
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+const openingScopeMisses = new WeakSet();
+function scopeGroups(path, keys = fields, firstOpening = false) {
   const groups = [];
   function walk(current) {
-    const group = observing("cgroup-read", () => readGroup(current, keys)); groups.push(group);
+    try { groups.push(observing("cgroup-read", () => readGroup(current, keys))); }
+    catch (error) {
+      if (firstOpening && current === path && error?.code === "ENOENT" && error.path === join(root, path))
+        openingScopeMisses.add(error);
+      throw error;
+    }
     for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
       observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
       if (entry.isDirectory()) walk(posix.join(current, entry.name));
@@ -139,57 +201,89 @@ function forkAnchor(previous, stat, closingStat, identity, cgroup, ref) {
   const ppid = parentPid(stat);
   if (ppid === identity.pid || parentPid(closingStat) !== ppid ||
     previous.some((p) => processIdentity(p.stat).pid === identity.pid)) return null;
-  const parent = previous.find((p) => p.cgroup === cgroup && p.executableRef === ref &&
+  const parent = previous.find((p) => p.cgroup === cgroup && censusImage(p) === ref &&
     processIdentity(p.stat).pid === ppid);
   if (!parent) return null;
   const anchor = processIdentity(parent.stat);
   return BigInt(anchor.startTicks) <= BigInt(identity.startTicks) ? { identity: anchor, ref } : null;
 }
-function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor, successor) {
-  const groups = scopeGroups(path), processes = [];
+function anchorSuccessor(error, previous, stat, closingStat, identity, cgroup, opening, closing, check) {
+  const admitted = previous.some((p) => censusImage(p) === opening && sameProcess(p, identity, cgroup));
+  const parent = admitted ? null : forkAnchor(previous, stat, closingStat, identity, cgroup, opening);
+  if (admitted || parent) {
+    check?.();
+    executableSuccessors.set(error, { identity, cgroup, ref: closing, parent });
+  }
+}
+function captureCensusProcess(pid, current, executables, pending, inline, previousProcesses, allowSuccessor, successor) {
+  // A racing exit invalidates this entire census, never just this member.
+  const at = `/proc/${pid}`, stat = observing("process-stat", () => readFileSync(`${at}/stat`, "utf8"));
+  const identity = observing("process-identity", () => processIdentity(stat));
+  const fresh = identity.pid === successor?.identity.pid || identity.pid === successor?.parent?.identity.pid;
+  const openingInline = inline && openInlineExecutable(at, inline, fresh);
+  try {
+    const opening = pending ? null : openingInline ?? executableLookup(at, executables);
+    const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: opening.hash };
+    const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
+    observing("process-membership", () => assert.equal(groupPath(cgroup), current));
+    const type = observing("process-cmdline", () => processRole(readFileSync(`${at}/cmdline`).toString("utf8"), () => readlinkSync(`${at}/exe`)));
+    const closingStat = observing("process-stat-recheck", () => readFileSync(`${at}/stat`, "utf8"));
+    const rechecked = observing("process-stat-recheck", () => processIdentity(closingStat));
+    if (successor?.parent && identity.pid === successor.identity.pid) observing("executable-recheck-successor", () => {
+      assert.equal(parentPid(stat), successor.parent.identity.pid);
+      assert.equal(parentPid(closingStat), successor.parent.identity.pid);
+    });
+    const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
+      : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
+    // Check the image before treating a name change as an ordinary name race.
+    const censusRename = (openingInline || pending && previousProcesses) &&
+      recheckOperation === "process-name-recheck" && rechecked.comm !== identity.comm;
+    if (!censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
+    if (pending) {
+      try { observing(censusRename ? "executable-recheck-renamed" : "executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
+      catch (error) {
+        if (allowSuccessor && previousProcesses && observationOperations.get(error) === "executable-recheck-inode"
+          && error.code === "ERR_ASSERTION" && error.expected === executable.executableIdentity && String(identity.pid) === pid)
+          anchorSuccessor(error, previousProcesses, stat, closingStat, identity, cgroup, executable.executableRef,
+            executableReference(error.actual), () => observing("executable-recheck-pin", () => pending.checkPinned(executable)));
+        throw error;
+      }
+    } else if (openingInline) observing("executable-recheck", () => {
+      const closing = openInlineExecutable(at, inline);
+      try {
+        openingInline.check();
+        closing.check();
+        if (closing.image === opening.image) return;
+        const inodeChanged = differentInode(opening, closing), error = executableMismatch(inodeChanged ? "device-or-inode" : "metadata");
+        if (allowSuccessor && previousProcesses && !censusRename && inodeChanged && opening.hash !== closing.hash && String(identity.pid) === pid)
+          anchorSuccessor(error, previousProcesses, stat, closingStat, identity, cgroup, opening.image, closing.image, () => {
+            opening.checkHash();
+            closing.checkHash();
+            observing("executable-recheck-successor", () => {
+              assert.ok(readFileSync(`${at}/cgroup`, "utf8") === cgroup, "executable successor cgroup changed");
+              const currentStat = readFileSync(`${at}/stat`, "utf8");
+              assert.ok(isDeepStrictEqual(processIdentity(currentStat), identity) && parentPid(currentStat) === parentPid(closingStat),
+                "executable successor process changed");
+            });
+          });
+        throw error;
+      } finally { closing.close(); }
+    });
+    else observing("executable-recheck", () => recheckExecutable(opening, executableLookup(at, executables)));
+    if (censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
+    const record = { stat, cgroup, ...executable, type }; // No environment or arbitrary arguments.
+    if (openingInline) inlineImages.set(record, openingInline.image);
+    return record;
+  } finally { openingInline?.close(); }
+}
+function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor, successor, firstOpening, inline) {
+  const groups = scopeGroups(path, fields, firstOpening), processes = [];
   const before = observing("snapshot-membership", () => membership(groups));
   for (const group of groups) {
     const current = group.path;
     for (const pid of group.files["cgroup.procs"].trim().split("\n").filter(Boolean)) {
       assert.match(pid, /^[1-9]\d*$/);
-      // A racing exit invalidates this entire census, never just this member.
-      const at = `/proc/${pid}`, stat = observing("process-stat", () => readFileSync(`${at}/stat`, "utf8"));
-      const identity = observing("process-identity", () => processIdentity(stat));
-      const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
-      const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
-      observing("process-membership", () => assert.equal(groupPath(cgroup), current));
-      const type = observing("process-cmdline", () => processRole(readFileSync(`${at}/cmdline`).toString("utf8"), () => readlinkSync(`${at}/exe`)));
-      const closingStat = observing("process-stat-recheck", () => readFileSync(`${at}/stat`, "utf8"));
-      const rechecked = observing("process-stat-recheck", () => processIdentity(closingStat));
-      if (successor?.parent && identity.pid === successor.identity.pid) observing("executable-recheck-successor", () => {
-        assert.equal(parentPid(stat), successor.parent.identity.pid);
-        assert.equal(parentPid(closingStat), successor.parent.identity.pid);
-      });
-      const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
-        : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
-      // A pinned census rename is retryable as name churn only after proving the
-      // image is unchanged. A PID/start mismatch still fails before that read.
-      const censusRename = previousProcesses && recheckOperation === "process-name-recheck" && rechecked.comm !== identity.comm;
-      if (!censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
-      if (pending) {
-        try { observing(censusRename ? "executable-recheck-renamed" : "executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
-        catch (error) {
-          // Anchor both images to accepted evidence; never promote this failed census.
-          if (allowSuccessor && previousProcesses && observationOperations.get(error) === "executable-recheck-inode"
-            && error.code === "ERR_ASSERTION" && error.expected === executable.executableIdentity
-            && String(identity.pid) === pid) {
-            const admitted = previousProcesses.some((p) => p.executableRef === executable.executableRef && sameProcess(p, identity, cgroup));
-            const parent = admitted ? null : forkAnchor(previousProcesses, stat, closingStat, identity, cgroup, executable.executableRef);
-            if (admitted || parent) {
-              observing("executable-recheck-pin", () => pending.checkPinned(executable));
-              executableSuccessors.set(error, { identity, cgroup, ref: executableReference(error.actual), parent });
-            }
-          }
-          throw error;
-        }
-      } else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
-      if (censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
-      processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
+      processes.push(captureCensusProcess(pid, current, executables, pending, inline, previousProcesses, allowSuccessor, successor));
     }
   }
   const after = observing("snapshot-membership", () => membership(scopeGroups(path, ["cgroup.procs"])));
@@ -199,23 +293,29 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
 const retryPause = new Int32Array(new SharedArrayBuffer(4));
 const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
   "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
-function snapshot(path, executables, pending, lastSampleAt = null, timing, previousProcesses) {
+const retriedEmptyCensuses = new WeakSet();
+function snapshot(path, executables, pending, lastSampleAt = null, timing, previousProcesses, inline) {
   // Spend only the time left in the existing continuity window. A monotonic
   // deadline also bounds retries when the wall clock moves backwards.
   const remaining = lastSampleAt === null ? maximumSampleGapMs : maximumSampleGapMs - (Date.now() - lastSampleAt);
   const started = performance.now(), deadline = started + Math.max(0, Math.min(maximumSampleGapMs, remaining));
   let race, successor, attempts = 0;
   for (;;) {
+    const inlineRetry = inline && successor;
+    if (inlineRetry && performance.now() >= deadline) throw race;
+    inline?.attempt.clear(); // Nothing from a refused census can seed its successor's lookup.
     attempts++;
     try {
       const attempt = () => {
-        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor);
+        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor, attempts === 1,
+          inlineRetry ? { ...inline, checkDeadline() { if (performance.now() >= deadline) throw race; } } : inline);
         if (successor) observing("executable-recheck-successor", () => {
-          assert.ok(observed.processes.some((p) => p.executableRef === successor.ref && sameProcess(p, successor.identity, successor.cgroup)));
+          assert.ok(observed.processes.some((p) => censusImage(p) === successor.ref && sameProcess(p, successor.identity, successor.cgroup)));
           if (successor.parent) assert.ok(observed.processes.some((p) =>
-            p.executableRef === successor.parent.ref && sameProcess(p, successor.parent.identity, successor.cgroup)));
+            censusImage(p) === successor.parent.ref && sameProcess(p, successor.parent.identity, successor.cgroup)));
         });
         if (race && performance.now() > deadline) throw race;
+        if (race && observed.processes.length === 0) retriedEmptyCensuses.add(observed);
         return observed;
       };
       return pending ? pending.transaction(attempt) : attempt();
@@ -227,6 +327,7 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
       const missing = ["ENOENT", "ESRCH"].includes(error.code) && processReads.has(operation);
       const ended = performance.now(), left = deadline - ended;
       const next = executableSuccessors.get(error);
+      if (inlineRetry && left <= 0) throw race;
       if (successor || (!changed && !missing && !next) || left <= 0) {
         if (timing) Object.assign(timing, { censusMs: Math.round(ended - started), attempts });
         throw error;
@@ -380,6 +481,18 @@ function confirmDockerExit(inspect, running, startedAt, began) {
     if (woke < exitRecheckTargetMs || woke >= exitRecheckDeadlineMs) return;
   }
 }
+function vanishedDockerScope(scope, directories, began) {
+  const withinBudget = () => performance.now() - began < exitRecheckDeadlineMs;
+  const sameAncestors = () => directories.every(([path, dev, ino]) => {
+    if (!withinBudget()) return false;
+    const directory = lstatSync(path, { throwIfNoEntry: false });
+    return directory?.isDirectory() && directory.dev === dev && directory.ino === ino;
+  });
+  try {
+    return sameAncestors() && withinBudget() && lstatSync(scope, { throwIfNoEntry: false }) === undefined
+      && sameAncestors() && withinBudget();
+  } catch { return false; } // Retain the original census fault.
+}
 function startupRecheck(record, bound, attempts) {
   try {
     const { state } = record.container;
@@ -426,7 +539,33 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
     participantGroup(path, id);
     stage = "kernel-census";
-    const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    const directories = exitRecheckBegan === undefined ? undefined : [];
+    const ancestors = parents(posix.dirname(path), directories);
+    let observed;
+    try { observed = snapshot(path, executables, pending); }
+    catch (error) {
+      const scope = join(root, path);
+      // Only the first opening scope miss can be confirmed as a stop. A
+      // closing or retried miss cannot erase an inconsistent census.
+      if (openingScopeMisses.has(error)
+        && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+        && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+        if (stopped && vanishedDockerScope(scope, directories, exitRecheckBegan))
+          throw new ClosingDockerExit({ ...stopped, endedAt: Date.now() });
+      }
+      throw error;
+    }
+    // The entry PID can exit after the opening stat. Empty PID walks alone
+    // cannot settle the exit, nor can an empty retry after a failed census.
+    if (observed.processes.length === 0 && !retriedEmptyCensuses.has(observed)
+      && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+      && observed.groups.every(({ files }) => files["cgroup.events"]?.split("\n")
+        .filter((line) => /^populated(?:[ \t]|$)/.test(line)).join("\n") === "populated 0")
+      && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+      const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+      if (stopped) throw new ClosingDockerExit(stopped);
+    }
     assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
     stage = "process-identity-close";
     const closing = processIdentity(readFileSync(`${at}/stat`, "utf8"));
@@ -517,8 +656,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   let context, writer, pending = null, closed = false, timer;
   const startupSignals = [...new Set([signal, startupSignal].filter(Boolean))];
   function releaseStartup() { for (const value of startupSignals) value.removeEventListener("abort", dispose); }
+  function stopSampling() { if (browser) clearTimeout(timer); else clearInterval(timer); }
   function dispose() {
-    closed = true; clearInterval(timer); releaseStartup(); pending?.close(); writer?.abort();
+    closed = true; stopSampling(); releaseStartup(); pending?.close(); writer?.abort();
   }
   for (const value of startupSignals) value.addEventListener("abort", dispose, { once: true });
   try {
@@ -550,6 +690,11 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   // Build commands introduce CLI/plugin executables during live sampling.
   // Pin their images now and seal their bytes after the final sample.
   pending = captureDocker || commandCpus || executableCensus ? participantExecutables() : null;
+  const inline = !pending && binding.request.group === "json-api" && terminalClockPolicy(binding, invocation, round, "timing") === "post-terminal"
+    ? { admitted: new Map(), attempt: new Map() } : null;
+  function admitInlineLookups() {
+    if (inline) for (const [ref, hash] of inline.attempt) inline.admitted.set(ref, hash);
+  }
   let samples = 0, observerError = null, attached = false, faultNotified = false;
   let firstDockerGap;
   function noteDockerGap(error) { firstDockerGap ??= dockerGapDiagnostic(error); }
@@ -558,7 +703,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     dockerStartupRechecks ??= { count: 0, first: diagnostic }; dockerStartupRechecks.count++;
   }
   const observerFailures = { count: 0, first: null, last: null };
-  let sampleOperation, lastSampleAt = null, previousCensusProcesses = executableCensus ? [] : null;
+  let sampleOperation, lastSampleAt = null, previousCensusProcesses = executableCensus || inline ? [] : null;
   function notifyFault() {
     if (faultNotified) return;
     faultNotified = true;
@@ -571,7 +716,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // error properties. First/last plus a count bound disk and memory on failure.
     const proofFailure = phase === "executables" ? error : null;
     const code = proofFailure?.code ?? (["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown");
+    const executableRecheckReason = executableRecheckReasons.get(error);
     const entry = { phase, operation: proofFailure?.operation ?? observationOperations.get(error) ?? sampleOperation, code,
+      ...(executableRecheckReason ? { executableRecheckReason } : {}),
       ...(proofFailure?.executableRef ? { executableRef: proofFailure.executableRef } : {}),
       at: Date.now(), samples, lastSampleAt, ...(catalog && timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
@@ -588,7 +735,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function collectSample(timing) {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
-    const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses), initial = [], keys = new Set();
+    const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses, inline), initial = [], keys = new Set();
     if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
       && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
     const processes = observed.processes;
@@ -610,14 +757,23 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     }
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
-    if (executableCensus) previousCensusProcesses = processes;
+    admitInlineLookups();
+    if (executableCensus || inline) previousCensusProcesses = processes;
     samples++; lastSampleAt = observed.at;
     return observed;
   }
   // The fresh bootstrap still waits for IPC outside this empty command scope.
   // Hash its actual executable before sampling starts, not across the empty-to-
   // attached boundary. Attach independently rechecks the executable cache key.
-  try { executableHash(`/proc/${pid}`, executables); sample(); checkStartup(); assert.equal(closed, false); }
+  try {
+    if (inline) {
+      openInlineExecutable(`/proc/${pid}`, inline).close();
+      // Warm only the digest cache. The bootstrap outside the attached scope
+      // is not an admitted process and cannot anchor a transition.
+      admitInlineLookups();
+    } else executableLookup(`/proc/${pid}`, executables);
+    sample(); checkStartup(); assert.equal(closed, false);
+  }
   catch (error) {
     dispose();
     if (!writer.state().pendingOwnership) rmdirSync(join(root, path));
@@ -633,16 +789,28 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
         checkStartup(); assert.equal(closed, false);
-        timer = setInterval(() => {
-          const timing = executableCensus ? { entryGapMs: Date.now() - lastSampleAt } : null;
+        const tick = () => {
+          const timing = executableCensus ? { entryGapMs: Date.now() - lastSampleAt } : inline ? {} : null;
           try {
             sample(timing);
           } catch (error) {
             observerError = "host-observation-gap"; failure("interval", error, timing);
-            if (writer.error) clearInterval(timer);
+            if (writer.error) stopSampling();
             notifyFault();
           }
-        }, sampleIntervalMs);
+        };
+        if (browser) {
+          // Repeating timers can keep synchronous Docker censuses back-to-back,
+          // leaving the asynchronous writer behind even on a healthy filesystem.
+          const capture = () => {
+            if (closed) return;
+            const startedAt = performance.now();
+            tick();
+            if (!closed && !writer.error) timer = setTimeout(capture,
+              Math.max(browserStorageYieldMs, Math.ceil(sampleIntervalMs - (performance.now() - startedAt))));
+          };
+          timer = setTimeout(capture, sampleIntervalMs);
+        } else timer = setInterval(tick, sampleIntervalMs);
         await writer.drain();
         checkStartup(); assert.equal(closed, false); releaseStartup();
       } catch (error) { dispose(); throw error; }
@@ -654,7 +822,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
     async finish(result, retainTerminalClock = false, onSettled) {
-      assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
+      assert.equal(closed, false); closed = true; stopSampling(); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
       catch (error) { observerError = "host-observation-gap"; failure("finish", error); }

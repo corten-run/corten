@@ -12,23 +12,53 @@ on:
         description: Run only the native Linux check
         type: boolean
         default: false
+      docker_exit_control:
+        description: Also exercise the experimental Docker cgroup exit control
+        type: boolean
+        default: false
 
-# Keep every main run; only newer PR runs supersede older ones.
+# Only direct PRs share a ref group. Main pushes must not cancel one another when admitted out of
+# order. workflow_ref and event_name describe the caller when this workflow is called.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: >-
+    ${{ github.workflow }}-${{ startsWith(github.workflow_ref, format('{0}/.github/workflows/benchmark-evidence.yml@', github.repository))
+    && github.event_name == 'pull_request'
+    && github.ref || format('benchmark-evidence-run-{0}', github.run_id) }}
+  cancel-in-progress: >-
+    ${{ startsWith(github.workflow_ref, format('{0}/.github/workflows/benchmark-evidence.yml@', github.repository))
+    && github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   scope:
+    # Only direct main pushes query the API. Reusable callers must still allow this permission.
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       run: ${{ steps.scope.outputs.run }}
       kernel: ${{ steps.scope.outputs.kernel }}
     steps:
+      - name: Stop a superseded main push
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1'
+          && github.workflow_ref == format('{0}/.github/workflows/benchmark-evidence.yml@refs/heads/main', github.repository)
+        shell: bash
+        run: |
+          tip_pattern=$'^([0-9a-f]{40})\trefs/heads/main$'
+          if tip=$(timeout -k 2s 15s git ls-remote --exit-code "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" refs/heads/main) &&
+              [[ "$tip" =~ $tip_pattern ]]; then
+            if [[ "${BASH_REMATCH[1]}" != "$GITHUB_SHA" ]]; then
+              echo "::notice::Main has moved; this run did not check its commit. Rerun to check this exact commit."
+              exit 1
+            fi
+          else
+            echo "::warning::Could not read the live main tip; checking the original push."
+          fi
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -38,8 +68,8 @@ jobs:
           node-version-file: .node-version
       - id: scope
         env:
-          PUSH_BEFORE: ${{ github.event.before }}
-        run: node scripts/benchmark-scope.mjs evidence
+          GITHUB_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+        run: node scripts/benchmark-scope.mjs evidence-cumulative-v1
 
   evidence:
     needs: scope
@@ -122,7 +152,9 @@ jobs:
         # sudo resets the environment, so the two variables the script's guard reads are passed on.
         run: sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" CI="$CI" /bin/bash scripts/ci-docker-hub-mirror.sh "$(command -v node)"
       - name: Exercise actual delegated process and Docker participant boundaries
-        run: sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"
+        env:
+          CORTEN_NATIVE_DOCKER_EXIT: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_exit_control && '1' || '0' }}
+        run: sudo env CORTEN_NATIVE_DOCKER_EXIT="$CORTEN_NATIVE_DOCKER_EXIT" /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"
       - name: Prove bracketed JSON resource reads on a synthetic Docker participant
         timeout-minutes: 3
         run: |

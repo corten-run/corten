@@ -95,7 +95,7 @@ It does not replace any native admission gate or default profile.
 | Group | Round and fixed preparation | Native defaults and retained evidence |
 |---|---|---|
 | Catalog page | `cN`, excluding historical `c1`; catalog fixtures; `--build --group catalog-page` | Three passes, 60 s phases, 30 s warmup, rate 150. Both-source page and JSON/browser gates precede page-only timing. Entire `bench/catalog/results/<round>` and strict commit-bound report. |
-| JSON API | `jN`; both fixtures; `--build --group json-api` | Same 60/30/150 defaults. All 36 functional cells plus independent exact-image native-source audits. Receipt staging is blocked here, not invented or waived. Entire results tree and strict commit-bound report. |
+| JSON API | `jN`; both fixtures; `--build --group json-api` | Same 60/30/150 defaults. Every app's four functional cells plus independent exact-image native-source audits. Receipt staging is blocked here, not invented or waived. Entire results tree and strict commit-bound report. |
 | Localized marketplace | `wN` or native official `rN` starting at r17; marketplace fixtures; `--build --group localized-marketplace` | Native defaults are 60/30/150, not the separate short-window cloud profile. Exact-image production/browser gates; preserve excluded/stopped outcomes. Native report has no strict-completeness flag; collection must separately check complete selected coverage. |
 | Mixed production | `wN --build`; runner generates fixture | Default functional-only profile, seed 42, two clients, one repetition. Measurement defaults remain three passes, 120 s windows, 15 s warmup, 30 s calibration, 120 s tail, 16 cycles. Raw captures, readbacks, faults and measurement tree stay separate. No standalone validator yet. |
 | Full-stack browser | `wN --build --out bench/fullstack-browser/work/<round> --isolated` | All ten apps and 240 profiles, native desktop/mobile settings. Requires host Chromium, a delegated command cpuset, the local Node tool image and free SvelteKit loopback port 8080. Isolation evidence does not replace the native workload gates. |
@@ -108,7 +108,9 @@ Named override recipes include `marketplace-short-window` (three passes,
 15 s phases/10 s warmup/rate 150), `mixed-measure` (adds measurement without changing the
 default native profile/settings), `mixed-production-measure` (the separately reviewed
 production procedure adds measurement and the native matched profile), `mixed-production-django-asgi`
-(the dedicated Mixed recipe selects Django's ASGI build and keeps the same timing, resources, and gates),
+(the earlier dedicated recipe selects Django ASGI), and `mixed-production-asgi-webflux`
+(the current dedicated recipe retains Django ASGI and selects Spring WebFlux with
+the same timing, resources, and gates),
 `native-feed-measure` for either live group
 (native-feed for every candidate, 1,044 events, queue 1,024/history 1,025, then the native
 1/2/4-browser measurement levels), and [`client-heavy-comparison-v1`](../../client-heavy/README.md#dedicated-comparison-recipe)

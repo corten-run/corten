@@ -1,6 +1,6 @@
 // Starts the probe held to one CPU, under callgrind or not, and talks HTTP/1.1 to it.
 import { execFileSync, spawn } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, on, once } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
@@ -15,31 +15,65 @@ import { Answers, cases, masked, unexpected } from "./requests.mjs";
  * a count reads.
  */
 const ALLOCATOR = { LD_PRELOAD: "libjemalloc.so.2", MALLOC_CONF: "background_thread:false,tcache_max:524288", PROBE_ALLOCATOR: "jemalloc" };
+const IDLE_FRAME = "IDLE_ALLOCATOR";
+
+/** @param {import("node:stream").Readable} stdout */
+function idleFrames(stdout) {
+  const frames = new EventEmitter();
+  // Keep at most enough for the four decimal counters and their keys. Discard the rest of any
+  // stdout line through LF: an unrelated log can be arbitrarily long without losing the next reply.
+  const line = Buffer.alloc(256);
+  let bytes = 0;
+  stdout.on("data", (/** @type {Buffer} */ chunk) => {
+    for (let at = 0; at < chunk.length;) {
+      const lf = chunk.indexOf(0x0a, at);
+      const end = lf === -1 ? chunk.length : lf;
+      const keep = Math.min(end - at, line.length - bytes);
+      if (keep > 0) chunk.copy(line, bytes, at, at + keep);
+      bytes = Math.min(line.length + 1, bytes + end - at);
+      if (lf === -1) break; // Never emit a partial line, even if stdout ends here.
+      const text = line.toString("utf8", 0, Math.min(bytes, line.length)).replace(/\r$/, "");
+      if (text === IDLE_FRAME || text.startsWith(`${IDLE_FRAME} `)) {
+        frames.emit("frame", bytes > line.length ? "" : text.slice(IDLE_FRAME.length + 1));
+      }
+      bytes = 0;
+      at = lf + 1;
+    }
+  });
+  return frames;
+}
 
 /**
  * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`, with `HOSTS` set to
  * `hosts` or, without it, not set, whatever this process's environment holds. With `callgrind`,
  * under callgrind writing its profiles to `callgrind.out`, with `callgrind.options` more.
  * @param {string} binary @param {"api" | "pages"} configuration
- * @param {{ cpu: string, port: number, hosts?: string, callgrind?: { out: string, options?: string[] } }} how
+ * @param {{ cpu: string, port: number, hosts?: string, idleMemory?: boolean, callgrind?: { out: string, options?: string[] } }} how
  */
-export async function start(binary, configuration, { cpu, port, hosts, callgrind }) {
+export async function start(binary, configuration, { cpu, port, hosts, callgrind, idleMemory = false }) {
   const under = callgrind ? ["valgrind", "--tool=callgrind", `--callgrind-out-file=${callgrind.out}`, ...(callgrind.options ?? [])] : [];
   /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, ...ALLOCATOR };
   delete env.HOSTS;
+  delete env.PROBE_IDLE_MEMORY;
   if (hosts !== undefined) env.HOSTS = hosts;
+  if (idleMemory) env.PROBE_IDLE_MEMORY = "1";
   const child = spawn("taskset", ["-c", cpu, ...under, binary, String(port), configuration], {
     env,
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", idleMemory ? "pipe" : "ignore", "pipe"],
   });
+  const samples = child.stdout && idleFrames(child.stdout);
+  const closed = new AbortController();
+  child.stdout?.once("close", () => closed.abort());
+  child.stdout?.once("error", () => closed.abort());
   let said = "";
+  let late;
   child.stderr.setEncoding("latin1");
   const ready = new Promise((resolve, reject) => {
-    const late = setTimeout(() => reject(new Error(`the probe did not say READY in 120 s:\n${said}`)), 120_000);
+    late = setTimeout(() => reject(new Error(`the probe did not say READY in 120 s:\n${said}`)), 120_000);
     child.stderr.on("data", (text) => {
       said += text;
-      if (/^READY /m.test(said)) resolve(clearTimeout(late));
+      if (/^READY /m.test(said)) resolve(undefined);
     });
     child.on("error", reject);
     child.on("exit", () => reject(new Error(`the probe stopped before it was ready:\n${said}`)));
@@ -49,12 +83,39 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
   } catch (error) {
     child.kill("SIGKILL");
     throw error;
+  } finally {
+    clearTimeout(late);
   }
   return {
     pid: /** @type {number} */ (child.pid),
+    /** One counter sweep from the serving thread, without opening an HTTP connection. */
+    async memory() {
+      if (!samples) throw new Error("the probe was not started for idle memory");
+      const signal = AbortSignal.any([closed.signal, AbortSignal.timeout(5000)]);
+      let payload;
+      try {
+        const replies = on(samples, "frame", { signal });
+        if (!signal.aborted && !child.kill("SIGUSR1")) closed.abort();
+        for await (const [frame] of replies) {
+          payload = frame;
+          break;
+        }
+      } catch {
+        throw new Error(`the probe did not give an idle allocator sample:\n${said}`);
+      }
+      let sample;
+      try { sample = JSON.parse(payload); } catch { /* refused below */ }
+      if (!sample || !Number.isSafeInteger(sample.live) || sample.live < 0 || !Number.isSafeInteger(sample.threadNet) ||
+          !Number.isSafeInteger(sample.active) || sample.active < 0 || !Number.isSafeInteger(sample.nanos) || sample.nanos < 0) {
+        throw new Error(`the probe gave an invalid idle allocator sample:\n${said}`);
+      }
+      const { live, threadNet, active, nanos } = sample;
+      return { live, threadNet, active, nanos };
+    },
     /** Stops the probe and waits until it has. */
     async stop() {
-      const exited = child.exitCode === null ? once(child, "exit") : Promise.resolve();
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exited = once(child, "exit");
       const late = setTimeout(() => child.kill("SIGKILL"), 60_000);
       child.kill("SIGTERM");
       await exited;

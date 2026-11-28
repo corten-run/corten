@@ -582,12 +582,70 @@ that hold the page, only the deepest is current. Its links carry the group they 
 markup puts them, so render every link it gives back: leave out an entry the user may not see
 before the call. Each entry comes with its item (a label, or the row it was read from), which
 `links()` hands back beside its link. An entry is a route or a `Local` path, written as the
-browser asks for it (a link to another site is a plain link, never current):
+browser asks for it (a link to another site is a plain link, never current). A link of `req.nav`
+or `req.nav_of` whose URL is not a path on this site, one `/` and then not `/` or `\` (`//host/x`,
+`/\host/x`, which only a route implemented by hand writes, or a full or a relative URL), is never
+current, on the server and in the runtime, which test the same `href` text; the browser would read
+its pathname as another host's. A tab or a line break straight after the first `/` is refused too,
+as a syntax restriction rather than a browser's rule: browsers drop it, so `/<tab>old` is this
+site's `/old`, and only `/<tab>/host/x` is another host's.
 
 ```rust,ignore
 let nav = req.nav_of(items.iter().map(|item| (NavTo::section(&item.href), item)));
 html! { <nav>for (link, item) in nav.links() { <a {..link}>{&item.label}</a> }</nav> }
 ```
+
+For a breadcrumb in the rendered page, read the same mark:
+`nav.links().find_map(|(link, item)| link.is_current().then_some(item))` gives the first marked
+item, or `None`. This reads the link's `aria-current="page"` decision, including other addresses;
+it does not write or compare its URL again. On a client navigation the runtime updates the links,
+not arbitrary breadcrumb text outside the swapped content.
+
+A page that also answers at another address, such as an older one that stored links still carry,
+names it with `also`, a route or a `Local` as the entry is: `NavTo::page(&Settings).also(&Governance)`
+is current at `/governance` as at `/settings`, by the same rule, and its link still goes to
+`/settings`. The entry is as deep as the deepest of its addresses that holds the page, so an older
+address deeper than its own URL wins over an entry whose URL is between the two. The other paths are written in `data-nav-also` as comparison keys, not as any one
+engine spells them: the path `location.pathname` shows at that address, by the URL Standard (the
+query and fragment left out, the end trimmed, `.` and `..` segments resolved, and a space or a
+character beyond ASCII percent-encoded: `/old/./café ` as `/old/caf%C3%A9`), with the spellings
+engines differ on made one. A `|` is written `%7C`, as Chromium shows it where Firefox and WebKit keep
+it, and an escape's hex digits are uppercase, as WebKit asks for `/old%7chome` as `/old%7Chome` while
+its `location.pathname` keeps `%7c`; no escape is decoded. In a nav with other addresses every
+entry's own URL is compared by its key too, so a deeper entry still wins in another spelling. An
+other address that is not a path on this site (`//host/old`) is left out, and an entry whose own
+URL is not one is current at none of its addresses. A NUL in an entry's own URL, which only a
+route implemented by hand writes, is ranked as the HTML parser leaves it in the `href`, U+FFFD
+(`/old%EF%BF%BDx`, not `/old%00x`), as the runtime reads it. An other address holding a raw NUL
+is left out and the entry is never current by it: Chromium and WebKit ask for it with `%00` and
+Firefox cuts it at the NUL, so no one key holds it in every engine. An app that means that address
+writes the escape, `%00`, which is kept. The server makes the request's path the same
+key and the runtime `location.pathname`, and each compares
+the keys as plain text, so for every address Corten writes they mark the same entry at first render
+and after a client navigation in Playwright's Chromium, Firefox and WebKit builds, where these
+spellings were measured. A nav without other addresses compares the paths as written, as before.
+The nav's group name ends in `+` when an entry has other addresses, so the runtime reads
+`data-nav-also` and compares by key only in such a nav. Like `data-nav`, `html!` refuses
+`data-nav-also` written as an attribute by hand; a spread of pairs passes it through, as it does
+`data-nav` and `data-nav-group`.
+
+WebKit asks for an escape of a letter, a digit, `-`, `.`, `_` or `~` decoded (`/old/%2e%2ex` as
+`/old/..x`) while its `location.pathname` keeps it, so Corten never writes one: a typed route writes
+those characters as they are, `Local::parse` refuses a path with one, and `also` leaves out an
+address with one, which only a route implemented by hand can write. `also` checks the path once its
+`.` and `..` segments are resolved, as every engine resolves them, escaped or not: `/old/%2e%2e/x` is
+`/x` and kept. An address typed by hand with
+such an escape is compared as written, so it is never the address with the plain character, as
+Corten's router matches a route's fixed text as sent (`/%73ettings` is not the route `/settings`).
+That leaves two limits. In any nav, WebKit asks for `/%73ettings` as `/settings`, so its server
+answer marks the Settings entry there and its runtime, after a client navigation to the same
+address, does not. Chromium and Firefox ask for it as written, and neither marks it. And a nav
+without other addresses compares the paths as written, the request's on the server and
+`location.pathname` in the runtime, so where an engine asks for a path in another spelling than
+it shows they can differ: an entry at `/old%7chome` is unmarked in WebKit's server answer, which
+it asks for as `/old%7Chome`, and marked by its runtime, whose `location.pathname` keeps `%7c`; an
+entry at `/a|b` is the same in Chromium, which asks for and shows `/a%7Cb`. A nav with other
+addresses compares by keys, and both mark them.
 
 Structured data for search engines is a head tag too: `head={JsonLd { value: &product }}`
 (feature `json`) writes a `ToJson` value in `<script type="application/ld+json">` with `<` as

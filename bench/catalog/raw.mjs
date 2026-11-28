@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { aggregate, leanApps, leanProfile, phases, probeCpu, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
+import { aggregate, leanApps, leanProfile, recordedLeanApps, phases, probeCpu, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { inspectCatalog, completeChecks } from "./report.mjs";
 import { records } from "./fixtures.mjs";
 import { qualificationIdentity } from "./group.mjs";
@@ -108,7 +108,7 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   assert.ok(runtime.Config.Env.includes("CATALOG_FIXTURE_PATH=/fixtures/catalog.json"));
   assert.ok(runtime.Config.Env.includes(`API_BASE=http://${summary.runId}-upstream:8080`));
   if (summary.measurement.leanProfile !== undefined) {
-    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
+    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: recordedLeanApps(summary) }, "catalog lean configuration differs");
     assert.deepEqual(runtime.Config.Env.filter((value) => value.startsWith("PROFILE=")),
       leanApps.includes(app) ? [`PROFILE=${leanProfile}`] : [], "catalog runtime lean profile differs");
   }

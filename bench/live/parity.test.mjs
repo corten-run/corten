@@ -62,6 +62,62 @@ test("fan-out capture uses the native port binding for every reader before any t
   }
 });
 
+for (const { name, times, attempts, message, receipt } of [
+  { name: "admits exactly 500 ms", times: [1000, 1050, 1050, 1550, 1600, 1600], attempts: [1, 2],
+    message: "fixture stopped publication" },
+  { name: "retains lag and preceding send just above 500 ms", times: [1000, 1050, 1050, 1550.25, 1600.25, 1600.25],
+    attempts: [1], message: "native publisher behind offered rate",
+    receipt: { sequence: 2, lagMs: 500.25, previousSendMs: 500.25 } },
+  { name: "retains first-attempt lag with no preceding send", times: [1000, 1550.25, 1550.25], attempts: [],
+    message: "native publisher behind offered rate", receipt: { sequence: 1, lagMs: 500.25, previousSendMs: null } },
+  { name: "does not serialize an ambiguous lag", times: [1000, Infinity, Infinity], attempts: [],
+    message: "native publisher behind offered rate" },
+  { name: "does not serialize lag outside the numeric bound", times: [1000, 2 ** 54, 2 ** 54], attempts: [],
+    message: "native publisher behind offered rate" },
+  { name: "does not serialize a backwards preceding send", times: [1000, 1050, 1050, 1049, 1600.25, 1600.25],
+    attempts: [1], message: "native publisher behind offered rate" },
+]) test(`native Laravel fan-out ${name}`, async (t) => {
+  const settings = settingsFor("recoverable-live", "normal", "native-feed"), clients = 4;
+  const sent = [];
+  let measuring = false, clockReads = 0;
+  t.mock.method(performance, "now", () => measuring ? times[clockReads++] : 1000);
+  t.mock.method(globalThis, "fetch", async (target) => {
+    if (target.endsWith("/parity/configure")) return Response.json({ configured: true });
+    assert.ok(target.endsWith("/parity/resources"));
+    return Response.json({ subscriptions: clients, connections: clients, pendingTasks: clients, queueEvents: 0,
+      queuePeak: 0, historyEvents: 0, historyPeak: 0, queueLimit: settings.queueLimit, historyLimit: settings.historyLimit });
+  });
+  let contexts = 0;
+  const browser = { async newContext() {
+    const id = String(++contexts), page = new EventEmitter();
+    Object.assign(page, {
+      setDefaultTimeout() {}, async goto() {}, async waitForFunction() {},
+      async evaluate(_fn, arg) {
+        if (arg?.seq === undefined) return [];
+        sent.push(arg.seq);
+        if (arg.seq === 2) throw new Error("fixture stopped publication");
+      },
+    });
+    return { async newPage() { return page; }, async close() {}, async newCDPSession() {
+      return { on() {}, async send() { return { targetInfo: { targetId: id, browserContextId: id } }; } };
+    } };
+  } };
+  await assert.rejects(fanoutJourney(browser, "http://127.0.0.1:8080", settings, clients, nativePorts.laravel, (_id, phase) => {
+    assert.equal(phase, "before");
+    measuring = true;
+    return { receipt: { startedAt: 1000 } };
+  }, (active) => { if (!active) measuring = false; }), (error) => {
+    assert.equal(error.message, message);
+    if (message === "native publisher behind offered rate") assert.equal(error.code, "ERR_ASSERTION");
+    assert.equal(error.evidence.browsers.length, clients);
+    if (receipt) assert.deepEqual(error.evidence.publisherLag, receipt);
+    else assert.ok(!Object.hasOwn(error.evidence, "publisherLag"));
+    return true;
+  });
+  assert.deepEqual(sent, attempts);
+  assert.equal(clockReads, times.length);
+});
+
 test("failed native journeys retain observed configuration and negative HTTP controls", async () => {
   for (const rejectedStatus of [400, 200]) {
     const workload = workloadFor("native-feed"), settings = settingsFor("recoverable-live", "normal", "native-feed");

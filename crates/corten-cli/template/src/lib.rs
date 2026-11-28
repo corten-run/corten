@@ -73,10 +73,7 @@ mod tests {
             .mode(Mode::Action)
             .field(GreetForm::FIELDS.name, "Ada")
             .await;
-        assert_eq!(
-            greeting.text(),
-            r#"<p id="greeting" aria-live="polite">Hello, Ada!</p>"#
-        );
+        assert_eq!(greeting.text(), r#"<span id="greeting">Hello, Ada!</span>"#);
     }
 
     #[tokio::test]
@@ -89,7 +86,8 @@ mod tests {
         assert_eq!(page.status(), 200);
         let html = page.text();
         assert!(
-            html.contains("Hello, Ada!") && html.contains("<header>"),
+            html.contains(r#"<p aria-live="polite"><span id="greeting">Hello, Ada!</span></p>"#)
+                && html.contains("<header>"),
             "{html}"
         );
         // The browser shows the address the form posted to, which answers a GET too, so it can

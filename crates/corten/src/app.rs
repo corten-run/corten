@@ -2515,7 +2515,7 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let mut req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        let mut req = req.map(crate::extract::arriving);
         // An HTTP/1.1 message with no `Host` line, which only its reader knows of a request.
         crate::security::mark_unnamed(&mut req);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
@@ -2568,9 +2568,18 @@ pub(crate) struct Scope {
     shell: u64,
     /// The lines the stages give its answers that bring none of them ([`Applied::lines`]).
     lines: http::HeaderMap,
+    /// What those say of an answer's tag ([`cache::tag`]).
+    beside_a_tag: cache::BesideATag,
     /// Its middleware, after the app's: each area's around it, outermost first, then its API's
     /// (with the APIs' around it).
     middleware: crate::middleware::Stack,
+}
+
+#[cfg(test)]
+impl Scope {
+    /// The offsets of `own` and `beside_a_tag`, for the router's test of a scope's layout.
+    pub(crate) const OWN_AND_BESIDE_A_TAG: (usize, usize) =
+        (std::mem::offset_of!(Scope, own), std::mem::offset_of!(Scope, beside_a_tag));
 }
 
 /// Every area's and API's scope and the app's, by path: for a request whose route cannot say
@@ -2598,16 +2607,24 @@ impl Scopes {
             around.sort_by_key(|area| area.prefix.len());
             around
         };
+        // A scope's lines, with what they say of an answer's tag: the one place both are made.
+        let scope_lines = |csp: &Csp, page| {
+            let lines = policy.lines(csp, page);
+            let beside_a_tag = cache::BesideATag::of(&lines);
+            (lines, beside_a_tag)
+        };
         let mut prefixed: Vec<(String, Arc<Scope>)> = Vec::with_capacity(areas.len() + mounts.len());
         for area in areas {
             let around = around(area.prefix);
             let (csp, shell) = policy.csp_for(area.prefix);
+            let (lines, beside_a_tag) = scope_lines(&csp, true);
             let scope = Scope {
                 own: false,
                 mount: None,
                 deadline: around.iter().rev().find_map(|area| area.deadline).unwrap_or(deadline),
                 body_limit: around.iter().rev().find_map(|area| area.body_limit).unwrap_or(body_limit),
-                lines: policy.lines(&csp, true),
+                lines,
+                beside_a_tag,
                 csp,
                 shell,
                 middleware: around.iter().flat_map(|area| area.middleware.iter().cloned()).collect(),
@@ -2624,15 +2641,26 @@ impl Scopes {
                 mount.body_limit.or_else(|| around.iter().rev().find_map(|area| area.body_limit)).unwrap_or(body_limit);
             let middleware = around.iter().flat_map(|area| area.middleware.iter()).chain(steps.iter()).cloned().collect();
             let prefix = mount.prefix.clone();
-            let lines = policy.lines(&csp, false);
-            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, middleware };
+            let (lines, beside_a_tag) = scope_lines(&csp, false);
+            let scope =
+                Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, beside_a_tag, middleware };
             prefixed.push((prefix, Arc::new(scope)));
         }
         prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         let app = |own| {
             let csp = policy.csp.clone();
-            let lines = policy.lines(&csp, true);
-            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, lines, middleware: Default::default() })
+            let (lines, beside_a_tag) = scope_lines(&csp, true);
+            Arc::new(Scope {
+                own,
+                mount: None,
+                deadline,
+                body_limit,
+                csp,
+                shell: 0,
+                lines,
+                beside_a_tag,
+                middleware: Default::default(),
+            })
         };
         Scopes { own_paths, own: app(true), app: app(false), prefixed }
     }
@@ -2767,11 +2795,12 @@ fn staged<S: Steps>(table: Table, layer: Layer<S>) -> Router {
 }
 
 /// The rest of the request under the deadline and the panic catch: the app's middleware, then the
-/// area's or API's, then the route and its handler.
+/// area's or API's, then the route and its handler, with the stages' signal for its answer
+/// ([`crate::middleware::Ends`]).
 pub(crate) struct Next<'a, S: Steps> {
     steps: &'a S,
     scope: S::Scope<'a>,
-    route: Option<Route>,
+    ends: &'a crate::middleware::Ends<'a>,
 }
 
 impl<'a, S: Steps> Next<'a, S> {
@@ -2780,13 +2809,13 @@ impl<'a, S: Steps> Next<'a, S> {
     }
 
     pub(crate) fn route_can_answer_action_page(&self) -> bool {
-        !self.route.as_ref().is_some_and(|route| route.action_patches())
+        !self.ends.route.as_ref().is_some_and(|route| route.action_patches())
     }
 
     // Not an `async fn`: a layer of its own would move the request once more.
     #[inline]
     pub(crate) fn run(self, req: Request) -> impl Future<Output = Response> + Send + 'a {
-        self.steps.run(req, self.route, self.scope)
+        self.steps.run(req, self.ends, self.scope)
     }
 }
 
@@ -2804,7 +2833,7 @@ pub(crate) trait Steps: Send + Sync + 'static {
     fn run<'a>(
         &'a self,
         req: Request,
-        route: Option<Route>,
+        ends: &'a crate::middleware::Ends<'a>,
         scope: Self::Scope<'a>,
     ) -> impl Future<Output = Response> + Send + 'a;
 }
@@ -2823,8 +2852,13 @@ impl<M: Middleware> Steps for Plain<M> {
     }
 
     #[inline]
-    fn run<'a>(&'a self, req: Request, route: Option<Route>, (): ()) -> impl Future<Output = Response> + Send + 'a {
-        self.0.call(req, crate::middleware::Handle(route))
+    fn run<'a>(
+        &'a self,
+        req: Request,
+        ends: &'a crate::middleware::Ends<'a>,
+        (): (),
+    ) -> impl Future<Output = Response> + Send + 'a {
+        self.0.call(req, crate::middleware::Handle(ends))
     }
 }
 
@@ -2847,13 +2881,13 @@ impl<M: Middleware> Steps for Scoped<M> {
     fn run<'a>(
         &'a self,
         req: Request,
-        route: Option<Route>,
+        ends: &'a crate::middleware::Ends<'a>,
         stack: Self::Scope<'a>,
     ) -> impl Future<Output = Response> + Send + 'a {
         use futures_util::future::Either;
         match stack {
-            [] => Either::Left(self.0.call(req, crate::middleware::Handle(route))),
-            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route })),
+            [] => Either::Left(self.0.call(req, crate::middleware::Handle(ends))),
+            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, ends })),
         }
     }
 }
@@ -2914,8 +2948,6 @@ impl<S: Steps> Layer<S> {
         }
         // The body limit, the same way, carried by the request's signal.
         let body_limit = scope.body_limit;
-        // The middleware of the area or API the request is in, where one has some.
-        let steps = self.steps.scope(scope);
         let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
         if let Some(mount) = mount {
             if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
@@ -3002,11 +3034,23 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let next = Next { steps: &self.steps, scope: steps, route };
+        // The route and the stages' signal, which the route's answer marks as it comes back past
+        // the middleware when it drew a form's new submit key, from whatever thread polled it.
+        let ends = crate::middleware::Ends { route, signal: &watch.0 };
+        // The middleware of the area or API the request is in, where one has some. Taken after
+        // the signal, so it is dropped before it: `Next` holds both for one lifetime.
+        let steps = self.steps.scope(scope);
+        let next = Next { steps: &self.steps, scope: steps, ends: &ends };
         // The signal ends when this future is dropped, then when the response is dropped.
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        drop(ends);
         let caller = watch.0.is_personal();
         let asked = watch.0.asked_language();
+        // Held by the stages' signal, which the route's answer marks as it comes back past the
+        // middleware too (`crate::middleware::Ends`), so a middleware's new response in place of
+        // the one it was given, to a request it may have rebuilt, on whatever thread it polled
+        // `next`, still goes out as an answer that drew a form's new submit key.
+        let drew_key = watch.0.key_drawn();
         let mut res = signal::follow(res, watch, self.zoned());
         // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
         // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
@@ -3043,10 +3087,13 @@ impl<S: Steps> Layer<S> {
             nonce: nonced,
             dev: self.shared.dev,
         };
+        if drew_key {
+            cache::unrepeatable(&mut res);
+        }
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
         if !ready {
-            cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+            cache::settle_drawn(&mut res, seen, path.as_deref().unwrap_or(""), drew_key);
         }
         // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
         // when its headers as sent let a shared cache keep it.
@@ -3057,7 +3104,7 @@ impl<S: Steps> Layer<S> {
         // A body with this request's nonce differs every time, so its tag would never match.
         if !nonced {
             if let Some(has) = has {
-                res = cache::tag(res, &has).await;
+                res = cache::tag(res, &has, ready.then_some(&scope.beside_a_tag)).await;
             }
         }
         if let Some(mount) = mount {

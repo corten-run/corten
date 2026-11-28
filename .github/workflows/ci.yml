@@ -7,15 +7,26 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Full SHA of a verified earlier ancestor of main
+        required: true
+        type: string
   workflow_call:
 
-# A newer run for a pull request cancels its older one, so superseded commits do not hold runners.
-# A rerun of an old commit is newer too and cancels the head's run; rerun the head's CI after it.
-# Pushes to main and the release's call each keep their own run. Do not give release.yml a
-# concurrency group this one could share.
+# Only direct PRs share a ref group, even on reruns. Main runs must not cancel one another:
+# GitHub can admit an older push to a group after a newer one. A reusable call sees its caller's
+# workflow_ref and event (push for Release).
+# Do not give release.yml a concurrency group this one could share.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: >-
+    ${{ github.workflow }}-${{ startsWith(github.workflow_ref, format('{0}/.github/workflows/ci.yml@', github.repository))
+    && github.event_name == 'pull_request'
+    && github.ref || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: >-
+    ${{ startsWith(github.workflow_ref, format('{0}/.github/workflows/ci.yml@', github.repository))
+    && github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -24,13 +35,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  main-tip:
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1'
+      && github.workflow_ref == format('{0}/.github/workflows/ci.yml@refs/heads/main', github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Stop a superseded main push
+        shell: bash
+        run: |
+          tip_pattern=$'^([0-9a-f]{40})\trefs/heads/main$'
+          if tip=$(timeout -k 2s 15s git ls-remote --exit-code "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" refs/heads/main) &&
+              [[ "$tip" =~ $tip_pattern ]]; then
+            if [[ "${BASH_REMATCH[1]}" != "$GITHUB_SHA" ]]; then
+              echo "::notice::Main has moved; this run did not check its commit. Rerun to check this exact commit."
+              exit 1
+            fi
+          else
+            echo "::warning::Could not read the live main tip; checking the original push."
+          fi
+
   # The required check `rust`: it passes only when both lanes below ran and passed, and fails on
   # one that failed, was cancelled or was skipped. The lanes run side by side on runners of their
   # own, each with its own cache (rust-cache keys by job), so the release tests no longer wait for
   # the rest.
   rust:
-    needs: [rust-checks, rust-release]
-    if: always()
+    needs: [main-tip, rust-checks, rust-release]
+    if: always() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')
     runs-on: ubuntu-26.04
     steps:
       - run: |
@@ -38,6 +70,8 @@ jobs:
           test "${{ needs.rust-checks.result }}" = success && test "${{ needs.rust-release.result }}" = success
 
   rust-checks:
+    needs: main-tip
+    if: "!cancelled() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')"
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -93,6 +127,8 @@ jobs:
   # smokes (#947), and not after the checks above, where they made the job a release build longer
   # (#1086); `rust` above still requires them.
   rust-release:
+    needs: main-tip
+    if: "!cancelled() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')"
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -103,6 +139,8 @@ jobs:
       - run: cargo test --release --workspace --all-features
 
   msrv:
+    needs: main-tip
+    if: "!cancelled() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')"
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -117,8 +155,8 @@ jobs:
   # and every part a group names has a step, so a renamed group or a mistyped condition cannot
   # leave a smoke running nowhere while this stays green.
   browser:
-    needs: smoke
-    if: always()
+    needs: [main-tip, smoke]
+    if: always() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -151,8 +189,13 @@ jobs:
   # them, `npm run check` and the benchmark apparatus run in two groups of their own: one after
   # the other they came within three minutes of the timeout (#2208).
   smoke:
+    needs: main-tip
+    if: "!cancelled() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')"
     name: smoke (${{ matrix.group }})
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      actions: read
     # Bound each group independently so a hung check cannot hold the runner for six hours.
     timeout-minutes: 30
     strategy:
@@ -197,15 +240,16 @@ jobs:
       # check:groups:browser parse with (bench/package.json).
       - run: npm --prefix bench ci
         if: contains(env.PARTS, ' npm-check ') || contains(env.PARTS, ' group-apparatus ')
-      # scripts/bench-size.mjs checks every commit since the base, which it does not guess here: a
-      # pull request's checkout is its merge with the base, whose first parent is the base; a push's
-      # base is the commit the branch was at before it, all zeros for a new branch or tag (the
-      # script then takes the merge base with origin/main). Release calls this on a tag's push. Any
-      # other event fails until its base is wired here.
+      # Check every commit since an earlier successful main CI run, including superseded pushes.
+      # If the lookup fails, stop rather than guess which commits have already been checked.
+      # For a PR use the merge commit's first parent. Release still uses the tag push's before
+      # (all zeros for a new tag, which uses its merge base with origin/main).
       - name: The bench size check's base
         if: contains(env.PARTS, ' npm-check ')
         env:
-          BEFORE: ${{ github.event.before }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DISPATCH_BASE: ${{ inputs.base }}
+          GITHUB_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.token || '' }}
         run: |
           case "$GITHUB_EVENT_NAME" in
             pull_request)
@@ -214,7 +258,20 @@ jobs:
                 exit 1
               fi
               base=$(git rev-parse 'HEAD^1') ;;
-            push) base=$BEFORE ;;
+            push)
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                base=$(node scripts/benchmark-scope.mjs ci-base-cumulative-v1) || exit 1
+              else
+                base=$PUSH_BEFORE
+              fi ;;
+            workflow_dispatch)
+              if [[ "$GITHUB_REF" != refs/heads/main || ! "$DISPATCH_BASE" =~ ^[0-9a-f]{40}$ || "$DISPATCH_BASE" = "$GITHUB_SHA" ]] ||
+                  [[ "$(git cat-file -t "$DISPATCH_BASE" 2>/dev/null)" != commit ]] ||
+                  ! git merge-base --is-ancestor "$DISPATCH_BASE" "$GITHUB_SHA" 2>/dev/null; then
+                echo "::error::Dispatch CI on main with a full commit SHA that is a verified earlier ancestor."
+                exit 1
+              fi
+              base=$DISPATCH_BASE ;;
             *) base= ;;
           esac
           if [ -z "$base" ]; then

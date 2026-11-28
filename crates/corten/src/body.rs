@@ -96,6 +96,13 @@ impl Body {
         self.0.as_ref().is_none_or(|body| body.held())
     }
 
+    /// The size in bytes of what its box holds, none for an empty body. A box of a value with no
+    /// size is not allocated, so a body whose size here is zero cost no allocation.
+    #[cfg(test)]
+    pub(crate) fn boxed_size(&self) -> usize {
+        self.0.as_ref().map_or(0, |body| std::mem::size_of_val(&**body))
+    }
+
     /// A body sent as `stream` gives each piece; an error ends it, and the connection with it.
     pub fn from_stream<S>(stream: S) -> Self
     where

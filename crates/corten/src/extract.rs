@@ -358,6 +358,11 @@ impl std::error::Error for BodyRejection {}
 /// Corten's refusal of the request's body, never shared wherever it is answered
 /// ([`crate::cache::Unshared`]).
 impl crate::http::IntoResponse for BodyRejection {
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
+
     fn into_response(self) -> crate::http::Response {
         crate::cache::unshared(crate::http::IntoResponse::into_response((self.status, self.text)))
     }
@@ -502,6 +507,51 @@ impl<B: HttpBody + Unpin> HttpBody for Arriving<B> {
 
     fn size_hint(&self) -> http_body::SizeHint {
         self.0.size_hint()
+    }
+}
+
+/// A request body that had ended when its request came, which is the body of every request sent
+/// without one: it says what hyper's own says of such a body (it is at its end, it is no bytes
+/// long, and a read of it gives nothing), and no read of it waits for the client or fails. It holds
+/// nothing, so the box a [`Body`] keeps it in allocates nothing.
+struct Ended;
+
+impl HttpBody for Ended {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        Poll::Ready(None)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        true
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(0)
+    }
+}
+
+/// The body of a request from the connection ([`crate::serve`]), as the router takes it: read as
+/// it arrives ([`Arriving`]), unless hyper says it has ended already, as it does of a request with
+/// no length or a length of zero. That body has nothing to read and nothing to wait for, so the
+/// stream is not kept or boxed for it ([`Ended`]). A chunked body's end is in the body, so it has
+/// not ended here, whatever it holds.
+///
+/// What hyper hands on as ended was read for HTTP/1 alone, the one protocol Corten serves: there
+/// such a body has no channel to the connection behind it, so dropping it here releases nothing.
+/// An HTTP/2 stream's body would come through here without a compile error, and what hyper holds
+/// for one that ended with its headers is to be read before it does
+/// (`docs/design.md#choice-deadline-body`).
+pub(crate) fn arriving(body: hyper::body::Incoming) -> Body {
+    if body.is_end_stream() {
+        Body::new(Ended)
+    } else {
+        Body::new(Arriving(body))
     }
 }
 

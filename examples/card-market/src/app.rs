@@ -996,7 +996,7 @@ mod tests {
         assert_eq!(headers["corten-patch"], "1");
         assert_eq!(
             body,
-            r#"<p class="alert-form__message" id="alert-message" aria-live="polite">Alert set: we will email a@b.c when Pika &lt;Promo&gt; &amp; &quot;Friends&quot; drops below $2.00.</p>"#
+            r#"<p class="alert-form__message" id="alert-message">Alert set: we will email a@b.c when Pika &lt;Promo&gt; &amp; &quot;Friends&quot; drops below $2.00.</p>"#
         );
         let cross = alert(&app, &ITEM, "Pika", "2").header(SEC_FETCH_SITE, "cross-site").await;
         assert_eq!(cross.status(), StatusCode::FORBIDDEN);

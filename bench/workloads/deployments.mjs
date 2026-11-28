@@ -7,7 +7,7 @@ import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
 import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
 import { cpuSettings as marketplaceCpus, parseArgs as marketplaceOptions } from "../marketplace/run-contract.mjs";
-import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "./registry.mjs";
+import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps, springWebflux } from "./registry.mjs";
 
 export const deploymentSchema = "benchmark-deployments/v1";
 export const receiptSchema = "benchmark-deployment-review/v1";
@@ -144,6 +144,8 @@ const native = freeze({
   nextjs: { framework: "Next.js Pages Router + React SSR", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "custom Node Next.js server", workers: "one application process", command: ["node", "server.mjs"], refs: ["package.json", "server.mjs", "server-profile.mjs", "next.config.mjs"], middleware: "server-profile.mjs and next.config.mjs; PROFILE=matched is a separate build and runtime configuration" },
   spring: { framework: "Spring Boot + Thymeleaf", runtime: "Temurin 27.0.1.1+4 JRE", build: "mvn package -DskipTests", server: "embedded Tomcat", workers: "one JVM; Tomcat-managed thread pool", command: ["java", "-jar", "app.jar"], refs: ["pom.xml", "src/main/resources/application.properties"], middleware: "Spring application and application.properties; no extra production profile asserted" },
   "axum-maud": { framework: "axum + Maud", runtime: "Rust native release", build: "cargo build --release --locked", server: "axum", workers: "one process; Tokio runtime as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native tower/axum layers" },
+  proa: { framework: "Proa", runtime: "Rust native release", build: "cargo build --release --locked", server: "Proa FrameworkBuilder on axum", workers: "one process; default Tokio runtime", command: ["/app/server"], refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/source.rs", "src/catalog.rs"], middleware: "native Proa security and CSP layers; catalog document headers" },
+  ntex: { framework: "ntex", runtime: "Rust native release", build: "cargo build --release --locked", server: "ntex HttpServer", workers: "framework default worker count; Tokio backend", command: ["/app/server"], refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/source.rs", "src/catalog.rs", "src/marketplace.rs"], middleware: "native ntex JSON and negotiated compression" },
   gin: { framework: "Gin + templ", runtime: "Go native", build: "templ generate; CGO_ENABLED=0 go build -trimpath -ldflags=-s -w", server: "Go net/http", workers: "one process; Go scheduler", command: ["/app/itempage"], refs: ["go.mod", "main.go"], middleware: "main.go native Gin handlers; GIN_MODE=release" },
   drogon: { framework: "Drogon CSP views", runtime: "C++ native release", build: "CMake Release; compiled CSP views", server: "Drogon", workers: "one process; IO threads from cpuCount() in src/main.cc", command: ["/app/server"], refs: ["CMakeLists.txt", "src/main.cc"], middleware: "src/main.cc native handlers and static document root" },
   leptos: { framework: "Leptos SSR + WASM hydration", runtime: "Rust native server + browser WASM", build: "cargo leptos build --release --cargo-locked", server: "axum / Leptos", workers: "one process; Tokio runtime as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native layers; LEPTOS_ENV=PROD" },
@@ -241,6 +243,17 @@ function candidates(group, app, baseline) {
       builds: { app: { context, dockerfile: `${context}/Dockerfile`, args: { PROFILE: "matched-asgi" } } },
       sourceRefs: [...baseline.configuration.sourceRefs, ...["requirements-matched-asgi.txt", "start_mixed_asgi.py", "itempage/mixed_asgi.py",
         "itempage/mixed_asgi_settings.py", "itempage/mixed_asgi_urls.py", "itempage/mixed_asgi_views.py"].map((path) => `${context}/${path}`)] };
+  }
+  if (app === "spring" && group === "mixed-production") {
+    const context = appRoot(app), dockerfile = `${context}/${springWebflux.dockerfile}`;
+    candidate(springWebflux.deployment, { scope: "dedicated Mixed Production only", buildProfile: springWebflux.buildProfile,
+      productionParity: "requires full native Mixed qualification before timing" }, [dockerfile], "source-present");
+    choices.at(-1).configuration = { ...baseline.configuration, framework: "Spring Boot WebFlux + Thymeleaf", server: "Reactor Netty",
+      workers: "one JVM; Reactor Netty event loops", command: [...springWebflux.entrypoint], middleware: "WebFlux request and upstream cancellation; native session middleware",
+      profile: "matched", environment: { ...baseline.configuration.environment, PROFILE: "matched" },
+      builds: { app: { context, dockerfile, args: {} } }, sourceRefs: [dockerfile, ...["mixed/pom.xml",
+        "mixed/src/main/resources/application.properties", "mixed/src/main/java/bench/mixed/MarketplaceApplication.java",
+        "mixed/src/main/java/bench/mixed/MarketplaceController.java", "mixed/src/main/java/bench/mixed/MarketplaceSource.java"].map((path) => `${context}/${path}`)] };
   }
   if (app === "fastapi") {
     candidate("fastapi-uvicorn-asyncio", { server: "Uvicorn", loop: "asyncio; explicit selection rather than auto", compiler: "CPython" }, [optionSources.uvicorn]);

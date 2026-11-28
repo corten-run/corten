@@ -1217,8 +1217,8 @@ fn mark_head_tags(html: &str, out: &mut String) {
 ///
 /// let row = html! { <tr id={RowId("i7")}><td>"Lamp"</td></tr> };
 /// assert_eq!(row.to_html(), r#"<tr id="row-i7"><td>Lamp</td></tr>"#);
-/// let status = html! { <p id={DeskStatusId} role="status">"Saved"</p> };
-/// assert_eq!(status.to_html(), r#"<p id="desk-status" role="status">Saved</p>"#);
+/// let status = html! { <div role="status"><p id={DeskStatusId}>"Saved"</p></div> };
+/// assert_eq!(status.to_html(), r#"<div role="status"><p id="desk-status">Saved</p></div>"#);
 /// assert_eq!(html! { {Remove(RowId("i7"))} }.to_html(), r#"<template id="row-i7" data-remove></template>"#);
 /// ```
 ///
@@ -1471,7 +1471,7 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 ///
 /// #[component]
 /// fn Status(text: &str) -> impl Patch {
-///     html! { <p id={StatusId} role="status">{text}</p> }
+///     html! { <p id={StatusId}>{text}</p> }
 /// }
 ///
 /// fn archived<'a>(done: &'a [&'a str]) -> impl Patch + 'a {
@@ -1480,6 +1480,9 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 ///         <Status text="Archived." />
 ///     }
 /// }
+/// // The page keeps the live region; the patch sends only its child.
+/// let page = html! { <div role="status"><Status text="" /></div> };
+/// assert_eq!(page.to_html(), r#"<div role="status"><p id="status"></p></div>"#);
 /// # let _ = archived(&["7"]);
 /// ```
 ///
@@ -1534,7 +1537,7 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// use corten::prelude::*;
 /// #[component]
 /// fn Status(text: &str) -> impl Patch {
-///     html! { <p role="status">{text}</p> }
+///     html! { <p>{text}</p> }
 /// }
 /// ```
 ///
@@ -1546,7 +1549,7 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// struct StatusId;
 /// #[component]
 /// fn Status(text: &str) -> impl Patch {
-///     html! { <p id={StatusId} role="status">{text}</p> }
+///     html! { <p id={StatusId}>{text}</p> }
 /// }
 /// #[component]
 /// fn Counted(n: u32) -> impl Patch {
@@ -1556,7 +1559,9 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 ///     }
 /// }
 /// fn send(view: impl Patch) -> String { view.to_html() }
-/// assert_eq!(send(Counted { n: 3 }), r#"<p id="status" role="status">3</p>"#);
+/// let page = html! { <div role="status"><Status text="" /></div> };
+/// assert_eq!(page.to_html(), r#"<div role="status"><p id="status"></p></div>"#);
+/// assert_eq!(send(Counted { n: 3 }), r#"<p id="status">3</p>"#);
 /// ```
 ///
 /// A loop over rows known from data is written where the rest of the patch is, with its
@@ -1877,6 +1882,11 @@ impl Rendered {
     pub fn into_string(self) -> String {
         self.html
     }
+
+    /// Whether its render drew a form's new submit key.
+    pub(crate) fn drew_key(&self) -> bool {
+        self.drew_key
+    }
 }
 
 impl Render for Rendered {
@@ -1935,6 +1945,19 @@ fn escape_each(text: &str, out: &mut String) {
         start = i + 1;
     }
     out.push_str(&text[start..]);
+}
+
+/// Appends `out[range]` to `out`, escaped as [`escape_into`] writes it, copying from within
+/// `out` rather than through a string of its own.
+pub(crate) fn escape_from_within(out: &mut String, range: std::ops::Range<usize>) {
+    let mut start = range.start;
+    while let Some(i) = next_escaped(&out.as_bytes()[..range.end], start) {
+        let entity = ENTITIES[ESCAPES[out.as_bytes()[i] as usize] as usize - 1];
+        out.extend_from_within(start..i);
+        out.push_str(entity);
+        start = i + 1;
+    }
+    out.extend_from_within(start..range.end);
 }
 
 /// The index of the first byte from `from` on that `escape_into` replaces. Most text has none, so
@@ -2341,8 +2364,8 @@ impl<T: Attrs> Attrs for Option<T> {
 /// The attributes a spread of pairs skips, compared as whole names in any case: the script
 /// wiring, `data-ref`, `data-ref-value`, `data-key`, `data-on` and `data-scope`, which only `ref=`,
 /// `key=`, `on:` and a component's root write, and `data-vars`, which only `style={..}` writes.
-/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group` and
-/// `data-corten-page` still pass through a spread.
+/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group`,
+/// `data-nav-also` and `data-corten-page` still pass through a spread.
 const PRINTED_BY_CORTEN: [&str; 6] = ["data-vars", "data-ref", "data-ref-value", "data-key", "data-on", "data-scope"];
 
 /// `[("data-id", id), ("title", title)]`: each pair as an attribute. Names come from the app's

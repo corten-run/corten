@@ -48,27 +48,36 @@ test("the official r24 mixed timing phase supplies the same measured CPU roles a
   assert.throws(() => nativeControlPartition(missing), /native CPU partition absent/);
   t.diagnostic("official r24/mixed-production: measured app=1 api=2-3 load=4-7; no functional-capture CPU proof");
 });
-test("dedicated Mixed binds its Django ASGI deployment and rejects a rehashed WSGI downgrade", () => {
+test("dedicated Mixed binds Django ASGI and Spring WebFlux and rejects both older recipes", () => {
   const group = "mixed-production", round = "r25", plan = campaigns.bindGroupCampaign({ group, round, commit });
   const [binding] = plan.bindings;
   assert.equal(productionRecipes[group], "mixed-production-measure");
-  assert.equal(binding.request.recipe, "mixed-production-django-asgi");
+  assert.equal(binding.request.recipe, "mixed-production-asgi-webflux");
   assert.equal(plan.recipes[group], binding.request.recipe);
   assert.deepEqual(binding.execution.invocation.argv, ["bench/mixed-production/run.mjs", "w25", "--build", "--measure", "--profile", "matched",
-    "--django-deployment", "django-granian-asgi"]);
+    "--django-deployment", "django-granian-asgi", "--spring-deployment", "spring-webflux"]);
   const previous = bindExecution({ ...binding.request, recipe: productionRecipes[group], review: null }, binding.campaignMode);
   assert.deepEqual(previous.resources, binding.resources);
-  const { djangoDeployment, ...remainingOptions } = binding.execution.effectiveOptions;
+  const { djangoDeployment, springDeployment, ...remainingOptions } = binding.execution.effectiveOptions;
   assert.equal(djangoDeployment, "django-granian-asgi");
+  assert.equal(springDeployment, "spring-webflux");
   assert.deepEqual(remainingOptions, previous.execution.effectiveOptions);
   const phase = mixedPhase(plan, "r25-0123456789abcdef");
   assert.equal(phase.execution.effectiveOptions.djangoDeployment, djangoDeployment);
+  assert.equal(phase.execution.effectiveOptions.springDeployment, springDeployment);
   assert.deepEqual(phase.execution.invocation.argv.slice(-2), ["--native-audits", "/bench/campaign/r25-0123456789abcdef/mixed-native-audits.json"]);
   validateCampaign(plan);
   const { campaignSha256, ...body } = plan;
-  const downgraded = { ...body, bindings: [previous], recipes: { ...plan.recipes, [group]: productionRecipes[group] } };
-  assert.notEqual(deploymentSha256(downgraded), campaignSha256);
-  assert.throws(() => validateCampaign({ ...downgraded, campaignSha256: deploymentSha256(downgraded) }), /fixed native bindings/);
+  const asgiOnly = bindExecution({ ...binding.request, recipe: "mixed-production-django-asgi", review: null }, binding.campaignMode);
+  assert.deepEqual(asgiOnly.execution.effectiveOptions, { ...remainingOptions, djangoDeployment });
+  assert.deepEqual(asgiOnly.execution.invocation.argv, binding.execution.invocation.argv.slice(0, -2));
+  for (const older of [previous, asgiOnly]) {
+    assert.deepEqual(older.selection, binding.selection);
+    assert.deepEqual(older.resources, binding.resources);
+    const downgraded = { ...body, bindings: [older], recipes: { ...plan.recipes, [group]: older.request.recipe } };
+    assert.notEqual(deploymentSha256(downgraded), campaignSha256);
+    assert.throws(() => validateCampaign({ ...downgraded, campaignSha256: deploymentSha256(downgraded) }), /fixed native bindings/);
+  }
 });
 test("captured pre-create worker uses the real committed placements including bounded hardening", async () => {
   const check = (group, mode) => inspectCampaign({ action: "actor-role-preflight", round: "r25", commit, group, mode });
@@ -220,7 +229,7 @@ test("group campaigns bind the entire exact native group with stable all-group p
   const dedicatedRecipes = {
     ...productionRecipes,
     "client-heavy": clientComparisonRecipe,
-    "mixed-production": "mixed-production-django-asgi",
+    "mixed-production": "mixed-production-asgi-webflux",
   };
   const expected = {
     "catalog-page": { app: "1", api: "2-3", load: "4-7" },
@@ -248,8 +257,10 @@ test("group campaigns bind the entire exact native group with stable all-group p
     assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), `${group}: dedicated group binding differs`);
     assert.equal(dedicated.host.region, providerCreateHost("dedicated").region);
     assert.notEqual(dedicated.subjectSha256, legacy.subjectSha256);
-    for (const field of ["procedures", "sourceSha256", "ready", "executionAuthorized"])
+    for (const field of ["procedures", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
+    assert.equal(dedicated.sources.sha256, legacy.sources.sha256);
+    assert.equal(plan.sourceSha256, group === "hardening" ? dedicated.sources.sha256 : all.sourceSha256);
     assert.deepEqual(plan.recipes, { ...all.recipes, [group]: recipe });
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
     if (group === "hardening") {

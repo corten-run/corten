@@ -632,7 +632,7 @@ export async function validateSaved({ folder, round, commit } = {}) {
     measureRequested = options.measure;
     checkpoint = "configuration";
     keys(options, ["round", "apps", "images", "readbacks", "nativeAudits", "build", "buildRef", "seed", "clients", "repetitions", "measure", "profile", "passes", "duration", "warmup", "calibration", "tailSeconds", "maxCycles", "requestTimeoutMs", "completeDelayMs", "slowDelayMs", "cancelAfterMs", "cleanupMs", "startupTimeoutMs",
-      ...(Object.hasOwn(options, "djangoDeployment") ? ["djangoDeployment"] : [])]);
+      ...["djangoDeployment", "springDeployment"].filter((key) => Object.hasOwn(options, key))]);
     equal(options.round, round); assert.ok(["matched", "defaults"].includes(options.profile));
     assert.ok(typeof options.build === "boolean" && typeof options.measure === "boolean");
     assert.match(summary.runId, new RegExp(`^mixed-${round}-[a-f0-9]{8}$`));
