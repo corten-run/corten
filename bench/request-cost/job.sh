@@ -14,9 +14,10 @@
 # bash job.sh read <directory> <cpu>
 #   Each build's answers, then each run `compare.mjs --readings` names, on base and then on
 #   head, the probe held to <cpu>. A build with `unbuilt` is not run at all, whatever it left.
-#   A run ends in 120 seconds or is stopped (and killed 10 seconds later if it has not ended),
-#   and none starts once STOP_AT has come, which must be set: seconds since the epoch. A run that
-#   fails or is stopped gave no figure: what it printed is removed, why is added to
+#   Just before launching timeout, sample the clock and skip the run if it is at or past
+#   STOP_AT (seconds since the epoch, required); otherwise the limit is the time left at that
+#   sample, at most 120 seconds, with 10 seconds' grace before KILL. A run that fails or is
+#   stopped gave no figure: what it printed is removed, why is added to
 #   <file>.refused, a line an attempt, and it is taken again, once. No run is taken again for
 #   its figure.
 set -eo pipefail

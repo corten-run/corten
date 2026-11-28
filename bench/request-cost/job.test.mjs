@@ -163,8 +163,8 @@ test("both successful builds leave the checksum of their own probe even in a pat
 for (const [side, end, code, minimum, said] of /** @type {const} */ ([
   ["base", "STAND_IN_WAITS", 124, 1, /build got TERM/],
   ["head", "STAND_IN_HANGS", 137, 11, /build waiting/],
-  ["head", "STAND_IN_EXITS_124", 124, 0, /exiting 124/],
-  ["base", "STAND_IN_KILLS", 137, 0, /another process sent KILL/],
+  ["head", "STAND_IN_EXITS_124", 124, null, /exiting 124/],
+  ["base", "STAND_IN_KILLS", 137, null, /another process sent KILL/],
 ])) {
   test(`a build on ${side} (${end}) reports status ${code} and seconds to the real verdict`, { skip }, (t) => {
     const made = fixture(t);
@@ -175,8 +175,8 @@ for (const [side, end, code, minimum, said] of /** @type {const} */ ([
     const record = String(left(`${side}/unbuilt`));
     const found = new RegExp(`^the build ended with status ${code} after (\\d+) s \\(limit 1 s\\)\\n$`).exec(record);
     assert.ok(found, record);
-    if (minimum === 0) assert.equal(Number(found[1]), 0);
-    else assert.ok(Number(found[1]) >= minimum, record);
+    // Independent exits do not bound elapsed time: the caller might be scheduled late.
+    if (minimum !== null) assert.ok(Number(found[1]) >= minimum, record);
     assert.equal(left(`${side}/sha256`), null);
     const { markdown, status } = compared("Request path: measured");
     assert.equal(status, 1);
@@ -214,16 +214,17 @@ test("a run the kit refuses is taken again, once, with why kept, and a run that 
   assert.deepEqual(readdirSync(join(builds, "base")).sort(), ["answers", "build.log", "commit", "count-get.json", "idle-silent-1.json", "sha256"]);
 });
 
-test("a reading that exits 124 early reports 0 seconds and is taken again", { skip }, (t) => {
+test("a reading that exits 124 early records its status and seconds and is taken again", { skip }, (t) => {
   const { builds, head, job, left, compared } = fixture(t);
   assert.equal(job({ STAND_IN_DIFFERS: head }, "build", builds).status, 0);
   const call = `${head} --json --cases get`;
   const read = job({ STOP_AT: later(), STAND_IN_DOES: JSON.stringify({ [call]: ["exits 124"] }) }, "read", builds, "3");
   assert.equal(read.status, 0, read.stderr);
-  const reason = "the reading ended with status 124 after 0 s (limit 120 s)";
-  assert.equal(left("head/count-get.json.refused"), `Error: ${reason}\n`);
+  const record = String(left("head/count-get.json.refused"));
+  const found = /^Error: (the reading ended with status 124 after \d+ s \(limit 120 s\))\n$/.exec(record);
+  assert.ok(found, record);
   assert.equal(left("head/count-get.json"), `${JSON.stringify({ call })}\n`);
-  assert.ok(compared().markdown.includes(`- \`count-get.json\` on head: \`${reason}\`\n`));
+  assert.ok(compared().markdown.includes(`- \`count-get.json\` on head: \`${found[1]}\`\n`));
 });
 
 for (const [how, code, grace] of /** @type {const} */ ([["exits on TERM", 124, 0], ["ignores TERM", 137, 10]])) {

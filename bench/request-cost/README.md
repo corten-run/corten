@@ -350,13 +350,15 @@ On one runner it does what [Running it](#running-it) says, the first three by
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
    `--json`, on base and then on head, a case a run: each case's instructions, three counts
    each, the four at a depth of 16, each case's allocations, and the three idle readings
-   three times a build. A run ends in 120 seconds or is stopped, and none starts once 24
-   minutes have gone since the job's first step, which leaves six of the job's 30 for the
-   table, a reserve in name and not a guarantee, since a run stopped at its time can take 10
-   seconds more to end. The checkout, the toolchain and the two builds are not held to those 24: a job
-   they take past its 30 minutes ends there with no table. A reading that fails or is stopped
-   is taken again once within the same job if time remains. The job keeps the status and timing
-   for statuses 124 and 137, and otherwise the kit's error, its last line or its exit status.
+   three times a build. Just before starting `timeout`, the job samples the clock. It skips
+   starting a reading if the sample is at or past `STOP_AT`, 24 minutes from the first step.
+   Otherwise it gives the reading the remaining time at that sample, at most 120 seconds.
+   A launch can cross the cutoff after the sample, and a stopped run can take 10 more seconds
+   to end. The six minutes left for the table are a reserve, not a guarantee. The checkout,
+   the toolchain and the builds are not held to those 24 minutes: a job they take past its 30
+   minutes ends with no table. A failed reading is tried once more in the same job if time
+   remains. The job keeps the status and timing for statuses 124 and 137, and otherwise the
+   kit's error, its last line or its exit status.
    A reading is never taken again for its figure.
 4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
    writes what it prints to the job's summary: for each case base, head, the difference and
@@ -395,7 +397,7 @@ The description's line says what a miss does:
 | The description says | The rule holds | It does not |
 | --- | --- | --- |
 | `Request path: counted` | Passes | Fails, naming each case, and says the change is then measured |
-| `Request path: measured` | Passes: the counts are reported and decide nothing | The same |
+| `Request path: measured` | Figures are reported and decide nothing; build failures still apply | The same |
 | No such line, or more than one | Passes, and names the line to add | Fails, and names the line to add |
 
 A declaration line is a line of the description's text, as it is written, that is
@@ -422,10 +424,11 @@ records the maintainer's ruling and why these readings are kept as evidence for 
 floor. Builds that are two binaries are compared as above, whatever the change is: a change
 that is not to rendering, the runtime or the request path but changes the probe's binary
 (a comment can: built as `build.sh` builds it, with Corten's crates as at `4fd6fd348`, the
-probe was another binary when a comment line was added at the top of
-`crates/corten/src/app.rs`, moving every line below it, and the same binary when the line went
-at the file's end, one build each; that the line numbers a panic's location carries are why is
-likely and was not checked) and misses is measured, by item 2.1 as it stands.
+probe differed from the unedited build when a comment was added at the top of
+`crates/corten/src/app.rs`, moving every line below it. It matched the unedited build when a
+separate edit added a different comment at the end, one build of each version. The line
+numbers a panic's location carries are a likely cause, not checked) and misses is measured,
+by item 2.1 as it stands.
 
 The description is the one the event carried when the run started. A line added afterwards is
 read by the next run a push or a reopening of the pull request starts, not by a rerun, and an
@@ -435,7 +438,7 @@ summary, until such a run: a maintainer reads the summary and the description as
 and the check's color only for the commit and description it ran with. The check is required
 on `main`, so unless the maintainer bypasses it with a written reason, that pull request does
 not merge until such a run has read the line and passed. Under `measured` the figures decide
-nothing. Two heads can read differently: the run on the commit being merged decides.
+nothing, but an ordinary head build failure still fails the job.
 
 **Build and reading exits.** GNU `timeout` returns 124 when it stops a command at its limit
 and 137 when it has to kill it. A command that exits 124 on its own or is killed by something
@@ -443,32 +446,44 @@ else can give the same status. An early exit can look late if the calling shell 
 again until after the limit, so status and elapsed time cannot prove what stopped the command.
 The job reports both without classifying the cause, for example
 `the build ended with status 124 after 420 s (limit 420 s)`. The seconds are rounded down and
-include time spent waiting for the command to exit after a signal. Such an exit on either side
-leaves no pair to compare: `Nothing compared:` names the side and records what happened. The
-job exits 1, regardless of the declaration, without saying the change broke the probe. An
-ordinary head build failure keeps its verdict even if the base returned 124 or 137.
+include time spent waiting for the command to exit after a signal. A **build** that returns
+124 or 137 on either side leaves no pair to compare: `Nothing compared:` names the side and
+reports the record, and the job exits 1 whatever the declaration. It does not say the change
+broke the probe. An ordinary head build failure keeps its verdict even if the base returned
+124 or 137. A build that consistently exceeds its limit keeps the job red however often it
+is run again. Fix what takes too long or change the limit; rerunning is not the remedy.
 
-**Running the job again.** This is the pull request's reading of the maintainer's ruling of
-2026-11-27, not a further ruling: a job in which no pair of readings was compared and decided
-may be run again, whether it left no table or a table with no decided row. This includes a
-`Nothing compared:` verdict, whatever stopped the build. Where at least one row was decided,
-those rows stand, including any miss. Do not replace them by rerunning, pushing or reopening
-just to draw a new count. A missing reading in a table with decided rows does not make those
-rows replaceable.
+A **reading** that returns 124 or 137 leaves a refusal line, for example
+`the reading ended with status 137 after 130 s (limit 120 s)`. Like any failed reading, it is
+tried once more if time remains. A row still missing a figure says `no figure`, and **Runs
+that gave no figure** lists each refusal. A reading that gave a figure on its second attempt
+is marked `taken again, and counted`. Other compared rows still decide as in a full table.
 
-The job already tries a failed reading once more if time remains. A row still missing a
-figure says `no figure`, and **Runs that gave no figure** lists why, for example
-`the reading ended with status 137 after 130 s (limit 120 s)` or
-`not attempted, the job's time for readings was spent`. A refusal that did give a figure on its
-second attempt is marked `taken again, and counted`. Other compared rows still decide as they
-would in a full table.
+**Running the job again.** The maintainer ruled on 2026-11-27 that a job that decided nothing
+may be run again. The option as offered: "a run that printed no comparison table decided
+nothing, so running it again is not taking a count again, and this includes a head build or
+readings cut off by a time limit". Separately, the maintainer ruled that the run on the commit
+being merged decides. A push made only to draw a new count stays forbidden by the existing
+rule against taking a count again for its result, whether or not a row was decided. Review is
+where that is caught.
+
+This pull request reads the first ruling to include a table with no decided row, not just a
+job with no table. When at least one row was decided, those rows stand, including any miss;
+a missing reading does not make them replaceable. The pull request also treats reopening
+solely to draw a new count like a push for that purpose. These are the pull request's
+interpretations, not additional rulings.
+
+A verdict that the probe did not build against head for an ordinary reason, not a 124 or 137
+record, is a decision even with no table row decided and whatever happened to base. Fix the
+change rather than rerunning the job to replace that verdict.
 
 A green check is evidence for a reviewer to read, not an attestation: the counts are of the
 pull request's own tree, by its own workflow, scope, kit and comparison. A pull request that
 changes any of those has that change reviewed for what it does to the verdict. Being required
 makes the check no more than that: it is green for a pull request it did not count, for one
-whose builds are one binary, for one declared `measured` whatever its counts, and for one that
-declares no way when the rule holds
+whose builds are one binary, and for one that declares no way when the rule holds. Under
+`measured`, figures alone cannot make it red; an ordinary head build failure or a
+`Nothing compared:` build verdict still does
 ([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), Pull requests, item 2.1, Counted).
 
 The same comparison of two builds counted on a host of one's own, each run's `--json` output in
