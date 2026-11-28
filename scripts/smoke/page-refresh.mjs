@@ -87,6 +87,8 @@ export function alertsReadFixture(/** @type {string} */ url) {
   };
   return {
     first, next, saving, parts, whole, onPart,
+    // The first part asks again; its follow-up is terminal. Count even a read aborted by close().
+    stopped: () => parts.length === 2 && whole.size === 0,
     async goto(page) {
       opening = true;
       try {
@@ -215,9 +217,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           console.error("Alerts cleanup also failed:", error);
         });
       }
-      const settled = parts.length;
       await page.waitForTimeout(2200);
-      check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);
+      check("a page's part stops once its patch no longer asks", fixture.stopped(), `${parts.length} part and ${whole.size} page reads; expected 2 and 0`);
       if (swaps) {
         const from = parts.length;
         await go(await pending());

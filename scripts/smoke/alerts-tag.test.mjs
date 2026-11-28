@@ -66,6 +66,40 @@ for (const [name, wrong] of [
   }
 });
 
+test("an extra part read during unroute counts even though the alerts fixture aborts it", { timeout: 30_000 }, async (t) => {
+  const browser = await firefox.launch();
+  t.after(() => browser.close());
+  const server = createServer((req, res) => {
+    const saving = req.url.startsWith("/smoke/alerts/saving?");
+    if (req.headers.corten === "action") return res.end(saving ? "Saving..." : "Saved.");
+    res.writeHead(200, { "content-type": "text/html" }).end("<p>Saving...</p>");
+  });
+  await new Promise((ready) => server.listen(0, "127.0.0.1", ready));
+  t.after(() => new Promise((done) => server.close(done)));
+  const url = `http://127.0.0.1:${server.address().port}/alerts?saved=1`;
+  const page = await browser.newPage();
+  const fixture = alertsReadFixture(url);
+  page.on("request", fixture.onPart);
+  await page.route(url, fixture.saving);
+  const read = () => page.evaluate(async () => {
+    const response = await fetch(location.href, { headers: { corten: "action" } });
+    return document.querySelector("p").textContent = await response.text();
+  });
+  await fixture.goto(page);
+  fixture.first.resolve();
+  assert.equal(await read(), "Saving...");
+  fixture.next.resolve();
+  assert.equal(await read(), "Saved.");
+  assert.equal(fixture.stopped(), true);
+  await fixture.close({ unroute: async (...args) => {
+    await assert.rejects(read(), /NetworkError/);
+    return page.unroute(...args);
+  } });
+  assert.equal(await page.locator("p").textContent(), "Saved.");
+  assert.equal(fixture.parts.length, 3);
+  assert.equal(fixture.stopped(), false);
+});
+
 test("a body failure aborts and drains an actual held Firefox alerts read without starting its fixture", { timeout: 30_000 }, async (t) => {
   const browser = await firefox.launch();
   t.after(() => browser.close());
