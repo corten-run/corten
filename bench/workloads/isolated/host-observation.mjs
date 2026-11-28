@@ -1,12 +1,35 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import os from "node:os";
+import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { regular } from "../cloud-local.mjs";
+import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, runnerFor } from "../registry.mjs";
 import { readApparatus, verifyApparatus } from "./control-stream.mjs";
 
 const udevCgroup = "0::/system.slice/systemd-udevd.service/udev\n";
-const udevExecutables = new Set(["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd"]);
+// Systemd 255 installs systemd-udevd as a symlink to the udevadm executable.
+const udevExecutables = new Set(["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd", "/usr/bin/udevadm"]);
 export const udevSettleMs = 5000;
+export const hostObservationBytes = 256 * 2 ** 20;
+export const liveWorkloadEndFile = "live-workload-end.json";
+export const liveWorkloadEndSchema = "benchmark-live-workload-end/v2";
+
+export function processIdentity(stat) {
+  const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
+  assert.ok(match); const rest = match[4].split(" ");
+  assert.match(rest[18] ?? "", /^\d+$/);
+  return { pid: Number(match[1]), startTicks: rest[18], comm: match[2] };
+}
+
+export function processRecordKey(p) {
+  const identity = { ...processIdentity(p.stat), cgroup: p.cgroup,
+    ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
+      : { executableSha256: p.executableSha256 }), type: p.type };
+  return createHash("sha256").update(`${JSON.stringify(identity)}\n`).digest("hex");
+}
 
 export function processStat(stat) {
   if (typeof stat !== "string") return null;
@@ -24,15 +47,25 @@ export function processStat(stat) {
 
 const uptime = () => readFileSync("/proc/uptime", "utf8");
 const bootId = () => readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+export const sampleAuditClock = () => ({ bootId: bootId(), monoNs: String(process.hrtime.bigint()) });
 const t = (value) => {
   if (typeof value !== "string") return null;
   const match = /^(\d{1,12})\.(\d{2}) \d{1,15}\.\d{2}\n$/.exec(value);
   return match && BigInt(match[1] + match[2]);
 };
 const monotonic = (value) => typeof value === "string" && /^(0|[1-9]\d{0,19})$/.test(value) ? BigInt(value) : null;
-const apparatusTime = (observation) => monotonic(observation.controlApparatus?.sample?.monoNs);
+const boundaryTime = (observation, offline) => monotonic(offline ? observation.offlineMonoNs : observation.controlApparatus?.sample?.monoNs);
 const identityOf = (p) => `${p.pid}:${p.startTicks}`;
 const sameProcess = (a, b) => a && b && a.pid === b.pid && a.startTicks === b.startTicks;
+
+// No helper process in the live driver's accounting scope. The independent
+// sealed terminal clock establishes CLK_TCK for both readings on this boot.
+export function liveWorkloadClock() {
+  try {
+    const boot = bootId(), raw = uptime(), monoNs = String(process.hrtime.bigint());
+    return t(raw) !== null ? { bootId: boot, uptime: raw, monoNs } : undefined;
+  } catch { return undefined; }
+}
 
 // Captured in the sealed lifetime terminal record, after the final kernel sample.
 // Unsupported or unreadable clocks disable settling, not strict cleanup.
@@ -41,8 +74,8 @@ export function hostTerminalClock() {
     const hz = execFileSync("/usr/bin/getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 1000, maxBuffer: 256,
       env: { LANG: "C" }, stdio: ["ignore", "pipe", "pipe"] }).trim();
     if (hz !== "100") return undefined;
-    const boot = bootId(), raw = uptime(), monoNs = String(process.hrtime.bigint());
-    return t(raw) !== null ? { bootId: boot, uptime: raw, ticksPerSecond: 100, monoNs } : undefined;
+    const clock = liveWorkloadClock();
+    return clock && { bootId: clock.bootId, uptime: clock.uptime, ticksPerSecond: 100, monoNs: clock.monoNs };
   } catch { return undefined; }
 }
 
@@ -71,7 +104,7 @@ export function dockerRead(args) {
     windowsHide: true, env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(),
       LANG: "C.UTF-8", TZ: "UTC", GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-export function observeHost(apparatus, retainUdev = false) {
+export function observeHost(apparatus, retainUdev = false, offline = false) {
   assert.equal(os.platform(), "linux");
   const processes = [];
   for (const pid of readdirSync("/proc").filter((p) => /^\d+$/.test(p))) {
@@ -97,7 +130,8 @@ export function observeHost(apparatus, retainUdev = false) {
     containers: dockerRead(["ps", "-aq", "--no-trunc"]).split("\n").filter(Boolean).sort(),
     networks: dockerRead(["network", "ls", "--no-trunc", "--format", "{{.ID}}"]).split("\n").filter(Boolean).sort(),
     processes: processes.sort((a, b) => a.pid - b.pid), isolation: "unverified",
-    ...(apparatus ? { controlApparatus } : {}), ...(retainUdev ? { uptime: uptime() } : {}) };
+    ...(apparatus ? { controlApparatus } : {}),
+    ...(retainUdev ? { uptime: uptime(), ...(offline ? { offlineMonoNs: String(process.hrtime.bigint()) } : {}) } : {}) };
 }
 function newHostProcesses(before, after) {
   assert.equal(!!before.controlApparatus, !!after.controlApparatus, "apparatus appeared/disappeared across boundary");
@@ -159,39 +193,104 @@ const isUdevDaemon = (p) => p && !p.kernelThread && p.comm === "systemd-udevd" &
 
 export function udevSettlePolicy(group, phase) {
   if (group === "json-api" && phase === "prepare") return "preparation";
-  if (group === "localized-marketplace" && phase === "timing") return "post-terminal";
+  if (phase === "timing" && groupNames.includes(group)) return "post-terminal";
   return null;
 }
 
+// The caller admits the binding before running or replaying the phase. A clock
+// belongs to its exact native command, never to another command in that phase.
+export function terminalClockPolicy(binding, invocation, campaignRound, phase) {
+  const { group, round } = binding.request, policy = udevSettlePolicy(group, phase);
+  if (!policy || !invocation || !isDeepStrictEqual(invocation, binding.execution?.invocation)) return null;
+  const timingRound = campaignRounds(campaignRound)[group];
+  if (policy === "preparation") return round === jsonPreparationRound(campaignRound)
+    && isDeepStrictEqual(invocation, jsonPreparationInvocation(campaignRound)) ? policy : null;
+  if (round !== timingRound || invocation.executable !== "node" || !Array.isArray(invocation.argv)) return null;
+  if (group === "json-api") {
+    const receipt = invocation.argv.at(-1);
+    return typeof receipt === "string" && receipt && isDeepStrictEqual(invocation, jsonTimingInvocation(round, receipt)) ? policy : null;
+  }
+  const { entry, selection } = runnerFor(group), prefix = [entry, round, ...selection];
+  return isDeepStrictEqual(invocation.argv.slice(0, prefix.length), prefix) ? policy : null;
+}
+
+// This record is usable only from the successful, bound, isolated Live Delivery
+// measurement command. The native reader also replays the measured actor ends.
+export function readLiveWorkloadEnd({ binding, invocation, round, phase, result, folder }) {
+  const { request, execution } = binding;
+  if (request.group !== "live-delivery" || phase !== "timing" || !execution.effectiveOptions?.isolated
+    || !execution.effectiveOptions.measure || !execution.effectiveOptions.build
+    || !terminalClockPolicy(binding, invocation, round, phase) || result?.success !== true || result.code !== 0
+    || result.terminal !== true || result.cancelled || result.forced || result.signal !== null || result.error !== null) return;
+  let bytes;
+  try { bytes = regular(join(folder, liveWorkloadEndFile), 1024); }
+  catch (error) { if (error.code === "ENOENT") return; throw error; }
+  let record;
+  try { record = JSON.parse(bytes); }
+  catch { assert.fail("invalid live workload end record"); }
+  const clock = record?.clock, { pid } = result;
+  assert.ok(Number.isSafeInteger(pid) && pid > 1, "live workload end lacks a bound command PID");
+  assert.ok(isDeepStrictEqual(record, { schema: liveWorkloadEndSchema, round: request.round, commit: request.commit, pid, clock }),
+    "live workload end differs from native invocation");
+  assert.ok(clock && isDeepStrictEqual(Object.keys(clock).sort(), ["bootId", "monoNs", "uptime"]), "invalid live workload clock");
+  return clock;
+}
+
+export function verifyLiveWorkloadWindows(before, offline, end, ends, count) {
+  let previousMono = boundaryTime(before, offline), previousBoot = t(before.uptime);
+  const cutoffMono = monotonic(end.monoNs), cutoffBoot = t(end.uptime);
+  assert.ok(count > 0 && ends.length === count && previousMono !== null && previousBoot !== null
+    && cutoffMono !== null && cutoffBoot !== null && end.bootId === before.bootId,
+    "live workload end lacks its measured actor windows");
+  for (const clock of ends) {
+    const mono = monotonic(clock?.monoNs), boot = t(clock?.uptime);
+    // Linux prints both /proc/uptime and process start time in truncated
+    // boot-time ticks at USER_HZ=100. Do not convert CLOCK_MONOTONIC to that
+    // domain: it excludes time spent suspended. Equal boot buckets here are
+    // fine; every worker must start in a strictly later bucket than the end.
+    assert.ok(clock?.bootId === end.bootId && mono !== null && previousMono < mono && mono < cutoffMono
+      && boot !== null && previousBoot <= boot && boot <= cutoffBoot, "measured actor window outside live workload boundary");
+    previousMono = mono; previousBoot = boot;
+  }
+}
+
 // Only a cohort entirely attributable to the existing daemon earns another
-// read. Untimed preparation can use the baseline cutoff; timing cannot.
-export function udevSettleCandidates(before, after, terminal, policy = "post-terminal") {
+// read. Timing uses terminal unless the specific Live Delivery proof is needed.
+export function udevSettleCandidates(before, after, terminal, policy = "post-terminal", offline = false, readWorkloadEnd) {
   assert.ok(policy === "post-terminal" || policy === "preparation");
   const remaining = newHostProcesses(before, after);
   if (!remaining.length || !terminal || terminal.bootId !== before.bootId || terminal.ticksPerSecond !== 100) return null;
   const start = t(before.uptime), end = t(terminal.uptime), first = t(after.uptime);
   if (start === null || end === null || first === null || !(start < end && end < first)) return null;
-  const startMono = apparatusTime(before), endMono = monotonic(terminal.monoNs), firstMono = apparatusTime(after);
+  const startMono = boundaryTime(before, offline), endMono = monotonic(terminal.monoNs), firstMono = boundaryTime(after, offline);
   if (startMono === null || endMono === null || firstMono === null || !(startMono < endMono && endMono < firstMono)) return null;
-  const cutoff = policy === "preparation" ? start : end;
   const baseline = processInventory(before), observed = processInventory(after), workers = remaining.map((p) => observed.get(p.pid));
   const daemon = observed.get(workers[0].parentPid), original = baseline.get(daemon?.pid);
   const exe = executableOf(daemon);
   if (!isUdevDaemon(original) || !isUdevDaemon(daemon) || !sameProcess(original, daemon) || !exe || executableOf(original) !== exe) return null;
   if (!workers.every((p) => !p.kernelThread && p.parentPid === daemon.pid && p.comm === "(udev-worker)" && p.state === "S"
-    && p.cgroup === udevCgroup && executableOf(p) === exe && BigInt(p.startTicks) > cutoff && BigInt(p.startTicks) <= first)) return null;
+    && p.cgroup === udevCgroup && executableOf(p) === exe && BigInt(p.startTicks) > start && BigInt(p.startTicks) <= first)) return null;
+  if (policy === "post-terminal" && workers.some((p) => BigInt(p.startTicks) <= end)) {
+    // A worker in the baseline is not part of a proved post-workload cohort.
+    if ([...baseline.values()].some((p) => p.comm === "(udev-worker)" || p.parentPid === daemon.pid)) return null;
+    const workload = readWorkloadEnd?.();
+    if (!workload || workload.bootId !== before.bootId) return null;
+    const work = t(workload.uptime), workMono = monotonic(workload.monoNs);
+    if (work === null || workMono === null || !(start < work && work < end && startMono < workMono && workMono < endMono)
+      || workers.some((p) => BigInt(p.startTicks) <= work)) return null;
+  }
   return { daemon, workers };
 }
 
-export function verifySettledHostBoundary(before, after, settled, terminal, policy) {
+export function verifySettledHostBoundary(before, after, settled, terminal, policy, offline = false, readWorkloadEnd) {
   assert.deepEqual(after.terminalClock, terminal, "terminal clock differs from the sealed first boundary");
-  const candidates = udevSettleCandidates(before, after, terminal, policy);
+  const candidates = udevSettleCandidates(before, after, terminal, policy, offline, readWorkloadEnd);
   assert.ok(candidates, "initial host boundary is not eligible for udev settling");
   const first = t(after.uptime), last = t(settled.uptime);
   // Allow the procfs clock's 10 ms rounding at the lower edge, but no second retry.
   assert.ok(last !== null && last - first >= BigInt(udevSettleMs / 10 - 1) && last - first <= 1000n,
     "settled host observation outside the bounded interval");
-  const settledMono = apparatusTime(settled), firstMono = apparatusTime(after);
+  const settledMono = boundaryTime(settled, offline), firstMono = boundaryTime(after, offline);
   const wait = BigInt(udevSettleMs) * 1000000n;
   assert.ok(settledMono !== null && settledMono - firstMono >= wait && settledMono - firstMono <= 10000000000n,
     "settled host observation outside the bounded monotonic interval");
@@ -201,4 +300,11 @@ export function verifySettledHostBoundary(before, after, settled, terminal, poli
     "udev daemon changed across host settle");
   assert.ok(candidates.workers.every((p) => !sameProcess(p, final.get(p.pid))), "udev worker identity still present");
   return { ...clean, settledUdevWorkers: candidates.workers.map(({ pid, startTicks }) => ({ pid, startTicks })) };
+}
+
+export function verifyLifetimeSettledBoundary({ binding, invocation, round, phase, lifetime, before, after, settled, offline, liveWorkloadEnd }) {
+  const policy = terminalClockPolicy(binding, invocation, round, phase);
+  assert.ok(policy && lifetime?.status === "verified" && lifetime.cleanupComplete && lifetime.terminalClock,
+    "udev settle lacks an eligible sealed terminal lifetime");
+  return verifySettledHostBoundary(before, after, settled, lifetime.terminalClock, policy, offline, liveWorkloadEnd);
 }

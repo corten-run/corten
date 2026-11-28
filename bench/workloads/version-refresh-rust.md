@@ -338,3 +338,40 @@ This note is not an official grouped-run receipt or a performance measurement.
 Independent review and the parent's integrated checks remain required before
 the official grouped run. Guide/changelog integration outside this scope stays
 with the parent.
+
+## Debian 13.8 refresh, 2026-11-26
+
+From main `e8734f929`, the dated Debian runtime and build bases move from `trixie-20261104`
+(Debian 13.7) to `trixie-20261123` (Debian 13.8), by digest
+([#2093 Benchmarks pin nginx 1.31.9 and Debian trixie-20261104 while nginx 1.31.10 (CVE-2026-132779 fix) and trixie-20261123 (Debian 13.8) are out](https://github.com/corten-run/corten/issues/2093)).
+The sections above record the earlier refresh as it was done; their digests and image
+checks are not rewritten.
+
+| Exact official image | Verified index digest |
+|---|---|
+| `debian:trixie-20261123-slim` | `sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0` |
+| `debian:trixie-20261123` | `sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2` |
+
+`docker buildx imagetools inspect` and Docker Hub's tag records gave the same index digests on
+2026-11-26; Docker Hub lists `trixie-20261123` as the newest dated trixie tag.
+
+What moved: the sixteen `FROM` lines that named `trixie-20261104` (the runtime of catalog and
+marketplace Corten, nodelay, live Corten and its parity image, fullstack axum + Maud, fullstack
+and live Gin, Leptos and Topcoat, and both stages of fullstack and live Drogon), the
+`cold-start.mjs` probe image and the pin `bench/live/runtime-pins.test.mjs` asserts. Fullstack
+Drogon's two lines named the date tag without a digest; they take the digest now.
+`debian:trixie-slim` pinned by the old digest in the Phoenix Dockerfiles is a different, undated
+tag, and is not part of this refresh.
+
+Checked on one Windows workstation with Docker Desktop, linux/amd64 only. The slim image
+reports Debian 13.8 and glibc 2.41-12+deb13u5, and has bash's `/dev/tcp` and GNU
+`date +%s%N`, which the cold-start probe uses. Drogon's runtime packages install in it
+(OpenSSL 3.5.9-1~deb13u1, ICU 76.1-4, JsonCpp 1.9.6-3), and its build stage's packages
+resolve in the full image. Fullstack Gin's image builds on the new base and reports 13.8.
+No other app image was rebuilt, and no browser or parity check was run on new images.
+
+**Comparison note (2026-11-26).** The base image is a comparison input that changed at this
+commit: OS packages move to their Debian 13.8 versions (glibc stays 2.41). Groups measured
+from it record the new images; earlier rounds, saved reservations and their job bytes keep
+what they recorded, since no cloud job names these images. No speedup or slowdown is measured
+or implied.

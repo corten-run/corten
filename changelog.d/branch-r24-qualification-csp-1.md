@@ -1,1 +1,0 @@
-- Marketplace and mixed-production qualification can retain Corten's default Trusted Types policy and permission denials without changing the headers sent to browsers. [#1833 Benchmark r24: marketplace qualification rejects a Corten CSP directive on both sources](https://github.com/corten-run/corten/issues/1833)

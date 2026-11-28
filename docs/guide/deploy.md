@@ -85,7 +85,7 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 
 | | What | Why |
 |---|---|---|
-| 1 | pass the browser's `Host` as it came, port included, and list the names in `HOSTS` | the app answers `421` to a name it does not know ([Host names](app.md#host-names)); a write or a WebSocket handshake without `Sec-Fetch-Site` (Chromium and Firefox sent none on one here) is checked by comparing its `Origin` with `Host` (name and port, a default port the same written or left out, and an `https` origin under `Policy::hsts`; [WebSockets](app.md#websockets-and-relays)), so with any other `Host` the app's own pages cannot open a WebSocket (measured: 403 with nginx's `$host`, which drops the port) unless `Policy::allow_origin` names the public origin; nginx's `proxy_pass` sends the upstream's name (`app:8080`) unless told otherwise |
+| 1 | forward the requested authority, port included, and list the names in `HOSTS` | for a path sent upstream, put the public host and port in `Host`; if the upstream target is a whole URL, put the public authority there. Its authority takes precedence over `Host` ([Host names](app.md#host-names)). An internal address there makes the write check trust the internal origin rather than the public one when `Sec-Fetch-Site` is absent. The app answers `421` to a name it does not know. A write or a WebSocket handshake without `Sec-Fetch-Site` (Chromium and Firefox sent none on one here) is checked by comparing its `Origin` with the requested authority (name and port, a default port the same written or left out, and an `https` origin under `Policy::hsts`; [WebSockets](app.md#websockets-and-relays)), so forwarding the wrong authority can prevent the app's own pages from opening a WebSocket (measured: 403 with nginx's `$host`, which drops the port) unless `Policy::allow_origin` names the public origin; nginx's `proxy_pass` sends the upstream's name (`app:8080`) unless told otherwise |
 | 2 | set `X-Forwarded-For`, and list the proxy's addresses in `PROXIES` | otherwise every request comes from the proxy ([The client's address](app.md#the-clients-address)) |
 | 3 | serve browsers and native clients HTTP/2 or HTTP/3 | each open live stream holds a connection, and over HTTP/1.1 a browser has about six per host ([Connection](live-data.md#connection)); a native app's `URLSession` caps HTTP/1.1 connections the same way and HTTP/2 lifts it, while OkHttp's cap counts calls whatever the protocol and is raised in the app ([Surfaces](../architecture.md#native-apps-next-not-built)); on a mobile link one connection for all of them also saves the other handshakes (HTTP/3 can keep it across a switch from Wi-Fi to cellular, where the client speaks it and the edge supports migration) |
 | 4 | pass event streams on as they are written | a buffered stream arrives late or not at all (below) |
@@ -93,7 +93,7 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 | 6 | let the app's 4xx and 5xx bodies through | they are the app's error pages and redrawn forms (nginx's `proxy_intercept_errors` is off by default; [Requests and forms](requests-and-forms.md)) |
 | 7 | reuse a connection to the app for less time than `App::header_timeout` | the app closes an idle connection after it (30 seconds), and a request the proxy sends on it as it closes fails; nginx 1.29.7 and later reuse upstream connections by default, for 60 seconds, so set `keepalive_timeout` in the `upstream` block (below) |
 | 8 | expect a connection to the app per open stream | streams multiplexed over one HTTP/2 connection to the proxy still each hold an HTTP/1.1 connection to the app, so `App::max_connections`, if set, counts them |
-| 9 | check `/health/live` and `/health/ready` | both answer to an IP address or `localhost` as the host, so a health check needs no name; `/health/ready` answers within 800 ms (`App::ready_within`), so a probe timeout of one second or more reads its answer ([Health](app.md#health)) |
+| 9 | check `/health/live` and `/health/ready` | both answer to an IP address or `localhost` as the host, so a health check needs no name, only the `Host` line every HTTP/1.1 client sends (a probe written by hand with none gets `400`, unless it speaks HTTP/1.0; [Host names](app.md#host-names)); `/health/ready` answers within 800 ms (`App::ready_within`), so a probe timeout of one second or more reads its answer ([Health](app.md#health)) |
 | 10 | allow request bodies as large as the app's largest form, and pass a large upload on as it arrives | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form; and it holds the whole body before passing it on (`proxy_request_buffering on`), so a route that reads a body as it arrives (`pieces_up_to`) gets a `location` of its own with its limit and `proxy_request_buffering off` (below) |
 | 11 | keep a quiet WebSocket open, or let the app ping it | nginx closes a proxied connection that sends nothing for `proxy_read_timeout` (60 seconds), a WebSocket included; Corten's `Upgrade` sends no pings of its own, so a socket that may go quiet longer pings from the app or gets a longer timeout in its `location` |
 | 12 | set `Policy::hsts` in the app when it is served only over HTTPS, even when the proxy or CDN already sends `Strict-Transport-Security` | the app sees plain HTTP from a proxy that ends TLS and reads no `X-Forwarded-Proto`, so `hsts` is how it knows its pages are `https`: with it, a write or a WebSocket handshake without `Sec-Fetch-Site` from a plain-http page on the app's host is refused, and without it that page passes ([design Limit 26](../design.md#limit-origin-scheme)); it also keeps a redirect's notice in the `__Host-` cookie ([WebSockets](app.md#websockets-and-relays)) |
@@ -350,14 +350,22 @@ corten build --profile-from sh train.sh
 ```
 
 The command is the app's own, since only the app knows what its requests are. It sends the copy
-requests like the ones the app will serve, at `127.0.0.1` on the port `PORT` names:
+requests like the ones the app will serve, at `127.0.0.1` on the port `PORT` names: each route
+whose cost matters, without an `Accept-Encoding` and with each line that reaches the app from
+its readers' browsers (what it has to cover, and why, is below). For an app with the one page:
 
 ```sh
 #!/bin/sh
 # train.sh
 set -e
-for i in $(seq 500); do
-    curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate, br, zstd' "http://127.0.0.1:$PORT/"
+url="http://127.0.0.1:$PORT"
+for path in /; do
+    for i in $(seq 125); do
+        curl -fs -o /dev/null "$url$path"
+        curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate, br, zstd' "$url$path"
+        curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate, br' "$url$path"
+        curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate' "$url$path"
+    done
 done
 ```
 
@@ -382,19 +390,152 @@ it builds has to run on this machine.
 `-p` at a workspace's root, that is the root, not the member's directory, so the command's path
 and the app's own relative paths are from there:
 `corten build -p shop --profile-from sh shop/train.sh`. The copy gets the environment
-`corten build` was given, less
-`HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
-once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
+`corten build` was given, less `HOST`, so that a copy that reads it listens on this machine
+only. The build gives the copy a port, and runs the command once a connection to that port is
+accepted.
+
+That port is a free one the build picks and gives the copy in `PORT`, whatever `PORT` holds
+where `corten build` runs: that one is the app's, set for running it, and is not read. An app
+that binds a port of its own and never reads `PORT` (`corten::serve_on` or `serve_wrapped` with
+listeners it bound itself, [Your own listeners](app.md#your-own-listeners)) never listens on a
+port the build picked, so the build is told the app's with `--port`, before `--profile-from`:
+
+```sh
+corten build --port 8443 --profile-from sh train.sh
+```
+
+The copy is then looked for on that port, and it and the command are given it in `PORT`
+(`--port=8443` is the same). `--port` is refused before anything is built when it is not a
+number from 1 to 65535, when it is given twice or without `--profile-from`, and when something
+already listens on the port, at `127.0.0.1` or at `[::1]`, which would answer the wait and the
+command in the copy's place. Nothing is built then, and something is written: the build takes
+its lock on the target directory before it looks at the port, so a refusal for a port something
+listens on leaves `target/corten-profile/lock`, in a target directory it makes when there was
+none. The build cannot tell whose listener that is, so the refusal says
+what to do for each: this app (under `corten dev`, or run another way) or a copy that a
+cancelled build left running is stopped, the copy of a build that is running in another target
+directory is left until that build ends, and anything else is another program that holds the
+port on this machine, which is stopped, or the build is run where the port is free, with
+`--port` checked against the port the app binds. The build looks again before it starts the
+copy, minutes later. A look is a
+connection, and a listener answers one only while its queue of connections it has not accepted
+has room: one that has stopped accepting, with that queue full, passes both looks as a free
+port. Where it holds an address the copy binds, the build then stops after the instrumented
+build, when the copy cannot bind; where it holds the other loopback address alone, the copy
+binds its own and the build goes on. A
+second build in the same target directory is refused for the build that is running, which is
+looked for before the port, so it is not told to stop that build's copy. Without `--port`, an
+app that binds its own port stops the build after a minute, with a line that names the option.
+
+The wait is a TCP connection to `127.0.0.1` or `[::1]` at that port and nothing more. So the
+port may be one that serves HTTPS, and the script then asks over `https://`, where the sample
+above asks over `http://`. The app has to bind the port on a loopback address or on every
+address: bound to another address alone it is not found, and the build stops after a minute
+saying where it looked. The wait is for that one port: an app with several listeners names one
+of them, and its script, which knows the others, waits for each before it sends to it
+(`curl --retry 10 --retry-connrefused` on the first request). And the wait cannot tell whose
+socket accepted: a copy that has exited is not taken for it, but a program that takes the port
+in the moment between the build's last look and the copy's own bind is, and the command's
+requests then go to that program. The copy cannot bind the same address then, unless both
+sockets set `SO_REUSEPORT`, as two instances of one app may: the system then shares the
+command's connections between the two, and the look after the copy (below) stops the build
+only if the other is still listening. That is reasoned from a bind that was measured, and was
+not run through a build. A copy that has
+exited by the time the command ends fails the build, as one that exited while the command ran.
+One that is still running when the command ends (it is still starting, or it does not exit
+when it cannot bind) is stopped like any other, and may exit with a profile of having served
+nothing, so with `--port` the build looks at the port twice more. When the command has ended
+and before the copy is stopped, the build stops if nothing accepts a connection at either
+loopback address of the port: a copy that listens on the port it was named would. After the
+copy has exited, the build stops if something listens there: that is not the copy.
+
+Each of those looks establishes one thing and no more: something accepted a connection on a
+loopback address of the port when the command ended, and nothing listens there once the copy
+has exited. Neither shows that the copy is what answered the command, and no look can, since a
+connection does not say whose socket accepted it. Three timings end with the build succeeding
+and the release built from a profile of a copy the command never reached:
+
+1. Another program takes the named port in that moment, answers the wait and the command, and
+   leaves while the command runs, and the copy, still starting or trying its bind again, binds
+   the port before the command ends. The copy answers the look at the command's end, and
+   nothing listens once it has exited.
+2. A program listens on the other loopback address of the named port, beside a copy bound to
+   its own, answers a command that asks that address (as one that asks `localhost` may), and
+   leaves before the copy has exited. This needs no race with the copy's start: the program
+   may come at any time after the look before the copy starts.
+3. Another program takes the named port in that moment and answers the wait and the command,
+   the copy is still running when the command ends, and the program leaves between the look
+   at the command's end and the copy's exit.
+
+The first two were reproduced, and the command's tests hold them as what a build does today,
+to change when it can tell; the third is reasoned.
+
+Each look can also stop a build it should not. The look at the command's end stops a build
+whose copy served, when the copy's queue of connections it has not accepted is full at that
+instant. The look after the copy stops a build whose profile was good when a program begins to
+listen on the port once the copy has left it (a supervisor starting the app again). And a
+listener on the other loopback address of the named port that is there at a look stops the
+build, at the one after the copy as well, though the copy bound its own address beside it and
+served for the whole run: the build cannot tell that the command never reached that listener,
+and a command that asks `localhost` may have.
+
+An app's own listeners bind the addresses the app chooses, with `HOST` or without: one that
+binds every address (`0.0.0.0:8443`) can be reached from the network while the build runs, and
+a request from outside would enter the profile. An app whose only listener is not a TCP port (a
+Unix socket) has no port to name, and is profiled with the steps by hand (below).
+
+When the command ends the build stops the copy with `SIGTERM` and waits for it: the copy
 writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
 [The app](app.md#the-app)), and a copy that is killed writes none. A command that fails stops
 the build, and so does a copy that exits early, does not listen within a minute, is still
 running a minute after `SIGTERM` (it is killed then), or leaves no profile; `curl -f` fails this command on an answer that is not a success, so a profile of error
 pages is not taken for one of the app. The build cannot tell a command that sent the copy
 nothing, or sent its requests to another port, from one that did its work: the profile is then
-of the app starting and stopping, and the release is built with it all the same. What the command sends is the part that decides the gain:
+of the app starting and stopping, and the release is built with it all the same, without a word. Every route is then one the command left out, and a route left out cost more instructions a request than with no profile where that was measured (below); a release from a command that sent nothing was not measured. What the command sends is the part that decides the gain:
 in the measurements below a profile did not have to come from the load it was measured with,
 only from requests that reach the same routes, and one that barely reached them gained about
 half as much.
+
+It can decide a loss too, in the instructions a request takes: what the command leaves out is
+not left as it was. On one app, a route and a coding that a command left out each cost more
+instructions a request than in a build with no profile. Why is not something those counts
+show; the likely reason is that the compiler lays out and inlines the code the copy ran, and
+treats what the copy never ran as code that seldom runs. So the command covers what the app's
+readers ask for:
+
+1. Every route whose cost matters: each page readers reach, its JSON, a form's post. On
+   card-market a command that asked for the home page and an item's JSON, and never for the
+   item page, made the item page cost 4.1% more instructions a request than a build with no
+   profile, and 7.2% more where its answer is in Brotli.
+2. Every response coding those routes are answered in. The app picks the coding from the
+   request's `Accept-Encoding` as it reaches the app, so the command asks without the header
+   and with each line that reaches it. The lines the browsers Corten is tested in sent on
+   Linux are `gzip, deflate, br, zstd` (Chromium and Firefox), which the starter answers in
+   zstd, `gzip, deflate, br` (WebKit over HTTPS), answered in Brotli, and `gzip, deflate`
+   (WebKit over plain HTTP), answered in gzip
+   ([design Choice 28](../design.md#choice-fixed-stages) has the three, and
+   [Choice 32](../design.md#choice-stream-coding) which WebKit sends where). Behind a proxy
+   that takes the header off or rewrites it, the line that reaches the app is the proxy's, not
+   a browser's ([Response compression](#response-compression)). A command that asked without
+   a line and with the first, and never with the second, made Brotli answers cost 17.2% and
+   9.5% more instructions a request than with no profile, on two pages it had asked for in the
+   other codings.
+
+Which coding an answer had is in its `Content-Encoding`, which curl prints with `-w`: `br`
+here, and an empty line for an answer with none.
+
+```sh
+curl -s -o /dev/null -w '%header{content-encoding}\n' -H 'Accept-Encoding: gzip, deflate, br' http://127.0.0.1:3000/
+```
+
+What a command did ask for cost 3.9% to 26.7% fewer instructions a request than with no
+profile, and the same within two points whichever of three commands had asked. The table is
+with the measurements below. All of it is instructions, counted on one app: whether what a
+command leaves out also costs more cycles or more time was not measured. Nor was a command
+that leaves out gzip, or the answer with no coding, or how few requests of each are enough:
+those profiles took 301 of each, and in the catalog table below a profile whose command had
+asked for the page once still took 40,480 instructions a request on it against 44,786 with no
+profile.
 
 The four steps are the toolchain's own, and Corten adds nothing to the binary:
 
@@ -492,9 +633,10 @@ build against about 580 MB with the instrumented copy beside the release.
 The app `corten new` writes, measured at `9fae8ff55` from binaries its Dockerfile's commands
 built in its build image, run on its run image and not from an image `docker build` made: built in `rust:1-trixie` (rustc 1.100.0) with the starter's release profile and
 `compress`, by the Dockerfile's `cargo build --release --locked` and by
-`corten build --locked --profile-from sh train.sh` in its place, with the script above (500
-requests for the home page); run on `debian:trixie-slim` with jemalloc preloaded and the
-image's settings, as root, the two binaries in one container with `perf` and `wrk`. The home
+`corten build --locked --profile-from sh train.sh` in its place, with the script above as it
+then was (500 requests for the home page, each with `Accept-Encoding: gzip, deflate, br, zstd`
+and none with another line or without one); run on `debian:trixie-slim` with jemalloc preloaded and the
+image's settings at that commit (a 64 KiB thread cache), as root, the two binaries in one container with `perf` and `wrk`. The home
 page is 1,274 bytes, and 649 in zstd, which the app chose from a browser's codings. The app on
 one CPU, `wrk` with 64 connections on three others, 10 rounds in which the two builds took
 turns, on a desktop with other work running; medians are the sixth of the ten:
@@ -509,7 +651,45 @@ kernel's from 59,988 to 49,595, user instructions from 27,905 to 19,929, L1 inst
 misses from 4,232 to 1,966 and branch misses from 275 to 141. What the image's build costs for
 it is in [A profile in the image](#a-profile-in-the-image).
 
-Not measured: another app or page, a profile taken from an earlier version of the app
+What a command leaves out, measured on card-market (`examples/card-market`) at `be1192a7b` with
+rustc 1.100.0 in `rust:1-trixie`, on a Xeon Platinum 8280: the workspace's release profile, zstd
+linked to the image's `libzstd` as the example's Dockerfile sets it, and one item, read from the
+smoke fixture. Four builds at the workspace's root: `corten build --locked -p card-market`, and
+the same with `--profile-from` and three commands. The first asked for the home page and the
+item page, each with no `Accept-Encoding`, with Chromium's and Firefox's (answered in zstd) and
+with WebKit's over HTTPS (answered in Brotli), and for the item's JSON. The second asked for the
+same without the item page, and the third for the same as the first without the two Brotli
+lines. Each line was 301 requests by curl: 300, five on a connection, and one more whose coding
+the script printed. Instructions a request are
+callgrind's, the server on one CPU with jemalloc preloaded, the image's thread cache and no
+background thread (`background_thread:false`, which the image has on): one
+keep-alive connection sending what curl sends, 1,240 requests less 240, over 1,000, the median
+of three counts, which differed by at most 69 instructions. The four builds answered each
+request with the same status, coding, type and length. Each profiled build is given against
+the build with no profile:
+
+| Request | No profile | All seven of these requests | Without the item page | Without Brotli |
+|---|---|---|---|---|
+| the item page, no coding | 77,800 | 65,421 (-15.9%) | 80,967 (+4.1%) | 64,477 (-17.1%) |
+| the item page in zstd | 348,251 | 334,610 (-3.9%) | 350,013 (+0.5%) | 333,601 (-4.2%) |
+| the item page in Brotli | 844,544 | 770,959 (-8.7%) | 905,245 (+7.2%) | 989,576 (+17.2%) |
+| the home page, no coding | 32,384 | 24,259 (-25.1%) | 23,737 (-26.7%) | 23,982 (-25.9%) |
+| the home page in zstd | 116,034 | 106,533 (-8.2%) | 105,757 (-8.9%) | 106,151 (-8.5%) |
+| the home page in Brotli | 230,893 | 197,244 (-14.6%) | 194,153 (-15.9%) | 252,889 (+9.5%) |
+| the item's JSON, no coding | 65,729 | 56,860 (-13.5%) | 56,580 (-13.9%) | 56,641 (-13.8%) |
+
+Each profile was then taken again and each profiled release built again from it, three other
+binaries: no count moved by more than 0.2%, and no percentage by more than a tenth of a point.
+So the route a command left out cost more than with no profile at all, and so did the coding
+another left out, on pages that command had asked for in the other codings. zstd moved least:
+with the first command the zstd rows took 13,641 and 9,501 fewer instructions than with no
+profile, about what the rows with no coding did (12,379 and 8,125). An explanation, not a
+measurement: zstd is the system's library in these builds, which a profile of the app does not
+reach, and Brotli is compiled with the app. These are instructions, the work a request takes,
+not cycles or time, on one app, and gzip was in no command and no count. The scripts and their
+output are commit `30206df73`, kept under the tag `evidence/profile-coverage`.
+
+Not measured: another app or page in cycles, what a command left out in cycles or time, a profile taken from an earlier version of the app
 or with another rustc, and a profile used on another kind of CPU than it was taken on. Nor the
 time a reader waits: no latency was kept, and the pages a second the same
 rounds counted (64 connections against one CPU) say little, 17,567 at the median without a
@@ -525,7 +705,7 @@ zstd or gzip, never Brotli ([Choice 32](../design.md#choice-stream-coding)). A r
 is made by libdeflate: up to 16 KiB it was smaller than Brotli at level 1, the level a request's
 Brotli is made at, on all but one of the bodies measured and took less to make (29% fewer
 cycles a request under load for JSON of 4 to 8 KB), and at every size it was
-smaller than the gzip it replaced ([Choice 73](../design.md#choice-request-gzip)). So one
+smaller than the gzip it replaced ([Choice 78](../design.md#choice-request-gzip)). So one
 client can be sent gzip for a short page and Brotli for a long one; `Vary: Accept-Encoding`
 is the same for both.
 
@@ -658,7 +838,14 @@ is the ordinary one: Docker 29.9.3 built it without a word about the argument.
 
 The two builds are two lines of one `RUN`. A Cargo argument the app's release needs
 (`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
-the image with a profile is built with other features than the image without.
+the image with a profile is built with other features than the image without. An app that
+binds a port of its own names it on the second, with `--port 8443` before `--profile-from`
+([A profile-guided build](#a-profile-guided-build)). The `corten` the Dockerfile installs has
+to be a release that has `--port`. One without it builds nothing with the line: where the
+Dockerfile's own check of the command (below) has not refused it first, it refuses `--port`
+as an argument `corten build` does not take, before it builds the app. The fix is to move the
+version on the Dockerfile's install line to a release that has `--port`: 0.3.0 is the first. An
+older release refusing `--port` in an image build has not been tried.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
@@ -682,13 +869,14 @@ What the argument asks of the app and its build, which the ordinary build does n
   release without the option is refused there, before the app is built. 0.2.0 is one: its
   `corten build` took no arguments and would build the ordinary binary without a word. A
   `corten` built from a commit between releases writes the number of the release before it,
-  so its Dockerfile is refused this way until that line names a release that has the option.
+  so its Dockerfile installs that release's command, not the commit's, and is refused this way
+  only when that release lacks the option (a command built before 0.3.0 wrote 0.2.0).
 - `llvm-tools` is added to the build image's toolchain. An app with a `rust-toolchain.toml`
   builds with its own, and `corten build` refuses a toolchain without the component, naming
   it; that file's `components` is where rustup takes it from. Not tried in an image build.
 - The build takes longer, and the app's target cache holds the instrumented copy beside the
   release. The starter's own image at `f909c0d2d`, its install line pointed at that checkout
-  since no release has the option yet, so the 45 seconds are not an install from crates.io;
+  since no release had the option then, so the 45 seconds are not an install from crates.io;
   one build each on a desktop with a lint run beside it:
   69 seconds the ordinary way, and 188 with `PROFILE_FROM` in the same target cache
   afterwards, of which 45 fetched `llvm-tools` and built the `corten` command and 138 were the
@@ -775,6 +963,10 @@ Before reserving a new grouped fleet, its [placement preflight](../../bench/work
 checks the provider's size and region listings for all required hosts. The
 reservation fixes those locations; create never tries a different region.
 
+New guest reservations use the [pinned upstream Git verifier](../../bench/workloads/CLOUD.md#public-source-permissions)
+before checkout, without relying on Launchpad. A failed verification or Git
+capability check is a setup failure, not benchmark evidence.
+
 For a partial round, the [independent group procedure](../../bench/workloads/CLOUD.md#independent-group-continuation)
 replays completed results from their original evidence and reserves only the
 named missing group. Different groups in the same continuation can measure on
@@ -788,14 +980,17 @@ On a fresh dedicated group host it also limits incoming SSH to the controller's
 authenticated provisioning IPv4 source. Keep that egress for collection and
 cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
-proved by saved Linux stat flags and matching PID/start identity. Supervised marketplace
-timing and untimed JSON preparation can
+proved by saved Linux stat flags and matching PID/start identity. An authenticated monitored
+or offline-handoff campaign can
 [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
-after sealed command termination if every new user-space identity is a proved udev worker.
-Marketplace timing still requires worker birth after the terminal cutoff; JSON preparation
-permits birth after its pre-phase census. The bounded wait, worker exit and ordinary whole-host
-boundary checks must all pass. This cannot repair old evidence or discount activity during
-measurement. This is benchmark-host preparation, not app deployment advice.
+after official timing or untimed JSON preparation, once the last native command's sealed
+lifetime verifies termination and an empty accounting scope, and every new user-space identity
+is a proved udev worker, including where the daemon and workers share the distribution's
+`/usr/bin/udevadm` executable. Timing requires worker birth strictly after the sealed terminal cutoff;
+untimed JSON preparation uses its pre-phase census cutoff instead. The bounded wait, worker exit
+and ordinary whole-host boundary checks must all pass. Replay uses the measured checkout: this
+cannot qualify old evidence that lacks the proof or discount activity during measurement.
+This is benchmark-host preparation, not app deployment advice.
 
 A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)
@@ -816,4 +1011,11 @@ version=$(node -p 'require("@playwright/test/package.json").version') &&
     -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
 ```
 
-The Dockerfile has no default base image.
+The Dockerfile has no default base image. CI builds Git 2.56.1 from its
+[upstream release on kernel.org](https://www.kernel.org/pub/software/scm/git/), not from
+the Launchpad PPA or the runner's installation. It verifies the pinned archive SHA-256
+and the detached signature on the uncompressed tar from Junio Hamano's pinned release key.
+When updating Git, verify both, and update the source pin and final image version check
+together. The compiler and source stay in the build stage. The final image checks that
+a missing blob in a local partial clone cannot be fetched with `--no-lazy-fetch`, but
+can be fetched without it. This check needs neither a network nor a Docker socket.

@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { validateSaved } from "../../../mixed-production/verify.mjs";
 import { parseArgs } from "../../../mixed-production/run.mjs";
+import { djangoAsgi, mixedDeploymentArgs, springWebflux } from "../../../mixed-production/source-audit.mjs";
 import { boundedFeatureProfile } from "../../../marketplace/feature-contract.mjs";
 import { selectedApps, contractSha256 } from "../../registry.mjs";
 import { readRegular, tree } from "../evidence.mjs";
@@ -16,11 +17,12 @@ export async function inspectSaved(binding, folder) {
   let before;
   try {
     const { request, selection, execution } = binding, { invocation, effectiveOptions: options } = execution;
-    assert.equal(request.group, "mixed-production"); assert.equal(request.recipe, "mixed-production-measure");
+    assert.equal(request.group, "mixed-production"); assert.ok(["mixed-production-measure", djangoAsgi.recipe, springWebflux.recipe].includes(request.recipe));
     assert.match(request.round, /^w[1-9]\d*$/); assert.match(request.commit, /^[a-f0-9]{40}$/);
     assert.equal(selection.group, request.group); assert.deepEqual(selection.apps, apps);
     assert.equal(selection.contractSha256, contractSha256(request.group)); assert.equal(binding.sources.commit, request.commit);
     const argv = ["bench/mixed-production/run.mjs", request.round, "--build", "--measure", "--profile", "matched"];
+    argv.push(...mixedDeploymentArgs(request.recipe));
     if (options.nativeAudits !== null) {
       const round = `r${request.round.slice(1)}`;
       assert.match(options.nativeAudits, new RegExp(`^/bench/campaign/${round}-[a-f0-9]{16}/mixed-native-audits\\.json$`));

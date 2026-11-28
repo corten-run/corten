@@ -144,7 +144,9 @@ jobs:
   # own (#1085): the watchlist's smoke, the longest, split by engine, one engine in each group with
   # the other examples beside it. Each group builds its own images and starts its own servers, so
   # no two share a port, a container or a database. Every check runs in every engine it ran in
-  # before; the watchlist's checks that use no browser run in each of its three groups.
+  # before; the watchlist's checks that use no browser run in each of its three groups. Beside
+  # them, `npm run check` and the benchmark apparatus run in two groups of their own: one after
+  # the other they came within three minutes of the timeout (#2208).
   smoke:
     name: smoke (${{ matrix.group }})
     runs-on: ubuntu-26.04
@@ -159,6 +161,10 @@ jobs:
         include:
           - group: benchmark-checks
             parts: npm-check
+          # The marketplace browser oracle and the native apparatus run in the Git-capable
+          # test-tools image, which only this group builds (in the step "Playwright's image").
+          - group: benchmark-apparatus
+            parts: marketplace-oracle group-apparatus
           - group: chromium-examples
             parts: watchlist-chromium card-market seller-desk deck-builder
           - group: firefox-feeds
@@ -171,7 +177,8 @@ jobs:
     steps:
       # npm run check resolves every commit the Markdown cites (scripts/design-refs.mjs), so the group
       # that runs it takes the whole history, and with it every tag: refs/tags/evidence/<sha> keeps a
-      # cited commit no branch has. A depth of 0 fetches +refs/tags/*; the others take one commit.
+      # cited commit no branch has. scripts/bench-size.mjs reads every commit between its base and the
+      # tip and refuses a shallow clone. A depth of 0 fetches +refs/tags/*; the others take one commit.
       - uses: actions/checkout@v7
         with:
           fetch-depth: ${{ contains(env.PARTS, ' npm-check ') && '0' || '1' }}
@@ -186,12 +193,38 @@ jobs:
       # The benchmark harness's classic compiler API, which npm run check:workloads and
       # check:groups:browser parse with (bench/package.json).
       - run: npm --prefix bench ci
+        if: contains(env.PARTS, ' npm-check ') || contains(env.PARTS, ' group-apparatus ')
+      # scripts/bench-size.mjs checks every commit since the base, which it does not guess here: a
+      # pull request's checkout is its merge with the base, whose first parent is the base; a push's
+      # base is the commit the branch was at before it, all zeros for a new branch or tag (the
+      # script then takes the merge base with origin/main). Release calls this on a tag's push. Any
+      # other event fails until its base is wired here.
+      - name: The bench size check's base
         if: contains(env.PARTS, ' npm-check ')
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+                echo "::error::the pull request's checkout is not a merge commit, so it has no base to check bench/ against"
+                exit 1
+              fi
+              base=$(git rev-parse 'HEAD^1') ;;
+            push) base=$BEFORE ;;
+            *) base= ;;
+          esac
+          if [ -z "$base" ]; then
+            echo "::error::no base for scripts/bench-size.mjs on a $GITHUB_EVENT_NAME event; give it one in .github/workflows/ci.yml"
+            exit 1
+          fi
+          echo "CORTEN_BENCH_SIZE_BASE=$base" >> "$GITHUB_ENV"
       - name: npm run check
         if: contains(env.PARTS, ' npm-check ')
         run: |
           npm run check
-          npm run check:workloads
+          # The runner image has Python 3, so the workload checks that need it run here and fail without it.
+          CORTEN_REQUIRE_PYTHON=1 npm run check:workloads
           npm run check:groups:host
           node --test bench/load-tool.test.mjs bench/fullstack/load-tool.test.mjs
           mapfile -t marketplace_tests < <(find bench/marketplace -maxdepth 1 -name '*.test.mjs' ! -name check.test.mjs -print | sort)
@@ -203,12 +236,14 @@ jobs:
       # the runner (`npx playwright install --with-deps`) fetched about a hundred apt packages from
       # the Ubuntu mirror on every run, and when the mirror slowed to a few KB/s the step stalled
       # until it was cancelled. `--network host` reaches the example servers at localhost.
+      # The group that runs only `npm-check` uses no browser, so it pulls no image.
       - name: Playwright's image
+        if: env.PARTS != ' npm-check '
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
           # Only the apparatus checks replay immutable Git sources; the other groups use the base.
-          if [[ "$PARTS" == *" npm-check "* ]]; then
+          if [[ "$PARTS" == *" group-apparatus "* ]]; then
             docker build --build-arg PLAYWRIGHT_IMAGE="$image" -f bench/workloads/test-tools.Dockerfile -t corten-playwright-tools .
             image="corten-playwright-tools"
           fi
@@ -219,11 +254,15 @@ jobs:
           # For a test that restarts its server: the runner's docker CLI and socket as well.
           echo "PLAYWRIGHT_WITH_DOCKER=$run -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock $image" >> "$GITHUB_ENV"
       - name: Marketplace browser oracle
-        if: contains(env.PARTS, ' npm-check ')
-        run: $PLAYWRIGHT node --test --test-concurrency=1 bench/marketplace/check.test.mjs
+        if: contains(env.PARTS, ' marketplace-oracle ')
+        run: |
+          $PLAYWRIGHT node --test --test-concurrency=1 bench/marketplace/check.test.mjs
+          echo marketplace-oracle >> "$RUNNER_TEMP/ran"
       - name: Native workload group apparatus
-        if: contains(env.PARTS, ' npm-check ')
-        run: $PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser
+        if: contains(env.PARTS, ' group-apparatus ')
+        run: |
+          $PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser
+          echo group-apparatus >> "$RUNNER_TEMP/ran"
       - name: watchlist
         if: contains(env.PARTS, ' watchlist-chromium ') || contains(env.PARTS, ' watchlist-firefox ') || contains(env.PARTS, ' watchlist-webkit ')
         run: |
@@ -311,7 +350,6 @@ jobs:
           docker run -d --name feeds-nats --network feeds nats:2-alpine -js
           docker build -f examples/listings-feed/Dockerfile -t corten-listings-feed .
           docker run -d --name corten-listings-feed --network feeds -p 18485:8080 -e DATABASE_URL=postgres://postgres:postgres@feeds-pg/feeds -e NATS_URL=nats://feeds-nats:4222 corten-listings-feed
-          timeout 120 sh -c 'until curl -sf -o /dev/null http://localhost:18485/health/ready; do sleep 1; done'
           $PLAYWRIGHT node examples/listings-feed/smoke.mjs http://localhost:18485 || { docker logs corten-listings-feed; docker logs feeds-nats; exit 1; }
           docker rm -f -v corten-listings-feed feeds-pg feeds-nats
           docker network rm feeds

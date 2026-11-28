@@ -152,8 +152,38 @@ test("independent detach names invalid admission without leaking the exception",
   const f = await independentDetach(t);
   writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
   assert.equal(await f.cli(), 2);
-  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission"]);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission; custody-read"]);
   f.notDispatched();
+});
+
+test("independent detach distinguishes busy, unresolved and wrong-round admission without dispatch", async (t) => {
+  const f = await independentDetach(t);
+  const preview = [...f.approved.slice(0, -2), "--print-approval"];
+  const lock = join(f.p.h.base, ".continuation-operation.lock");
+  const owner = "SYNTHETIC_PRIVATE_OWNER";
+  const catalogCalls = f.p.catalogCalls.length, outputs = f.p.output.length;
+  writeFileSync(lock, owner);
+  assert.equal(await f.cli(preview), 2);
+  assert.equal(await f.cli(), 2);
+  assert.equal(readFileSync(lock, "utf8"), owner);
+  unlinkSync(lock);
+  assert.equal(await f.cli(["r22", ...preview.slice(1)]), 2);
+  f.notDispatched();
+  const incomplete = join(f.root, "mixed-production");
+  mkdirSync(incomplete);
+  assert.equal(await f.cli(preview), 2);
+  assert.deepEqual(f.errors, [
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; group-selection",
+    "fleet-operation-failed: continuation-admission; custody-unresolved",
+  ]);
+  assert.deepEqual(readdirSync(incomplete), []);
+  assert.deepEqual(readdirSync(f.root).sort(), ["fleet-r21.json", "mixed-production"]);
+  assert.equal(existsSync(lock), false);
+  assert.deepEqual(f.p.children, []);
+  assert.equal(f.p.catalogCalls.length, catalogCalls);
+  assert.equal(f.p.output.length, outputs);
 });
 
 test("independent prepare names its admission or reservation stage without exposing inputs", async (t) => {
@@ -165,7 +195,7 @@ test("independent prepare names its admission or reservation stage without expos
   assert.equal(await cli(), 2);
   writeFileSync(p.index, "[]"); p.flags.head = "b".repeat(40);
   assert.equal(await cli(), 2);
-  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission", "fleet-operation-failed: prepare-reservation"]);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; custody-read", "fleet-operation-failed: prepare-reservation"]);
   assert.equal(existsSync(p.old), false);
   assert.deepEqual(p.children, []);
 });
@@ -337,6 +367,37 @@ function continuationFixture(t) {
   return { ...p, group, old, next, manifest, index, prepare, preview, detach, history };
 }
 
+test("offline handoff is selected only at fresh single-group prepare and bound in detach preview", async (t) => {
+  const p = continuationFixture(t);
+  const configure = ["--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context, "--offline-handoff"];
+  const prepare = ["r21", "--continuation-root", p.h.base, "--group", p.group, ...configure];
+  assert.throws(() => parseFleetArgs(["r21", "--fleet-root", p.h.base, ...configure]), /single-group preparation/);
+  assert.throws(() => parseFleetArgs(["r21", "--continuation-root", p.h.base, "--group", p.group, "--detach", "--offline-handoff"]),
+    /single-group preparation/);
+  assert.equal(await fleetMain(prepare, p.deps), 3);
+  const saved = readFleet(p.old, "r21");
+  assert.equal(saved.manifest.single.offlineHandoff, true);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.ok(await p.preview("r21"));
+  assert.deepEqual(p.output.at(-1).subject.fleet.single, saved.manifest.single);
+  assert.deepEqual(p.children, []);
+});
+
+test("approved continuation dispatch selects the monitor callback from the locked handoff mode", async (t) => {
+  for (const offline of [false, true]) await t.test(offline ? "offline" : "supervised", async (t) => {
+    const p = continuationFixture(t), callbacks = [];
+    const args = ["r21", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit", commit,
+      "--ssh-key", "42", "--account-id", accountId, "--context", context];
+    assert.equal(await fleetMain(offline ? [...args, "--offline-handoff"] : args, p.deps), 3);
+    const approval = await p.preview("r21");
+    p.deps.main = async (_args, { onReady }) => { callbacks.push(typeof onReady); return 3; };
+    // Dispatch occurred, but the synthetic child produced no saved host state.
+    assert.equal(await p.detach("r21", approval), 2);
+    assert.deepEqual(callbacks, [offline ? "undefined" : "function"]);
+    assert.equal(p.output.at(-1).groups[0].error, "group-state-invalid");
+  });
+});
+
 test("continuation refuses a live staged remaining owner before it writes its intent", async (t) => {
   const p = continuationFixture(t), staged = fixture(t);
   const remaining = await staged.remaining(), lock = join(staged.h.base, ".fleet-operation.lock");
@@ -353,6 +414,11 @@ test("continuation refuses a live staged remaining owner before it writes its in
   writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: remaining.at(-1) }));
   assert.ok(!existsSync(join(staged.h.base, "remaining-intent.json")));
   await assert.rejects(p.detach("r21", approval), /active batch/);
+  const errors = [], owner = readFileSync(lock, "utf8");
+  assert.equal(await fleetCli(["r21", "--continuation-root", p.h.base, "--group", p.group, "--detach", "--print-approval"],
+    { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; batch-owner"]);
+  assert.equal(readFileSync(lock, "utf8"), owner);
   assert.ok(!existsSync(join(p.old, "launch-intent.json")));
   assert.deepEqual(p.children, []);
 
@@ -378,6 +444,32 @@ test("continuation refuses a live staged remaining owner before it writes its in
   p.flags.placement = () => { ownerGone = false; return syntheticPlacement(); };
   await assert.rejects(p.detach("r21", updated), /source lock changed/);
   assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+});
+
+test("continuation distinguishes a failed selected-group replay without exposing its error", async (t) => {
+  const p = continuationFixture(t), retained = fixture(t), errors = [];
+  retained.seedLegacy();
+  const result = retained.finishGroup(p.group), archivePath = join(result.local, "results.tgz");
+  Object.assign(result.state, { evidenceOutcome: "failed", exitCode: 1 });
+  result.state.validation.status = "failed";
+  writeFileSync(join(result.evidence, "exit-code"), "1\n");
+  writeFileSync(join(result.evidence, "run.log"), "synthetic failed run\n");
+  const files = ["run.log", "exit-code", "host.txt", "campaign/.host-attempt.json", `campaign/${result.report.campaign}/plan.json`];
+  writeFileSync(archivePath, archive(files.map((name) => ({ name, body: readFileSync(join(result.evidence, name)) }))));
+  result.state.archiveSha256 = fileHash(archivePath); result.rehash();
+  writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit, archives: {} }]));
+  const saved = treeHash(retained.h.base);
+  let inspected = 0;
+  p.deps.inspect = async () => { inspected++; throw new Error("SYNTHETIC_PRIVATE_REPLAY_FAILURE"); };
+  const prepare = ["r22", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  assert.equal(await fleetCli(prepare, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+  assert.equal(inspected, 1);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; custody-replay"]);
+  assert.deepEqual(readdirSync(p.h.base), ["index.json"]);
+  assert.equal(treeHash(retained.h.base), saved);
+  assert.deepEqual(p.catalogCalls, []);
   assert.deepEqual(p.children, []);
 });
 
@@ -1696,6 +1788,40 @@ test("fleet receipts retain all closed census predicates without replay", async 
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_TOKEN")); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
   await assert.rejects(fleetMain(approved, p.deps), /fleet-exact-approval-required/);
   await assert.rejects(fleetMain(await p.approve("--collect"), p.deps), /EEXIST/);
+});
+
+test("fleet receipts name a provider-errored create only when its child saved that terminal state", async (t) => {
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
+  const approved = await p.approve("--collect");
+  const errored = (state) => {
+    state.status = "creating"; delete state.id; delete state.ip; delete state.bootstrapReady;
+    state.createErrored = { dropletId: "9", actionId: "8", evidenceSha256: "e".repeat(64) };
+  };
+  const stop = (fields, code = "create-errored-absent") => Object.assign(new Error("PRIVATE_MESSAGE"), { providerDiagnostic: { code } }, fields);
+  flags.child = ({ group }) => {
+    const i = groupNames.indexOf(group);
+    if (i === 3) throw stop(); // No saved terminal record.
+    if (i === 4) return 1; // Terminal code without a record.
+    p.seed(group, errored);
+    if (i === 0) return 1;
+    if (i === 1) throw stop();
+    if (i === 2) throw stop({ controlUncertain: true });
+    throw stop({}, "create-action-errored");
+  };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  const rows = p.output.at(-1).groups;
+  for (const [i, row] of rows.entries()) {
+    if (i < 2) {
+      assert.equal(row.outcome, "create-errored"); assert.equal(row.error, undefined); assert.equal(row.id, undefined);
+      if (i === 1) { assert.equal(row.uncertain, false); assert.deepEqual(row.providerDiagnostic, { code: "create-errored-absent" }); }
+    } else {
+      assert.equal(row.outcome, "error");
+      assert.equal(row.error, i === 4 ? "group-state-invalid" : "group-operation-failed");
+    }
+    const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
+    assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row));
+  }
+  assert.ok(rows.length > 5); assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
 });
 
 test("fleet receipt sanitizer rejects raw fields and accessors without changing failure outcomes", async (t) => {

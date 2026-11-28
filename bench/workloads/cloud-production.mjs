@@ -5,22 +5,25 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentCreate, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, handoffCapture, handoffLocks, handoffRetirementPolicy,
+  failedExitOneCandidate, failedExitOnePolicy, failedExitOneScope, verifyFailedExitOneCustody, verifyFailedExitOneRetirement, interruptedFirstUpload,
+  launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
-import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckIndexedLaunchCustody, recheckSetupAttempt } from "./fleet-verify.mjs";
+import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+  recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
+  recheckExternalFailedHost, recheckSetupAttempt, recheckSetupRetirement, replacementQuarantine } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
-  "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "cloud-sealed-collection.mjs", "isolated/control-admission.mjs",
+  "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "cloud-sealed-collection.mjs", "cloud-setup-drain-source.mjs", "isolated/control-admission.mjs",
   "isolated/control-session-source.mjs", "isolated/control-stream-source.mjs", "isolated/control-stream.mjs", "isolated/host-observation.mjs", "isolated/native-roles.mjs",
   "../hardening/plan.mjs", "../hardening/bounded-requests.mjs", "../hardening/dependency-recovery-contract.mjs",
   "deployments.mjs", "../marketplace/feature-contract.mjs", "../marketplace/run-contract.mjs", "../marketplace/groups.mjs",
@@ -46,7 +49,7 @@ async function launchRoles({ round, commit, group, mode }, interrupted) {
 
 // compiler and roleCheck are synthetic TEST seams, never CLI options.
 export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler, roleCheck = launchRoles,
-  interrupted, remainingPlacement } = {}) {
+  interrupted, remainingPlacement, holdingOperationLock = false } = {}) {
   // All checks here are local/read-only. Missing integration stays visible, not imported.
   repo = realpathSync(repo);
   assert.ok(!/["$%\r\n\0]/.test(options.stateDir), "SSH config expansion in state path refused");
@@ -68,7 +71,8 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   if (options.detach) for (const path of benchPackagePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
   // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
-  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
+  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout
+    && options.absentMeasuredCheckout === undefined) && !compiler()) missing.push(localCompilerMissing);
   let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery, launchHostKeySha256;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = requireStagedFleet(JSON.parse(bytes));
@@ -110,14 +114,18 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         registrationSha256: saved.control.monitor.registrationSha256, sealSha256: terminal.sealSha256, campaign: terminal.campaign,
         archiveSha256: options.exitArchiveSha256, policy: "collect-one-sealed-exit-archive-with-measured-replay" };
     } else if (options.unusedBootstrapKnownHosts !== undefined) {
-      const settled = settledBootstrap(saved, join(physicalRequest, `groups-${options.round}`));
-      assert.ok(settled || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, unless the upload prefix is settled");
-      if (settled) assert.equal(saved.commit, head, "settled uploads require the measured checkout");
+      const local = join(physicalRequest, `groups-${options.round}`), settled = settledBootstrap(saved, local), interrupted = interruptedFirstUpload(saved, local);
+      assert.ok(settled || interrupted || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, a settled upload prefix, the unacknowledged first job upload,"
+        + " or an offline bound posted create that never started");
+      if (settled || interrupted) assert.equal(saved.commit, head, "bootstrap uploads require the measured checkout");
       else if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
       const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
       assert.ok(key.length, "verified host key required");
+      if (interrupted) assert.ok(launchHostKey(local, saved).equals(key), "verified key differs from launch");
       recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key),
-        policy: settled ? "settled-uploads-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
+        policy: interrupted ? "unacknowledged-first-upload-never-written-only" : settled ? "settled-uploads-unused-only-no-qualification"
+          : saved.createContradicted ? "contradicted-create-posted-droplet-unused-only-no-qualification"
+          : offlineNeverStarted(saved) ? "offline-never-started-posted-create-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
     } else if (options.cancelMixedWait) {
       ownedMixedWait(saved); assert.equal(saved.status, "running");
       for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(saved[key], undefined);
@@ -136,18 +144,46 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
             "measured group layout or remote job differs");
         assert.ok(saved.fullGroupQualified === false && !saved.collectedAt && !saved.validation && !saved.evidenceOutcome,
           "only unqualified failure evidence can retire");
-        const grouped = groupedPreplanFailure(local, saved);
-        // A refused custody probe can append a settled collection ledger row
-        // without replacing the original reservation. Approve both byte sets.
-        const original = join(local, "failed-native-reservation.json");
-        const preservedReservationSha256 = digest(lstatSync(original, { throwIfNoEntry: false })
-          ? regular(original, 1024 * 1024) : bytes);
         const { stagedChildIntent } = await import("./fleet.mjs");
-        recovery = { policy: "grouped-preplan-failure-custody-only", measuredCommit: saved.commit, hostId: saved.id,
-          preservedReservationSha256,
-          group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
-          launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
-          intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+        if (saved.control?.monitor?.phase === "closed") {
+          handoffLocks(local, holdingOperationLock);
+          if (failedExitOneCandidate(local, saved)) {
+            const absentOnly = saved.status === "retired";
+            const { grouped, launchIntentSha256, fleetManifestSha256, record } = absentOnly
+              ? verifyFailedExitOneRetirement(local, saved) : verifyFailedExitOneCustody(local, saved);
+            if (absentOnly) assert.equal(record.controllerCommit, head, "original exit-one retirement controller required");
+            const intent = stagedChildIntent(physicalRequest, saved);
+            assert.deepEqual(intent, { launch: launchIntentSha256 }, "original exit-one launch intent changed");
+            recovery = { policy: failedExitOnePolicy, operation: absentOnly ? "reconcile-absence-only" : "observe-terminal-and-retire",
+              measuredCommit: saved.commit, provider: saved.provider, hostId: saved.id,
+              ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent, fleetManifestSha256 };
+          } else {
+            const { grouped, capture, captureSha256 } = handoffCapture(local, saved);
+            recovery = { policy: handoffRetirementPolicy, measuredCommit: saved.commit, captureControllerCommit: capture.controllerCommit,
+              captureSha256, preservedReservationSha256: capture.reservationSha256, provider: saved.provider,
+              hostId: saved.id, ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256,
+              evidenceSha256: saved.evidenceSha256, custodyArchiveSha256: capture.observation.archiveSha256,
+              custodyEvidenceSha256: capture.evidenceSha256, snapshotSha256: capture.observation.snapshotSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+          }
+        } else {
+          const grouped = groupedPreplanFailure(local, saved);
+          // A refused custody probe can append a settled collection ledger row
+          // without replacing the original reservation. Approve both byte sets.
+          const original = join(local, "failed-native-reservation.json");
+          const preservedReservationSha256 = digest(lstatSync(original, { throwIfNoEntry: false })
+            ? regular(original, 1024 * 1024) : bytes);
+          recovery = { policy: "grouped-preplan-failure-custody-only", measuredCommit: saved.commit, hostId: saved.id,
+            preservedReservationSha256,
+            group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
+            launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+            intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+        }
       } else {
         const roots = failedNativeRoots(saved);
         if (saved.group === "mixed-production") verifyMixedSignal(local, saved);
@@ -156,7 +192,19 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
           policy: failedNativePolicy(saved) };
       }
     } else {
-      assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+      if (options.absentMeasuredCheckout !== undefined) {
+        assert.ok(saved.commit !== head && absentCollectionCandidate(options, saved), "absence-only collection requires a verified older reservation with deletion intent");
+        const measuredRoot = realpathSync(options.absentMeasuredCheckout);
+        assert.ok(outside(measuredRoot, physicalRequest) && outside(physicalRequest, measuredRoot), "measured checkout and reservation must be disjoint");
+        const measuredGit = async (...args) => (await run("git", ["-C", measuredRoot, ...args])).stdout;
+        assert.equal(realpathSync((await measuredGit("rev-parse", "--show-toplevel")).trim()), measuredRoot);
+        assert.equal((await measuredGit("rev-parse", "--verify", "HEAD^{commit}")).trim(), saved.commit, "use the original measured checkout");
+        assert.equal(await measuredGit("status", "--porcelain", "--untracked-files=all"), "", "clean measured checkout required");
+        await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+        if (!compiler(measuredRoot)) missing.push(localCompilerMissing);
+        recovery = { policy: absentCollectionPolicy, measuredCommit: saved.commit, measuredRoot, hostId: saved.id,
+          archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256 };
+      } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
       if (options.collect && saved.launchHostKeySha256 !== undefined) {
         launchHostKey(join(physicalRequest, `groups-${options.round}`), saved);
         launchHostKeySha256 = saved.launchHostKeySha256;
@@ -175,9 +223,59 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
       ? "operator-confirmed-original-local-process-tree-gone-and-exact-host-key-verified-for-unused-bootstrap-retirement-only"
       : options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
       : options.r21MeasuredCheckout ? "operator-approved-after-merged-independent-review-for-one-sealed-child-collection"
+      : recovery?.policy === absentCollectionPolicy ? "operator-approved-for-read-only-absence-and-measured-replay-only"
       : recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
       : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
+}
+
+// The controller's run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration,
+// guardDispatch) in production: one cancellation checkpoint before dispatch, then the
+// controller's dispatch guard, then the private provider worker or the process transport.
+// Exported only so tests drive the controller through these exact dispatch steps.
+export function productionDispatch({ processRun, provider, interrupted, historicalDispatch = () => undefined, dispatchRefusals = new WeakSet() }) {
+  return async (...args) => {
+    const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
+    const creating = args[0] === "doctl" && args[1][0] === "compute" && args[1][1] === "droplet" && args[1][2] === "create";
+    try { await controlCheckpoint(interrupted); } catch (error) {
+      if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
+      if (creating) return unsentCreate;
+      throw error;
+    }
+    const guardDispatch = args[6];
+    if (guardDispatch !== undefined) {
+      assert.ok(args[0] === "doctl" && args[1][2] === "delete");
+      // The controller's local custody must still match after this last await,
+      // before the private worker receives the mutation. A refusal throws; only a
+      // DELETE bounded by a proof deadline can instead report its proof expired.
+      if (guardDispatch() === false) {
+        assert.ok(args[4] !== undefined, "an unbounded DELETE guard cannot report an expired proof");
+        return unsentDelete; // The local proof expired before worker dispatch.
+      }
+    }
+    const checkHistoricalDispatch = historicalDispatch();
+    if (creating && checkHistoricalDispatch) {
+      try { checkHistoricalDispatch(); } catch (error) {
+        if (!dispatchRefusals.has(error)) throw error;
+        return unsentCreate;
+      }
+    }
+    let result, failure;
+    // An in-process provider engine awaits once more before its request, so it receives the
+    // same guard and calls it after that await. The private provider worker is another
+    // process: a function cannot cross its IPC, so there the fence above is the last one.
+    const send = (argv, ...rest) => guardDispatch === undefined ? provider()(argv, ...rest)
+      : provider()(argv, rest[0], rest[1], rest[2], rest[3], guardDispatch);
+    try { result = args[0] === "doctl" ? await send(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
+    if (creating && result === unsentCreate) return result;
+    // Hand custody back before cancellation: take the stream handle, record
+    // the acknowledged command exit, or clear a positively unsent DELETE.
+    if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
+    try { await controlCheckpoint(interrupted); }
+    catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
+    if (failure) throw failure;
+    return result;
+  };
 }
 
 export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler, roleCheck, remainingAdmission = false } = {}) {
@@ -207,22 +305,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     return error;
   };
   try {
-  const run = async (...args) => {
-    const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
-    try { await controlCheckpoint(interrupted); } catch (error) {
-      if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
-      throw error;
-    }
-    let result, failure;
-    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : await processRun(...args); } catch (error) { failure = error; }
-    // Hand custody back before cancellation: take the stream handle, record
-    // the acknowledged command exit, or clear a positively unsent DELETE.
-    if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
-    try { await controlCheckpoint(interrupted); }
-    catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
-    if (failure) throw failure;
-    return result;
-  };
+  let checkHistoricalDispatch;
+  const createDispatchRefusals = new WeakSet();
+  const run = productionDispatch({ processRun, provider: () => providerRun, interrupted,
+    historicalDispatch: () => checkHistoricalDispatch, dispatchRefusals: createDispatchRefusals });
   const manifest = options.group === undefined ? undefined
     : requireStagedFleet(JSON.parse(regular(resolve(options.fleet), 1024 * 1024)));
   const stagedSibling = manifest && options.group !== manifest.jobs[0].group;
@@ -235,6 +321,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     if (manifest.single) {
       const root = dirname(fleet.root), { indexSha256, group } = manifest.single;
       assert.equal(intent.subject.continuation?.indexSha256, indexSha256, "continuation approval required");
+      if (manifest.single.offlineHandoff) assert.ok(!intent.subject.continuation.peers?.length, "offline handoff requires no live peer");
       assert.equal(continuationIndexSha256(root), indexSha256, "continuation index changed");
       assert.deepEqual(JSON.parse(regular(join(root, ".continuation-operation.lock"), 1024)), { pid: process.pid, group },
         "group launch requires the active continuation lock");
@@ -250,11 +337,23 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
   const unconfirmed = manifest?.single ? admission?.subject.continuation.unconfirmed ?? [] : [];
-  const historicalIds = new Set(unconfirmed.map(({ accountId, id }) => {
+  const externalFailures = unconfirmed.filter((row) => row.externalFailureSha256 !== undefined);
+  // Every posted droplet of an earlier provider-errored attempt, in any group, is fenced
+  // too, by ID alone: a renamed or untagged droplet with that ID still refuses the create.
+  const continuation = manifest?.single ? admission?.subject.continuation : undefined;
+  const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
+  const quarantined = continuation?.quarantinedCreates ?? [];
+  const replacement = !preview && replacementQuarantine(quarantined, options.group, manifest?.single?.replacesQuarantineSha256);
+  assert.ok(quarantined.every((row) => row.accountId === manifest.provider.accountId
+    && (row.group !== options.group || row === replacement && Number(row.round.slice(1)) < Number(options.round.slice(1)))),
+    "create quarantine permits only other groups or its exact replacement in the saved account");
+  const exitOneRetirements = continuation?.exitOneRetirements ?? [];
+  const setupRetirements = continuation?.setupRetirements ?? [];
+  const historicalIds = new Set([...unconfirmed, ...exitOneRetirements, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
-  let historicalHostsAbsent;
+  let historicalHostsAbsent = !historicalIds.size && !quarantined.length;
   const deps = { repo, run, compiler, roleCheck, interrupted, remainingPlacement: admission?.placement };
   const plan = await productionPlan(options, deps);
   if (preview) {
@@ -274,17 +373,67 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
     assert.deepEqual(job.subject, plan.subject);
     if (beforeCreate && manifest.single) {
-      if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
+      assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
+      if (manifest.single.offlineHandoff) assert.deepEqual(currentPeers, [], "offline handoff requires no live peer");
       if (beforeCreate === true) {
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
-        const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));
+        const checks = unconfirmed.filter((row) => row.root !== undefined && row.externalFailureSha256 === undefined)
+          .map((row) => recheckSetupAttempt(root, row, manifest));
         for (const stillIdle of checks) stillIdle(); // Another attempt's archive may have taken time to hash.
+        // Last, immediately before the create is recorded and dispatched under this child's
+        // own locks: an earlier provider-errored attempt of this group must still hold no
+        // custody. After this point that attempt's collect never creates or provisions: it
+        // rechecks read-only, or records a reappearance and binds only the exact owned posted droplet.
+        for (const row of current.subject.continuation.createFailures ?? []) recheckCreateErroredAttempt(root, row);
+        // Then every earlier posted create on this account, in any group (not only this
+        // group's retry): a contradiction or custody change since admission refuses.
+        for (const row of current.subject.continuation.postedCreates ?? []) recheckPostedCreate(row);
+        for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
+      }
+      if (beforeCreate !== "census") {
+        for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
+        const checkCustody = (check) => {
+          try { return check(); } catch (error) {
+            if (beforeCreate === "dispatch" && error instanceof Error) createDispatchRefusals.add(error);
+            throw error;
+          }
+        };
+        const setupIdleChecks = checkCustody(() => setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody)));
+        for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
+        // A continuation approval predating this binding cannot create beside
+        // an unbound r78 slot. Do not try to replay its archive from the child.
+        for (const slot of ["client-heavy", "client-heavy--r78"]) {
+          const prior = join(root, slot);
+          if (prior === current.fleetRoot || exitOneRetirements.some((row) => row.root === prior)
+              || !lstatSync(join(prior, "fleet-r78.json"), { throwIfNoEntry: false })) continue;
+          const { state } = readGroup(readFleet(prior, "r78", { priorSelection: true }), "client-heavy");
+          assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
+        }
+        if (beforeCreate === "dispatch" && setupIdleChecks.length) {
+          checkCustody(() => {
+            recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+            for (const stillIdle of setupIdleChecks) stillIdle();
+          });
+        }
+        if (beforeCreate === "dispatch") {
+          for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
+        }
       }
       return currentPeers;
     }
   });
+  if (exitOneRetirements.length || externalFailures.length || setupRetirements.length || quarantined.length) {
+    checkHistoricalDispatch = () => {
+      try { return checkFleetAdmission("dispatch"); } catch (error) {
+        // A quarantined successor must not strand another creating state on a
+        // local admission refusal before any request reaches the provider.
+        if (quarantined.length && error instanceof Error) createDispatchRefusals.add(error);
+        throw error;
+      }
+    };
+  }
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
@@ -309,43 +458,56 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       requireStagedFleet(JSON.parse(bytes)), admission?.placement?.region) });
   }
   let entered = false;
+  const absenceOnly = plan.subject.recovery?.policy === absentCollectionPolicy ? plan.subject.recovery : undefined;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
-    const locked = await productionPlan(options, deps);
+    const locked = await productionPlan(options, { ...deps, holdingOperationLock: true });
     assert.equal(locked.approvalSha256, approval, "locked action changed after approval");
     // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
     assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
     checkFleetAdmission?.();
+    if ([handoffRetirementPolicy, failedExitOnePolicy].includes(locked.subject.recovery?.policy)) entered = true;
     return locked.subject;
   };
-  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
+  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch) => {
+    if (absenceOnly && binary !== "git") assert.ok(binary === "doctl" && !registration && deleteProofExpiresAtMs === undefined && guardDispatch === undefined
+      && (argv[0] === "account" && argv[1] === "get"
+        || argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "get" && argv[3] === absenceOnly.hostId), "absence reconciliation is read-only");
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
       await authorizeLocked();
       entered = true;
     }
-    const result = await run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration);
-    // Use the controller's complete, account-bracketed pre-create list, not
-    // just the rows that still carry their original benchmark name or tags.
-    if (historicalIds.size && historicalHostsAbsent === undefined && binary === "doctl"
-        && argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "list") {
-      const rows = JSON.parse(result.stdout);
-      assert.ok(Array.isArray(rows));
-      historicalHostsAbsent = !rows.some(({ id }) => historicalIds.has(String(id)));
-    }
-    return result;
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
   };
+  const inspectPreCreateInventory = !historicalHostsAbsent ? (rows, complete) => {
+    const listed = rows.some(({ id }) => historicalIds.has(String(id)));
+    const externalListed = rows.some(({ name, tags }) => externalFailures.some((row) =>
+      typeof name === "string" && digest(name) === row.nameSha256
+      || tags?.some((tag) => typeof tag === "string" && digest(tag) === row.tagSha256)));
+    if (quarantined.length) {
+      checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows);
+    }
+    assert.ok(!externalListed && (!(quarantined.length || externalFailures.length) || !listed),
+      "an earlier historical host is listed; preserve reservation");
+    historicalHostsAbsent = complete && !listed;
+  } : undefined;
+  // The worker returns at most one compact witness. Keep quarantine targets
+  // ahead of external failures, which are all checked against the complete census.
+  const censusTargets = quarantined.length ? quarantined : externalFailures.slice(0, 1);
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
+    inspectPreCreateInventory, preCreateCensusTargets: censusTargets.map(({ nameSha256, tagSha256 }) => `${nameSha256}:${tagSha256}`),
     ...(admission ? { checkFleetAdmission, ...(stagedSibling
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
-    } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
+    } }), ...(absenceOnly || options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
-        ...(options.r21MeasuredCheckout || plan.subject.recovery?.policy === "grouped-preplan-failure-custody-only" ? plan.subject.recovery : {}) },
+        ...(absenceOnly || options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
+          ? plan.subject.recovery : {}) },
     } : {}) });
   let result;
   stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : options.cancelMixedWait ? "controller-cancellation" : options.retireFailedNative ? "controller-retirement" : "controller-audit";
@@ -356,7 +518,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   return result;
   } catch (error) {
     const detail = stage === "controller-collect" && controllerFailure(error);
-    throw mark(error, detail && detail.startsWith("setup-") ? detail : stage);
+    throw mark(error, detail && routeStages.includes(detail) ? detail : stage);
   }
   finally {
     try { await providerRun?.close(); }

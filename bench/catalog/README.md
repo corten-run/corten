@@ -29,6 +29,27 @@ records return 404; upstream errors are errors, not an empty 200. `GET /api/cata
 serializes the same record through the framework's normal JSON support. It does not return a
 pre-serialized body. No marketplace view-model conversion is in either path.
 
+The stand-in upstream is Node's HTTP server: it answers with `Keep-Alive: timeout=5` and, on the
+pinned Node 26, closes a connection idle for that 5 s keep-alive timeout plus Node's 1 s buffer
+(observed at 5,999 to 6,045 ms after the last answer). A read written to a pooled connection as
+the upstream closes it can fail in the send, before the upstream's handler sees it. That is a
+possible mechanism for a failed upstream read, reproduced here only against a test double that
+closes at 5 s; it is not a diagnosis of the saved r21 catalog or r27 marketplace failures, whose
+cause remains unattributed. The Corten app and every fullstack app whose client would keep idle
+connections longer (reqwest's default is 90 s) are configured not to reuse a connection idle 4 s,
+a second under what the upstream advertises. Spring is the exception at 1 s, since the JDK client
+drops an expired connection late, and Drogon and Django check the idle time when they take a
+connection from the pool, so an expired one is skipped at checkout rather than closed at 4 s. The
+full-stack [Caveats](../fullstack/README.md#caveats), item 5, list each client's setting.
+`bench/fullstack/idle-close.mjs` checks that an image had dropped them when its probe requests
+reached the upstream with every warmed connection idle 4.5 to 4.75 s (or closed under 4.75 s
+idle before the probe) and nothing sent upstream since the warm-up, under the upstream's 5 s
+close; it does not measure the configured 4 s itself. This is the pool policy alone: no retry, no
+cache, and still one upstream GET per record
+read. It is a correctness-only change to the timed request path: the apps' pool bounds, and the
+class counters below, are timed inputs for groups measured from this point, with no performance
+claim; their cost is not measured, and saved results are unchanged.
+
 The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
 startup. Canonical record GETs reuse those bytes without URL parsing or an
 asynchronous handler; other URL forms retain normal URL parsing. Controlled
@@ -181,13 +202,81 @@ Application logs preserve both stdout and stderr directly in each raw `app.log`,
 output larger than the command's bounded in-memory diagnostic tail. Command deadlines and
 log-collection failures remain explicit failures; incomplete logs are not silently accepted.
 This does not disable native access logging or change measured application settings.
+When a detached app start or an application, startup or upstream log collection fails or
+reaches its deadline, the runner saves a `catalog-command-failure/v1` receipt before it removes
+the owned container: `app-start.failure.json` in the source or preflight folder, or
+`<log>.failure.json` beside the partial log. A failed detached start (`docker run -d`) writes only
+its receipt, with no log file: that command collects no logs. When a started app later fails its
+startup check (not running, or no published port), the runner collects its logs into
+`<container>-startup-<attempt>.log`, numbered per attempt, and a failure of that collection
+writes `<container>-startup-<attempt>.log.failure.json` beside it. The receipt records the
+Docker client's lifetime in milliseconds after spawn (first and last output on each pipe, client
+exit, each pipe's close, when and why the runner stopped it, and what the stop signalled), and the
+offset, bytes and SHA-256 of what the log collection appended, hashed from the closed file. A
+container is read only when Docker names it exactly and it carries this run's label. Each command makes that
+check once, and its receipt is bound to the result: a log collection reads logs by the ID it
+resolved, and its receipt reads that same ID, never the name again. From `docker inspect` it
+keeps the restart count and the state's status, running flag, exit code, OOM flag and start
+and finish times; from Docker events since one minute before the command, each event's action
+and time. It keeps no health-check output, labels or other event attributes. For a missing or
+foreign container (application, startup or upstream) it keeps the command's own evidence and
+the refusal and queries nothing; if the verified container has gone by the time of the
+receipt, it records that and queries nothing else. A detached start has no earlier check, so
+its receipt's one ownership check is also its state: that inspect is not repeated. Each probe
+has a 10-second bound and a probe failure is recorded in the receipt. An output write error
+after another stop was accepted is recorded as `outputError` and does not change the stop's
+outcome. A Docker client that cannot be started fails with Node's spawn error (its `exit` has no
+code or signal) unless a stop was accepted first; then that stop decides and the spawn error is
+recorded as `spawnError`. Saving the receipt is best effort and never replaces the
+failure, which still fails the run; nothing is retried and no command deadline changes.
+Receipts cover the detached parity and preflight starts and these log collections, not the
+measured cold-start create and start. Commands in a timed phase, such as k6's `docker start
+-a`, take no receipt and do no receipt work: no lifetime record or clock, no receipt byte
+count, no hashing, and no listener beyond their output, error and close. Their command path is
+still not the one before receipts: each output chunk also passes an earlier-write-error check
+and a receipt flag test, and command setup and settlement changed. Their timing effect has not
+been measured.
+A command succeeds only once its Docker client has exited and both of its pipes have closed,
+so its output is complete, and nothing stopped it: a command stopped at its deadline or by an
+interrupt fails whatever its exit code, cleanup commands included, and the first stop reason
+decides which (an interrupt followed by the deadline stays an interrupt).
+On Linux the client leads its own process group, and the runner signals that group only while
+the client has not exited: Node has not reaped it, so its PID, which is the group's ID, is still
+reserved. The stop sends SIGTERM to the group and, two seconds later if the client is still
+running, SIGKILL. Each signal is checked and sent from an event-loop callback of its own, never
+from the code that requested the stop: libuv reaps every exited child in one batch before it
+reports any of their exits, so a stop requested from one client's exit callback could otherwise
+see another client as unreaped after it was reaped. Once the client has exited the group is
+never signalled again, because a successful probe cannot tell the original group from a new
+one that took its number. This is a deliberate rule: a group member that ignores SIGTERM and
+outlives the client is not killed. If it holds a pipe, the runner releases the pipes at the
+bound and fails the command, recording
+that the client exited while its output stayed open. Owned Docker containers are still removed
+independently, so this does not leave a browser or k6 container behind. Nothing is signalled
+for a client that had already exited before the stop.
+On Windows tree cleanup is best effort: `taskkill /T /F` receives a bare PID and gets three
+seconds to stop the client's tree. It is not run for a client that has already exited, and it
+is abandoned at 4.75 seconds. If it fails, cannot start or takes longer than three seconds,
+whatever its exit code, a client still running is killed through its own handle, and the
+helper's outcome is recorded.
+A signal that fails (to the group, to the client's own handle, or the helper's own kill) is
+recorded and never ends the stop early: the first stop reason still decides the outcome, the
+pipes are still released at the bound, and a helper still running then is abandoned without
+holding the runner.
+A process that left the group (a new session) or the `taskkill` tree, or a group member that
+outlived the client, can still hold a pipe after the client exits. The runner does not stop
+such a process: five seconds after the stop it stops reading, so the command settles as a
+failure that says its pipes were released without end of file, instead of waiting forever. A
+client that is somehow still running then is left running, no longer holding the runner, and
+the failure says so.
 Startup failures include the container's actual exit state and application log. A checker
 failure without a valid record-response failure receipt retains its original diagnostic
 (including browser/style assertions), rather than replacing it with a missing-file error.
 Such failures remain incomplete and block timing; they do not become replayable negative
 attempts or passing checks.
 
-Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
+Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT`, run from a checkout of
+FULL_COMMIT (for example `git worktree add --detach <dir> FULL_COMMIT`), to replay
 `catalog-saved-evidence/v2`, `catalog-saved-evidence/v3` or `catalog-saved-evidence/v4` observations without running Docker, Git or a browser.
 This schema requires the selected k6 image, platform and actual executable version;
 older evidence is not retroactively assigned that identity.
@@ -200,6 +289,13 @@ and aggregate. Truncated stats framing fails in the producer as well as replay,
 preserving its raw bytes.
 Exit 0 means native evidence replay passed; exit 2 means required
 observations are missing; exit 1 means malformed or contradictory evidence.
+For a gated negative attempt, the retained upstream and checker image references are checked
+against the pins of the checkout that loads `verify.mjs`, and the k6 reference is checked wherever
+k6 was recorded, so evidence measured before a pin moved fails from a newer checkout. `verify.mjs`
+reports that refusal as it is: the pin it expected and the measured commit to verify from, never
+the saved reference. Every other failure stays "native evidence invalid or contradictory".
+Complete and timed evidence does not compare the upstream and checker references with the
+checkout's pins; replay it from a checkout of its measured commit all the same.
 This is not host-isolation or independent source-audit approval. Those remain
 separate campaign gates. Old summaries remain reportable, but cannot acquire the
 new raw proof retroactively; images not built in the native run are not qualified
@@ -222,7 +318,8 @@ ready-to-run replacement for catalog or the historical marketplace suite.
 
 ## Running it
 
-From the repository root, with Node 24, Docker and Playwright Chromium installed:
+From the repository root, with the Node version in [`.node-version`](../../.node-version), Docker
+and Playwright Chromium installed:
 
 ```sh
 npm ci
@@ -232,6 +329,16 @@ npm run check:catalog
 node --test bench/catalog/check.test.mjs
 node bench/catalog/run.mjs c1 --build --check-only
 ```
+
+The hosted Catalog checks' runner steps use the exact Node in `.node-version`. The harness's and
+the Gin, Drogon, Topcoat and Leptos cells' browser checks run in Playwright's image for the
+`@playwright/test` version in `package.json`, with the Node 26 that image installs by major
+version, which can differ in patch; their image step prints both versions in its log, or warns that
+the image's version is unavailable when its bounded probe fails. The Nuxt cell launches that image
+itself and does not print its Node. `runner.test.mjs`'s shell tests run the image steps, that probe
+and the guarded check commands in bash; only the probe test also needs GNU `timeout -k`. A local
+host without bash skips the shell tests, and one without GNU `timeout` skips only the probe test,
+each with its reason; hosted CI always runs them.
 
 The generator explicitly gives only its public synthetic `fixtures/catalog.json` mode 0644
 and its `fixtures/` directory mode 0755, including when regenerating under umask 0077.
@@ -261,11 +368,31 @@ node bench/catalog/report.mjs bench/catalog/results/c4/summary.json --commit FUL
 node --test bench/catalog/group.test.mjs bench/catalog/runner.test.mjs bench/catalog/report.test.mjs bench/catalog/contract.test.mjs
 ```
 
-`--group catalog-page` selects exactly the approved registry's seven apps: Corten, ASP.NET,
-Express, FastAPI, axum/Maud, Drogon and Gin. It cannot be combined with `--apps`; missing native
+`--group catalog-page` selects eight apps: Corten, ASP.NET,
+Express, FastAPI, axum/Maud, Drogon, Gin and Proa. It cannot be combined with `--apps`; missing native
 inventory entries fail selection rather than shrinking the group. No group is selected by
 default, and this does not change the scheduled benchmark or historical twenty-app results.
 The `json-api` group is not implemented by this option.
+Historical group results replay against their original roster. Use their measured
+checkout for strict qualification; they are not evidence for the expanded group.
+
+**Proa admission pilot, 2026-11-27 (not a baseline).** The Proa 0.4.1 release
+image passed the native checker in both modes: 120 page checks, 500 JSON
+records and eight browser profiles per mode. For a fixture-only timing smoke,
+the lean Corten build from `468264ace` and this Proa adapter each had one CPU
+(same pin) and 1 GiB. A loopback client rotated records 1, 17 and 250 over a
+single persistent connection, identity encoding, 60 warmup then 600 measured
+GETs per pass, alternating adapter order over three passes. No request failed.
+
+| Adapter | Successful requests/s, median [min, max] | p99 ms, median [min, max] | App CPU µs/success, median [min, max] |
+|---|---:|---:|---:|
+| Corten | 74 [51, 138] | 51 [24, 80] | 617 [482, 739] |
+| Proa | 76 [41, 77] | 62 [50, 73] | 656 [632, 813] |
+
+The shared host and serial client did not establish capacity: variation between
+passes was larger than the difference between medians. Include Proa as a native
+SSR peer, not a new speed leader. These checks do not qualify it for the localized
+marketplace; no marketplace port or extra scheduled case is proposed.
 
 Both fixture and API sources retain the full native **page AND JSON correctness gate** below,
 including all eight browser profiles and upstream error/uncached-read checks. Only **page**
@@ -282,7 +409,7 @@ phase artifacts remain unchanged. After cleanup, group runs also capture `commit
 clean tree before and after the run, plus the canonical fixture hash. An image ID identifies
 the image used, not proof of its source revision when reusing an image without `--build`.
 
-The report accepts a complete group comparison only with all seven apps, both sources, exact
+The report accepts a complete group comparison only with the full roster for that contract, both sources, exact
 qualification/timing identities, every requested pass, valid cold/warmup and all three load
 phases. Every saved phase aggregate must exactly match the native aggregation of its individual
 runs, including collected and requested pass counts; missing, altered or extra aggregate fields
@@ -313,7 +440,22 @@ or plain text, but remain failed requests, never successful pages. Unknown trans
 errors, other status codes and incorrect content types on 200 responses are not
 completed target outcomes. Each active VU initializes all four counter series with
 zero once, then increments only the request's classified outcome. This retains
-zero-valued categories without four counter updates on every request. Counts,
+zero-valued categories without four counter updates on every request. A failed
+request also adds one to its class: `catalog_failed_http_429`, `_http_502`,
+`_http_503` and `_http_5xx` split the HTTP errors, and an invalid response is
+`_transport` (k6 got no response for a network reason: a non-TCP network, TCP, TLS or
+HTTP/2 error code) or `_other` (a generic, invalid-URL, DNS, blocked-host or
+response-decompression error code, another status or a wrong content type). A success
+never reaches that classification and no class series receives a sample, so a run
+without failures emits exactly the samples it did before the split; k6 reports only
+series that received a sample. The six class Counters are still created at init and a
+success makes one more comparison; that cost is not measured, and the counters are a timed input
+for groups measured from this point (a correctness-only exception, with no performance claim;
+saved results are unchanged). A replay reads the classes when any is present, requires
+them to account exactly for the HTTP errors and invalid responses, and names a transport
+error when it refuses a phase; without any (no failures, or a producer from before the
+split) the split is unknown, and the phase replays to the same metrics either way. Any
+other series named `catalog_failed_...` is refused, alone or beside the known ones. Counts,
 root checks, rates, completed iterations and all three threshold results must
 agree exactly. Existing full page/JSON content and browser correctness gates
 remain mandatory; timed requests still discard bodies and check status/type,
@@ -467,7 +609,7 @@ The Nuxt parity job also checks that the built Home chunk is not requested after
 on cold or related catalog routes, but is prefetched after a client transition out of the
 catalog. The header opens Home with or without JavaScript and retains keyboard focus
 across in-app catalog transitions. Script and stylesheet failures still fail the checker.
-`styles.mjs --check` checks all twenty stylesheet copies byte-for-byte. After changing
+`styles.mjs --check` checks all twenty-one stylesheet copies byte-for-byte. After changing
 `catalog.css`, run `node bench/catalog/styles.mjs --write` and rebuild the images.
 
 On a quiet, dedicated Linux benchmark host, use a new round name and omit `--check-only`:
@@ -515,12 +657,23 @@ overlapping sets are rejected. Keep it identical across compared rounds. The API
 one Node process, not two workers: its two-core quota does not make it use two cores, and high
 API CPU can cap HTTP-source throughput independently of the framework.
 
-Results go to `bench/catalog/results/cN/`. An existing round directory is never overwritten,
+Results go to `bench/catalog/results/cN/`, which Git ignores: a published round commits its report,
+summary and provenance, recording where a maintainer published its raw output, so it can be
+fetched, and its SHA-256 ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). An existing round directory is never overwritten,
 including a failed or check-only round. Failures and cleanup errors make the command fail;
 only containers and the network with this invocation's ownership label are removed. The
 runner does not create cloud machines or operate the fullstack/nightly state. The CI
-`Catalog Contract` workflow builds each framework and runs both sources, but does not publish
-performance numbers.
+`Catalog Contract` workflow builds each framework a change selects and runs both of its
+sources, but does not publish performance numbers. `scripts/benchmark-scope.mjs` selects them
+from the pull request's merge commit against its first parent, or a push to `main` against the
+previous tip of `main`: a change to the directory of an app the matrix lists selects that app
+and the apps that share a driver it changed (`aspnet-aot` runs the JSON jobs instead), a change
+to the framework's Rust inputs (`crates`, `Cargo.toml`, `Cargo.lock`, `.cargo`, the toolchain
+files) or to `bench/catalog/corten` selects Corten, one of the listed fleet-controller files
+selects Corten and both JSON jobs, and a change to the benchmark's other shared inputs, to an app
+directory the matrix does not list yet, or to the workflow selects them all. A manual run, and a
+push whose earlier commit is unknown or not an ancestor, also select them all; a change to none of these builds none
+([Checks](../../CONTRIBUTING.md#checks)).
 
 The runner creates the shared upstream container with `--pull=missing`. Docker reuses
 the pinned Node image for the requested platform or downloads it within the ten-minute
@@ -532,7 +685,9 @@ The runner uses a version-matched Playwright container for browser checks. Remov
 container also removes detached browser processes after a timeout or interruption. To exercise
 that Linux cleanup regression locally, run `CATALOG_DOCKER_TESTS=1 node --test
 bench/catalog/cleanup.test.mjs` in a shell that supports this environment-variable syntax (or
-set the variable separately in PowerShell). The ordinary harness tests do not require Docker.
+set the variable separately in PowerShell). The same variable runs the failure receipt's probes
+against a real container in `bench/catalog/output.test.mjs`. The ordinary harness tests do not
+require Docker.
 
 The opt-in native Gin permission regression builds the real Dockerfile from a Linux
 0700-directory/0600-file context and generates fixtures under umask 0077. It retains the

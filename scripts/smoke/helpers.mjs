@@ -103,6 +103,105 @@ const watchBusy = (page, selector) =>
       observer.disconnect();
     }).observe(el, { attributes: true, attributeFilter: ["aria-busy"] });
   }, selector);
+/**
+ * Settles as `work` does, or rejects with `what` once `ms` have passed. `work` is left to end on
+ * its own (closing its page ends it); a rejection it brings later is already handled here.
+ * @template T @param {number} ms @param {string} what @param {Promise<T>} work @returns {Promise<T>}
+ */
+const within = (ms, what, work) => {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const late = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(what)), ms)));
+  return /** @type {Promise<T>} */ (Promise.race([work, late])).finally(() => clearTimeout(timer));
+};
+
+/**
+ * Work under one budget of `ms` that stops for good. Each step has what is left of the budget; a
+ * step that settles after the budget has ended fails as one that ran out, though its result came
+ * (a result that arrives late is no result), and once a step fails or runs out (or `end` is
+ * called, or the time is up), no step starts. A step that ran out is left to end on its own, as
+ * `within` leaves it. A handle a step returns is read in a step of its own.
+ * @param {number} ms @param {string} what
+ */
+const steps = (ms, what) => {
+  const until = performance.now() + ms;
+  /** Why the work stopped, never empty once it has: an error without a message stops it too. */
+  let over = "";
+  /** @param {unknown} why */
+  const stop = (why) => (over ||= (why instanceof Error ? why.message.split("\n")[0] : String(why ?? "")) || `${what}: a step failed`);
+  /** Whether the work has stopped, marking it stopped once the time is up. */
+  const stopped = () => {
+    if (!over && performance.now() >= until) over = what;
+    return over !== "";
+  };
+  /** @template T @param {() => Promise<T>} work @returns {Promise<T>} */
+  const step = async (work) => {
+    if (stopped()) throw new Error(over);
+    /** @type {T} */
+    let value;
+    try {
+      value = await within(until - performance.now(), what, work());
+    } catch (error) {
+      stop(error);
+      throw error;
+    }
+    if (stopped()) throw new Error(over);
+    return value;
+  };
+  return {
+    /** Why the work stopped, or "" while it goes on. */
+    get over() {
+      return over;
+    },
+    /** Stops the work, for `why`, and throws it. @param {string} why @returns {never} */
+    end(why) {
+      stop(why);
+      throw new Error(over);
+    },
+    step,
+    /**
+     * Calls `probe` every 50 ms, each call a step, until it returns something other than
+     * `undefined` or `false`, and returns that.
+     * @template T @param {() => Promise<T | undefined | false>} probe @returns {Promise<T>}
+     */
+    async poll(probe) {
+      for (;;) {
+        const got = await step(probe);
+        if (got !== undefined && got !== false) return /** @type {T} */ (got);
+        await step(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      }
+    },
+  };
+};
+
+/**
+ * `probe`'s first answer other than `undefined` or `false` within `ms` (see `steps`), or null if
+ * none came in time (a late one included) or a probe threw.
+ * @template T @param {number} ms @param {() => Promise<T | undefined | false>} probe @returns {Promise<T | null>}
+ */
+const pollFor = (ms, probe) =>
+  steps(ms, `nothing within ${ms} ms`)
+    .poll(probe)
+    .catch(() => null);
+
+/**
+ * Runs each of a case's cleanup steps in turn, the later ones even when one before them rejects,
+ * then rejects with the first rejection, if there was one.
+ * @param {...(() => unknown)} undo
+ */
+const cleanUp = async (...undo) => {
+  /** @type {unknown[]} */
+  const failed = [];
+  for (const step of undo) {
+    try {
+      await step();
+    } catch (error) {
+      failed.push(error);
+    }
+  }
+  if (failed.length) throw failed[0];
+};
+
 /** What `watchBusy` saw, once the mark has gone. @param {import("@playwright/test").Page} page */
 const busyEnded = (page) =>
   page
@@ -270,4 +369,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, steps, pollFor, cleanUp };

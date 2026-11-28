@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { globSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,8 +7,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parse } from "yaml";
+import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
-import { eventPaths, selectEvidence, selectKernel, selectScope } from "./benchmark-scope.mjs";
+import { eventPaths, selectEvidence, selectKernel, selectRequestCost, selectScope } from "./benchmark-scope.mjs";
+import { fixtureGitEnv } from "./fixture-git.mjs";
 
 const root = new URL("../", import.meta.url);
 const workflow = parse(readFileSync(new URL(".github/workflows/catalog.yml", root), "utf8"));
@@ -29,6 +31,8 @@ for (const [name, paths, apps, json] of [
   ["Express driver used by FastAPI", ["bench/fullstack/apps/express/check-native.mjs"], ["fastapi", "express"], false],
   ["Express app without shared driver changes", ["bench/fullstack/apps/express/package.json"], ["express"], false],
   ["compiled alert helper", ["bench/fullstack/apps/gin/check-alerts.mjs"], ["leptos", "topcoat", "gin", "drogon"], false],
+  ...["src/main.rs", "src/hosts.rs", "tests/check-parity.mjs", "tests/marketplace.json"]
+    .map((path) => [`Topcoat parity input: ${path}`, [`bench/fullstack/apps/topcoat/${path}`], ["topcoat"], false]),
   ["workflow edit", [".github/workflows/catalog.yml"], allApps, true],
   ["docs only", ["docs/design.md", "CHANGELOG.md"], [], false],
   ["JSON-only app", ["bench/fullstack/apps/aspnet-aot/Program.cs"], [], true],
@@ -38,6 +42,20 @@ for (const [name, paths, apps, json] of [
 ]) {
   test(name, () => assert.deepEqual(selectScope(allApps, paths), { apps, json }));
 }
+
+// Every Catalog and Evidence job sets up Node from this file, so a pin bump alone has to run them
+// all on the new Node, not pass their scope jobs and skip the rest.
+test("a Node pin bump alone runs every Catalog app, both JSON jobs and both Evidence selections", () => {
+  const files = new Set(["catalog.yml", "benchmark-evidence.yml"].flatMap(name =>
+    Object.values(parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8")).jobs)
+      .flatMap(job => job.steps ?? []).map(step => step.with?.["node-version-file"]).filter(Boolean)));
+  assert.deepEqual([...files], [".node-version"]);
+  for (const path of files) {
+    assert.deepEqual(selectScope(allApps, [path]), { apps: allApps, json: true }, path);
+    assert.equal(selectEvidence([path]), true, path);
+    assert.equal(selectKernel([path]), true, path);
+  }
+});
 
 test("fleet controller changes keep the harness, Corten build, JSON and evidence checks", () => {
   // First-parent diff of the stopped-sibling census fix at 63e7c3314.
@@ -91,9 +109,12 @@ async function localImports(entries) {
 }
 
 test("every local module used by the Catalog harness starts the harness", async () => {
-  const patterns = workflow.jobs.harness.steps.flatMap(({ run }) => {
-    if (!run || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ") || run.startsWith("npx playwright install ")) return [];
-    const command = run === "npm run check:marketplace" ? packageScripts["check:marketplace"] : run;
+  const patterns = workflow.jobs.harness.steps.flatMap(({ name, run }) => {
+    // Playwright's image takes its tag from package.json, which is shared tooling.
+    if (!run || name === "Playwright's image" || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ")) return [];
+    // A browser check runs the same command in that image.
+    const local = run.replace(/^\$\{PLAYWRIGHT(?:_WITH_DOCKER)?:\?\} /, "");
+    const command = local === "npm run check:marketplace" ? packageScripts["check:marketplace"] : local;
     assert.match(command, /^node (?:--test )?bench\//, "trace new harness commands here");
     return command.replace(/^node (?:--test )?/, "").split(" ");
   });
@@ -101,6 +122,7 @@ test("every local module used by the Catalog harness starts the harness", async 
     const { apps, json } = selectScope(allApps, [input]);
     assert.ok(apps.length > 0 || json, "harness input not selected: " + input);
   }
+  assert.ok(selectScope(allApps, ["package.json"]).apps.length > 0, "Playwright's image tag input not selected");
 });
 
 test("Catalog jobs whose replay parses bindings install the bench package's classic compiler", () => {
@@ -118,9 +140,11 @@ function parityEntries(app) {
     const command = run.replaceAll("${{ matrix.app }}", app);
     const entries = [...command.matchAll(/(?:^|\s)(bench\/[^\s]+\.mjs)(?=\s|$)/g)].map(([, path]) => path);
     if (!entries.length || !condition) return entries;
-    const single = /^matrix\.app == '([^']+)'$/.exec(condition);
+    // A diagnostic that also runs after an earlier step failed: its app selection is the same.
+    const selection = /^always\(\) && (matrix\.app == '[^']+') && \((?:steps\.[\w-]+\.outcome == '(?:success|failure)'(?: \|\| )?)+\)$/.exec(condition)?.[1] ?? condition;
+    const single = /^matrix\.app == '([^']+)'$/.exec(selection);
     if (single) return single[1] === app ? entries : [];
-    const multiple = /^contains\(fromJSON\('([^']+)'\), matrix\.app\)$/.exec(condition);
+    const multiple = /^contains\(fromJSON\('([^']+)'\), matrix\.app\)$/.exec(selection);
     assert.ok(multiple, "trace new parity condition: " + condition);
     return JSON.parse(multiple[1]).includes(app) ? entries : [];
   }))];
@@ -138,6 +162,108 @@ test("every local module used by Catalog parity selects each consuming matrix ap
   assert.deepEqual(missing, [], "unselected Catalog parity inputs");
 });
 
+// The probe step's condition, for one matrix app and gate outcome. Only the expression's own
+// operators and these three operands are allowed; anything new must be traced here.
+function probeRuns(condition, app, gate) {
+  const js = condition.replaceAll("always()", "true").replaceAll("matrix.app", JSON.stringify(app))
+    .replaceAll("steps.marketplace.outcome", JSON.stringify(gate)).replaceAll("==", "===");
+  assert.match(js, /^(?:true|"[\w-]+"|'[\w-]+'|===|&&|\|\||[()\s])+$/, "trace new probe condition: " + condition);
+  return Function(`return ${js}`)();
+}
+
+function probeStep() {
+  const steps = workflow.jobs.parity.steps;
+  const gate = steps.findIndex((step) => step.id === "marketplace");
+  const probe = steps.findIndex((step) => step.run?.includes("bench/marketplace/alert-probe-run.mjs"));
+  const upload = steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact"));
+  // The results directory, named once in the script and passed to the runner as "$results".
+  const results = /^\s*results=(\S+)$/m.exec(steps[probe].run)?.[1] ?? /alert-probe-run\.mjs \S+ \d+ (\S+)/.exec(steps[probe].run)?.[1];
+  return { steps, gate, probe, upload, results, ...steps[probe] };
+}
+
+test("the React Router alert probe diagnoses a failed gate without hiding it, and ends inside its step", () => {
+  const { steps, gate, probe, upload, results, if: condition, run, env, "timeout-minutes": minutes } = probeStep();
+  assert.ok(gate >= 0 && gate < probe && probe < upload);
+  // A failed gate fails the job: no step or job in parity may turn a failure into a pass.
+  assert.equal(workflow.jobs.parity["continue-on-error"], undefined);
+  assert.deepEqual(steps.filter((step) => step["continue-on-error"] !== undefined).map((step) => step.name), []);
+  // It runs for React Router after the gate passed or failed, and not after cancellation or a skip.
+  for (const app of allApps) for (const outcome of ["success", "failure", "cancelled", "skipped"])
+    assert.equal(probeRuns(condition, app, outcome), app === "react-router" && ["success", "failure"].includes(outcome), `${app} ${outcome}`);
+  // The only way past it without the probe is a gate that failed before building the image; how the
+  // step tells that apart from a failed image check is run below.
+  assert.equal(env.GATE, "${{ steps.marketplace.outcome }}");
+  // Its receipts and diagnostics upload whatever the outcome.
+  const node = run.trim().split("\n").at(-1).trim();
+  assert.match(node, /^node bench\/marketplace\/alert-probe-run\.mjs cb-marketplace-react-router \d+ "\$results" /);
+  assert.ok(results);
+  assert.equal(steps[upload].if, "always()");
+  assert.ok(steps[upload].with.path.split("\n").includes(`${results}/`));
+  // The image check is bounded (its timeout plus the kill grace), and with Node's own deadline and
+  // half a minute for Node to start and exit, ends inside the step timeout. The deadline is longer
+  // than the cleanup it reserves plus one source's budget.
+  const deadline = Number(/--deadline (\d+)/.exec(node)?.[1]), budget = Number(/--budget (\d+)/.exec(node)?.[1]);
+  const [, kill, limit] = /\btimeout -k (\d+) (\d+) docker image inspect\b/.exec(run) ?? [];
+  const check = Number(kill) + Number(limit);
+  assert.ok(check > 0, "the image check must be bounded by timeout -k");
+  assert.ok(check + deadline + 30 <= minutes * 60, `the ${check} s image check and --deadline ${deadline} must leave half a minute of the ${minutes}-minute step timeout`);
+  assert.ok(deadline > teardownReserve + budget, `--deadline ${deadline} must leave the cleanup reserve and one probe budget`);
+});
+
+// The step's script under bash as Actions runs it (`bash -e`), with stub `docker` and `node` on
+// PATH: bash itself off Windows, WSL's bash on Windows when it is installed.
+function stepShell() {
+  const wsl = process.platform === "win32";
+  const present = wsl ? spawnSync("wsl.exe", ["-e", "bash", "-c", "true"], { timeout: 30_000 }) : spawnSync("bash", ["-c", "true"]);
+  if (present.status !== 0) return null;
+  const path = wsl ? (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, drive) => `/mnt/${drive.toLowerCase()}/`).replaceAll("\\", "/") : (p) => p;
+  return (script, results, { gate, docker }) => {
+    const dir = mkdtempSync(join(tmpdir(), "probe-step-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "docker"), [
+        "#!/bin/sh", 'echo "docker $*" >> calls.log', 'case "$FAKE_DOCKER" in',
+        "  present) echo sha256:0123 ;;",
+        '  absent) echo "Error response from daemon: No such image: cb-marketplace-react-router:latest" >&2; exit 1 ;;',
+        '  error) echo "Error response from daemon: Bad Gateway" >&2; exit 1 ;;',
+        "  hang) exec sleep 30 ;;", "esac", ""].join("\n"), { mode: 0o755 });
+      writeFileSync(join(bin, "node"), '#!/bin/sh\necho "node $*" >> calls.log\n', { mode: 0o755 });
+      writeFileSync(join(dir, "step.sh"), script);
+      const command = ["env", "-i", `PATH=${path(bin)}:/usr/bin:/bin`, `GATE=${gate}`, `FAKE_DOCKER=${docker}`, "bash", "-e", path(join(dir, "step.sh"))];
+      const started = Date.now();
+      const run = spawnSync(wsl ? "wsl.exe" : command[0], wsl ? ["-e", ...command] : command.slice(1), { cwd: dir, encoding: "utf8", timeout: 60_000 });
+      const read = (file) => { try { return readFileSync(join(dir, file), "utf8"); } catch { return null; } };
+      return { status: run.status, output: run.stdout + run.stderr, ms: Date.now() - started,
+        calls: (read("calls.log") ?? "").split("\n").filter(Boolean), preflight: read(join(results, "preflight.log")) };
+    // WSL can hold the directory for a moment after its bash exits.
+    } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
+  };
+}
+const shell = stepShell();
+
+test("the probe step skips only an image the failed gate did not build, and fails on a failed or stalled image check", { skip: !shell && "no bash to run the step" }, () => {
+  const { run, results } = probeStep();
+  // The stalled check runs with a one-second bound in place of the step's, which the test above reads.
+  const short = run.replace(/\btimeout -k \d+ \d+ docker/, "timeout -k 1 1 docker");
+  for (const [gate, docker, status, commands, preflight] of [
+    ["success", "error", 0, ["node"], null],
+    ["failure", "present", 0, ["docker", "node"], null],
+    ["failure", "absent", 0, ["docker"], null],
+    ["failure", "error", 1, ["docker"], /exit 1\b[^]*Bad Gateway/],
+    ["failure", "hang", 1, ["docker"], /exit 124\b/],
+  ]) {
+    const outcome = shell(docker === "hang" ? short : run, results, { gate, docker });
+    const what = `gate ${gate}, image check ${docker}: ${outcome.output}`;
+    assert.equal(outcome.status, status, what);
+    assert.deepEqual(outcome.calls.map((call) => call.split(" ")[0]), commands, what);
+    if (commands.includes("node")) assert.match(outcome.calls.at(-1), new RegExp(` ${results} .*--deadline \\d+$`), what);
+    if (preflight) assert.match(outcome.preflight ?? "", preflight, what);
+    else assert.equal(outcome.preflight, null, what);
+    if (docker === "hang") assert.ok(outcome.ms < 20_000, `the stalled check ended after ${outcome.ms} ms`);
+  }
+});
+
 test("Evidence covers every real source-custody root and its descendants", () => {
   for (const path of sourceRoots) {
     assert.equal(selectEvidence([path]), true, path);
@@ -152,6 +278,7 @@ test("Evidence covers every real source-custody root and its descendants", () =>
 
 test("native kernel controls run for fixture and tooling inputs, not portable source custody alone", () => {
   for (const path of ["bench/workloads/isolated/bootstrap.mjs", "scripts/benchmark-kernel-ci.sh",
+    "scripts/ci-docker-hub-mirror.sh", "scripts/ci-docker-hub-mirror.mjs",
     ".github/workflows/benchmark-evidence.yml", "package-lock.json"]) {
     assert.equal(selectKernel([path]), true, path);
   }
@@ -197,10 +324,13 @@ test("every local module used by native kernel controls selects the kernel job",
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "corten-benchmark-scope-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  // Git's environment for the fixture, in process and for the scope script: the caller's GIT_DIR and the like would
+  // choose another repository.
+  const env = fixtureGitEnv();
   const git = (...args) => execFileSync("git", [
     "-c", "core.autocrlf=false", "-c", "user.name=Catalog Fixture", "-c", "user.email=fixture@example.invalid",
     "-c", "commit.gpgsign=false", ...args,
-  ], { cwd, encoding: "utf8" }).trim();
+  ], { cwd, encoding: "utf8", env }).trim();
   git("init", "-q", "-b", "main");
   const write = (path, text = "fixture\n") => {
     const file = join(cwd, path);
@@ -221,13 +351,13 @@ function fixture(t) {
     git("merge", "--quiet", "--no-ff", "--no-edit", head);
     return git("rev-parse", "HEAD");
   };
-  return { cwd, git, write, commit, rename, merge };
+  return { cwd, env, git, write, commit, rename, merge };
 }
 
 const prEvent = GITHUB_SHA => ({ GITHUB_EVENT_NAME: "pull_request", GITHUB_SHA });
 
 test("PR diff excludes base-only changes and includes both sides of an app rename", t => {
-  const { cwd, git, write, commit, rename, merge } = fixture(t);
+  const { cwd, env: gitEnv, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/rails/old file";
   const after = "bench/fullstack/apps/nextjs/new file";
   write(before);
@@ -237,18 +367,18 @@ test("PR diff excludes base-only changes and includes both sides of an app renam
   git("switch", "--quiet", "--detach", fork);
   rename(before, after);
   const event = prEvent(merge(commit()));
-  const paths = eventPaths(event, cwd);
+  const paths = eventPaths(event, cwd, gitEnv);
   assert.deepEqual(paths.sort(), [after, before]);
 
   const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
   const output = join(cwd, "output");
-  const env = { ...process.env, ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
+  const env = fixtureGitEnv({ ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
   for (const job of ["catalog", "evidence"]) execFileSync(process.execPath, [script, job], { cwd, env });
   assert.equal(readFileSync(output, "utf8"), 'apps=["nextjs","rails"]\njson=false\nrun=true\nkernel=true\n');
 });
 
 test("a base-side rename scopes the edited file where parity actually tests it", t => {
-  const { cwd, git, write, commit, rename, merge } = fixture(t);
+  const { cwd, env, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/express/driver.mjs";
   const after = "bench/workloads/driver.mjs";
   write(before);
@@ -260,13 +390,87 @@ test("a base-side rename scopes the edited file where parity actually tests it",
   const head = commit();
   const merged = merge(head);
   assert.equal(git("diff", "--name-only", base + "..." + head), before);
-  const paths = eventPaths(prEvent(merged), cwd);
+  const paths = eventPaths(prEvent(merged), cwd, env);
   assert.deepEqual(paths, [after]);
   assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
 });
 
+for (const [name, paths, run] of [
+  ["the framework", ["crates/corten/src/router.rs"], true],
+  ["the macros", ["docs/guide/views.md", "crates/corten-macros/src/lib.rs"], true],
+  ["the feed", ["crates/corten-feed/src/lib.rs"], true],
+  ["the feed's protocol", ["crates/corten-protocol/src/lib.rs"], true],
+  ["a locked version", ["Cargo.lock"], true],
+  ["the workspace's manifest", ["Cargo.toml"], true],
+  ["the kit", ["bench/request-cost/probe/src/main.rs"], true],
+  ["the job", [".github/workflows/request-cost.yml"], true],
+  ["the scope script", ["scripts/benchmark-scope.mjs"], true],
+  ["the Node pin", [".node-version"], true],
+  ["what an archive of a commit holds", [".gitattributes"], true],
+  ["what an archive holds of a directory", ["README.md", "crates/.gitattributes"], true],
+  ["what an archive holds of a crate's directory", ["crates/corten-cli/src/.gitattributes"], true],
+  ["an event with no diff to read", undefined, true],
+  ["what no request is built from", ["README.md", "docs/design.md", "CONTRIBUTING.md", "package.json", "examples/card-market/src/main.rs",
+    "crates/corten-cli/src/main.rs", "crates/corten-ui/src/lib.rs", "crates/corten-cluster/src/lib.rs", "crates/corten-macros.md",
+    "bench/fullstack/count.mjs", "bench/request-costs/README.md", ".github/workflows/ci.yml", "examples/watchlist/Cargo.toml",
+    ".cargo/config.toml", "docs/gitattributes", "docs/x.gitattributes"], false],
+]) {
+  test(`Request Cost ${run ? "counts" : "skips"} ${name}`, () => assert.equal(selectRequestCost(paths), run));
+}
+
+test("Request Cost's scope reads a pull request's merge against its first parent, not what the base alone changed", t => {
+  const { cwd, git, write, commit, merge } = fixture(t);
+  write("initial");
+  const fork = commit();
+  write("crates/corten/src/lib.rs");
+  commit();
+  const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
+  const output = join(cwd, "output");
+  const scope = (from, path) => {
+    git("switch", "--quiet", "--detach", from);
+    write(path);
+    writeFileSync(output, "");
+    const env = fixtureGitEnv({ ...prEvent(merge(commit())), GITHUB_OUTPUT: output });
+    execFileSync(process.execPath, [script, "request-cost"], { cwd, env });
+    return readFileSync(output, "utf8");
+  };
+  // The base changed the framework after the fork; the pull request changed a guide.
+  assert.equal(scope(fork, "docs/guide/views.md"), "run=false\n");
+  assert.equal(scope("main", "crates/corten-macros/src/lib.rs"), "run=true\n");
+});
+
+test("Request Cost runs for pull requests alone, in one job that always scopes, counts only what the scope selects and asks nothing of the token", () => {
+  const source = readFileSync(new URL(".github/workflows/request-cost.yml", root), "utf8");
+  const requestCost = parse(source);
+  assert.deepEqual(requestCost.on, { pull_request: null });
+  assert.deepEqual(requestCost.permissions, { contents: "read" });
+  assert.deepEqual(Object.keys(requestCost.jobs), ["request-cost"]);
+  const { if: when, permissions, steps } = requestCost.jobs["request-cost"];
+  assert.deepEqual([when, permissions], [undefined, undefined]);
+  // The readings' end is set in the job's first step, so what comes before them is in its time.
+  assert.match(steps[0].run, /^echo "STOP_AT=\$\(\(\$\(date \+%s\) \+ \d+\)\)" >> "\$GITHUB_ENV"$/);
+  // The merge base is found in the history, and the token is not left in the checkout.
+  assert.deepEqual(steps[1].with, { "fetch-depth": 0, "persist-credentials": false });
+  // The scope's step runs for every pull request, and every step after it by what it said: a
+  // scope that said neither true nor false fails the job, and is not a skip.
+  const scope = steps.findIndex(step => step.run === "node scripts/benchmark-scope.mjs request-cost");
+  assert.deepEqual(steps.slice(1, scope + 1).map(step => [step.uses?.split("@")[0] ?? step.id, step.if]), [["actions/checkout", undefined], ["actions/setup-node", undefined], ["scope", undefined]]);
+  assert.deepEqual(steps.slice(scope + 1).map(step => step.if), ["steps.scope.outputs.run == 'false'",
+    "steps.scope.outputs.run != 'true' && steps.scope.outputs.run != 'false'", ...Array(4).fill("steps.scope.outputs.run == 'true'")]);
+  assert.match(steps[scope + 1].run, /^echo "Not counted, .*" >> "\$GITHUB_STEP_SUMMARY"$/);
+  assert.match(steps[scope + 2].run, /\nexit 1\n$/);
+  // The builds and the readings are the kit's controller's, which job.test.mjs runs.
+  assert.deepEqual(steps.slice(scope + 4, scope + 6).map(step => step.run.match(/^bash bench\/request-cost\/job\.sh .*$/m)?.[0]),
+    ['bash bench/request-cost/job.sh build "$RUNNER_TEMP/request-cost"', 'bash bench/request-cost/job.sh read "$RUNNER_TEMP/request-cost" "$cpu"']);
+  // A fork's run has a token that reads and no secrets, and a description is whatever its author
+  // typed: it is read from the event's file, never written into a script.
+  assert.doesNotMatch(source, /secrets\.|github\.token|GITHUB_TOKEN/);
+  assert.deepEqual(source.match(/\$\{\{[^}]*\}\}/g).filter(expression => !/^\$\{\{ (github\.workflow|github\.ref) \}\}$/.test(expression)), []);
+  assert.ok(steps.at(-1).run.includes(`jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH"`));
+});
+
 test("a push to main scopes Catalog by its push diff, and an unknown base selects everything", t => {
-  const { cwd, write, commit } = fixture(t);
+  const { cwd, env: gitEnv, write, commit } = fixture(t);
   write("initial");
   const base = commit();
   write("docs/guide/views.md");
@@ -277,8 +481,8 @@ test("a push to main scopes Catalog by its push diff, and an unknown base select
   const output = join(cwd, "output");
   const scope = (PUSH_BEFORE, GITHUB_SHA) => {
     writeFileSync(output, "");
-    const env = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
-      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
+    const env = fixtureGitEnv({ GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
+      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
     execFileSync(process.execPath, [script, "catalog"], { cwd, env, stdio: ["ignore", "ignore", "ignore"] });
     return readFileSync(output, "utf8");
   };
@@ -290,12 +494,12 @@ test("a push to main scopes Catalog by its push diff, and an unknown base select
   // A rewound or rewritten push compares with a base that is not its ancestor.
   assert.equal(scope(framework, docs), all);
   for (const GITHUB_EVENT_NAME of ["workflow_dispatch", "schedule"]) {
-    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd)), { apps: allApps, json: true });
+    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd, gitEnv)), { apps: allApps, json: true });
   }
 });
 
 test("PR and multi-commit push diffs see inputs beyond the hosted path-filter limit", t => {
-  const { cwd, git, write, commit, merge } = fixture(t);
+  const { cwd, env, git, write, commit, merge } = fixture(t);
   write("initial");
   const base = commit();
   git("switch", "--quiet", "--detach", base);
@@ -307,7 +511,7 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
   const head = commit();
   const events = [prEvent(merge(head)), { GITHUB_EVENT_NAME: "push", GITHUB_SHA: head, PUSH_BEFORE: base }];
   for (const event of events) {
-    const paths = eventPaths(event, cwd);
+    const paths = eventPaths(event, cwd, env);
     assert.equal(paths.length, 303);
     assert.equal(paths[301], input);
     assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
@@ -315,8 +519,71 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
     assert.equal(selectKernel(paths), true);
   }
   for (const before of ["0".repeat(40), "a".repeat(40)]) {
-    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd);
+    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd, env);
     assert.equal(selectEvidence(paths), true);
     assert.equal(selectKernel(paths), true);
+  }
+});
+
+// The benchmark gates run on the framework CI's Node line and the release workflow's artifact
+// pin, so moving either is one edit and a literal Node or tag cannot drift back in. Each job that
+// needs Node or uploads evidence is named, so dropping its step fails instead of falling back to
+// the runner's default Node or losing that job's artifacts.
+const toolchainJobs = {
+  "catalog.yml": { node: ["scope", "harness", "parity", "json-harness", "json-aot"], upload: ["parity", "json-aot"] },
+  "benchmark-evidence.yml": { node: ["scope", "evidence", "kernel"], upload: [] },
+  "request-cost.yml": { node: ["request-cost"], upload: [] },
+};
+
+function assertToolchain(workflows, pin) {
+  for (const [name, required] of Object.entries(toolchainJobs)) {
+    const jobs = workflows[name].jobs;
+    for (const job of [...required.node, ...required.upload]) assert.ok(jobs[job], `${name} has no job ${job}`);
+    for (const [job, { steps = [] }] of Object.entries(jobs)) {
+      const node = steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
+      const uploads = steps.filter((step) => step.uses?.startsWith("actions/upload-artifact@"));
+      if (required.node.includes(job)) assert.ok(node.length > 0, `${name} ${job} sets up no Node`);
+      if (required.upload.includes(job)) assert.ok(uploads.length > 0, `${name} ${job} uploads no artifact`);
+      for (const step of node) {
+        assert.equal(step.with?.["node-version-file"], ".node-version", `${name} ${job}`);
+        assert.equal(step.with?.["node-version"], undefined, `${name} ${job}`);
+      }
+      for (const step of uploads) assert.equal(step.uses, pin, `${name} ${job}`);
+    }
+  }
+}
+
+test("Catalog, Benchmark Evidence and Request Cost take Node from .node-version and upload-artifact from release.yml's pin", () => {
+  const read = (name) => parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8"));
+  const pins = new Set(Object.values(read("release.yml").jobs).flatMap((job) => job.steps ?? [])
+    .map((step) => step.uses).filter((uses) => uses?.startsWith("actions/upload-artifact@")));
+  assert.equal(pins.size, 1);
+  const [pin] = pins;
+  assert.match(pin, /^actions\/upload-artifact@[0-9a-f]{40}$/);
+  const workflows = Object.fromEntries(Object.keys(toolchainJobs).map((name) => [name, read(name)]));
+  assertToolchain(workflows, pin);
+
+  // Each mutation leaves the rest of the workflow passing, so only the named job's gap fails.
+  const without = (name, job, prefix) => {
+    const copy = structuredClone(workflows);
+    const steps = copy[name].jobs[job].steps;
+    copy[name].jobs[job].steps = steps.filter((step) => !step.uses?.startsWith(prefix));
+    assert.ok(copy[name].jobs[job].steps.length < steps.length);
+    return copy;
+  };
+  const edit = (name, job, prefix, change) => {
+    const copy = structuredClone(workflows);
+    change(copy[name].jobs[job].steps.find((step) => step.uses?.startsWith(prefix)));
+    return copy;
+  };
+  for (const [workflowSet, message] of [
+    [without("catalog.yml", "parity", "actions/setup-node@"), /catalog\.yml parity sets up no Node/],
+    [without("catalog.yml", "json-aot", "actions/upload-artifact@"), /catalog\.yml json-aot uploads no artifact/],
+    [without("benchmark-evidence.yml", "kernel", "actions/setup-node@"), /benchmark-evidence\.yml kernel sets up no Node/],
+    [edit("catalog.yml", "json-harness", "actions/setup-node@", (step) => { step.with = { "node-version": 24 }; }), /catalog\.yml json-harness/],
+    [edit("benchmark-evidence.yml", "evidence", "actions/setup-node@", (step) => { step.with["node-version"] = 26; }), /benchmark-evidence\.yml evidence/],
+    [edit("catalog.yml", "json-aot", "actions/upload-artifact@", (step) => { step.uses = "actions/upload-artifact@v6"; }), /catalog\.yml json-aot/],
+  ]) {
+    assert.throws(() => assertToolchain(workflowSet, pin), message);
   }
 });

@@ -1,1 +1,0 @@
-- The benchmark control stream records which check stopped a run and reads Linux process identities even when the kernel truncates a multibyte process name.

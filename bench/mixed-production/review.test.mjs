@@ -11,7 +11,7 @@ import { nativeTransport } from "./native.mjs";
 import { mergeResourceSamples } from "./resources.mjs";
 import { referenceHtml } from "../marketplace/reference.mjs";
 import { expectedPage } from "../marketplace/records.mjs";
-import { buildInputPaths, sourceAuditIdentity, sourceSnapshot, verifySourceAudit } from "./source-audit.mjs";
+import { buildInputPaths, sourceAuditIdentity, sourceSnapshot, verifySourceAudit, nativeDeployment, springWebflux, verifyDeploymentCommand } from "./source-audit.mjs";
 import { parseArgs } from "./run.mjs";
 
 const records = fixture(), path = "/marketplace/records/item_1", token = "review-private";
@@ -125,6 +125,44 @@ test("source requests are derived from native build inputs, not positive qualifi
   assert.deepEqual(buildInputPaths("corten"), ["."]);
   assert.throws(() => sourceSnapshot(process.cwd(), ["../outside"]));
   assert.equal(parseArgs(["w123", "--build", "--measure", "--native-audits", "reviewed.json"]).nativeAudits, "reviewed.json");
+});
+
+test("Django ASGI opts in only for a matched fresh build, and cannot reuse a WSGI source audit", () => {
+  const flag = ["--django-deployment", "django-granian-asgi"], matched = ["w123", "--build", "--profile", "matched"];
+  const old = parseArgs(matched), options = parseArgs([...matched, ...flag]);
+  assert.ok(!Object.hasOwn(old, "djangoDeployment"));
+  assert.equal(nativeDeployment(old, "django"), null);
+  assert.equal(nativeDeployment(options, "django").buildProfile, "matched-asgi");
+  assert.equal(nativeDeployment(options, "express"), null);
+  for (const args of [["w123", "--build", ...flag], ["w123", "--profile", "matched", ...flag],
+    [...matched, "--apps", "corten", ...flag], [...matched, flag[0], "django-other"], [...matched, ...flag, ...flag]])
+    assert.throws(() => parseArgs(args));
+  const x = auditVector(), { buildCommit: commit } = x.image, files = { "bench/fullstack/apps/django/Dockerfile": Buffer.from("FROM matched AS matched-asgi\n") };
+  const sourceFiles = Object.entries(files).map(([path, body]) => ({ path, sha256: sha256(body) }));
+  const contextArchiveSha256 = x.image.contextArchiveSha256;
+  const summary = { provenance: { nativeSource: { commit } }, contractSha256: x.expected.contractSha256, options,
+    apps: { django: { buildInputs: sourceFiles, contextArchiveSha256 } } };
+  const asgi = sourceAuditIdentity(summary, "django"), wsgi = sourceAuditIdentity({ ...summary, options: old }, "django");
+  const snapshot = { files, sourceFiles }, image = { ...x.image, profile: "matched", buildProfile: "matched-asgi", nativeDeployment: "django-granian-asgi" };
+  const receipt = { ...x.receipt, sourceFiles, identity: asgi };
+  assert.equal(verifySourceAudit(receipt, asgi, snapshot, image).imageId, image.id);
+  assert.throws(() => verifySourceAudit({ ...receipt, identity: wsgi }, asgi, snapshot, image), /native audit identity differs/);
+  assert.throws(() => verifySourceAudit(receipt, asgi, snapshot, { ...image, buildProfile: "matched" }), /native image deployment differs/);
+});
+
+test("Spring WebFlux requires a fresh matched Spring build and cannot accept the MVC entrypoint", () => {
+  const flag = ["--spring-deployment", "spring-webflux"], matched = ["w123", "--build", "--profile", "matched"];
+  assert.ok(!Object.hasOwn(parseArgs(matched), "springDeployment"));
+  const options = parseArgs([...matched, "--apps", "spring", ...flag]);
+  assert.equal(nativeDeployment(options, "spring"), springWebflux);
+  assert.equal(nativeDeployment(options, "corten"), null);
+  for (const args of [["w123", "--build", ...flag], ["w123", "--profile", "matched", ...flag],
+    [...matched, "--apps", "corten", ...flag], [...matched, flag[0], "spring-mvc"], [...matched, ...flag, ...flag]])
+    assert.throws(() => parseArgs(args));
+  const Entrypoint = ["java", "-jar", "marketplace-mixed.jar"];
+  verifyDeploymentCommand({ Entrypoint, Cmd: null }, springWebflux);
+  assert.throws(() => verifyDeploymentCommand({ Entrypoint: ["java", "-jar", "app.jar"], Cmd: null }, springWebflux), /native image entrypoint/);
+  assert.throws(() => verifyDeploymentCommand({ Entrypoint, Cmd: ["unexpected"] }, springWebflux), /native image command/);
 });
 
 test("resource merge refuses an originally backwards stream rather than sorting away the evidence", () => {

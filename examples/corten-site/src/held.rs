@@ -58,8 +58,8 @@ const HELD: [(&str, &str, &str, &str); 20] = [
         PERFORMANCE,
         "round browser-2 measured 29.5 ms for Corten, and three reruns of that step on one CPU model gave 4.9, 20.7 and 6.3 ms",
     ),
-    (CERT, "corten-run 0.2", MANIFEST, "version = \"0.2."),
-    (SURFACE, "16.0 KB gzipped", README, "A 16.0 KB (gzip) runtime."),
+    (CERT, "corten-run 0.3", MANIFEST, "version = \"0.3."),
+    (SURFACE, "16.5 KB gzipped", README, "A 16.5 KB (gzip) runtime."),
     (
         AFTER,
         "Firefox 147 and later, Safari 26.2 and later",
@@ -73,7 +73,7 @@ const HELD: [(&str, &str, &str, &str); 20] = [
         "`corten::serve` speaks HTTP/1.1, so an app with live streams goes behind a proxy or CDN",
     ),
     (AFTER, "You need Rust 1.89 or later", MANIFEST, "rust-version = \"1.89\""),
-    (AFTER, "Corten is 0.2: usable and tested", README, "Corten is 0.2: usable and tested, on Rust 1.89 or later"),
+    (AFTER, "Corten is 0.3: usable and tested", README, "Corten is 0.3: usable and tested, on Rust 1.89 or later"),
     (
         AFTER,
         "the deadline timer that cost 640 ns per request was reworked rather than kept for convenience, and a nicer API that slows every page loses",

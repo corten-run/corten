@@ -66,7 +66,10 @@ Hex package metadata, esbuild metadata and Docker image manifests: Elixir 1.20.5
 OTP 29.1.2, Phoenix 1.8.16, LiveView 1.2.13, Phoenix HTML 4.4.0, Bandit 1.14.1
 and esbuild 0.28.2. Builder and runtime bases are digest-pinned. The independent
 native lock was regenerated with Mix on that Elixir image, removing unused
-inherited fullstack entries. No new library is introduced.
+inherited fullstack entries. No new library is introduced. On 2026-11-23 Phoenix moved to
+1.8.17, LiveView to 1.2.15 and Plug to 1.20.4 for their published security fixes
+([#1376 bench/fullstack runs Rails, Phoenix, Gin and Nuxt on releases with published security fixes, so its production comparison is not each framework's supported configuration](https://github.com/corten-run/corten/issues/1376));
+runs measured before that keep the versions they recorded.
 The Dockerfile builds a normal production OTP
 release, serves standard esbuild-bundled installed Phoenix/LiveView clients, and
 runs as a non-root user. `ERL_FLAGS` bounds VM scheduler threads in both build and

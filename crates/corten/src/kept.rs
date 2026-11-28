@@ -57,8 +57,10 @@
 //! asked (`req.mode`). What an API adds for the site that asks (`Access-Control-Allow-Origin`,
 //! `Vary: origin`) is written after the handler for each request, and is no part of what is
 //! kept. An answer with markup its handler rendered that holds a form's new submit key is that
-//! request's alone: a page's render marks one, and the handler is watched for one drawn any
-//! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
+//! request's alone: a page's render marks one, and the handler of every route whose answer may be
+//! `Public` is watched for one drawn any other way, on the thread that runs it (`form::KeyWatch`),
+//! which marks the answer too (`cache::Unrepeatable`), so no cache in front shares it either. JSON
+//! the app holds as bytes
 //! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
 //! not replay, so it is its handler's for every request, which costs it no writing and no
 //! compression. A file is kept as text is, whatever its type: a picture no build compresses
@@ -85,8 +87,11 @@
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
 //! was reading while a write went through is not kept. Nothing else drops a page before its
 //! lifetime ends, but a write from before the app counted writes by path (below): the lifetime
-//! is how stale the app said the page may be. Off under `corten dev`,
-//! and in an app with no route that keeps a page, whose writes are then not counted. The
+//! is how stale the app said the page may be. Off in an app with no route that keeps a page,
+//! whose writes are then not counted. Under `corten dev` the store stands and counts writes, so
+//! the code that decides what it keeps runs, but it keeps nothing and gives nothing: each
+//! `Public` route says in the log instead whether a release build would keep its answer while
+//! the store has room, and if not why ([`Verdict`]). The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key,
 //! the head's lines and each compressed form are held in allocations of their own size
@@ -255,6 +260,184 @@ const WRITES: usize = 1 << 16;
 pub enum Shape {
     Page,
     Body,
+}
+
+/// What `corten dev` says of a `Public` answer, where nothing is kept: that a release build would
+/// keep it while its store has room, or the first reason it does not, as the code that decides
+/// found it. A reason decided when the route is made comes from its handler's type
+/// (`crate::handler::Handler::public`). One decided before the handler runs comes from
+/// [`Asked::checked`], the code of [`Asked::of`] in a copy of its own that only `corten dev` runs
+/// (`crate::router::Telling`). A drawn submit key comes from the watch the route keeps by, where a
+/// release build gives the answer as it is ([`Missed::drew_key`]), and one decided by the answer
+/// from [`Missed::keep`], whose copy for `corten dev` (`TELL`) records each in the request's
+/// signal ([`Verdict::found`]). `Kept`, or `Unread`, comes from the body of an answer a release
+/// build would keep, as `corten dev` reads it ([`tell_read`]): that build reads it whole before
+/// the answer leaves, within the route's deadline, and `corten dev` only as it is sent, after, so
+/// of a body it reads that way each says what `corten dev` saw and leaves what that build does
+/// with the body to that read: a slow body may meet the deadline there, and one that fails
+/// after the request's signal ends may read whole there. What a request alone decides (a
+/// cookie, a navigation, a write) is not said: the page's verdict is for the request that shows
+/// nothing about who asks. Nor is a full store, which the store under `corten dev`, holding
+/// nothing, never is: `Kept` says the answer may be kept, not that it is. Public in a private
+/// module, as [`Shape`] is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Verdict {
+    Kept {
+        lifetime: u64,
+        /// Its body was read under `corten dev` as it was sent, after its route answered, not
+        /// held whole: a release build keeps it if it reads it whole within the route's deadline.
+        read: bool,
+    },
+    /// The app keeps no answers: its bound is 0 (`crate::App::kept_answers`).
+    Off,
+    /// Its handler takes an input the key does not cover (`Anonymous::KEYED`).
+    Unkeyed,
+    /// Its answer is neither a page nor a whole body (`Answer::WHOLE`).
+    NotWhole,
+    /// Its route says `unstaged`: no stage gives the request its signal.
+    Unstaged,
+    /// Something read a caller for the request.
+    Caller,
+    /// A middleware changed the URL the router matched.
+    Rewritten,
+    /// It drew a form's new submit key.
+    DrewKey,
+    /// No lifetime a shared cache keeps it for (`crate::cache::Typed::shared`), with its status.
+    NoLifetime {
+        status: u16,
+    },
+    Varies,
+    Status(u16),
+    /// A mark not put back on a kept answer, or not `Public`'s.
+    Marked,
+    SetsCookie,
+    Encoded,
+    Range,
+    Tagged,
+    Names,
+    Nonce,
+    Slow {
+        took: u64,
+        lifetime: u64,
+    },
+    Unsized,
+    Small(u64),
+    Empty,
+    Large {
+        size: usize,
+        bound: usize,
+    },
+    Written,
+    /// Its body, of a known size, failed as `corten dev` read it, after its route answered. A
+    /// release build reads it before then, so what it does with it is not known here.
+    Unread,
+}
+
+impl Verdict {
+    /// The request's answer has this verdict, unless an earlier one was found for it: under
+    /// `corten dev` alone, where the route says it ([`Verdict::tell`]).
+    #[cold]
+    pub(crate) fn found(self, signal: &crate::Signal) {
+        let _ = signal.found::<Verdict>().set(self);
+    }
+
+    /// The verdict found for the request, if one was.
+    pub(crate) fn of(signal: &crate::Signal) -> Option<Verdict> {
+        signal.found::<Verdict>().get().copied()
+    }
+
+    /// Its bit among the verdicts a route has said: one for each kind, whatever its numbers. A
+    /// body held whole and one read as it was sent are kept on different terms (the second only if
+    /// a release build reads it within the route's deadline), so each has its own.
+    fn bit(self) -> u32 {
+        let at = match self {
+            Verdict::Kept { read: false, .. } => 0,
+            Verdict::Kept { read: true, .. } => 25,
+            Verdict::Off => 1,
+            Verdict::Unkeyed => 2,
+            Verdict::NotWhole => 3,
+            Verdict::Unstaged => 4,
+            Verdict::Caller => 5,
+            Verdict::Rewritten => 6,
+            Verdict::DrewKey => 7,
+            Verdict::NoLifetime { .. } => 8,
+            Verdict::Varies => 9,
+            Verdict::Status(_) => 10,
+            Verdict::Marked => 11,
+            Verdict::SetsCookie => 12,
+            Verdict::Encoded => 13,
+            Verdict::Range => 14,
+            Verdict::Tagged => 15,
+            Verdict::Names => 16,
+            Verdict::Nonce => 17,
+            Verdict::Slow { .. } => 18,
+            Verdict::Unsized => 19,
+            Verdict::Small(_) => 20,
+            Verdict::Empty => 21,
+            Verdict::Large { .. } => 22,
+            Verdict::Written => 23,
+            Verdict::Unread => 24,
+        };
+        1 << at
+    }
+
+    /// Says it in the log for the route whose request for `path` it is, unless the route said it
+    /// before: `told` holds a bit for each verdict the route has said ([`Verdict::bit`]: a reason
+    /// once, whatever its numbers), so a page loaded again says nothing new, and one that changes
+    /// how it answers says so. `corten dev` starts the app again on each change, so a changed
+    /// route starts over.
+    pub(crate) fn tell(self, path: &str, told: &AtomicU32) {
+        let bit = self.bit();
+        if told.load(Ordering::Relaxed) & bit != 0 || told.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+            return;
+        }
+        // Of a body read as it was sent, what `corten dev` saw, and no more: a release build reads it
+        // before the answer leaves, under the route's deadline and before the request's signal
+        // ends, where it may be slower or read otherwise.
+        match self {
+            Verdict::Kept { lifetime, read: false } => tracing::info!(
+                "corten: {path} is Public, and a release build would keep its answer for {lifetime} s while its store has room, given in its handler's place to each GET that shows nothing about who asks (under corten dev its handler makes every answer)"
+            ),
+            Verdict::Kept { lifetime, read: true } => tracing::info!(
+                "corten: {path} is Public, and a release build would keep its answer for {lifetime} s while its store has room if it reads the body whole within the route's deadline, given in its handler's place to each GET that shows nothing about who asks (a release build reads the body before the answer leaves; corten dev read it whole only as it was sent, after the route answered, and its handler makes every answer)"
+            ),
+            Verdict::Unread => tracing::warn!(
+                "corten: {path} is Public, and its body, of a known size, failed as corten dev read it, after the route answered: a release build reads it before the answer leaves, within the route's deadline, and keeps the answer only if the body reads whole there"
+            ),
+            _ => tracing::warn!("corten: {path} is Public, but a release build does not keep its answer: {}", self.why()),
+        }
+    }
+
+    /// Why it is not kept, and what to change, for an author.
+    fn why(self) -> String {
+        match self {
+            Verdict::Kept { .. } | Verdict::Unread => String::new(),
+            Verdict::Off => "the app keeps no answers, since its bound is 0 (App::kept_answers(0)); give it a bound to have answers kept".into(),
+            Verdict::Unkeyed => "its handler takes an input the kept answer's key does not cover (an extractor of the app's own, an Option, Json, an Upload, LiveSince or Since, or a Form before its last argument), so it runs for every request; read what the URL gives with Params or Uri instead".into(),
+            Verdict::NotWhole => "its answer is neither a page nor a whole body (a stream, a relay, a feed or a status alone), so its handler runs for every request".into(),
+            Verdict::Unstaged => "its route says unstaged, and no stage gives the request what keeping its answer needs; leave unstaged out to have it kept".into(),
+            Verdict::Caller => "something read a Caller for the request (a middleware, or the layout), which makes the answer that caller's; read a caller only where the answer is not Public".into(),
+            Verdict::Rewritten => "a middleware changed its URL after the router matched it, so the URL no longer names the page its handler makes; change the URL in a layer in front (App::layer), or redirect".into(),
+            Verdict::DrewKey => "it draws a form's new submit key (SubmitKey::field), and each visitor needs a key of their own; put the form on a page that is not Public".into(),
+            Verdict::NoLifetime { status } if !(200..400).contains(&status) => Verdict::Status(status).why(),
+            Verdict::NoLifetime { .. } => "it has no lifetime a shared cache keeps it for (Public::new with 0 seconds, or Public::immutable, which the caches in front keep for a year); give it a lifetime of a second or more".into(),
+            Verdict::Varies => "its Vary names a header the key does not cover (of a request's headers only Accept-Language is part of the key); leave that header out of Vary, or answer it private".into(),
+            Verdict::Status(status) => format!("it answered {status}, and only a 200 is kept"),
+            Verdict::Marked => "its answer carries a mark the app does not put back on a kept answer (an extension of its handler's, or an answer type of the app's own); return the answer Public made as it is".into(),
+            Verdict::SetsCookie => "it sets a cookie; set it on an answer that is not Public".into(),
+            Verdict::Encoded => "it says a Content-Encoding (its handler compressed it); leave compressing to the app".into(),
+            Verdict::Range => "it answers a range of its body (Content-Range)".into(),
+            Verdict::Tagged => "it has an ETag of its own; the app tags the answers it keeps itself".into(),
+            Verdict::Names => format!("it has more than {NAMES} header names"),
+            Verdict::Nonce => "its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce); move the inline script or style into a component's file".into(),
+            Verdict::Slow { took, lifetime } => format!("it took {took} s to make, as long as its lifetime of {lifetime} s or longer; give it a longer one"),
+            Verdict::Unsized => "its body's size is not known before it is sent (a stream, Media::stream)".into(),
+            Verdict::Small(length) => format!("its body is {length} bytes, and a whole body is kept from {BODY_FROM} (a smaller one costs less to make again than to look up)"),
+            Verdict::Empty => "its body is empty".into(),
+            Verdict::Large { size, bound } => format!("it takes {size} bytes, more than an eighth of the {bound} the app keeps (App::kept_answers); raise the bound to have it kept"),
+            Verdict::Written => "a write to its path went through while its handler read, so it may show what was there before; the next answer may be kept".into(),
+        }
+    }
 }
 
 /// How many answers in a row a route of whole bodies makes with none kept before it stops
@@ -496,7 +679,7 @@ impl Written {
 /// or, where it found no counts by path, with the others like it.
 pub(crate) struct Writing<'a> {
     answers: &'a Answers,
-    /// The path's count and the request's `Host`; none for a write that found no counts to
+    /// The path's count and the requested authority; none for a write that found no counts to
     /// count in, which is counted with the others like it ([`Store::early`]).
     counted: Option<(usize, Option<HeaderValue>)>,
     answered: bool,
@@ -545,7 +728,7 @@ impl Drop for Writing<'_> {
 }
 
 /// The path of a place on this site that `to` (a `Location`) names: one that starts at the
-/// root, or a whole URL with the request's `Host`. Another site's page is not kept here, and a
+/// root, or a whole URL with the requested authority. Another site's page is not kept here, and a
 /// reference relative to the request's path is not followed.
 fn on_site<'a>(to: &'a [u8], host: Option<&HeaderValue>) -> Option<&'a [u8]> {
     let path = |rest: &'a [u8]| rest.split(|byte| matches!(byte, b'?' | b'#')).next().unwrap_or(rest);
@@ -978,7 +1161,12 @@ impl Answers {
         }
         let count = count_of(req.uri().path().as_bytes());
         signal.writes(count);
-        Writing { answers: self, counted: Some((count, req.headers().get(header::HOST).cloned())), answered: false }
+        let host = crate::security::request_host(req.uri(), || req.headers().get(header::HOST));
+        Writing {
+            answers: self,
+            counted: Some((count, host.and_then(crate::security::RequestHost::into_header))),
+            answered: false,
+        }
     }
 
     /// Counts a write to the paths `count` is for, so no page kept for them stands: every
@@ -1035,7 +1223,9 @@ impl<'a> Sent<'a> {
     /// answer at the same URL. A whole body is its route's one answer, so a data client's
     /// request is kept too, apart: a handler that takes `Req` can read which of the two asked
     /// (`req.mode`).
-    fn read(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
+    // `TELL` is [`Asked::checked`]'s: `corten dev`'s reading is its own copy, closures and all, so
+    // the one a release build runs has `Asked::of` as its only caller, and is made as it was then.
+    fn read<const TELL: bool>(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
         // By their names and first, since they are what most requests a page is not kept for
         // carry: a session's cookie, and the runtime's header on a navigation inside the app.
         // Each is a lookup of about 100 instructions that the pass below could make in its
@@ -1087,30 +1277,55 @@ impl<'a> Sent<'a> {
 
 impl<'a> Asked<'a> {
     pub(crate) fn of(req: &'a Request, shape: Shape) -> Option<Self> {
+        Self::checked::<false>(req, shape).ok()
+    }
+
+    /// [`Asked::of`], with, when `TELL` (`corten dev`, before the handler runs: [`Verdict`]), the
+    /// reason a request the store would otherwise be asked for is not: `Err(Some(_))` for one the
+    /// page's author can change (an app that keeps no answers among them), `Err(None)` for what
+    /// the request alone decides (a cookie, a navigation, a proxy's URL), which is not said. A
+    /// release build reads none of it: with `TELL` false every `Err` is `None`, and this is the
+    /// code `of` always was.
+    #[inline(always)]
+    pub(crate) fn checked<const TELL: bool>(req: &'a Request, shape: Shape) -> Result<Self, Option<Verdict>> {
         if *req.method() != http::Method::GET {
-            return None;
+            return Err(None);
         }
-        let signal = req.extensions().get::<crate::Signal>()?;
-        let answers = signal.shared()?.kept.as_ref()?;
+        let signal = req.extensions().get::<crate::Signal>().ok_or(None)?;
+        let answers = signal.shared().and_then(|shared| shared.kept.as_ref());
+        // An app that keeps no answers asks nothing more. Under `corten dev` that is said, below,
+        // only of a request the store would otherwise be asked for, as every reason is.
+        if !TELL && answers.is_none() {
+            return Err(None);
+        }
         // A caller a middleware read makes the answer that caller's, and the error page's request
-        // is not the one the route would answer.
-        if signal.is_personal() || signal.is_error_page() {
-            return None;
+        // is not the one the route would answer. Said of a request the store would otherwise ask
+        // for, below: one with a session's cookie is left to its handler anyway.
+        if (signal.is_personal() && !TELL) || signal.is_error_page() {
+            return Err(None);
         }
-        let Sent { host, language, data } = Sent::read(req.headers(), shape)?;
+        let Sent { host, language, data } = Sent::read::<TELL>(req.headers(), shape).ok_or(None)?;
         // In origin form: a URL that names its own host is a proxy's.
         if req.uri().authority().is_some() {
-            return None;
+            return Err(None);
         }
-        let at = req.uri().path_and_query()?;
+        // An app with a route that keeps an answer has a store unless its bound is 0.
+        let Some(answers) = answers else {
+            return Err(if TELL && signal.shared().is_some() { Some(Verdict::Off) } else { None });
+        };
+        if TELL && signal.is_personal() {
+            return Err(Some(Verdict::Caller));
+        }
+        let at = req.uri().path_and_query().ok_or(None)?;
         // The URL the router matched: a route's parameters are read from the path as it was then
         // ([`crate::router::MatchedPath`]), so after a middleware changed the URI, the one the
         // handler sees no longer names the page it makes.
-        if req.extensions().get::<crate::router::MatchedPath>().is_none_or(|matched| matched.matched() != at) {
-            return None;
+        let matched = req.extensions().get::<crate::router::MatchedPath>();
+        if matched.is_none_or(|matched| matched.matched() != at) {
+            return Err(if TELL && matched.is_some() { Some(Verdict::Rewritten) } else { None });
         }
         let hash = answers.0.keys.hash_one(at.as_str());
-        Some(Asked { answers, signal, at, hash, host, language, data })
+        Ok(Asked { answers, signal, at, hash, host, language, data })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
@@ -1181,62 +1396,140 @@ pub(crate) struct Missed {
 }
 
 impl Missed {
-    /// `res`, kept when it is the same for everyone and for how long: see the module.
-    pub(crate) async fn keep(self, mut res: Response) -> Response {
+    /// Under `corten dev`: its handler drew a form's new submit key, so a release build gives the
+    /// answer as it is, before [`Missed::keep`] ([`Verdict::DrewKey`]).
+    #[cold]
+    pub(crate) fn drew_key(&self) {
+        if let Some(signal) = &self.signal {
+            Verdict::DrewKey.found(signal);
+        }
+    }
+
+    /// `res`, kept when it is the same for everyone and for how long: see the module. `TELL` is
+    /// `corten dev`'s copy (`crate::router::Telling`): nothing is kept, and the request is given
+    /// what a release build does with its answer instead ([`Verdict`]), with the answer's head
+    /// left as it is; one a release build would keep is left where that build reads its body,
+    /// for [`tell_read`]. A release build's copy, with `TELL` false, is the code it was, but
+    /// for the head's count ([`head_bytes`]).
+    pub(crate) async fn keep<const TELL: bool>(mut self, mut res: Response) -> Response {
         let Some(signal) = &self.signal else { return res };
         let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
-        let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
+        // Not kept: under `corten dev` the reason is made for the route to say.
+        macro_rules! unkept {
+            ($verdict:expr) => {{
+                if TELL {
+                    $verdict.found(signal);
+                }
+                return res;
+            }};
+        }
+        // A form's new submit key the handler rendered where its watch did not poll (`req.rendered`
+        // in a blocking task) marks only the request's signal, not the answer: it is this request's
+        // alone too, and goes out as one (`crate::cache::Unrepeatable`).
+        if signal.key_drawn() {
+            unkept!(Verdict::DrewKey);
+        }
+        let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else {
+            unkept!(Verdict::NoLifetime { status: res.status().as_u16() })
+        };
         // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
         // from it), or on something the key does not cover.
-        let Some(mut language) = varies(res.headers()) else { return res };
+        let Some(mut language) = varies(res.headers()) else { unkept!(Verdict::Varies) };
         // A locale negotiated after the page set its headers is named now, so the key below
-        // and the header the app sends agree.
+        // and the header the app sends agree. Under `corten dev` the answer is left as it is (the
+        // app names it as the answer leaves, after its middleware, as it did with no store), and
+        // its head is counted as a release build counts it, from a copy named so ([`NamedHead`]).
         if !language && signal.asked_language() {
-            crate::page::add_language(res.headers_mut());
+            if TELL {
+                let mut headers = res.headers().clone();
+                crate::page::add_language(&mut headers);
+                let _ = signal.found::<NamedHead>().set(NamedHead(headers.keys_len(), head_bytes(headers.iter())));
+            } else {
+                crate::page::add_language(res.headers_mut());
+            }
             language = true;
         }
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
         // Only what is put back on a kept answer: a mark this does not know is not replayed.
         let known = 2 + usize::from(style.is_some());
-        if res.status() != StatusCode::OK
-            || res.extensions().len() != known
-            || res.extensions().get::<crate::layout::SameForAll>().is_none()
-            || res.headers().contains_key(header::SET_COOKIE)
-            || res.headers().contains_key(header::CONTENT_ENCODING)
-            || res.headers().contains_key(header::CONTENT_RANGE)
-            || res.headers().contains_key(header::ETAG)
-            || res.headers().keys_len() > NAMES
-            || self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some())
-            || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
-            // Made over a time longer than it lasts: it would never be given.
-            || self.asked.elapsed().as_secs() >= lifetime
-        {
-            return res;
+        if res.status() != StatusCode::OK {
+            unkept!(Verdict::Status(res.status().as_u16()));
         }
-        let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
+        if res.extensions().len() != known || res.extensions().get::<crate::layout::SameForAll>().is_none() {
+            unkept!(Verdict::Marked);
+        }
+        if res.headers().contains_key(header::SET_COOKIE) {
+            unkept!(Verdict::SetsCookie);
+        }
+        if res.headers().contains_key(header::CONTENT_ENCODING) {
+            unkept!(Verdict::Encoded);
+        }
+        if res.headers().contains_key(header::CONTENT_RANGE) {
+            unkept!(Verdict::Range);
+        }
+        if res.headers().contains_key(header::ETAG) {
+            unkept!(Verdict::Tagged);
+        }
+        if named_head::<TELL>(signal).map_or_else(|| res.headers().keys_len(), |(names, _)| names) > NAMES {
+            unkept!(Verdict::Names);
+        }
+        if self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some()) {
+            unkept!(Verdict::Nonce);
+        }
+        if self.signal.as_ref().is_none_or(crate::Signal::is_personal) {
+            unkept!(Verdict::Caller);
+        }
+        // Made over a time longer than it lasts: it would never be given.
+        if self.asked.elapsed().as_secs() >= lifetime {
+            unkept!(Verdict::Slow { took: self.asked.elapsed().as_secs(), lifetime });
+        }
+        let Some(length) = http_body::Body::size_hint(res.body()).exact() else { unkept!(Verdict::Unsized) };
         // A whole body is kept from a size, whatever its type.
         if self.told.0.is_some() && length < BODY_FROM {
-            return res;
+            unkept!(Verdict::Small(length));
         }
-        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
+        let head: usize = match named_head::<TELL>(signal) {
+            Some((_, bytes)) => bytes,
+            None => head_bytes(res.headers().iter()),
+        };
         // The URL is held once, by the entry: the map holds its hash.
         let sent = self.language.as_ref().filter(|_| language);
         let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
-        if length == 0 || size > answers.0.bound / SHARE {
-            return res;
+        if length == 0 {
+            unkept!(Verdict::Empty);
+        }
+        if size > answers.0.bound / SHARE {
+            unkept!(Verdict::Large { size, bound: answers.0.bound });
         }
         // An answer that may be kept: writes are counted by path from here on, whether or not
         // this one is kept, so an app whose writes never pause still comes to keep its pages.
         answers.counts();
         // A write while the handler read: the page may show what was there before.
         if !self.written.stands(&answers.0) {
+            unkept!(Verdict::Written);
+        }
+        // Under `corten dev` none is kept: the answer goes back to be said to be kept where a
+        // release build keeps it, as its body is read ([`tell_read`]), and, of a route of whole
+        // bodies, is told so, so it goes on asking.
+        if TELL {
+            self.told.1 = true;
+            let _ = signal.found::<ToRead>().set(ToRead(lifetime));
             return res;
         }
         let (mut parts, body) = res.into_parts();
         // Exact size: one held `Bytes`.
-        let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
-            // A body of an exact size that could not be read: not a page to send as it is.
-            return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
+        let body = match crate::body::to_bytes(body, usize::MAX).await {
+            Ok(body) => body,
+            // A body of an exact size that could not be read: not a page to send as it is. The
+            // failure in its place is Corten's, not the handler's, so it is never shared whatever
+            // the page said (the error page drawn for it may read the request's `Cookie`).
+            Err(error) => {
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(error, "corten: a page to keep could not be read");
+                let failed =
+                    crate::response::IntoResponse::into_response(crate::Error::corten("corten: the page could not be read"));
+                return crate::cache::unshared_in_place_of(&parts.extensions, failed);
+            }
         };
         // A copy of its own length: a page's buffer is sized for the last page rendered and an
         // eighth more, and the bytes made from it would hold all of that for as long as they are
@@ -1291,6 +1584,103 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
         }
     }
     Some(language)
+}
+
+/// The bytes a kept answer's head is counted as: each line's name and value, and what holds it.
+/// One function for both copies of [`Missed::keep`], so the name of a line is read in one place
+/// in the program, as it was: a second place to read it made the compiler stop inlining that
+/// read, and a release build counted 36 instructions more a refused request
+/// (`tests/router_cost.rs`).
+#[inline]
+fn head_bytes(headers: http::header::Iter<'_, HeaderValue>) -> usize {
+    headers.map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum()
+}
+
+/// Under `corten dev`, in the request's signal: its answer is one a release build would keep from
+/// here, for its lifetime, as `corten dev`'s copy of [`Missed::keep`] left it, for
+/// [`tell_read`] to say so once its body is read.
+struct ToRead(u64);
+
+/// Under `corten dev`, in the request's signal: the names and bytes of the head a release build
+/// counts for an answer whose locale was negotiated after the page set its headers, which that
+/// build names before it counts and `corten dev` leaves for the app to name as the answer leaves.
+/// Held in the signal rather than in [`Missed::keep`], so a release build's copy holds nothing
+/// more across its read of the body than it did.
+struct NamedHead(usize, usize);
+
+/// The head [`NamedHead`] counted, for `corten dev`'s copy of [`Missed::keep`]; none for a
+/// release build's.
+#[inline(always)]
+fn named_head<const TELL: bool>(signal: &crate::Signal) -> Option<(usize, usize)> {
+    if !TELL {
+        return None;
+    }
+    signal.found::<NamedHead>().get().map(|&NamedHead(names, bytes)| (names, bytes))
+}
+
+/// Under `corten dev`, `res` as `corten dev`'s copy of [`Missed::keep`] left it, with `tell` given
+/// what becomes of the body of an answer a release build would keep once it reads it. The body
+/// is not read here: a body held whole, which a release build takes without reading, is kept
+/// now ([`Verdict::Kept`], not `read`); any other is watched as whatever reads it next (the
+/// app's middleware, the client) pulls each frame, and told when it ends ([`Verdict::Kept`],
+/// `read`) or fails ([`Verdict::Unread`]), so the answer, its frames, its trailers and when each
+/// comes are as they are with no store. That is what `corten dev` saw, not what a release build
+/// does: it reads the body before the answer leaves, within the route's deadline and before the
+/// request's signal ends (`crate::signal::follow` ends it as an answer of a known size leaves),
+/// so a body that is slow, or reads otherwise once the signal has ended, may fare otherwise
+/// there. One dropped before its end (the client left) is told nothing. Any other answer is as
+/// it was, and `tell` is not called.
+pub(crate) fn tell_read<F>(res: Response, signal: &crate::Signal, tell: F) -> Response
+where
+    F: FnOnce(Verdict) + Send + Unpin + 'static,
+{
+    let Some(&ToRead(lifetime)) = signal.found::<ToRead>().get() else { return res };
+    if res.body().is_whole() {
+        tell(Verdict::Kept { lifetime, read: false });
+        return res;
+    }
+    let kept = Verdict::Kept { lifetime, read: true };
+    res.map(|body| Body::new(Reading { body, kept, tell: Some(tell) }))
+}
+
+/// Under `corten dev`, the body of an answer a release build would keep once it reads it
+/// ([`tell_read`]): its frames as they come, and, when it ends, how it ended as `corten dev` read it.
+struct Reading<F> {
+    body: Body,
+    kept: Verdict,
+    tell: Option<F>,
+}
+
+impl<F: FnOnce(Verdict) + Unpin> http_body::Body for Reading<F> {
+    type Data = Bytes;
+    type Error = crate::body::BoxError;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        let this = self.get_mut();
+        let frame = std::task::ready!(std::pin::Pin::new(&mut this.body).poll_frame(cx));
+        // Read to its end, or failed, here: a release build reads it to the end
+        // (`crate::body::to_bytes`) before the answer leaves, which may end otherwise.
+        let verdict = match &frame {
+            None => Some(this.kept),
+            Some(Err(_)) => Some(Verdict::Unread),
+            Some(Ok(_)) => this.body.is_end_stream().then_some(this.kept),
+        };
+        if let Some((verdict, tell)) = verdict.and_then(|verdict| Some((verdict, this.tell.take()?))) {
+            tell(verdict);
+        }
+        std::task::Poll::Ready(frame)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.body.size_hint()
+    }
 }
 
 #[cfg(test)]
@@ -1602,14 +1992,14 @@ mod tests {
                         headers.append(sent[at].0.clone(), HeaderValue::from_bytes(line).unwrap());
                     }
                 }
-                let page = Sent::read(&headers, Shape::Page).map(|sent| (sent.host, sent.language, sent.data));
+                let page = Sent::read::<false>(&headers, Shape::Page).map(|sent| (sent.host, sent.language, sent.data));
                 assert_eq!(page, by_name(&headers, Shape::Page), "{headers:?}");
                 match page {
                     Some(_) => kept += 1,
                     None => left += 1,
                 }
                 // A whole body is kept for a data client too, apart, and for no one a page is not.
-                let body = Sent::read(&headers, Shape::Body).map(|sent| (sent.host, sent.language, sent.data));
+                let body = Sent::read::<false>(&headers, Shape::Body).map(|sent| (sent.host, sent.language, sent.data));
                 assert_eq!(body, by_name(&headers, Shape::Body), "{headers:?}");
                 assert!(page.is_none() || body == page, "{headers:?}");
                 apart += usize::from(matches!(body, Some((_, _, true))));

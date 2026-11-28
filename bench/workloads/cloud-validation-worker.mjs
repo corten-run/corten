@@ -20,6 +20,8 @@ try {
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
+    "bench/json-api/load-resource-proof.mjs",
+    "bench/json-api/placement.mjs",
     "bench/typescript.mjs",
     "bench/workloads/isolated/native-roles.mjs",
   ]);

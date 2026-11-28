@@ -20,6 +20,17 @@ export async function comboBox(page, qty) {
   await page.keyboard.press("ArrowDown");
   const active = await color.getAttribute("aria-activedescendant");
   check("Arrow Down opens at the value and moves", active !== null && (await page.locator(`#${active}`).textContent()) === "Moderately Played");
+  const highlighted = async () => {
+    const id = await color.getAttribute("aria-activedescendant");
+    return id === null ? null : page.locator(`#${id}`).textContent();
+  };
+  await page.keyboard.press("ArrowUp");
+  check("Arrow Up moves back", (await highlighted()) === "Lightly Played", String(await highlighted()));
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  check("Arrow Up from the first option wraps to the last", (await highlighted()) === "Damaged", String(await highlighted()));
+  await page.keyboard.press("ArrowDown");
+  check("Arrow Down from the last option wraps to the first", (await highlighted()) === "Near Mint", String(await highlighted()));
   await page.keyboard.press("Escape");
   check("Escape closes and keeps the value", (await color.inputValue()) === "Lightly Played" && (await color.getAttribute("aria-expanded")) === "false");
   const visible = () => page.locator('[data-scope=ui-combo-box] [role="option"]:visible').allTextContents();
@@ -77,6 +88,9 @@ export async function comboBox(page, qty) {
   await color.fill("");
   await page.keyboard.press("Tab");
   check("emptying the field clears the value", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "");
+  await color.press("ArrowUp");
+  check("Arrow Up on a closed field with no value opens at the last option", (await color.getAttribute("aria-expanded")) === "true" && (await highlighted()) === "Damaged", String(await highlighted()));
+  await color.press("Escape");
   await page.getByRole("button", { name: "List for sale" }).click();
   const message = await color.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   check("a required, empty combobox stops the form on the input", message !== "", message);

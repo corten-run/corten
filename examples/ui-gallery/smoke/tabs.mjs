@@ -15,6 +15,21 @@ export async function tabs(page) {
   check("only the selected tab is in the tab order", (await page.$$eval('[role="tab"]', (t) => t.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "0,-1,-1");
   await page.keyboard.press("End");
   check("End selects the last", (await tab("Sales").getAttribute("aria-selected")) === "true");
+  const selected = async (/** @type {string} */ name) => (await tab(name).getAttribute("aria-selected")) === "true" && (await tab(name).evaluate((t) => t === document.activeElement));
+  await page.keyboard.press("Home");
+  check("Home selects the first", (await selected("Listings")) && page.url() === `${base}/`, page.url());
+  await page.keyboard.press("ArrowLeft");
+  check("Arrow Left from the first tab wraps to the last", await selected("Sales"));
+  await page.keyboard.press("ArrowLeft");
+  check("Arrow Left moves back and selects", (await selected("Offers")) && page.url().endsWith("/?tab=offers"), page.url());
+  // Home from the last tab is where Arrow Right's wrap goes too, and End from the first where
+  // Arrow Left's does: from the middle tab each differs from that arrow.
+  await page.keyboard.press("Home");
+  check("Home selects the first from the middle tab too", await selected("Listings"));
+  await tab("Offers").click();
+  // Leaves the last tab selected, where the checks after these start.
+  await page.keyboard.press("End");
+  check("End selects the last from the middle tab too", await selected("Sales"));
   // An Icon beside a tab's text, as beside a button's (#793).
   const tabIcon = await tab("Listings").evaluate(besideText);
   check("Tabs: an icon beside a tab's text is the kit's gap apart and on its middle", spacedLikeButton(tabIcon), JSON.stringify(tabIcon));
@@ -25,6 +40,6 @@ export async function tabs(page) {
   const showing = () =>
     page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden) && !p.querySelector("table")).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
-  check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
+  check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0,-1");
   return { tab, period, showing };
 }

@@ -4,7 +4,7 @@
 
 namespace marketplace {
 namespace { constexpr auto cookieName = "marketplace_session"; }
-bool Alerts::append(const drogon::HttpRequestPtr &request, const drogon::HttpResponsePtr &response, Json::Value row) {
+bool Alerts::append(const drogon::HttpRequestPtr &request, const drogon::HttpResponsePtr &response, Json::Value row, bool publicTLS) {
  std::lock_guard<std::mutex> lock(mutex_);
  auto now = std::chrono::steady_clock::now();
  for (auto it = sessions_.begin(); it != sessions_.end(); ) {
@@ -19,7 +19,7 @@ bool Alerts::append(const drogon::HttpRequestPtr &request, const drogon::HttpRes
   found = sessions_.emplace(token, Session{now + std::chrono::hours(1), Json::Value(Json::arrayValue)}).first;
   drogon::Cookie cookie(cookieName, token);
   cookie.setPath("/"); cookie.setHttpOnly(true); cookie.setSameSite(drogon::Cookie::SameSite::kLax);
-  cookie.setSecure(request->isOnSecureConnection());
+  cookie.setSecure(request->isOnSecureConnection() || publicTLS);
   response->addCookie(cookie);
  }
  if (found->second.rows.size() >= 1024) return false;

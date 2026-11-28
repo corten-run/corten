@@ -2,13 +2,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { aggregate, leanApps, leanProfile, phases, probeCpu, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
+import { aggregate, leanApps, leanProfile, recordedLeanApps, phases, probeCpu, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { inspectCatalog, completeChecks } from "./report.mjs";
 import { records } from "./fixtures.mjs";
 import { qualificationIdentity } from "./group.mjs";
 import { verifyRecordAttempt, verifyAttemptWindow } from "./record-attempt.mjs";
 import { summarizeSamples, memoryMiB } from "./stats.mjs";
-import { verifyK6Provenance } from "../load-tool.mjs";
+import { assertPinned, assertSameEvidence, k6Fields, k6Image, verifyK6Provenance } from "../load-tool.mjs";
 import { timedRawSchema, verifyTimedPhase, verifyTimedContinuity } from "./timed.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { workerAware, workerRawSchema, workerCommand, verifyControl, verifySource, verifyWorkers } from "./apparatus.mjs";
@@ -16,8 +16,10 @@ import { verifyArtifactIndex, verifyPreflight } from "./preflight.mjs";
 import { receiptPrefix } from "./check.mjs";
 
 export const rawSchema = "catalog-saved-evidence/v2";
-export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+export const upstreamImage = "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067";
 export const checkerImage = `mcr.microsoft.com/playwright:v${JSON.parse(readFileSync(new URL("../../package.json", import.meta.url))).devDependencies["@playwright/test"]}-noble`;
+/** The tool and field names run.mjs writes in tools.json. */
+const toolFields = ["upstream", "checker", "k6", "k6Execution", "image", "imageId", "execution", "isolation", "Entrypoint", "Cmd", ...k6Fields];
 export function imageCommandEvidence(image) {
   assert.ok(image?.Config && typeof image.Config === "object" && !Array.isArray(image.Config), "image configuration missing");
   return { Entrypoint: image.Config.Entrypoint ?? null, Cmd: image.Config.Cmd ?? null };
@@ -106,7 +108,7 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   assert.ok(runtime.Config.Env.includes("CATALOG_FIXTURE_PATH=/fixtures/catalog.json"));
   assert.ok(runtime.Config.Env.includes(`API_BASE=http://${summary.runId}-upstream:8080`));
   if (summary.measurement.leanProfile !== undefined) {
-    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
+    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: recordedLeanApps(summary) }, "catalog lean configuration differs");
     assert.deepEqual(runtime.Config.Env.filter((value) => value.startsWith("PROFILE=")),
       leanApps.includes(app) ? [`PROFILE=${leanProfile}`] : [], "catalog runtime lean profile differs");
   }
@@ -161,7 +163,8 @@ export function replayCatalog(summary, { readJson, readText }, commit, expectedC
     assert.equal(summary.dirty, false); assert.equal(summary.complete, false); assert.equal(summary.checksPassed, false);
     assert.notEqual(summary.options.checkOnly, true); assert.deepEqual(summary.failures, []); assert.deepEqual(summary.cleanupFailures, []);
     assert.equal(summary.measurement.appMemoryBytes, 2 ** 30);
-    assert.equal(summary.tools?.upstream?.image, upstreamImage); assert.equal(summary.tools?.checker?.image, checkerImage);
+    // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
+    for (const [tool, pin] of [["upstream", upstreamImage], ["checker", checkerImage]]) assertPinned(summary.tools?.[tool]?.image, pin, { tool, verb: "verify", commit });
   }
   assert.equal(summary.commitAfter, commit);
   assert.equal(summary.dirtyAfter, false);
@@ -172,9 +175,19 @@ export function replayCatalog(summary, { readJson, readText }, commit, expectedC
   const catalog = documentHeaders ? JSON.parse(fixture) : null;
   const cleanup = readJson("cleanup.json");
   assert.deepEqual(cleanup, { runId: summary.runId, containers: [], networks: [] }, "owned resources remain or cleanup proof differs");
-  assert.deepEqual(readJson("tools.json"), summary.tools, "tool observations differ");
-  if (!gated || summary.tools.k6 !== undefined) verifyK6Provenance(summary.tools.k6);
-  for (const name of ["upstream", "checker", ...(gated ? [] : ["k6"])]) assert.match(summary.tools?.[name]?.imageId, /^sha256:[a-f0-9]{64}$/);
+  const tools = readJson("tools.json"), k6Checked = !gated || summary.tools?.k6 !== undefined;
+  // The sidecar must equal the summary, so its pins hold wherever the summary's do; checking them
+  // first names the pin, not the saved text.
+  if (k6Checked) verifyK6Provenance(summary.tools?.k6, { verb: "verify", commit });
+  for (const [tool, pin, pinned] of [["upstream", upstreamImage, gated], ["checker", checkerImage, gated], ["k6", k6Image, k6Checked]]) {
+    if (pinned) assertPinned(tools?.[tool]?.image, pin, { tool, verb: "verify", commit });
+  }
+  // Both are saved: only the tool and field names this checkout writes are printed.
+  assertSameEvidence(tools, summary.tools, "tool observations differ", "", toolFields);
+  for (const name of ["upstream", "checker", ...(gated ? [] : ["k6"])]) {
+    const id = summary.tools?.[name]?.imageId;
+    assert.ok(typeof id === "string" && /^sha256:[a-f0-9]{64}$/.test(id), `missing/malformed ${name} tool image ID`);
+  }
   const outcomes = [];
   const targetFailures = [];
   const timedIds = new Set();

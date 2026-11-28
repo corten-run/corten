@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { posix } from "node:path";
-import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
+import { isDeepStrictEqual } from "node:util";
+import { parseStatsSample, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
 import { admitted } from "./feature-contract.mjs";
 import { qualificationValidator, validateSummary } from "./report.mjs";
@@ -11,12 +12,21 @@ import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, 
 import { validateLoadExecution } from "./load-evidence.mjs";
 import { evidenceVersion, k6Image, loadEnvironment, maxStatsSamples, nodeImage, producerSchema, sourceTree, upstreamInterpretation, validateLocaleCounters } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
-import { verifyK6Provenance } from "../load-tool.mjs";
+import { assertSameEvidence, verifyK6Provenance } from "../load-tool.mjs";
 
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "invalid receipt timestamp"); return n; };
-const exactKeys = (v, keys) => assert.deepEqual(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
+function terminalSampleAt(finished) {
+  const match = typeof finished === "string"
+    && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.(\d{1,9}))?(?:Z|[+-]\d\d:\d\d)$/.exec(finished);
+  // A millisecond receipt must not make a sub-millisecond exit look earlier.
+  return match ? time(finished) + Number(/[1-9]/.test(match[1]?.slice(3) ?? "")) : Infinity;
+}
+const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const sameKeys = (v, keys) => Object.keys(v).length === keys.length && keys.every((key) => Object.hasOwn(v, key));
+const same = (actual, expected, message) => assert.ok(isDeepStrictEqual(actual, expected), message);
+const exactKeys = (v, keys) => same(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
 const id = (s) => assert.match(s, /^[a-f0-9]{64}$/);
-const imageId = (s) => assert.match(s, /^sha256:[a-f0-9]{64}$/);
+const imageId = (s) => assert.ok(typeof s === "string" && /^sha256:[a-f0-9]{64}$/.test(s), "malformed image ID");
 function cpuSet(value) {
   assert.match(value, /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/, "invalid observed CPU inventory");
   const used = new Set();
@@ -35,13 +45,6 @@ function cpuBudget(c, milliseconds, onlineCpus) {
   // conservative whole period per CPU for non-expiring local runtime slices.
   return Math.min(cores * usec, quota * (Math.ceil(usec / period) + 1) + cores * period) + 2;
 }
-function displayedMemory(value) {
-  const m = /^\s*(\d+(?:\.(\d+))?)\s*(B|[KMGT]i?B)\s*$/.exec(value);
-  assert.ok(m, "invalid Docker memory display");
-  // Docker BytesSize uses %.4g: omitted trailing zeroes do not reduce precision.
-  const magnitude = Math.floor(Math.log10(Number(m[1]) || 1));
-  return { mib: memoryMiB(value), rounding: memoryMiB(`1${m[3]}`) * 10 ** (magnitude - 3) / 2 };
-}
 
 /** Returns the validated summary, or throws MARKETPLACE_EVIDENCE_INVALID (also for missing raw).
  * No Docker, HTTP, writes, or fetching: only bounded saved files and a local Git commit object.
@@ -53,6 +56,8 @@ export function validateSaved({ folder, round, commit }) {
 }
 function replay({ folder, round, commit }) {
   roundIdentity(round); assert.match(commit, /^[a-f0-9]{40}$/);
+  // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
+  const pinned = (image, pin) => assert.ok(image === pin, `retained image is not this checkout's pin ${pin}; validate from a checkout of the measured commit ${commit}`);
   const files = savedFiles(folder), s = files.json("summary.json");
   assert.equal(s.round, round, "wrong saved round"); assert.equal(s.commit, commit, "wrong saved commit");
   assert.ok([v5Schema, resultSchema].includes(s.schema), "saved replay requires a native raw result format");
@@ -152,7 +157,7 @@ function replay({ folder, round, commit }) {
   id(network.id); assert.equal(network.name, `${s.runId}-net`); assert.equal(network.owner, s.runId);
   const upstream = runtime(files.json("upstream-container.json"), s.tools.upstream.imageId, "api", 512 * 2 ** 20, { running: true });
   assert.equal(upstream.name, `${s.runId}-upstream`); assert.equal(upstream.network, network.name);
-  assert.equal(upstream.image, nodeImage); assert.equal(s.tools.upstream.image, nodeImage);
+  pinned(upstream.image, nodeImage); pinned(s.tools.upstream.image, nodeImage);
   assert.deepEqual(upstream.cmd, ["node", "/bench/marketplace/upstream.mjs"]);
   const fixtureMount = mount(upstream, "/fixtures", true), benchMount = mount(upstream, "/bench", true);
   assert.ok(benchMount.startsWith("/") && posix.normalize(benchMount) === benchMount && !benchMount.includes("\\") && posix.basename(benchMount) === "bench", "invalid native source root");
@@ -162,20 +167,23 @@ function replay({ folder, round, commit }) {
   const cpu = runtime(files.json("cpu-container.json"), s.tools.upstream.imageId, "load", 128 * 2 ** 20, { quota: 1, running: true });
   covers(cpu, firstLoad);
   assert.equal(cpu.name, `${s.runId}-cpu`); assert.equal(cpu.network, "none");
-  assert.equal(cpu.image, nodeImage);
+  pinned(cpu.image, nodeImage);
   mounts(cpu, [["/bench", benchMount], ["/sys/fs/cgroup", "/sys/fs/cgroup"]]);
   assert.deepEqual(cpu.cmd, ["node", "-e", "setInterval(() => {}, 1000)"]);
-  const toolImages = files.json("tools.json"); exactKeys(toolImages, ["upstream", "checker", "k6"]);
-  verifyK6Provenance(s.tools.k6);
-  for (const field of ["platform", "version", "versionOutput"]) assert.equal(toolImages.k6[field], s.tools.k6[field], "retained k6 executable probe differs");
+  const toolImages = files.json("tools.json");
+  // Saved keys are not printed: an extra or missing tool is refused without naming it.
+  assert.ok(record(toolImages) && sameKeys(toolImages, ["upstream", "checker", "k6"]), "tools.json has a missing or unexpected tool");
+  // Saved tool receipts are refused by field, never printed.
+  verifyK6Provenance(s.tools.k6, { verb: "validate", commit });
+  for (const field of ["platform", "version", "versionOutput"]) assert.ok(toolImages.k6[field] === s.tools.k6[field], `retained k6 executable probe differs at k6.${field}`);
   for (const tool of Object.keys(toolImages)) {
-    imageId(toolImages[tool].id); assert.equal(toolImages[tool].id, s.tools[tool].imageId, "tool image receipt differs");
+    imageId(toolImages[tool].id); assert.ok(toolImages[tool].id === s.tools[tool].imageId, "tool image receipt differs");
   }
-  assert.equal(s.tools.k6.image, k6Image); assert.deepEqual(toolImages.k6.repoDigests, s.tools.k6.repoDigests);
+  pinned(s.tools.k6.image, k6Image); assertSameEvidence(toolImages.k6.repoDigests, s.tools.k6.repoDigests, "tool image receipt differs", "k6.repoDigests");
   assert.ok(toolImages.k6.repoDigests.includes(k6Image), "k6 image does not carry the pinned digest");
-  assert.deepEqual(toolImages.k6.entrypoint, ["k6"]);
-  assert.deepEqual(toolImages.upstream.entrypoint, ["docker-entrypoint.sh"]);
-  assert.equal(toolImages.checker.entrypoint, null);
+  assertSameEvidence(toolImages.k6.entrypoint, ["k6"], "tool image receipt differs", "k6.entrypoint");
+  assertSameEvidence(toolImages.upstream.entrypoint, ["docker-entrypoint.sh"], "tool image receipt differs", "upstream.entrypoint");
+  assert.ok(toolImages.checker.entrypoint === null, "tool image receipt differs at checker.entrypoint");
   assert.deepEqual(upstream.entrypoint, toolImages.upstream.entrypoint); assert.deepEqual(cpu.entrypoint, toolImages.upstream.entrypoint);
   function appRuntime(c, app, source, { running = true } = {}) {
     const a = s.apps[app], rawImage = images[app];
@@ -228,7 +236,7 @@ function replay({ folder, round, commit }) {
       assert.ok(time(coldApp.state.StartedAt) >= time(run.startedAt), "cold start precedes its run");
       const probe = runtime(files.json(`${base}/probe-container.json`), s.tools.upstream.imageId, "load", 256 * 2 ** 20, { running: true });
       assert.ok(!probeIds.has(probe.id), "cold start reused a probe container"); probeIds.add(probe.id);
-      assert.equal(probe.image, nodeImage);
+      pinned(probe.image, nodeImage);
       assert.deepEqual(probe.entrypoint, toolImages.upstream.entrypoint);
       assert.equal(probe.name, `${coldApp.name}-probe`);
       assert.ok(time(probe.state.StartedAt) >= time(run.startedAt) && time(probe.state.StartedAt) <= time(coldApp.state.StartedAt), "cold probe outside run/before app start");
@@ -263,7 +271,7 @@ function replay({ folder, round, commit }) {
           covers(raw.upstream, time(run.startedAt));
         } else assert.equal(raw.upstream, null);
         const k6 = runtime(raw.load, s.tools.k6.imageId, "load", 2 * 2 ** 30);
-        assert.equal(k6.image, k6Image);
+        pinned(k6.image, k6Image);
         assert.deepEqual(k6.entrypoint, toolImages.k6.entrypoint);
         assert.equal(k6.name, `${s.runId}-k6`); assert.ok(!loadIds.has(k6.id), "load phase reused a k6 container"); loadIds.add(k6.id);
         assert.equal(k6.network, network.name); mounts(k6, [["/bench", benchMount]]);
@@ -276,7 +284,7 @@ function replay({ folder, round, commit }) {
         validateLocaleCounters(profile, k6Summary.metrics, clock.testRunDurationMs, seconds, k6.env);
         const rawCounters = files.json(`${base}/${phase}-cpu.json`);
         const counted = Object.fromEntries(Object.keys(raw.before).filter((n) => raw.after[n] !== undefined).map((n) => [n, { usec: raw.after[n] - raw.before[n] }]));
-        assert.deepEqual(rawCounters, counted, "saved CPU deltas differ from before/after counters");
+        same(rawCounters, counted, "saved CPU deltas differ from before/after counters");
         if (profile.source === "api") {
           assert.equal(raw.upstreamReads.before.status, 200); assert.equal(raw.upstreamReads.after.status, 200);
           assert.equal(upstreamErrors(raw.upstreamReads.before, raw.upstreamReads.after), 0);
@@ -302,54 +310,75 @@ function replay({ folder, round, commit }) {
           cpuObservations.push({ id: name === coldApp.name ? coldApp.id : upstream.id, start, end, before: raw.before[name], after: raw.after[name] });
         }
         const stop = phaseEnd({ ...raw.seen, errors: raw.seen.errors.map((e) => ({ ...e, error: new Error(e.error) })), summary: k6Summary });
+        let appTerminalAt = Infinity;
         if (stop) {
           assert.deepEqual(stop, run.stopped, "raw stop differs");
           const loadStart = time(k6.state.StartedAt), loadEnd = time(k6.state.FinishedAt);
-          if (!raw.app.state.Running) assert.ok(time(raw.app.state.FinishedAt) >= loadStart && time(raw.app.state.FinishedAt) <= loadEnd, "app stop is outside generator execution");
-          else assert.ok(raw.seen.events.some((e) => e.action === "oom" && e.ms >= loadStart && e.ms <= loadEnd), "app OOM is outside generator execution");
+          if (!raw.app.state.Running) {
+            const finished = raw.app.state.FinishedAt;
+            assert.ok(time(finished) >= loadStart && time(finished) <= loadEnd, "app stop is outside generator execution");
+            appTerminalAt = terminalSampleAt(finished);
+          } else assert.ok(raw.seen.events.some((e) => e.action === "oom" && e.ms >= loadStart && e.ms <= loadEnd), "app OOM is outside generator execution");
           assert.ok(raw.seen.events.every((e) => Number.isFinite(e.ms) && e.ms >= start && e.ms <= end), "Docker stop events are outside the phase window");
           const sidecars = [raw.cpu, ...(profile.source === "api" ? [raw.upstream] : [])];
           assert.deepEqual(raw.seen.sidecars, sidecars.map((c) => ({ name: c.name, startedAt: c.state.StartedAt, state: c.state })), "stop sidecar identities/state differ from runtime receipts");
-          break;
         }
-        const metrics = readOutcome(k6Summary);
-        if (phase !== "warmup") {
-          const counters = rawCounters; exactKeys(counters, participants);
-          const sampled = files.json(`${base}/${phase}-stats.log.json`); exactKeys(sampled.samples, participants); exactKeys(sampled.summary, participants);
+        const metrics = stop ? null : readOutcome(k6Summary);
+        if (participants.length) {
+          // Even an app stop needs the two artifacts that only a successful
+          // sampler stop writes together. It never needs full-phase coverage.
+          if (!stop) exactKeys(rawCounters, participants);
           const history = Object.fromEntries(participants.map((n) => [n, []]));
           const statsText = files.text(`${base}/${phase}-stats.log`);
           assert.ok(statsText.endsWith("\n"), "truncated stats log");
           for (const line of statsText.split("\n").map((s) => s.trim()).filter(Boolean)) {
-            const p = JSON.parse(line); assert.ok(Object.hasOwn(history, p.Name), "unexpected stats participant");
-            assert.match(p.CPUPerc, /^\d+(?:\.\d+)?%$/);
-            // Docker reports one logical CPU as 100%, rounded to two decimals.
-            // Samples can burst beyond quota; only the whole host is a bound.
-            const cpu = parseFloat(p.CPUPerc);
-            assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
-            assert.ok(history[p.Name].length < maxStatsSamples, "stats log exceeds sample bound");
-            const c = p.Name === coldApp.name ? raw.app : raw.upstream, parts = p.MemUsage.split("/");
-            assert.equal(parts.length, 2, "memory display missing its limit");
-            const usage = displayedMemory(parts[0]), limit = displayedMemory(parts[1]), expected = c.memoryBytes / 2 ** 20;
-            assert.ok(Math.abs(limit.mib - expected) <= limit.rounding + 1e-12, "memory display limit differs from container");
-            assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
-            history[p.Name].push({ cpu, mem: usage.mib });
+            const sample = parseStatsSample(line), { name } = sample;
+            assert.ok(Object.hasOwn(history, name), "unexpected stats participant");
+            assert.ok(history[name].length < maxStatsSamples, "stats log exceeds sample bound");
+            history[name].push(sample);
           }
+          let sampled;
+          try { sampled = files.json(`${base}/${phase}-stats.log.json`); }
+          catch (error) {
+            if (!(error instanceof SyntaxError)) throw error;
+            throw new Error("invalid Docker stats summary JSON");
+          }
+          exactKeys(sampled.samples, participants); exactKeys(sampled.summary, participants);
           const stats = {};
           for (const name of participants) {
             const samples = sampled.samples[name];
             assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= maxStatsSamples, "invalid/bounded stats history required");
-            assert.deepEqual(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name], "stats history differs from raw Docker samples");
+            same(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name].map(({ cpu, mem }) => ({ cpu, mem })), "stats history differs from raw Docker samples");
+            const appSample = name === coldApp.name;
+            const expected = (appSample ? raw.app : raw.upstream).memoryBytes / 2 ** 20;
             let last = start;
-            for (const p of samples) { assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && p.cpu >= 0 && p.mem > 0, "invalid stats clock/value"); last = p.t; }
-            assert.ok(samples.at(-1).t - samples[0].t >= Math.max(0, s.options.duration - 5) * 1000, "truncated stats coverage");
-            stats[name] = summarizeSamples(samples); assert.deepEqual(sampled.summary[name], stats[name], "stats aggregate differs from raw history");
-            const usec = raw.after[name] - raw.before[name]; assert.deepEqual(counters[name], { usec }, "CPU delta differs from raw counters");
-            stats[name].cpuUsec = usec;
+            for (const [i, p] of samples.entries()) {
+              assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end, "invalid stats clock/value");
+              const { cpu, mem, usage, limit } = history[name][i];
+              // Docker reports one logical CPU as 100%, rounded to two decimals.
+              // Samples can burst beyond quota; only the whole host is a bound.
+              assert.ok(cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
+              const terminalZero = appSample && p.t >= appTerminalAt && cpu === 0 && mem === 0;
+              assert.ok((terminalZero && limit.mib === 0) || Math.abs(limit.mib - expected) <= limit.rounding + 1e-12,
+                "memory display limit differs from container");
+              assert.ok(usage.mib <= expected + usage.rounding + 1e-12, "memory sample exceeds container limit");
+              assert.ok(terminalZero || mem > 0, "invalid stats clock/value");
+              last = p.t;
+            }
+            stats[name] = summarizeSamples(samples); same(sampled.summary[name], stats[name], "stats aggregate differs from raw history");
+            if (!stop) {
+              assert.ok(samples.at(-1).t - samples[0].t >= Math.max(0, s.options.duration - 5) * 1000, "truncated stats coverage");
+              const usec = raw.after[name] - raw.before[name]; same(rawCounters[name], { usec }, "CPU delta differs from raw counters");
+              stats[name].cpuUsec = usec;
+            }
           }
-          const up = profile.source === "api" ? { ...stats[upstream.name], highCpu: stats[upstream.name].cpuAvgPct >= 80, interpretation: upstreamInterpretation } : null;
-          Object.assign(metrics, stats[coldApp.name], { perCpuSecond: metrics.requests / (stats[coldApp.name].cpuUsec / 1e6), upstream: up });
+          if (metrics) {
+            const up = profile.source === "api" ? { ...stats[upstream.name], highCpu: stats[upstream.name].cpuAvgPct >= 80, interpretation: upstreamInterpretation } : null;
+            Object.assign(metrics, stats[coldApp.name], { perCpuSecond: metrics.requests / (stats[coldApp.name].cpuUsec / 1e6), upstream: up });
+          }
         }
-        assert.deepEqual(phase === "warmup" ? run.warmup : run.phases[phase], metrics, "summary metrics differ from raw k6/counters/history");
+        if (stop) break;
+        same(phase === "warmup" ? run.warmup : run.phases[phase], metrics, "summary metrics differ from raw k6/counters/history");
       }
     }
   }

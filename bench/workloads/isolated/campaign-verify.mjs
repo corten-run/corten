@@ -2,21 +2,21 @@
 // provider ownership, operator authorization or independent human attestation.
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, validateCampaign as validatePlan } from "./campaign-contract.mjs";
+import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, validateCampaign as validatePlan, verifyOfflineAuditStart } from "./campaign-contract.mjs";
 import { digest, inspectEvidence, phaseSnapshot, readRegular, supportedGroups, tree } from "./evidence.mjs";
 import { auditSubject, inspectPreparation, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { replayJournal } from "./campaign-journal.mjs";
+import { readCampaignJournal, replayJournal } from "./campaign-journal.mjs";
 import { executionGroups, inspectNative } from "./native-replay.mjs";
 import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { readLiveWorkloadEnd, verifyHostBoundary, verifyLifetimeSettledBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { verifyControlAdmission } from "./control-admission.mjs";
+import { verifyControlAdmission, verifyOfflineWindow } from "./control-admission.mjs";
 import { apparatusProof, nativeControlPartition, verifyStreamAudit, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
 
 export async function validateCampaign(input) {
@@ -40,7 +40,9 @@ export async function validateCampaign(input) {
     assert.equal(status.schema, "benchmark-isolated-campaign-status/v1");
     assert.equal(status.campaign, id); assert.equal(status.round, round); assert.equal(status.campaignSha256, plan.campaignSha256);
     assert.equal(status.controllerReady, false); assert.equal(status.isolation, "unverified");
-    const currentExecution = [2, 3, 4, 5].includes(status.executionVersion), mixedStaging = [3, 4, 5].includes(status.executionVersion), groups = currentExecution ? executionGroups : supportedGroups;
+    const offline = status.executionVersion === 6, currentExecution = [2, 3, 4, 5, 6].includes(status.executionVersion);
+    const mixedStaging = [3, 4, 5, 6].includes(status.executionVersion), groups = currentExecution ? executionGroups : supportedGroups;
+    if (offline) assert.ok(groupScoped && plan.order.length === 1, "offline handoff must be a single group");
     assert.ok(!groupScoped || mixedStaging, "group campaigns require current audit and host lifetime gates");
     assert.ok(["finished", "preserved-uncertain"].includes(status.state));
     assert.deepEqual(status.outcomes.map((r) => r.group), plan.order, "every fixed registry group must be retained once");
@@ -50,18 +52,10 @@ export async function validateCampaign(input) {
     for (const outcome of status.outcomes) {
       if (!groups.includes(outcome.group)) assert.equal(outcome.outcome, "not-run", "unimplemented group cannot be claimed executed/qualified");
     }
-    const subtree = tree(join(folder, id)), events = subtree.entries.filter((e) => /^\d{5}-[a-z-]+\.json$/.test(e.path));
-    assert.ok(events.length > 0, "durable campaign journal missing");
-    const journal = [];
-    for (const [sequence, entry] of events.entries()) {
-      const event = read(`${id}/${entry.path}`);
-      assert.equal(event.schema, "benchmark-isolated-campaign-event/v1"); assert.equal(event.sequence, sequence);
-      assert.equal(event.campaign, id); assert.equal(event.round, round); assert.equal(event.campaignSha256, plan.campaignSha256);
-      assert.equal(entry.path, `${String(sequence).padStart(5, "0")}-${event.kind}.json`);
-      journal.push(event);
-    }
+    const campaignRoot = join(folder, id), subtree = tree(campaignRoot);
+    const journal = readCampaignJournal(campaignRoot, plan, id, subtree.entries.map(({ path }) => path)).map(({ event }) => event);
     const replay = replayJournal(plan, id, journal, status);
-    let controlHost, apparatus, streamSeal, supervisedTerminal;
+    let controlHost, apparatus, streamSeal, supervisedTerminal, offlineTerminal, offlineBootstrap;
     for (const [epoch, event] of replay.controlAdmissions) {
       const bytes = readRegular(join(folder, id, event.path)); assert.equal(digest(bytes), event.sha256);
       const admission = JSON.parse(bytes);
@@ -73,6 +67,7 @@ export async function validateCampaign(input) {
         assert.equal(digest(delivery), admission.intent.sha256); assert.equal(delivery.length, admission.intent.bytes); continue;
       }
       verifyControlAdmission(event.binding, epoch, admission);
+      if (offline && epoch === "bootstrap") offlineBootstrap = admission;
       if (status.executionVersion === 5) { assert.equal(epoch, "bootstrap"); assert.ok(admission.apparatus); apparatus = admission.apparatus; }
       else assert.equal(admission.apparatus, undefined, "legacy execution cannot claim supervised apparatus");
       if (controlHost) assert.deepEqual(admission.host, controlHost);
@@ -91,7 +86,13 @@ export async function validateCampaign(input) {
       const initial = read(`${id}/host-initial.json`);
       for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
     }
-    const lastEvent = read(`${id}/${events.at(-1).path}`);
+    if (offline && replay.mixedReviewNeeded) verifyOfflineAuditStart(replay.mixedReviewNeeded.auditClock, offlineBootstrap);
+    if (offline && (status.state === "finished" || replay.offlineAuditExpired)) {
+      assert.ok(controlHost);
+      offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token,
+        bootstrapSealSha256: digest(JSON.stringify(offlineBootstrap.seal.ledger)) };
+    }
+    const lastEvent = journal.at(-1);
     assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");
     const collectionEntry = subtree.entries.find((e) => e.path === "collection-manifest.json");
     if (collectionEntry) {
@@ -101,22 +102,37 @@ export async function validateCampaign(input) {
       assert.ok(isDeepStrictEqual(collection.status, status), "collection status differs");
     } else assert.equal(status.state, "preserved-uncertain", "finished campaign needs a sealed collection manifest");
     const diagnostics = [], blockers = currentExecution ? [] : ["legacy three-group campaign is not all-nine execution"];
+    if (replay.offlineAuditExpired) {
+      assert.ok(collectionEntry && !replay.incomplete && !replay.pending.length);
+      assert.ok(!subtree.entries.some(({ path }) => /^(json|mixed)-(audit-delivery(?:-pending|-retained)?|native-audits)\.json$/.test(path)),
+        "audit publication may have started");
+      blockers.push("independent audit expired before timing");
+    }
+    const offlineIngress = [];
     const verifiedGroups = [];
     const phaseDirectories = subtree.entries.filter((e) => e.type === "directory" && /^\d{2}-[a-z-]+-(prepare|timing)$/.test(e.path));
     assert.deepEqual(phaseDirectories.map((e) => e.path).sort(), [...replay.phases.keys()].sort(), "native phases do not match journal");
     for (const recorded of replay.phases.values()) for (const path of recorded.logs)
       assert.ok(subtree.entries.some((e) => e.path === path && e.type === "file"), "command log missing");
     const manifests = new Map();
+    let offlinePreparation;
     for (const entry of phaseDirectories) {
       const index = Number(entry.path.slice(0, 2)), group = plan.order[index], phase = entry.path.endsWith("-prepare") ? "prepare" : "timing";
       assert.equal(entry.path, `${String(index).padStart(2, "0")}-${group}-${phase}`);
       assert.ok(groups.includes(group)); assert.ok(phase !== "prepare" || group === "json-api");
       const recorded = replay.phases.get(entry.path), hostObservations = [];
-      let hostBefore, boundary;
+      let hostBefore, boundary, ingress, workloadEnd;
       if (currentExecution && recorded.phaseManifestSha256 !== undefined) {
         assert.equal(phaseSnapshot(join(folder, id, entry.path), group === "json-api" && phase === "prepare").sha256,
           recorded.phaseManifestSha256, "phase host/native evidence differs from journal seal");
         hostBefore = read(`${id}/${entry.path}/host-before.json`);
+        if (offline) {
+          assert.equal(hostBefore.controlApparatus, undefined);
+          nativeControlPartition(recorded.binding);
+          ingress = verifyOfflineWindow(read(`${id}/${entry.path}/control-ingress.json`));
+          offlineIngress.push({ group, phase, ...ingress });
+          if (phase === "timing" && ingress.packets) blockers.push(`${group}/timing: denied pre-login probe traffic`);
+        }
         if (status.executionVersion === 5) {
           assert.deepEqual(hostBefore.controlApparatus?.registration, apparatus);
           const after = read(`${id}/${entry.path}/host-after.json`);
@@ -139,7 +155,7 @@ export async function validateCampaign(input) {
         }
         const observation = inspectLifetime(recorded.binding, recorded.invocations[commandIndex],
           join(folder, id, entry.path, `command-${result.number}-host`),
-          { campaign: id, command: result.number, pid: result.pid, result: commandResult(result) });
+          { campaign: id, command: result.number, pid: result.pid, result: commandResult(result), phase });
         assert.equal(observation.manifestSha256, result.hostManifestSha256, "host observations differ from journal seal");
         if (hostBefore) assert.equal(observation.context.bootId, hostBefore.bootId);
         if (advanced) {
@@ -150,22 +166,30 @@ export async function validateCampaign(input) {
         if (observation.status !== "verified") blockers.push(`${group}/${phase}: host observations incomplete`);
       }
       if (hostBefore) {
+        let after, settled;
+        const terminalClock = hostObservations.at(recorded.results.length - 1)?.terminalClock;
         try {
-          const after = read(`${id}/${entry.path}/host-after.json`);
+          after = read(`${id}/${entry.path}/host-after.json`);
+          if (offline) assert.equal(after.controlApparatus, undefined);
           const settlePath = `${entry.path}/host-after-settled.json`;
           if (subtree.entries.some((e) => e.path === settlePath)) {
-            const settlePolicy = status.executionVersion === 5 ? udevSettlePolicy(group, phase) : null;
-            const lifetime = hostObservations.at(recorded.results.length - 1);
-            assert.ok(settlePolicy && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
-              && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks an eligible sealed terminal lifetime");
-            const settled = read(`${id}/${settlePath}`);
+            assert.ok((status.executionVersion === 5 || offline) && recorded.results.length === recorded.invocations.length,
+              "udev settle lacks an eligible sealed terminal lifetime");
+            settled = read(`${id}/${settlePath}`);
+            if (offline) assert.equal(settled.controlApparatus, undefined);
             if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
-            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock, settlePolicy);
+            const invocation = recorded.invocations.at(-1), result = recorded.results.at(-1);
+            boundary = verifyLifetimeSettledBoundary({ binding: recorded.binding, invocation, round, phase,
+              lifetime: hostObservations.at(recorded.results.length - 1), before: hostBefore, after, settled, offline,
+              liveWorkloadEnd: () => (workloadEnd = readLiveWorkloadEnd({ binding: recorded.binding, invocation, round, phase, result,
+                folder: join(folder, id, entry.path, "native") })) });
           } else boundary = verifyHostBoundary(hostBefore, after);
         }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
-        if (status.executionVersion === 5 && phase === "prepare" && replay.reviewNeeded)
+        if ((status.executionVersion === 5 || offline) && phase === "prepare" && replay.reviewNeeded) {
           assert.ok(boundary && isDeepStrictEqual(replay.reviewNeeded.cleanup, boundary), "JSON preparation cleanup boundary differs");
+          if (offline) offlinePreparation = { before: hostBefore, after, settled, terminalClock };
+        }
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       const manifestEntry = subtree.entries.find((e) => e.path === `${entry.path}/native-manifest.json`);
@@ -190,13 +214,16 @@ export async function validateCampaign(input) {
       let report, invalid = false;
       if (currentExecution && phase === "timing") {
           const nativeResult = await inspectNative(binding, native);
+          if (workloadEnd && replay.completed.has(group)) assert.ok(
+            nativeResult.status === "verified" && nativeResult.cleanupComplete && nativeResult.resources === "verified",
+            "early udev settlement requires verified live workload evidence");
           const last = hostObservations[recorded.invocations.length - 1];
           const host = last ? composeHostProof(binding, nativeResult, last) : { resources: "blocked", cleanupComplete: false };
           const timingAudit = group === "json-api" ? validateTimingAudit(binding, native,
             read(`${id}/json-audit-subject.json`), read(`${id}/json-native-audits.json`), join(folder, id, "audit-sources")).complete
             : mixedStaging && group === "mixed-production" ? validateMixedRun(binding, native,
               read(`${id}/mixed-audit-subject.json`), read(`${id}/mixed-native-audits.json`)) : true;
-          const derived = composePhase(binding, nativeResult, host, recorded.results, timingAudit);
+          const derived = composePhase(binding, nativeResult, host, recorded.results, timingAudit, ingress?.packets);
           const savedOutcome = status.outcomes[index];
           if (replay.completed.has(group)) {
             for (const field of ["outcome", "nativeStatus", "appOutcomes", "report"]) assert.ok(isDeepStrictEqual(savedOutcome[field], derived[field]), "saved outcome differs");
@@ -231,6 +258,10 @@ export async function validateCampaign(input) {
       }
     }
     if (replay.reviewNeeded) {
+      if (offline) {
+        assert.ok(offlinePreparation, "offline audit preparation boundary missing");
+        verifyOfflineAuditStart(replay.reviewNeeded.auditClock, offlineBootstrap, offlinePreparation);
+      }
       const subject = read(`${id}/json-audit-subject.json`), sourceRoot = join(folder, id, "audit-sources");
       const sources = subject.sourcesManifest;
       assert.ok(isDeepStrictEqual(sources.snapshot, tree(sourceRoot)), "audit source snapshot differs");
@@ -299,7 +330,8 @@ export async function validateCampaign(input) {
     assert.ok(isDeepStrictEqual(tree(folder), snapshot), "saved campaign mutated during validation");
     const complete = currentExecution && status.state === "finished" && collectionEntry && !replay.incomplete && !replay.pending.length
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
-    const loadLayout = groupScoped ? plan.bindings[0].resources.requestedCpuEnv?.CATALOG_LOAD_LAYOUT : undefined;
+    const cpuEnv = groupScoped ? plan.bindings[0].resources.requestedCpuEnv : undefined;
+    const loadLayout = cpuEnv?.CATALOG_LOAD_LAYOUT ?? cpuEnv?.JSON_API_LOAD_LAYOUT;
     const mode = groupScoped ? plan.bindings[0].campaignMode : undefined;
     const placement = alternateCampaignPlacements.includes(mode) ? mode : undefined;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",
@@ -307,6 +339,9 @@ export async function validateCampaign(input) {
       ...(loadLayout ? { loadLayout } : {}),
       ...(placement ? { placement } : {}),
       ...(supervisedTerminal ? { supervisedTerminal } : {}),
+      ...(offlineTerminal ? { offlineTerminal } : {}),
+      ...(offline ? { offlineIngress } : {}),
+      ...(replay.offlineAuditExpired ? { offlineAuditExpired: replay.offlineAuditExpired } : {}),
       selection: currentExecution ? { schema: registrySchema, groups: plan.bindings.map((b) => ({ group: b.request.group,
         contractSha256: b.selection.contractSha256, apps: b.selection.apps })) } : undefined, groups: verifiedGroups, blockers,
       collectionIntegrity: collectionEntry && !replay.incomplete && replay.pending.length === 0 ? "manifest-verified" : "unsealed-partial",

@@ -21,6 +21,10 @@ export async function numberField(page) {
   check("Page Up adds ten steps, up to the maximum", (await qty.inputValue()) === "10" && (await qtyButtons.nth(1).isDisabled()));
   await page.keyboard.press("Home");
   check("Home goes to the minimum", (await qty.inputValue()) === "1");
+  await page.keyboard.press("End");
+  check("End goes to the maximum", (await qty.inputValue()) === "10" && (await qtyButtons.nth(1).isDisabled()), await qty.inputValue());
+  await page.keyboard.press("PageDown");
+  check("Page Down takes ten steps off, down to the minimum", (await qty.inputValue()) === "1" && (await qtyButtons.nth(0).isDisabled()), await qty.inputValue());
   const box = await qtyButtons.nth(1).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();

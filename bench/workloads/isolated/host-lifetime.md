@@ -24,10 +24,19 @@ failure (`executable-recheck-reference`) from a different device/inode
 (`executable-recheck-size-or-mtime`), and ctime-only change
 (`executable-recheck-ctime`). The labels retain no values and do not identify
 the process, prove an exec or exit, or show that bytes were unchanged. Each
-mismatch rejects the census. Only a catalog interval can establish an executable
-successor as described below. A failed closing procfs stat during a catalog
-rename is `executable-recheck-renamed`; otherwise it retains the
-`executable-recheck` operation and the existing process-read rules.
+mismatch rejects the census. Only a catalog interval or an interval of the exact
+native JSON API preparation command can establish an executable successor as
+described below. During a process rename in a catalog or exact native JSON API
+preparation census, a failed closing procfs stat is `executable-recheck-renamed`;
+otherwise it retains the `executable-recheck` operation and the existing
+process-read rules.
+
+An inline (unpinned) executable digest mismatch still reports
+`executable-recheck` and refuses the census. Its optional
+`executableRecheckReason` names the first differing lookup field class, in
+order: `device-or-inode`, `link` (legacy path only), or `metadata` (size/mtime/ctime).
+The label itself neither proves an exec nor admits a retry. Legacy receipts need
+not have it.
 
 If a catalog interval fails while reading the command's process census, its
 failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
@@ -59,6 +68,84 @@ Legacy terminal files without these diagnostics remain readable but cannot revea
 the cause of a swallowed exception. Successful samples describe only completed
 observations, not the failed attempt. Do not infer a specific exit race, permission
 failure, identity change or latency cause from a generic `host-observation-gap` alone.
+
+If a Docker participant snapshot fails, a sealed terminal record also includes
+`firstDockerGap`: the failed collector stage and an allowlisted error code, or
+`unknown`. It is absent without a gap. Only the first failure is described,
+including when a later sample is complete. The diagnostic keeps no error text,
+daemon output, commands, environment or values read from procfs. The existing
+sample still records the gap and notifies as before. A stage identifies a failed
+check, not the cause of the underlying failure. A `kernel-census` failure in one
+of the fixed census checks also names it (`operation`); an ancestor read or the
+root-PID check can fail there without one. A failure after startup rechecks
+records their `attempts`.
+
+A container's first process can rename itself or exec its entrypoint just after
+Docker reports it running (the Node image runs `docker-entrypoint.sh`, which execs
+`node`, whose main thread then renames itself). The collector rechecks only that
+churn: a changed process name between the opening and closing reads
+(`process-name-close`), or a changed executable inode in the container's census
+(`executable-recheck-inode`), on a container whose RFC 3339 Docker `StartedAt` is a real calendar time
+at most one second old. It takes the whole capture again, checking before each
+new attempt that 250 ms have not passed since the first began; the budget bounds
+when an attempt may start, and one started inside it runs to its end. A capture admitted
+after a recheck must have the same Docker start time, PID and kernel start time as
+the failed one, checked before its executables are pinned; a mismatch is a gap at
+`startup-recheck` and leaves no executable proof. Any other failure, an older,
+unreadable or impossible start time, or churn still there when the budget leaves no
+new attempt remains a gap and
+notifies `onFault` as before. A changed name inside the census
+(`process-name-recheck`) is not part of this recheck: the census retries it itself,
+for every participant, within its own deadline. A sealed terminal record counts admitted rechecks in
+`dockerStartupRechecks` (count and the first stage, code and attempts). The count
+is of captures, including those in a sample the collector later rejects for another
+reason, so it can exceed the retained Docker participant captures.
+
+Separately, if the opening `/proc/PID/stat` read returns `ENOENT` after a
+running inspect, an exact-ID re-observation can record the container as stopped.
+It must show the same image, start and restart generation, PID zero and an
+`exited` or `removing` state with a valid finish time in that capture. The
+stopped row has no kernel evidence. Only an unchanged, coherent running response
+allows one pause and one final exact-ID inspect. The pause targets 70 ms from
+the start of capture; the final inspect must start before 75 ms on the monotonic
+clock. Failed confirmation retains the original gap; later proc reads and
+startup retries do not use this path.
+
+The same bounded exact-ID check can start after a successful opening stat if
+the complete, stable cgroup census is empty on the first attempt and every
+observed cgroup's `cgroup.events` has a single `populated 0` row. Its first
+inspect must start before 75 ms too. Missing or contradictory population evidence,
+a census containing another process but not the entry PID, and an empty retry
+after a failed census all leave a gap.
+
+If the first census attempt's opening directory lookup reports `ENOENT`
+for the container's exact cgroup after the opening PID and membership
+reads, the same exact-ID check can confirm its stopped generation. A miss
+on a closing lookup or after retrying a failed census cannot confirm the
+stop. A second directory lookup must show the
+scope is still absent before the existing 75 ms bound. Its ancestor
+directories must still match the opening device and inode on both sides
+of the lookup. A missing ancestor or nested cgroup, a failed lookup, or
+a scope that still exists leaves the original gap.
+
+The closing Docker inspect can itself prove the same stopped transition after
+the kernel checks. The collector then discards the incomplete kernel census and
+its new executable pins, recording only the stopped row. There is no additional
+inspect. An absent participant, an unproved finish, or a changed generation is
+still a gap.
+
+Replay counts only verified kernel records as live coverage. An `exited` or
+`removing` row must have a finish between the end of the last verified running
+capture and the end of its own capture. Stopped rows for the same container
+generation must agree on finish, exit code and OOM status, even if the terminal
+receipt still showed it running. Stopped rows do not extend live coverage.
+An exited terminal receipt must also have a valid finish no earlier than the
+last verified running capture, even without a stopped row. Fullstack Browser
+bounds it by its post-inspect timestamp (`window.endedAt`). Live Delivery records
+its window end before the inspect, so that boundary does not constrain the
+receipt's finish. Docker timestamps retain nanoseconds,
+but comparisons to observation or receipt clocks truncate to milliseconds.
+A finish in the last millisecond of a bound is admitted.
 
 ## Fault Shutdown
 
@@ -97,9 +184,10 @@ It can recover only through a new complete snapshot. A still-listed PID whose
 executable remains unreadable exhausts the budget and blocks proof. Permission,
 I/O, non-process read failures and PID/start-tick changes still fail immediately.
 
-A catalog child can replace its image via exec between the two executable
-reads. A different device/inode at the closing read alone is not enough to
-retry. The immediately preceding admitted sample must bind the same PID,
+A child of a catalog command or the native JSON API preparation command can
+replace its image via exec between the two executable reads. A different device/inode
+at the closing read alone is not enough to retry. The immediately preceding
+admitted sample must bind the same PID,
 start ticks and cgroup to the opening executable, or bind its parent as
 described below. The pinned descriptor must still match every identity field.
 Discard the entire failed attempt.
@@ -119,6 +207,29 @@ same child on the expected new image, still naming that parent at both reads.
 This uses the parent's already-admitted descriptor and digest; the failed
 census adds no accounting or process records. Matching an unrelated process's
 image is not sufficient.
+
+The exact native JSON API timing invocation keeps inline digests, not pinned
+artifacts. Each executable bookend opens the live procfs image, binds its bytes
+and nano-resolution file identity to that descriptor, and checks that the procfs
+path still matches. The opening descriptor remains open through the closing
+bookend. An incoherent lookup cannot populate the admitted digest cache.
+Only an interval with a changed inode **and** digest, unchanged process name
+between those bookends, and an immediately preceding admitted image or parent
+can try the same single fresh census. Both candidate images are hashed from their
+own descriptors, and the fresh census independently opens and hashes the exact
+successor and any parent anchor. When the retry deadline expires, no new
+descriptor read starts; an in-flight read cannot qualify a late sample. Both
+process and directory membership are read afresh. No digest or accounting row
+from the rejected census is published. The
+temporary descriptors close before the sample is written. Fixture generation
+and other unpinned invocations keep their existing observer.
+
+Replay still checks the ordinary inline digest records and sample membership,
+continuity and accounting. It can read different accepted digests for the same
+PID and start ticks across samples; it does not reconstruct the failed census
+or certify a transition between samples. This repair does not introduce a new
+receipt, change qualification, or detect an image change invisible to the
+bookends.
 
 Unseen old images, same-inode metadata changes and unproven successors remain
 blocked. This is sampled image replacement, not a trace of exec syscalls or
@@ -152,7 +263,8 @@ native runner failure or the cause of an exception-free accounting gap.
 
 ## Catalog Build Startup
 
-Catalog commands use the same pinned executable descriptors as browser commands.
+Catalog commands and the native JSON API preparation command use the same pinned
+executable descriptors as browser commands.
 The sampler still reads each member's PID, start ticks, name, cgroup and executable
 bookends, with both recursive membership censuses. It seals the exact executable
 bytes after the final resource sample, using the existing bounded helper. Catalog
@@ -190,14 +302,21 @@ appending a sample that references it. Samples are never written ahead of their
 record dependencies, even when the kernel flushes un-fsynced appends on its own.
 There is no helper process, worker, custom message protocol or production I/O hook.
 
-The sampler retains its actual capture timestamps, 100 ms interval and independent
-one-second replay limit. It can capture ahead of storage without retimestamping
+The sampler retains its actual capture timestamps, 100 ms target interval and
+independent one-second replay limit. The Fullstack Browser sampler waits at
+least 50 ms after each periodic Docker census before the next one, letting the
+writer run when a synchronous census takes most or all of the interval. The
+one-second observation limit, including capture, is unchanged. The sampler can
+capture ahead of storage without retimestamping
 rows at completion. The combined 256 MiB record/sample limit includes admitted but
-unfinished bytes. Additional queue limits are 8 MiB, 64 frames and 4,096 initial
-records, including the one in-flight frame. Overflow fails rather than waiting on
-the sampler, dropping a member or growing an unbounded queue. Storage uses at most
-two evidence FDs: the sample file and one record or directory. Queue payload and
-V8 heap limits are not claims about total process memory.
+unfinished bytes. Additional queue limits are 8 MiB, 300 frames (30 seconds at
+100 ms) and 4,096 initial records. The writer may append up to 16 already-queued
+sample-only frames together, up to 256 KiB in a batch, without waiting to fill it.
+Each in-flight frame keeps its queue credits until the append settles. Overflow
+fails rather than waiting on the sampler, dropping a member or growing an
+unbounded queue. Storage uses at most two evidence FDs: the sample file and one
+record or directory. Queue payload and V8 heap limits are not claims about total
+process memory.
 
 `beginLifetime`, `attach` and `finish` are awaited. Attachment starts periodic
 capture before waiting for its initial record writes, keeping the native bootstrap
@@ -216,11 +335,26 @@ returned observer is disposed without a terminal seal, and pending filesystem I/
 retains its FIFO ownership until it actually returns. Completed attachment releases
 the startup-only listeners, preserving normal drained-cancellation collection.
 
-Storage errors and the existing 30-second startup/frame/drain deadlines are sticky.
+Storage errors and the 30-second startup, append and drain deadlines are sticky.
 A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retains
 ownership until the operation returns and cleanup is attempted; partial files and
 an unproven scope remain retained, with no terminal seal or cleanup claim. Neither
 an empty cgroup nor an eventual successful fsync clears a prior storage failure.
+`halted` events retain `hostStorageFailure` for known FIFO faults, including
+during startup: the first writer operation, its allowlisted code (or
+`unknown`), and, only for a quota refusal, the first exceeded limit
+(`total-bytes`, `queued-bytes`, `queued-frames` or `queued-records`).
+A timed-out wait identifies the active writer stage if one is known. Record,
+directory and final sample closes are distinct from sync. Startup retains the
+writer's first fault even if cleanup later fails. When the supervisor reports
+its setup deadline as the first interruption of a pending writer, the halt can
+name the stage without waiting for I/O. When attachment is still draining, the
+campaign journals the supervisor outcome without finishing the disposed observer.
+An earlier leader exit or ordinary cancellation is not a writer deadline.
+These labels do not contain exception text, paths or process details. A frame
+limit reports a full queue, not why the writer fell behind. No terminal seal
+is published on this path.
+
 Fully observed and flushed cancelled/forced evidence retains the old contract:
 it can be collected as explicitly nonqualifying evidence, never a clean success.
 A new abort during finish cannot seal an earlier contradictorily clean result.
@@ -274,6 +408,12 @@ The delegated Linux tests use real child PIDs and cgroups. Fault-injection cases
 both a real shell exec at the catalog closing read and a chmod of the same
 running inode, without substituting procfs stat results. The former requires
 both image digests in replay; the latter must not seal the mutated descriptor.
+The exact JSON API timing binding (without launching the benchmark) also tests
+a same-name exec between unpinned bookends and an unchanged child. The exec
+must verify through one fresh census, with both inline digests replayable and
+no executable-proof sidecar; the unchanged child takes no retry. Synthetic
+controls refuse missing or wrong images, changed process or parent identity,
+changed cgroup, split opens, ambiguous changes and exhausted deadlines.
 Other cases exercise
 repeated interval errors, deadline exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure

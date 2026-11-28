@@ -2,7 +2,7 @@
 // Run only inside an explicitly prepared owned delegated test unit. This test
 // never creates/configures a unit, changes limits or adopts an existing cgroup.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -12,11 +12,116 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { beginLifetime, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
+import { setTimeout as delay } from "node:timers/promises";
+import { beginLifetime, captureBrowserParticipant, containerState, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
 import { executableIdentity } from "./participant-executables.mjs";
 import { supervise } from "./process.mjs";
 let unit;
 if (process.platform === "linux") unit = /\/corten-bench-groups-(r[1-9]\d*)-[a-f0-9]{16}\.service\/supervisor\n?$/.exec(readFileSync("/proc/self/cgroup", "utf8"));
+
+// Experimental and explicit: the driver supplies a second fixture to stop, not
+// the container the later native participant and private-namespace checks need.
+if (process.env.BROWSER_EXIT_FIXTURE_ID !== undefined) test("actual Docker exit after the exact participant cgroup disappears", {
+  timeout: 15000,
+}, async (t) => {
+  assert.ok(unit, "Docker exit control requires a delegated Linux test unit");
+  const id = process.env.BROWSER_EXIT_FIXTURE_ID, task = process.env.BROWSER_EXIT_FIXTURE_TASK;
+  const gate = process.env.BROWSER_EXIT_FIXTURE_GATE;
+  assert.match(id, /^[a-f0-9]{64}$/);
+  assert.match(task, /^corten-evidence-kernel-[a-f0-9]{16}-exit$/);
+  assert.match(gate, /^\/tmp\/tmp\.[^/]+\/docker-exit$/);
+  assert.equal(fs.realpathSync(gate), gate);
+  const inspect = () => {
+    const [info, ...extra] = JSON.parse(execFileSync("docker", ["--host", "unix:///var/run/docker.sock", "container", "inspect", id], {
+      encoding: "utf8", timeout: 3000, killSignal: "SIGKILL", maxBuffer: 128 * 1024, stdio: ["ignore", "pipe", "ignore"],
+    }));
+    assert.equal(extra.length, 0); assert.equal(info?.Id, id);
+    assert.equal(info.Config.Labels["agent.owner"], "codex");
+    assert.equal(info.Config.Labels["agent.task"], task);
+    assert.ok(info.Mounts.some((m) => m.Type === "bind" && m.Source === gate && m.Destination === "/corten-docker-exit"));
+    return containerState(info);
+  };
+  const running = inspect();
+  assert.equal(running.state.Status, "running");
+  const { O_RDWR, O_NONBLOCK, O_NOFOLLOW } = fs.constants;
+  const pipe = fs.openSync(join(gate, "exit"), O_RDWR | O_NONBLOCK | O_NOFOLLOW);
+  try {
+    assert.ok(fs.fstatSync(pipe).isFIFO());
+    // Startup is outside the observer's budget. The container creates ready
+    // only after it has opened the pipe and is about to read the exit byte.
+    const readyBy = performance.now() + 5000;
+    while (!fs.lstatSync(join(gate, "ready"), { throwIfNoEntry: false })?.isFile()) {
+      assert.ok(performance.now() < readyBy, "Docker exit fixture did not arm its gate");
+      await delay(10);
+    }
+    const live = captureBrowserParticipant(id);
+    assert.ok(live.kernel, "the opening control must capture the actual running cgroup");
+    assert.deepEqual(live.container, running);
+    const pid = running.state.Pid, at = `/proc/${pid}`, scope = "/sys/fs/cgroup" + live.kernel.cgroup.trim().slice(3);
+    const openingIdentity = processIdentity(live.kernel.stat);
+    const budgetMs = 75, pause = new Int32Array(new SharedArrayBuffer(4)), exitByte = Buffer.from("x");
+    const originalRead = fs.readFileSync, originalStat = fs.lstatSync;
+    let began, releasedAt, missingAt, finishedAt, sawStat = false, sawMembership = false;
+    const remaining = () => budgetMs - (performance.now() - began);
+    const read = t.mock.method(fs, "readFileSync", function (file, ...args) {
+      const actual = originalRead.call(this, file, ...args);
+      if (file === `${at}/stat`) {
+        const identity = processIdentity(actual);
+        sawStat = identity.pid === pid && identity.startTicks === openingIdentity.startTicks;
+      }
+      if (file === `${at}/cgroup`) sawMembership = actual === live.kernel.cgroup;
+      return actual;
+    });
+    const stat = t.mock.method(fs, "lstatSync", function (file, ...args) {
+      if (file !== scope || releasedAt !== undefined) return originalStat.call(this, file, ...args);
+      assert.equal(args.length, 0, "expected the opening exact leaf lookup");
+      assert.ok(sawStat && sawMembership, "exit was requested before the real opening reads");
+      assert.ok(originalStat.call(this, file, ...args).isDirectory(), "the original scope was not live at handoff");
+      assert.ok(remaining() > 0, "75 ms budget expired before the exit gate");
+      releasedAt = performance.now();
+      assert.equal(fs.writeSync(pipe, exitByte), exitByte.length);
+      for (;;) {
+        assert.ok(remaining() > 0, "75 ms budget expired waiting for Docker to remove the cgroup");
+        try { originalStat.call(this, file, ...args); }
+        catch (error) {
+          if (error.code === "ENOENT" && error.path === scope) missingAt = performance.now();
+          throw error; // Pass through the real failing syscall, not a fabricated ENOENT.
+        }
+        const left = remaining();
+        if (left > 0) Atomics.wait(pause, 0, 0, Math.min(1, left));
+      }
+    });
+    syncBuiltinESMExports();
+    let stopped;
+    try {
+      began = performance.now();
+      try { stopped = captureBrowserParticipant(id); }
+      catch (error) {
+        if (remaining() <= 0) throw new Error("75 ms budget expired before the real exit proof completed", { cause: error });
+        throw error;
+      }
+      finishedAt = performance.now();
+      assert.ok(finishedAt - began < budgetMs, "real exit proof completed outside the 75 ms budget");
+    } finally {
+      finishedAt ??= performance.now();
+      stat.mock.restore(); read.mock.restore(); syncBuiltinESMExports();
+      const elapsed = (at) => at === undefined ? "not reached" : `${(at - began).toFixed(2)} ms`;
+      t.diagnostic(`real capture: gate ${elapsed(releasedAt)}, cgroup ENOENT ${elapsed(missingAt)}, completed ${elapsed(finishedAt)}`);
+    }
+    assert.ok(releasedAt !== undefined && missingAt !== undefined, "no actual cgroup disappearance was observed");
+    assert.equal(stopped.kernel, null);
+    assert.equal(stopped.container.id, id);
+    assert.equal(stopped.container.imageId, running.imageId);
+    assert.equal(stopped.container.restartCount, running.restartCount);
+    assert.equal(stopped.container.state.StartedAt, running.state.StartedAt);
+    assert.equal(stopped.container.state.Status, "exited");
+    assert.equal(stopped.container.state.Pid, 0);
+    assert.equal(stopped.container.state.ExitCode, 0);
+    assert.deepEqual(stopped.container, inspect());
+    assert.equal(fs.lstatSync(scope, { throwIfNoEntry: false }), undefined);
+  } finally { fs.closeSync(pipe); }
+});
+
 for (const change of ["exec", "exec with rename", "chmod"]) test(`catalog executable bookends around real ${change}`, {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
 }, async (t) => {
@@ -104,6 +209,85 @@ for (const change of ["exec", "exec with rename", "chmod"]) test(`catalog execut
     await closed;
     if (!finished) observer?.dispose();
     fs.closeSync(pin);
+    assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); rmSync(temporary, { recursive: true });
+  }
+});
+
+for (const replace of [false, true]) test(`JSON API timing unpinned bookends: ${replace ? "same-name exec" : "unchanged"}`, {
+  skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
+}, async (t) => {
+  const { campaignRounds, jsonTimingInvocation } = await import("../registry.mjs");
+  const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-json-exec-")), directory = join(temporary, "command-host");
+  const old = join(temporary, "same"), next = join(temporary, "next", "same");
+  const campaign = `${unit[1]}-000000000000000a`, round = campaignRounds(unit[1])["json-api"], command = 8;
+  const invocation = jsonTimingInvocation(round, "/unused/audits.json");
+  const binding = { request: { group: "json-api", round, commit: "a".repeat(40) }, execution: { invocation } };
+  let child, closed, observer, finished = false, tick, faults = 0;
+  try {
+    fs.mkdirSync(join(temporary, "next"));
+    fs.copyFileSync("/bin/bash", old); fs.chmodSync(old, 0o500);
+    fs.copyFileSync("/bin/cat", next); fs.chmodSync(next, 0o500);
+    // Only the collector's binding is the timing invocation; no benchmark runs.
+    child = spawn(old, ["--noprofile", "--norc", "-c", 'echo ready; read -r line || exit 0; exec "$1"', "same", next],
+      { stdio: ["pipe", "pipe", "inherit"], timeout: 8000, killSignal: "SIGKILL" });
+    closed = once(child, "close");
+    const [ready] = await Promise.race([once(child.stdout, "data"), closed]);
+    assert.equal(String(ready), "ready\n");
+    const pid = child.pid, at = `/proc/${pid}`, exe = `${at}/exe`;
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    t.mock.method(globalThis, "setInterval", (cb) => { tick = cb; return 1; });
+    observer = await beginLifetime({ campaign, binding, invocation, directory, command, pid, onFault() { faults++; } });
+    await observer.attach(pid);
+    const before = processIdentity(readFileSync(`${at}/stat`, "utf8")), cgroup = readFileSync(`${at}/cgroup`, "utf8");
+    assert.equal(fs.readlinkSync(exe) === old, true, "opening image differs");
+    const digest = () => createHash("sha256").update(readFileSync(exe)).digest("hex");
+    const opening = digest(), original = fs.readFileSync;
+    let bookends = 0, reachedSuccessor = false;
+    // The exact cmdline read follows the opening digest and precedes both
+    // closing bookends. Coordinate the real exec without replacing any reads.
+    const hook = t.mock.method(fs, "readFileSync", function (path, ...args) {
+      if (path === `${at}/cmdline` && ++bookends === 1 && replace) {
+        child.stdin.write("go\n");
+        const deadline = performance.now() + 250;
+        do {
+          reachedSuccessor = fs.readlinkSync(exe) === next;
+          if (reachedSuccessor) break;
+          Atomics.wait(pause, 0, 0, 1);
+        } while (performance.now() < deadline);
+      }
+      return original.call(this, path, ...args);
+    });
+    syncBuiltinESMExports();
+    try { tick(); } finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(bookends, replace ? 2 : 1, "an exec gets exactly one fresh census");
+    assert.equal(reachedSuccessor, replace, "owned child did not exec within the fixture deadline");
+    assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), before);
+    assert.equal(readFileSync(`${at}/cgroup`, "utf8") === cgroup, true, "child changed cgroups");
+    assert.equal(digest() !== opening, replace);
+    await observer.drain();
+    child.stdin.end(); const [code, signal] = await closed;
+    assert.deepEqual([code, signal], [0, null]);
+    const result = { terminal: true, code, signal, cancelled: false, forced: false, success: true, error: null };
+    await observer.finish(result); finished = true;
+    const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    assert.equal(existsSync(join(directory, "executables.json")), false, "control must use the unpinned path");
+    assert.equal(faults, 0);
+    assert.equal(terminal.empty, true);
+    assert.equal(terminal.observerError, null);
+    assert.equal(terminal.observerFailures.count, 0);
+    const proof = inspectLifetime(binding, invocation, directory, { campaign, command, pid, result });
+    assert.equal(proof.status, "verified");
+    const closing = createHash("sha256").update(readFileSync(next)).digest("hex");
+    assert.deepEqual(proof.samples.map((sample) => sample.processes.map((row) => {
+      assert.deepEqual(processIdentity(row.stat), before);
+      assert.equal(row.cgroup === cgroup, true);
+      assert.equal(Object.hasOwn(row, "executableRef"), false);
+      return row.executableSha256;
+    })), [[], [opening], [replace ? closing : opening], []]);
+  } finally {
+    if (!finished) observer?.dispose();
+    if (child?.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    if (closed) await closed;
     assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); rmSync(temporary, { recursive: true });
   }
 });
@@ -495,7 +679,9 @@ for (const scenario of [
           }
           if (path === `/proc/${first}/cmdline`) {
             attempt.cmdlines.set(first, (attempt.cmdlines.get(first) ?? 0) + 1);
-            return Buffer.from(`--type=${number === 1 ? "utility" : "renderer"}\0`);
+            if (number === 1) return Buffer.from("--type=utility\0");
+            // Chromium's renderer rewrites argv as one title followed by NUL padding.
+            return Buffer.from(`${fs.readlinkSync(`/proc/${first}/exe`)} --type=renderer --lang=en-US\0\0`);
           }
           const value = original.call(this, path, ...args);
           if (path === `${scope}/cpu.stat`) capture.cpu.push(value);

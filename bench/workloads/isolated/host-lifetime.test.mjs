@@ -8,13 +8,41 @@ import { tmpdir } from "node:os";
 import { join, posix, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { deploymentSha256 } from "../deployments.mjs";
-import { definition } from "../registry.mjs";
+import { campaignRounds, definition, groupNames, nativeArtifactRoot, runnerFor, selectedApps } from "../registry.mjs";
 import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
-import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
+import { composeHostProof, inspectLifetime, processIdentity, processRole, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
 import { executableIdentity, executableReference, hashExecutableDescriptor, participantExecutables } from "./participant-executables.mjs";
-import { jsonPhase } from "./campaign-contract.mjs";
+import { jsonPhase, mixedPhase, productionRecipes } from "./campaign-contract.mjs";
+import { clientComparisonRecipe, nativeExecution } from "./contract.mjs";
+import { composePhase } from "./composition.mjs";
+import { terminalClockPolicy } from "./host-observation.mjs";
+import { clientActorCpus, hardeningActorCpus, hardeningCpuGate, liveActorCpus, liveApplication } from "./native-roles.mjs";
+import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
+import { budgets } from "../../hardening/plan.mjs";
+import { comparisonProfile } from "../../client-heavy/contract.mjs";
 import { reserveCompilerTarget, withCompilerTarget } from "../../client-heavy/compiler.mjs";
+
+test("renderer role accepts Chromium's Linux process title without matching arbitrary embedded switches", () => {
+  const exe = "/pinned chrome/chrome-headless-shell";
+  let links = 0;
+  const getExe = () => { links++; return exe; };
+  assert.equal(processRole(`${exe}\0--type=renderer\0`, getExe), "--type=renderer");
+  assert.equal(processRole(`${exe}\0--type=utility\0`, getExe), "--type=utility");
+  assert.equal(links, 0);
+  assert.equal(processRole(`${exe} --type=renderer --lang=en\0\0`, getExe), "--type=renderer");
+  assert.equal(links, 1);
+  for (const text of [
+    `${exe}\0--flags=foo --type=renderer\0`,
+    `${exe} --flags=foo --type=renderer\0`,
+    `${exe} --type=renderer-extra\0`,
+    `${exe} --type=renderer\0--lang=en\0`,
+    `${exe} --type=renderer`,
+    `${exe}-foreign --type=renderer\0`,
+    `${exe} --type=renderer\t--lang=en\0`,
+  ]) assert.equal(processRole(text, getExe), null);
+  assert.equal(processRole(`${exe} --type=renderer\0`, () => `${exe} (deleted)`), null);
+});
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
 const binding = { request: { group: "client-heavy", round: "w17", commit: "a".repeat(40) }, resources: { app: null } };
@@ -131,11 +159,12 @@ test("sealed deferred executable records replay without rewriting sample timesta
   assert.throws(f.replay);
   rmSync(path); assert.throws(f.replay, { code: "ERR_ASSERTION" });
 });
-function fixture(t, change = () => {}, bound = binding, invoke = invocation, runResult = result) {
+function fixture(t, change = () => {}, bound = binding, invoke = invocation, runResult = result, phase, id = campaign) {
   const directory = mkdtempSync(join(tmpdir(), "isolated-host-replay-"));
   t.after(() => { assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep)); rmSync(directory, { recursive: true }); });
+  const parent = `/system.slice/corten-bench-groups-${id}.service`, path = `${parent}/native-${command}-0123456789abcdef`;
   const ancestors = []; for (let p = parent; ; p = posix.dirname(p)) { ancestors.push(group(p)); if (p === "/") break; }
-  const context = { schema: "benchmark-isolated-host-lifetime/v1", campaign, command, leaderPid: pid, parent, path,
+  const context = { schema: "benchmark-isolated-host-lifetime/v1", campaign: id, command, leaderPid: pid, parent, path,
     ...bound.request, bindingSha256: deploymentSha256(bound), invocation: invoke, bootId: "boot", ancestors };
   const processes = [[100, "node", "a", null], [101, "rustc", "c", null], [102, "chrome", "b", "--type=renderer"]]
     .map(([pid, name, hash, type]) => ({ stat: stat(pid, name), cgroup: `0::${path}\n`, executableSha256: hash.repeat(64), type }));
@@ -146,7 +175,7 @@ function fixture(t, change = () => {}, bound = binding, invoke = invocation, run
   writeFileSync(join(directory, "binding.json"), JSON.stringify(context));
   writeFileSync(join(directory, "samples.jsonl"), samples.map((s) => JSON.stringify(s) + "\n").join(""));
   writeFileSync(join(directory, "terminal.json"), JSON.stringify(terminal));
-  return { directory, observation: () => inspectLifetime(bound, invoke, directory, { campaign, command, pid, result: runResult }) };
+  return { directory, observation: () => inspectLifetime(bound, invoke, directory, { campaign: id, command, pid, result: runResult, phase }) };
 }
 
 function browserFixture(t, selectedApp = "app", isolated = false, workload = "fullstack-browser") {
@@ -158,7 +187,7 @@ function browserFixture(t, selectedApp = "app", isolated = false, workload = "fu
   });
   const id = "f".repeat(64), imageId = `sha256:${"e".repeat(64)}`, dockerPath = `/system.slice/docker-${id}.scope`;
   const state = { Status: "running", Pid: 300, Running: true, Paused: false, Restarting: false, OOMKilled: false,
-    Dead: false, ExitCode: 0, StartedAt: "2026-11-14T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
+    Dead: false, ExitCode: 0, StartedAt: new Date(10).toISOString(), FinishedAt: "0001-01-01T00:00:00Z" };
   const participant = { id, role: "application", app: "app", case: "case", imageId, window: { startedAt: 20, endedAt: 70 },
     terminal: { id, imageId, restartCount: 0, state: structuredClone(state), limits: { NanoCpus: 1e9, Memory: 2 ** 30, CpusetCpus: "" } } };
   const g = group(dockerPath, [300]); g.files["cpu.max"] = "100000 100000\n"; g.files["memory.max"] = `${2 ** 30}\n`;
@@ -312,11 +341,16 @@ for (const [role, id, allowed, escaped] of [
   if (role === "browser") assert.equal(replayBrowser(f).checks.accounting, false);
 });
 
-function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true } = {}) {
-  const f = browserFixture(t, "corten"), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
+function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true, workload = "fullstack-browser",
+  finishedAt = new Date(3650).toISOString() } = {}) {
+  const live = workload === "live-delivery";
+  const f = browserFixture(t, "corten", live, workload), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
   f.observation.samples = Array.from({ length: 41 }, (_, i) => {
     const at = i * 100, sample = structuredClone(template); sample.at = at;
-    if (i === 0 || i === 40) { sample.groups = [group(path)]; sample.processes = []; }
+    if (i === 0 || i === 40) {
+      sample.groups = [group(path)]; sample.processes = [];
+      if (live) sample.groups[0].files["cpuset.cpus.effective"] = "4-7\n";
+    }
     if (i < 2 || i > 38) sample.docker = { inventory: [], participants: [], gaps: [] };
     else {
       const r = sample.docker.participants[0]; r.startedAt = at + 1; r.endedAt = at + 3; r.kernel.at = at + 2;
@@ -327,12 +361,12 @@ function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbse
   const running = structuredClone(p.terminal.state), neverStarted = { ...running, Status: "created", Running: false, Pid: 0,
     StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
   const terminal = exited ? { ...running, Status: "exited", Running: false, Pid: 0, ExitCode: 1,
-    FinishedAt: "2026-11-14T00:00:04Z" } : running;
+    FinishedAt: finishedAt } : running;
   const task = "browser-abcdef", caseKey = definition("fullstack-browser").cases[0].key;
   const image = { Id: p.imageId, Config: { Entrypoint: ["node"], Cmd: ["server.mjs"] } };
   const info = { Id: p.id, Name: "/native-case", Image: p.imageId,
     Config: { ...image.Config, Env: ["MARKETPLACE_SOURCE=fixture"], Labels: { "agent.owner": "codex", "agent.task": task } },
-    RestartCount: 0, State: neverStarted, HostConfig: { NanoCpus: 1e9, CpuQuota: 0, CpuPeriod: 0, CpusetCpus: "",
+    RestartCount: 0, State: neverStarted, HostConfig: { NanoCpus: 1e9, CpuQuota: 0, CpuPeriod: 0, CpusetCpus: live ? "1" : "",
       Memory: 2 ** 30, MemorySwap: 2 ** 31, ShmSize: 64 * 2 ** 20, PidsLimit: null, NetworkMode: "bridge" }, Mounts: [] };
   const snapshot = (state) => participantSnapshot({ ...info, State: state }, image);
   const identity = { event: "participant", role: "application", app: "corten", case: caseKey };
@@ -347,7 +381,7 @@ function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbse
     ...["container", "network", "image", "volume"].map((kind) => ({ event: "inventory", at: 3870, kind, scope: "owned", code: 0, ids: [] })),
   ].map((e, seq) => ({ ...e, seq }));
   const replay = replayExecution({ json: () => ({ schema: "native-browser-execution/v2", task,
-    commit: f.bound.request.commit, startedAt: 100, endedAt: 3900, events }) }, null);
+    commit: f.bound.request.commit, startedAt: 100, endedAt: 3900, events }) }, null, { isolated: live });
   assert.deepEqual(replay.blocked, []); assert.equal(replay.cleanupComplete, true);
   assert.deepEqual(replay.participants[0].window, { startedAt: 200, endedAt: 3800 });
   Object.assign(f.native.hostSubject, { participants: replay.participants, processWindows: replay.processWindows,
@@ -359,6 +393,97 @@ function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbse
     const r = sample.docker.participants[0]; r.kernel = null; r.container.state = structuredClone(terminal);
   }
   return f;
+}
+
+function setStoppedRows(f, status, finishedAt, from = 3700) {
+  const [{ terminal }] = f.native.hostSubject.participants;
+  terminal.state.FinishedAt = finishedAt;
+  for (const sample of f.observation.samples.filter((s) => s.at >= from)) {
+    for (const r of sample.docker.participants) {
+      r.kernel = null;
+      r.container.state = { ...terminal.state, Status: status };
+    }
+  }
+}
+
+for (const workload of ["fullstack-browser", "live-delivery"]) {
+  const proof = (f) => {
+    const observation = replayBrowser(f), { participants, toolIdentities: { node, browser } } = f.native.hostSubject;
+    return workload === "fullstack-browser" ? inspectBrowserParticipants(f.native.hostSubject, observation)
+      : inspectLiveActors(f.bound, observation, { node, browser }, participants,
+        [{ app: "corten", startedAt: 900, endedAt: 1100, renderer: null }]);
+  };
+  for (const [label, finishedAt] of [
+    ["predates the last running capture", new Date(3650).toISOString()],
+    ["has an impossible date", "2026-02-29T00:00:00Z"],
+  ]) test(`r95 replay: ${workload} refuses an exited receipt that ${label} without a stopped sample`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { workload });
+    const [{ terminal }] = f.native.hostSubject.participants;
+    f.observation.samples = f.observation.samples.filter((s) => s.at !== 3800);
+    Object.assign(terminal.state, { Status: "exited", Running: false, Pid: 0, ExitCode: 137,
+      FinishedAt: new Date(3750).toISOString() });
+    assert.equal(proof(f), true);
+    terminal.state.FinishedAt = finishedAt;
+    assert.throws(() => proof(f), { code: "ERR_ASSERTION",
+      message: workload === "fullstack-browser" ? "invalid Browser Docker terminal receipt" : "invalid Live Docker terminal receipt" });
+  });
+  for (const [field, different] of [
+    ["FinishedAt", new Date(3815).toISOString()],
+    ["ExitCode", 1],
+    ["OOMKilled", true],
+  ]) test(`r95 replay: ${workload} binds stopped ${field} after a running receipt`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { workload });
+    let removing;
+    for (const [sampleAt, at, status] of [[3700, 3820, "exited"], [3800, 3860, "removing"]]) {
+      const sample = f.observation.samples.find((s) => s.at === sampleAt);
+      const [r] = sample.docker.participants;
+      sample.at = at;
+      Object.assign(r, { startedAt: at, endedAt: at + 3, kernel: null });
+      Object.assign(r.container.state, { Status: status, Running: false, Pid: 0,
+        ExitCode: 137, FinishedAt: new Date(3810).toISOString() });
+      if (status === "removing") removing = r.container.state;
+    }
+    assert.equal(proof(f), true, "exited then removing with the same outcome is valid");
+    removing[field] = different;
+    assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "stopped Docker observations disagree" });
+  });
+  for (const [label, finishedAt, valid] of [
+    ["finish during the receipt's last millisecond", new Date(3800).toISOString().replace("Z", "999999Z"), true],
+    ["finish 35 ms after the receipt boundary", new Date(3835).toISOString(), workload === "live-delivery"],
+  ]) test(`r95 replay: ${workload} ${label}`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { exited: true, workload, finishedAt });
+    const later = f.observation.samples.find((s) => s.at === 3800);
+    f.observation.samples = f.observation.samples.filter((s) => s.at !== 3700);
+    later.at = 3820;
+    const [r] = later.docker.participants;
+    Object.assign(r, { startedAt: 3820, endedAt: 3840 });
+    r.container.state.Status = "removing";
+    if (valid) assert.equal(proof(f), true);
+    else assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "invalid Browser Docker terminal receipt" });
+  });
+  for (const status of ["exited", "removing"]) test(`r95 replay: ${workload} validates the finish on every ${status} row`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { exited: true, workload });
+    setStoppedRows(f, status, new Date(3650).toISOString());
+    assert.equal(proof(f), true, "both stopped rows may report the same earlier finish");
+    for (const [label, finish] of [
+      ["zero time", "0001-01-01T00:00:00Z"],
+      ["before the last running observation", new Date(3500).toISOString()],
+      ["after the first stopped observation", new Date(3750).toISOString()],
+    ]) {
+      setStoppedRows(f, status, finish);
+      assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "invalid stopped Docker observation" }, label);
+    }
+  });
+  test(`r95 replay: ${workload} refuses kernel:false as live coverage`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { exited: true, workload });
+    assert.equal(proof(f), true);
+    f.native.hostSubject.participants[0].window.endedAt = 3803;
+    f.observation.samples = f.observation.samples.filter((s) => s.at !== 2700);
+    setStoppedRows(f, "exited", new Date(2650).toISOString(), 2800);
+    assert.equal(proof(f), false, "the last real running record ended 1.2 s before the window ended");
+    f.observation.samples.find((s) => s.at === 3800).docker.participants[0].kernel = false;
+    assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "invalid Docker kernel observation" });
+  });
 }
 
 for (const [name, options] of [
@@ -404,11 +529,7 @@ for (const delay of [1000, 1001]) test(`created prefix keeps the exact ${delay}m
 
 for (const delay of [1000, 1001]) test(`exited suffix keeps the exact ${delay}ms continuity boundary`, (t) => {
   const f = lifecycleBoundaryFixture(t, { exited: true });
-  const terminal = f.observation.samples[38].docker.participants[0];
-  for (const sample of f.observation.samples.filter((s) => s.at >= 2800 && s.at < 3700)) {
-    sample.docker.participants[0] = structuredClone(terminal);
-    Object.assign(sample.docker.participants[0], { startedAt: sample.at + 1, endedAt: sample.at + 3 });
-  }
+  setStoppedRows(f, "exited", new Date(2800).toISOString(), 2800);
   const last = f.observation.samples[27].docker.participants[0];
   last.endedAt = 3800 - delay; last.kernel.at = last.endedAt - 1;
   assert.deepEqual(browserResourceResults(f), delay === 1000 ? ["verified", "verified"] : ["blocked", "blocked"]);
@@ -451,7 +572,7 @@ test("actual participant observations cannot hide a 3.2 second internal hole beh
 
 test("a valid exited failed participant does not need a still-running terminal PID", (t) => {
   const f = browserFixture(t), state = f.native.hostSubject.participants[0].terminal.state;
-  Object.assign(state, { Status: "exited", Running: false, Pid: 0, OOMKilled: true, ExitCode: 137, FinishedAt: "2026-11-14T00:00:01Z" });
+  Object.assign(state, { Status: "exited", Running: false, Pid: 0, OOMKilled: true, ExitCode: 137, FinishedAt: new Date(60).toISOString() });
   f.native.outcomes[0].outcome = "failed";
   assert.deepEqual(browserResourceResults(f), ["verified", "verified"]);
 });
@@ -489,7 +610,7 @@ test("created-before-start and stopped-after-window boundaries are not live OS c
   samples[0].docker = { inventory: [p.id], participants: [before], gaps: [] };
   const after = structuredClone(before); after.startedAt = 99; after.endedAt = 101;
   Object.assign(after.container.state, { Status: "exited", StartedAt: p.terminal.state.StartedAt,
-    FinishedAt: "2026-11-14T00:00:01Z", ExitCode: 143 });
+    FinishedAt: new Date(98).toISOString(), ExitCode: 143 });
   samples[2].docker = { inventory: [p.id], participants: [after], gaps: [] };
   assert.deepEqual(browserResourceResults(f), ["verified", "verified"]);
 });
@@ -548,32 +669,131 @@ test("actual inherited controls need no invented cap; terminal observations comp
   native.hostSubject.processWindows[0].endedAt = 40;
   assert.equal(composeHostProof(binding, native, observed).resources, "blocked");
 });
-test("a verified marketplace lifetime still exposes its sealed, same-boot terminal clock", (t) => {
-  const marketplace = { ...binding, request: { ...binding.request, group: "localized-marketplace" } };
-  const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
-  const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
-  const clean = fixture(t, withClock, marketplace).observation();
-  assert.equal(clean.status, "verified");
-  assert.deepEqual(clean.terminalClock, clock);
-  assert.equal(fixture(t, ({ terminal }) => {
-    withClock({ terminal }); terminal.empty = false;
-  }, marketplace).observation().terminalClock, undefined);
-  assert.throws(() => fixture(t, ({ terminal }) => {
-    terminal.terminalClock = { ...clock, bootId: "other" };
-  }, marketplace).observation());
-  assert.throws(() => fixture(t, withClock).observation());
+const terminalClock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
+const withClock = ({ terminal }) => { terminal.terminalClock = terminalClock; };
+
+const clockCampaignRound = "r21", clockCampaignId = `${clockCampaignRound}-0000000000000001`;
+test("Browser observer leaves time for storage after a slow capture and cancels the next capture on finish", {
+  timeout: 5000,
+}, async (t) => {
+  const group = "fullstack-browser", round = campaignRounds(clockCampaignRound)[group], recipe = productionRecipes[group];
+  const execution = nativeExecution(group, round, recipe, "a".repeat(64));
+  const binding = { request: { group, round, commit: "a".repeat(40), recipe }, resources: { browserCpus },
+    selection: { apps: selectedApps(group) }, validation: { artifactRoot: nativeArtifactRoot(group, round) }, execution };
+  const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+  let time = 0, inventoryMs = 0;
+  const scheduled = new Map();
+  t.mock.method(performance, "now", () => time);
+  t.mock.method(globalThis, "setTimeout", (callback, ms, ...args) => {
+    if (ms > 100) return set(callback, ms, ...args);
+    const handle = {};
+    scheduled.set(handle, { callback, ms });
+    return handle;
+  });
+  t.mock.method(globalThis, "clearTimeout", (handle) => {
+    if (!scheduled.delete(handle)) clear(handle);
+  });
+  const f = await samplingControl(t, undefined, { binding, invocation: execution.invocation, phase: "timing",
+    onInventory() { time += inventoryMs; } });
+  function tick(expected, work) {
+    assert.equal(scheduled.size, 1);
+    const [handle, { callback, ms }] = scheduled.entries().next().value;
+    assert.equal(ms, expected); scheduled.delete(handle); time += ms; inventoryMs = work;
+    callback();
+  }
+  const written = new Promise((resolve) => {
+    f.afterOperation = (name, path) => { if (name === "write" && path.endsWith("samples.jsonl")) resolve(); };
+  });
+  tick(100, 149);
+  await written;
+  f.afterOperation = undefined;
+  assert.equal(f.samples().length, 3, "the write completed before the next capture, without a drain");
+  tick(50, 10);
+  tick(90, 0);
+  assert.equal(scheduled.size, 1);
+  assert.equal((await f.finish(f.result, true, true)).status, "verified");
+  assert.equal(f.samples().length, 6);
+  assert.equal(scheduled.size, 0);
 });
-test("only the exact JSON preparation execution can expose a sealed JSON terminal clock", (t) => {
-  const plan = { round: "r17", bindings: [{ ...binding, request: { ...binding.request, group: "json-api", round: "j35" } }] };
-  const prepare = jsonPhase(plan, "prepare"), timing = jsonPhase(plan, "timing", "/bench/campaign/json-native-audits.json");
+
+const clockPhases = [...groupNames.map((group) => [group, "timing"]), ["json-api", "prepare"]];
+for (const [group, phase] of clockPhases) test(`terminal clock writer: ${group}/${phase} emits the clock its lifetime reader verifies`, async (t) => {
+  const round = campaignRounds(clockCampaignRound)[group], commit = "a".repeat(40);
+  const recipe = group === "client-heavy" ? clientComparisonRecipe : productionRecipes[group];
+  const resources = group === "fullstack-browser" ? { browserCpus }
+    : group === "client-heavy" ? { actorCpus: clientActorCpus }
+      : ["live-delivery", "recoverable-live"].includes(group) ? { actorCpus: liveActorCpus, app: liveApplication }
+        : group === "hardening" ? { actorCpus: hardeningActorCpus, budget: budgets().resources } : {};
+  const base = { request: { group, round, commit, recipe }, resources, selection: { apps: selectedApps(group) },
+    validation: { artifactRoot: nativeArtifactRoot(group, round) },
+    sources: { files: [{ path: hardeningCpuGate }] }, execution: nativeExecution(group, round, recipe, "a".repeat(64)) };
+  const plan = { round: clockCampaignRound, bindings: [base] };
+  const bound = group === "json-api" ? jsonPhase(plan, phase, `/bench/campaign/${clockCampaignId}/json-native-audits.json`)
+    : group === "mixed-production" ? mixedPhase(plan, clockCampaignId) : base;
+  const invocation = bound.execution.invocation;
+  const f = await samplingControl(t, undefined, { binding: bound, invocation, phase });
+  const retain = terminalClockPolicy(bound, invocation, clockCampaignRound, phase) !== null;
+  const result = phase === "prepare" ? { ...f.result, success: false, code: 1 }
+    : group === "client-heavy" ? { ...f.result, success: false, code: 2 } : f.result;
+  const observed = await f.finish(result, true, retain);
+  assert.equal(observed.status, "verified");
+  const raw = JSON.parse(readFileSync(join(f.directory, "terminal.json"), "utf8"));
+  assert.ok(raw.terminalClock, "the real lifetime writer omitted the requested terminal clock");
+  const { monoNs, ...clock } = raw.terminalClock;
+  assert.deepEqual(clock, { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100 });
+  assert.match(monoNs, /^[1-9]\d*$/);
+  assert.deepEqual(observed.terminalClock, raw.terminalClock);
+  assert.deepEqual(raw.command, result);
+});
+
+test("terminal clock: r75-shaped client-heavy lifetime replays exit 2 pending parent qualification", (t) => {
+  const group = "client-heavy", round = "w75", id = "r75-0123456789abcdef", apps = selectedApps(group);
+  const execute = { executable: "node", argv: [runnerFor(group).entry, round, "--out", nativeArtifactRoot(group, round),
+    "--profile", comparisonProfile], cwd: "repository-root", shell: false };
+  const bound = { request: { group, round, commit: "8d5160be2abe9c76cde0f25266b356a477ae0e61", recipe: comparisonProfile },
+    execution: { invocation: execute }, resources: { actorCpus: { client: "4-7" } },
+    preparation: { fixtures: [] }, selection: { apps } };
+  const observed = fixture(t, (f) => {
+    withClock(f);
+    for (const sample of f.samples) sample.groups[0].files["cpuset.cpus.effective"] = "4-7\n";
+  }, bound, execute, result, "timing", id).observation();
+  assert.equal(observed.cleanupComplete, true);
+  assert.deepEqual(observed.terminalClock, terminalClock);
+  // A synthetic missing-proof control, not a statement about r75's native captures.
+  const native = { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
+    outcomes: apps.map((app) => ({ app, outcome: "not-run" })) };
+  const composed = composePhase(bound, native, observed, [result]);
+  assert.equal(composed.outcome, "failed");
+  assert.equal(composed.report.qualification, "blocked");
+  assert.ok(composed.appOutcomes.every((row) => !row.comparisonEligible));
+});
+
+const timingBinding = (group) => {
+  const round = campaignRounds("r17")[group], { entry, selection } = runnerFor(group);
+  const bound = { ...binding, request: { ...binding.request, group, round },
+    execution: { invocation: { executable: "node", argv: [entry, round, ...selection], cwd: "repository-root", shell: false } } };
+  return group === "json-api" ? jsonPhase({ round: "r17", bindings: [bound] }, "timing", `/bench/campaign/${campaign}/json-native-audits.json`) : bound;
+};
+for (const group of groupNames) test(`terminal clock: ${group} timing replays its exact invocation, with or without a clock`, (t) => {
+  const bound = timingBinding(group), execute = bound.execution.invocation;
+  const clean = fixture(t, withClock, bound, structuredClone(execute), result, "timing").observation();
+  assert.equal(clean.status, "verified");
+  assert.deepEqual(clean.terminalClock, terminalClock);
+  assert.equal(clean.context.round, bound.request.round);
+  const legacy = fixture(t, () => {}, bound, execute, result, "timing").observation();
+  assert.equal(legacy.status, "verified");
+  assert.equal(legacy.terminalClock, undefined);
+});
+
+test("terminal clock: only the exact JSON preparation invocation can carry its clock", (t) => {
+  const timing = timingBinding("json-api");
+  const prepare = jsonPhase({ round: "r17", bindings: [timing] }, "prepare");
   const execute = prepare.execution.invocation, prepareExit = { ...result, code: 1 };
-  const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
-  const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
-  const inspect = (bound, invoke, change = withClock) => fixture(t, change, bound, invoke, prepareExit).observation();
+  const inspect = (bound, invoke, change = withClock) => fixture(t, change, bound, invoke, prepareExit, "prepare").observation();
 
   const clean = inspect(prepare, execute);
   assert.equal(clean.status, "verified");
-  assert.deepEqual(clean.terminalClock, clock);
+  assert.deepEqual(clean.terminalClock, terminalClock);
   assert.equal(inspect(prepare, execute, ({ terminal }) => {
     withClock({ terminal }); terminal.empty = false;
   }).terminalClock, undefined);
@@ -585,7 +805,54 @@ test("only the exact JSON preparation execution can expose a sealed JSON termina
   assert.throws(() => inspect(prepare, { ...execute, argv: [...execute.argv, "--check-only"] }), refused);
   assert.throws(() => inspect({ ...prepare, execution: timing.execution }, execute), refused);
   assert.throws(() => inspect(timing, { ...execute, argv: execute.argv.map((arg) => arg === "j34" ? "j35" : arg) }), refused);
-  assert.throws(() => inspect(prepare, execute, ({ terminal }) => { terminal.terminalClock = { ...clock, bootId: "other" }; }));
+  assert.throws(() => inspect(prepare, execute, ({ terminal }) => { terminal.terminalClock = { ...terminalClock, bootId: "other" }; }));
+  const relabeled = { ...timing, request: { ...timing.request, round: "j34" } };
+  assert.throws(() => inspect(relabeled, timing.execution.invocation), refused);
+});
+
+test("terminal clock: timing refuses fixtures, changed bindings, foreign rounds and phases", (t) => {
+  const bound = timingBinding("localized-marketplace"), execute = bound.execution.invocation;
+  const inspect = (b, invoke, phase = "timing", change = withClock) => fixture(t, change, b, invoke, result, phase).observation();
+  const refused = /terminal clock not allowed for this invocation/;
+  const helper = { executable: "node", argv: ["bench/marketplace/fixtures.mjs"] };
+  assert.throws(() => inspect(bound, helper), refused);
+  assert.throws(() => inspect({ ...bound, execution: { invocation: helper } }, helper), refused);
+  assert.throws(() => inspect(bound, { ...execute, argv: [...execute.argv, "--check-only"] }), refused);
+  assert.throws(() => inspect(bound, execute, "prepare"), refused);
+  assert.throws(() => inspect(bound, execute, "other"), refused);
+  assert.throws(() => inspect(bound, execute, null), refused);
+  const otherRound = { ...execute, argv: [execute.argv[0], "r18", ...execute.argv.slice(2)] };
+  assert.throws(() => inspect({ ...bound, request: { ...bound.request, round: "r18" }, execution: { invocation: otherRound } }, otherRound), refused);
+  assert.throws(() => inspect({ ...bound, request: { ...bound.request, group: "foreign" } }, execute), refused);
+  assert.throws(() => inspect(bound, execute, "timing", (f) => {
+    withClock(f); f.context.bindingSha256 = "0".repeat(64);
+  }));
+  assert.throws(() => inspect(bound, execute, "timing", ({ terminal }) => {
+    terminal.terminalClock = { ...terminalClock, bootId: "foreign" };
+  }));
+  const prep = jsonPhase({ round: "r17", bindings: [timingBinding("json-api")] }, "prepare");
+  assert.throws(() => inspect(prep, prep.execution.invocation), refused);
+  const json = timingBinding("json-api"), checkOnly = { executable: "node",
+    argv: prep.execution.invocation.argv.map((arg) => arg === prep.request.round ? json.request.round : arg) };
+  assert.throws(() => inspect({ ...json, execution: { invocation: checkOnly } }, checkOnly), refused);
+});
+
+test("terminal clock: accounting, cleanup, observer and unforced proof still gate exposure", (t) => {
+  const bound = timingBinding("localized-marketplace"), execute = bound.execution.invocation;
+  for (const [check, resultChange, mutate] of [
+    ["accounting", {}, ({ samples }) => { samples[1].at = 2000; samples[2].at = 2001; }],
+    ["empty", {}, ({ terminal }) => { terminal.empty = false; }],
+    ["observer", {}, ({ terminal }) => { terminal.observerError = "host-observation-gap"; }],
+    ["unforced", { cancelled: true }, () => {}],
+    ["unforced", { forced: true }, () => {}],
+  ]) {
+    const observed = fixture(t, (f) => { withClock(f); mutate(f); }, bound, execute,
+      { ...result, ...resultChange }, "timing").observation();
+    assert.equal(observed.status, "blocked", check);
+    assert.equal(observed.checks[check], false);
+    assert.equal(observed.cleanupComplete, false);
+    assert.equal(observed.terminalClock, undefined);
+  }
 });
 test("missing effective command controls cannot verify a client lifetime", (t) => {
   const f = fixture(t, ({ samples }) => {

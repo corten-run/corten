@@ -13,8 +13,9 @@ import { checkPages } from "./pages.mjs";
 import { records as catalogRecords } from "../../catalog/fixtures.mjs";
 import { records as marketplaceRecords } from "../../marketplace/fixtures.mjs";
 
-export function checkoutIdentity(base = root) {
-  const git = (...args) => execFileSync("git", args, { cwd: base, encoding: "utf8" }).trim();
+// `env` is for a test's own repository; the verifier reads its checkout with the caller's environment.
+export function checkoutIdentity(base = root, env = process.env) {
+  const git = (...args) => execFileSync("git", args, { cwd: base, encoding: "utf8", env }).trim();
   const commit = git("rev-parse", "--verify", "HEAD"), dirty = !!git("status", "--porcelain", "--untracked-files=all");
   const paths = git("ls-files", "-z", "--", "bench/deployments/express-bun", "bench/catalog", "bench/marketplace", "bench/workloads",
     "bench/fullstack/apps/express", "bench/fullstack/apps.mjs", "bench/fullstack/conformance.mjs", "bench/fullstack/passes.mjs", "scripts/steady.mjs").split("\0").filter(Boolean).sort();

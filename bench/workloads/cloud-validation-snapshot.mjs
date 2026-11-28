@@ -77,6 +77,8 @@ export const validationPaths = Object.freeze([
   "bench/json-api/fixed-identity.mjs",
   "bench/json-api/fixed-prototype.mjs",
   "bench/json-api/fixed-stream.mjs",
+  "bench/json-api/load-resource-proof.mjs",
+  "bench/json-api/placement.mjs",
   "bench/json-api/process.mjs",
   "bench/json-api/production.mjs",
   "bench/json-api/report.mjs",

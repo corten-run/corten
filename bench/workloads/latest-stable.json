@@ -134,9 +134,9 @@
       "vue"
     ],
     "solid": [
+      "@solidjs/compiler",
+      "@solidjs/web",
       "esbuild",
-      "@babel/core",
-      "babel-preset-solid",
       "solid-js"
     ],
     "svelte": [
@@ -148,9 +148,14 @@
       "remix"
     ]
   },
-  "unsupported": {
-    "app": "solid",
-    "reason": "latest-stable-solid-2-needs-compatible-stable-compiler"
+  "unsupported": null,
+  "solid2": {
+    "url": "https://registry.npmjs.org/%40solidjs%2Fcompiler/latest",
+    "observedAt": "2026-11-23T23:28:47.230Z",
+    "status": 200,
+    "bytes": 3260,
+    "sha256": "56dd082ed737d4a1a0dd710ac2a39f1d9e691bf1079271a33884970ca131d8f0",
+    "raw": "{\"bugs\":{\"url\":\"https://github.com/solidjs/solid/issues\"},\"dist\":{\"shasum\":\"c3e04059dff1eac1466aa138498a3c7436cbf300\",\"tarball\":\"https://registry.npmjs.org/@solidjs/compiler/-/compiler-2.0.2.tgz\",\"fileCount\":4,\"integrity\":\"sha512-z7ZlbBQaCeNt4wt12xLS86pdgwet2QwAjyB/+enhDkPL2LUF4jWt7Q8NIlLkXVxm6RJWvZRL5hwcVmrH6JZhZA==\",\"signatures\":[{\"sig\":\"MEUCIQCg+BOgDtS7D/YS0I8vtN6y+zIXKWRSNaa6Kqaxn+HFrgIgdpbwBvKjtWVdjJROOBidqBezh9ipMb0i2nPA1OLZ2EA=\",\"keyid\":\"SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U\"},{\"sig\":\"MEUCIHKCqaojx95sEP4iHLJqpwjRb2cYPbTIDxWaqzzS/AntAiEAhuhQFefnWWGrNyoAYZ670uHM6aLOGWZdaPsSCa3vOm4=\",\"keyid\":\"SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U\"}],\"attestations\":{\"url\":\"https://registry.npmjs.org/-/npm/v1/attestations/@solidjs%2fcompiler@2.0.2\",\"provenance\":{\"predicateType\":\"https://slsa.dev/provenance/v1\"}},\"unpackedSize\":52328},\"main\":\"index.js\",\"name\":\"@solidjs/compiler\",\"napi\":{\"wasm\":{\"browser\":{\"fs\":false,\"buffer\":false,\"asyncInit\":false,\"errorEvent\":true}},\"targets\":[\"x86_64-apple-darwin\",\"aarch64-apple-darwin\",\"x86_64-unknown-linux-gnu\",\"aarch64-unknown-linux-gnu\",\"x86_64-pc-windows-msvc\",\"wasm32-wasip1-threads\"],\"binaryName\":\"compiler\"},\"types\":\"types.d.ts\",\"author\":{\"name\":\"Ryan Carniato\"},\"exports\":{\".\":{\"types\":\"./types.d.ts\",\"default\":\"./index.js\",\"require\":\"./index.js\"}},\"gitHead\":\"7f86b2dee029a82be946918fcaa248ce52d1a96d\",\"license\":\"MIT\",\"scripts\":{\"lint\":\"cargo clippy --manifest-path ./Cargo.toml -- -D warnings\",\"test\":\"pnpm run test:rust && pnpm run build:debug && vitest run\",\"bench\":\"pnpm run build && node scripts/bench.mjs\",\"build\":\"napi build --release --strip --manifest-path ./Cargo.toml\",\"artifacts\":\"napi artifacts\",\"test:rust\":\"cargo test --manifest-path ./Cargo.toml && cargo test --manifest-path ./Cargo.toml --no-default-features && cargo test --manifest-path ./Cargo.toml --no-default-features --features tsrx\",\"build:debug\":\"napi build --manifest-path ./Cargo.toml\",\"napi:version\":\"napi version && node ./sync-optional-deps.mjs\",\"create-npm-dirs\":\"napi create-npm-dirs\"},\"_npmUser\":{\"name\":\"GitHub Actions\",\"email\":\"npm-oidc-no-reply@github.com\",\"trustedPublisher\":{\"id\":\"github\",\"oidcConfigId\":\"95ffc1d3-86d6-45e5-b03e-c2f9fd4a74df\"}},\"homepage\":\"https://github.com/solidjs/solid#readme\",\"repository\":{\"url\":\"git+https://github.com/solidjs/solid.git\",\"type\":\"git\",\"directory\":\"packages/compiler\"},\"_npmVersion\":\"11.19.1\",\"description\":\"Solid's native Oxc JSX compiler\",\"directories\":{},\"maintainers\":[{\"name\":\"ryansolid\",\"email\":\"ryansolid@gmail.com\"},{\"name\":\"davedbase\",\"email\":\"dave.dibiase@gmail.com\"}],\"sideEffects\":false,\"_nodeVersion\":\"24.22.3\",\"_hasShrinkwrap\":false,\"devDependencies\":{\"emnapi\":\"^1.11.3\",\"@emnapi/core\":\"^1.11.3\",\"@napi-rs/cli\":\"^3.10.6\",\"@emnapi/runtime\":\"^1.11.3\",\"@napi-rs/wasm-runtime\":\"^1.1.6\"},\"optionalDependencies\":{\"@solidjs/compiler-darwin-x64\":\"2.0.2\",\"@solidjs/compiler-wasm32-wasi\":\"2.0.2\",\"@solidjs/compiler-darwin-arm64\":\"2.0.2\",\"@solidjs/compiler-linux-x64-gnu\":\"2.0.2\",\"@solidjs/compiler-win32-x64-msvc\":\"2.0.2\",\"@solidjs/compiler-linux-arm64-gnu\":\"2.0.2\"},\"_npmOperationalInternal\":{\"tmp\":\"tmp/compiler_2.0.2_1795069846212_0.8858678327203139\",\"host\":\"s3://npm-registry-packages-npm-production\"},\"_id\":\"@solidjs/compiler@2.0.2\",\"version\":\"2.0.2\"}"
   },
   "legacy": {
     "schema": "benchmark-latest-stable-policy/v1",

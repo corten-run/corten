@@ -65,11 +65,11 @@ function readMetrics(summary, clock, { fixed = false } = {}) {
 }
 
 export function deriveTimedObservation(raw, phase, options, { stream } = {}) {
-  assert.equal(raw?.schema, timedPhaseSchema, "versioned timed JSON phase required");
+  assert.ok(raw?.schema === timedPhaseSchema, "versioned timed JSON phase required");
   assert.ok(["warmup", ...phases].includes(phase), "unknown timed JSON phase");
   for (const [key, max] of [["duration", 300], ["warmup", 120], ["rate", 10000]])
     assert.ok(Number.isSafeInteger(options?.[key]) && options[key] >= 1 && options[key] <= max, "invalid configured timed duration/rate");
-  assert.equal(raw.phase, phase, "timed phase differs");
+  assert.ok(raw.phase === phase, "timed phase differs");
   const config = loadConfig(options, phase);
   same(raw.config, config, "timed native configuration differs");
   const { clock, command } = raw;
@@ -101,7 +101,7 @@ export function deriveTimedObservation(raw, phase, options, { stream } = {}) {
       observedOffers: metrics.requests + metrics.dropped, evidence: "recorded-stock-native-starts-and-wall-drop-events",
       monotonicSchedulerStopObserved: false, endpointEligible: null };
   } else {
-    assert.equal(clock?.schema, "json-api-closed-clock/v1", "closed timed native clock schema differs");
+    assert.ok(clock?.schema === "json-api-closed-clock/v1", "closed timed native clock schema differs");
     assert.equal(stream, undefined, "unexpected fixed event stream on closed phase");
     assert.equal(raw.events, undefined, "unexpected fixed event reference on closed phase");
     assert.equal(metrics.dropped, 0, "closed timed phases cannot drop arrivals");

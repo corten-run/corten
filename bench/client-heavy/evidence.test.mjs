@@ -11,6 +11,7 @@ import { selectedApps } from "../workloads/registry.mjs";
 import { validateSaved, snapshot } from "./verify.mjs";
 import { vendorConfiguration } from "./build.mjs";
 import { artifactProfile, replayToolIdentity } from "./verify-v2.mjs";
+import { fixtureGitEnv, withFixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { captureExecutable, executableBytes } from "./launch.mjs";
 
 // All fixtures here are collector unit inputs, NOT saved native framework evidence.
@@ -40,18 +41,20 @@ test("source before/after saves real bytes, commit, binary diff and clean observ
   const f = await fixture(t);
   await f.write(".gitignore", "saved/\n"); await f.write("bench/client-heavy/probe.mjs", "// Collector unit fixture\n");
   await f.write("Cargo.toml", "# Collector unit fixture\n");
-  const git = (...args) => execFileSync("git", args, { cwd: f.root, stdio: ["ignore", "pipe", "pipe"] });
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() });
   git("init", "--quiet"); git("add", ".gitignore", "Cargo.toml", "bench/client-heavy/probe.mjs");
   await mkdir(join(f.root, "hooks"));
   git("-c", "user.name=Collector unit fixture", "-c", "user.email=unit@example.invalid", "-c", "commit.gpgsign=false",
     "-c", `core.hooksPath=${join(f.root, "hooks")}`, "commit", "--quiet", "-m", "Collector unit fixture");
-  // Empty untracked hooks directory does not affect the clean observation.
-  const before = await f.evidence.source("before"), after = await f.evidence.source("after");
+  // Empty untracked hooks directory does not affect the clean observation. source() runs Git on the
+  // process's environment, so it reads the fixture only without the caller's selectors.
+  const source = (/** @type {string} */ stage) => withFixtureGitEnv(() => f.evidence.source(stage));
+  const before = await source("before"), after = await source("after");
   assert.match(before.commit, /^[a-f0-9]{40}$/); assert.equal(before.status.bytes, 0);
   assert.deepEqual(before.entries, after.entries); assert.deepEqual(before.unavailable, []);
   for (const entry of before.entries) assert.equal(sha256(await readFile(join(f.out, entry.blob))), entry.sha256);
   await f.write("bench/client-heavy/probe.mjs", "// Changed collector unit fixture\n");
-  const changed = await f.evidence.source("changed");
+  const changed = await source("changed");
   assert.notDeepEqual(before.entries, changed.entries); assert.ok(changed.status.bytes > 0 && changed.diff.bytes > 0);
   assert.ok(f.evidence.blockers.includes("source-changed-not-clean"));
 });
@@ -306,11 +309,8 @@ test("a real failed producer invocation saves complete six-app accounting but no
   assert.deepEqual(JSON.parse(await readFile(join(out, "plan.json"), "utf8")).invocation.argv, args);
   for (const app of selectedApps("client-heavy")) {
     assert.deepEqual(JSON.parse(await readFile(join(out, `${app}.json`), "utf8")), saved.cells[app]);
-    if (app === "solid") {
-      assert.equal(saved.cells[app].outcome, "unsupported");
-      assert.equal(saved.cells[app].reason, "latest-stable-solid-2-needs-compatible-stable-compiler");
-      assert.equal(saved.cells[app].qualification, null);
-    } else assert.ok(["passed", "failed", "not-run"].includes(saved.cells[app].outcome));
+    assert.equal(saved.cells[app].outcome, "not-run");
+    assert.equal(saved.cells[app].qualification, null);
     if (saved.cells[app].outcome !== "passed") assert.equal(saved.cells[app].measurement, null);
   }
   // Missing Cargo guarantees no Rust build and no Corten performance qualification,

@@ -97,6 +97,12 @@ apparatus. No load, startup or memory advantage is asserted. Standalone/bytecode
 and machine-AOT are not candidates here; they need separate actual artifacts,
 meaningful measurements and independent qualification before admission.
 
+The full-stack apps do not reuse an upstream connection idle for the upstreams' advertised 5 s
+keep-alive ([Caveats](../../fullstack/README.md#caveats), item 5). That policy is not applied or
+checked here: the shared Express source calls `fetch` unchanged, and Bun 1.4.5's keeps an idle
+connection for 5 minutes by default. Before any timed load under Bun, give it an equivalent bound
+and run `bench/fullstack/idle-close.mjs` against the image.
+
 Parent integration: retain this as `express-bun-normal`, alongside the Node Express
 baseline in the deployment catalog. Add the focused test command to the parent's
 checks and bind any later group receipt to the full image/source/options/contract

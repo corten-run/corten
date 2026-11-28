@@ -8,10 +8,10 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { createProviderEngine as providerTransport, isSettledAccountFailure } from "./cloud-engine-test-fixture.mjs";
+import { createProviderEngine as providerTransport, isSettledAccountFailure, isSettledCatalogFailure } from "./cloud-engine-test-fixture.mjs";
 import { providerTransport as workerTransport } from "./cloud-provider.mjs";
 import { context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
-import { fleetCatalogCommand, preloginUserData, tags } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetRegion, preloginUserData, tags } from "./cloud-contract.mjs";
 
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
 const account = ["account", "get", "--output", "json", "--context", context];
@@ -88,11 +88,12 @@ test("placement catalog retains both directions for supported candidates and dro
   const sizes = [
     { slug: "c-8", available: true, regions: ["nyc1", "blr1", "lon1"] },
     { slug: "c-16", available: true, regions: ["sfo2"] },
+    { slug: "c-32", available: true, regions: ["sfo2"] },
     { slug: "c-4", available: true, regions: ["lon1"] },
   ];
   const regions = [
     { slug: "sfo3", available: true, sizes: [] },
-    { slug: "sfo2", available: true, sizes: ["c-16"] },
+    { slug: "sfo2", available: true, sizes: ["c-16", "c-32"] },
     { slug: "lon1", available: true, sizes: ["c-8", "c-4"] },
     { slug: "blr1", available: true, sizes: ["c-8"] },
     { slug: "nyc1", available: true, sizes: ["c-8"] },
@@ -106,10 +107,36 @@ test("placement catalog retains both directions for supported candidates and dro
   } });
   const result = await run([...fleetCatalogCommand, "--context", context]);
   assert.deepEqual(JSON.parse(result.stdout), {
-    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1]],
+    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1], sizes[2]],
     regions: [regions[0], regions[1], { ...regions[2], sizes: ["c-8"] }, regions[3]],
   });
   assert.deepEqual(calls, ["/v2/sizes?page=1&per_page=200", "/v2/regions?page=1&per_page=200"]);
+});
+
+test("an unusable optional c-32 offer does not hide default, catalog or c-16 placements", async () => {
+  for (const row of [
+    { slug: "c-32", available: true },
+    { slug: "c-32", available: true, regions: [null] },
+    { slug: "c-32", available: "true", regions: ["sfo2"] },
+  ]) {
+    const { sizes, regions } = syntheticPlacement();
+    sizes.push(row);
+    regions.find((entry) => entry.slug === "sfo2").sizes.push("c-32");
+    const run = providerTransport({ repo: resolve("."), createMode: null, spawn, request({ method, path }) {
+      assert.equal(method, "GET");
+      const kind = path === "/v2/sizes?page=1&per_page=200" ? "sizes" : "regions";
+      assert.equal(path, `/v2/${kind}?page=1&per_page=200`);
+      const rows = kind === "sizes" ? sizes : regions;
+      return { status: 200, value: { [kind]: rows, meta: { total: rows.length } } };
+    } });
+    const projected = JSON.parse((await run([...fleetCatalogCommand, "--context", context])).stdout);
+    for (const mode of [{ group: "json-api" }, { group: "catalog-page" },
+      { group: "json-api", loadLayout: "json-c16-generator-v1" }]) {
+      assert.equal(fleetRegion(projected, "sfo3", { staged: true, ...mode }), "sfo3");
+    }
+    assert.throws(() => fleetRegion(projected, "sfo3", { staged: true, group: "json-api", loadLayout: "json-c32-generator-v1" }),
+      /missing or invalid fleet catalog entry: c-32/);
+  }
 });
 
 test("create-link diagnostics isolate each refused predicate without reflecting provider values", async (t) => {
@@ -623,7 +650,9 @@ test("ignored metadata cannot qualify a wrong, failed or unbound action", async 
     const run = providerTransport({ repo: resolve("."), spawn, request({ method, path }) {
       calls.push({ method, path }); return method === "POST" ? response : action;
     } });
-    await assert.rejects(run(create, 1000), (error) => error.providerDiagnostic?.code === "create-action-response");
+    // Only the exact action bound to the POST droplet can report a provider-errored create.
+    const code = isDeepStrictEqual(action.value.action, { ...createAction().value.action, status: "errored" }) ? "create-action-errored" : "create-action-response";
+    await assert.rejects(run(create, 1000), (error) => error.providerDiagnostic?.code === code);
     assert.deepEqual(calls, [{ method: "POST", path: "/v2/droplets" }, { method: "GET", path: "/v2/actions/7515" }]);
   }
 });
@@ -655,7 +684,8 @@ test("first action failures after accepted POST stop without retry or leaking pr
       } else {
         await assert.rejects(run(create, 1000), (error) => {
           assert.equal(error.message, "provider control failed; preserve state/evidence/host");
-          assert.equal(error.providerDiagnostic?.code, response === null ? "create-action-request" : "create-action-response");
+          assert.equal(error.providerDiagnostic?.code, response === null ? "create-action-request"
+            : isDeepStrictEqual(response.value.action, { ...action, status: "errored" }) ? "create-action-errored" : "create-action-response");
           assert.equal(error.controlUncertain === true, response === null);
           assert.ok(!`${error.stack}${JSON.stringify(error)}`.includes(credential)); return true;
         });
@@ -797,7 +827,7 @@ test("HTTP failures, redirects and ambiguous requests are never retried or expos
   await assert.rejects(uncertain(create, 1000, true), (error) => error.controlUncertain === true && !error.message.includes(credential)); assert.equal(count, 1);
 });
 
-test("native catalog transport refuses complete invalid JSON but cannot settle truncated or timed-out reads", { timeout: 10000 }, async (t) => {
+test("native catalog distinguishes complete invalid JSON, closed truncation and timeout", { timeout: 10000 }, async (t) => {
   let mode = "malformed";
   const server = createServer((req, res) => {
     assert.equal(req.method, "GET");
@@ -815,10 +845,49 @@ test("native catalog transport refuses complete invalid JSON but cannot settle t
   const refused = await run(command, 1000, true);
   assert.deepEqual({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr, diagnostic: refused.providerDiagnostic },
     { status: 1, stdout: "", stderr: "", diagnostic: { code: "catalog-response" } });
-  for (mode of ["truncated", "slow"]) {
-    await assert.rejects(run(command, mode === "slow" ? 100 : 1000, true), {
-      controlUncertain: true, providerDiagnostic: { code: "catalog-request" },
+  mode = "truncated";
+  await assert.rejects(run(command, 1000, true), (error) => {
+    assert.ok(isSettledCatalogFailure(error)); assert.equal(error.controlUncertain, undefined);
+    assert.deepEqual(error.providerDiagnostic, { code: "catalog-request", detail: "response-aborted" }); return true;
+  });
+  mode = "slow";
+  await assert.rejects(run(command, 100, true), (error) => {
+    assert.equal(isSettledCatalogFailure(error), false); assert.equal(error.controlUncertain, true);
+    assert.deepEqual(error.providerDiagnostic, { code: "catalog-request", detail: "deadline" }); return true;
+  });
+});
+
+test("native create reports a fixed transport reason without resolving or retrying its POST", { timeout: 10000 }, async (t) => {
+  let mode, requests = 0;
+  const server = createServer((req, res) => {
+    requests++;
+    assert.equal(req.method, "POST");
+    assert.equal(req.url, "/v2/droplets");
+    req.resume();
+    if (mode === "request-error") req.socket.destroy();
+    else if (mode === "response-aborted") {
+      res.writeHead(202, { "content-length": 100 });
+      res.end("{");
+    } else if (mode === "invalid-json") res.writeHead(202).end(credential + " is not JSON");
+    else { res.writeHead(202); res.flushHeaders(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  for (const detail of ["request-error", "response-aborted", "invalid-json", "deadline"]) {
+    mode = detail;
+    const prior = requests;
+    const run = providerTransport({ repo: resolve("."), spawn, connect(url, options, callback) {
+      assert.equal(url.origin, "https://api.digitalocean.com");
+      return httpRequest({ ...options, hostname: "127.0.0.1", port: server.address().port, path: url.pathname }, callback);
+    } });
+    await assert.rejects(run(create, detail === "deadline" ? 500 : 2000, true), (error) => {
+      assert.equal(error.controlUncertain, true);
+      assert.ok(!error.pendingCreate);
+      assert.ok(!JSON.stringify(error).includes(credential));
+      assert.deepEqual(error.providerDiagnostic, { code: "create-request", detail });
+      return true;
     });
+    assert.equal(requests, prior + 1);
   }
 });
 

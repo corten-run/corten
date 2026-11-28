@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { fork, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -9,7 +10,7 @@ import test from "node:test";
 import * as provider from "./cloud-provider.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { publicError } from "./droplet.mjs";
-import { providerDiagnostic } from "./cloud-options.mjs";
+import { providerDiagnostic, unsentCreate } from "./cloud-options.mjs";
 import { accountId, campaign, commit, context, harness as controllerHarness, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
 import { settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
@@ -63,7 +64,9 @@ test("worker create mode accepts only its pinned size, region and image; recover
     ["dedicated-blr1", "nyc1", false], ["dedicated-blr1", "blr1", false, "c-16"], ["dedicated-lon1", "lon1", false, "c-8", "other-image"],
     ["dedicated-nyc1", "nyc1", false],
     ["c16-generator-v1", "sfo2", true, "c-16"], ["c16-generator-v1", "sfo2", false],
-    ["c16-generator-v1", "sfo3", false, "c-16"], ["c16-generator-v1", "lon1", false, "c-16"], ["dedicated", "sfo3", false, "c-16"]]) {
+    ["c16-generator-v1", "sfo3", false, "c-16"], ["c16-generator-v1", "lon1", false, "c-16"], ["dedicated", "sfo3", false, "c-16"],
+    ["json-c32-generator-v1", "sfo2", true, "c-32"], ["json-c32-generator-v1", "sfo2", false, "c-16"],
+    ["json-c32-generator-v1", "sfo3", false, "c-32"], ["json-c16-generator-v1", "sfo2", false, "c-32"]]) {
     await t.test(`${createMode}: ${size}/${region}/${image}`, async (t) => {
       const forged = ["sfo3", "dedicated-nyc1"].includes(createMode);
       if (forged) assert.throws(() => provider.providerTransport({ repo: resolve("."), createMode }), /unknown provider create mode/);
@@ -78,6 +81,8 @@ test("worker create mode accepts only its pinned size, region and image; recover
         const listed = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)])).stdout);
         assert.equal(listed[0].region.slug, region);
         assert.equal(listed[0].size_slug, size);
+        const posts = h.state().calls.filter(({ method }) => method === "POST");
+        assert.deepEqual(posts.map(({ path }) => path), ["/v2/droplets"]);
       } else {
         await assert.rejects(h.run(create));
         assert.equal(h.state().consumes, 0);
@@ -251,6 +256,118 @@ test("supported lifecycle real worker retains one private credential through kno
   });
 });
 
+test("pre-create census worker preserves the census fields, refuses other modes and never retakes", async (t) => {
+  const suffix = account.slice(-2), hash = (text) => createHash("sha256").update(text).digest("hex");
+  const census = (name, tag) => ["compute", "droplet", "list", "--pre-create-census", `${hash(name)}:${hash(tag)}`, "--output", "json", ...suffix];
+  const list = census("saved-name", "saved-tag");
+  await t.test("complete projection", async (t) => {
+    const h = harness(t), name = "corten-bench-groups-r21-0123456789abcdef";
+    const tags = ["corten-bench", "corten-bench-groups", "corten-bench-groups-run-0123456789abcdef"];
+    await h.run(["compute", "droplet", "create", name, "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+      "--ssh-keys", "42", "--tag-names", tags.join(","), "--wait", "--output", "json", ...suffix]);
+    assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: true, rows: [{ id: 123, name, tags,
+      size_slug: "c-8", region: { slug: "sfo3" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } }] });
+    assert.deepEqual(h.state().calls.filter(({ path }) => path.startsWith("/v2/droplets?")).map(({ path }) => path),
+      ["/v2/droplets?page=1&per_page=200"]);
+  });
+  await t.test("incomplete or malformed reply", async (t) => {
+    for (const mode of ["list-converges", "list-next", "list-last", "list-shape"]) {
+      const h = harness(t, mode);
+      assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: false, rows: [] });
+      assert.equal((await h.run(account)).status, 0, "the same worker can bracket the reply");
+      assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200", "/v2/account"]);
+      await h.run.close();
+    }
+  });
+  await t.test("independently checkable sightings survive a malformed field", async (t) => {
+    const h = harness(t, "list-partial");
+    assert.deepEqual(JSON.parse((await h.run(list)).stdout), { complete: false,
+      rows: [{ id: 123, name: "saved-name" }] });
+    assert.deepEqual(JSON.parse((await h.run(census("unrelated-name", "saved-tag"))).stdout), { complete: false,
+      rows: [{ id: 124, tags: ["saved-tag"] }] });
+  });
+  await t.test("a sighting beyond an absence bound is not discarded", async (t) => {
+    const h = harness(t, "list-oversized");
+    const value = JSON.parse((await h.run(census("unrelated-name", "saved-tag"))).stdout);
+    assert.deepEqual(value, { complete: false, rows: [{ id: 201, tags: ["saved-tag"] }] });
+    assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
+  });
+  await t.test("a compact sighting crosses IPC even when the input nearly fills the HTTP limit", async (t) => {
+    const h = harness(t, "list-ipc-bound");
+    const value = JSON.parse((await h.run(census("unrelated-name", "saved-tag"))).stdout);
+    assert.deepEqual(value, { complete: false, rows: [{ id: 201, tags: ["saved-tag"] }] });
+    assert.deepEqual(h.state().calls.map(({ path }) => path), ["/v2/droplets?page=1&per_page=200"]);
+  });
+  await t.test("missing or malformed targets never issue a request", async (t) => {
+    for (const targets of [[], ["not-a-digest"], [list[4], list[4]]]) {
+      const h = harness(t, "success");
+      await assert.rejects(h.run([...list.slice(0, 4), ...targets, ...list.slice(5)]));
+      assert.equal(h.state().requests, 0);
+    }
+  });
+  await t.test("no create mode", async (t) => {
+    const h = harness(t, "success", undefined, undefined, undefined, null);
+    await assert.rejects(h.run(list));
+    assert.equal(h.state().requests, 0);
+  });
+});
+
+test("provider-errored create crosses real worker IPC with only its exact IDs and leaves the worker usable", async (t) => {
+  const h = harness(t, "first-action-errored"), suffix = account.slice(-2);
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
+  assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: '[{"id":123,"actionId":456}]', stderr: "",
+    providerDiagnostic: { code: "create-action-errored" } });
+  assert.deepEqual(await h.run(["compute", "droplet", "get", "123", "--output", "json", ...suffix], 1000, true),
+    { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
+  assert.deepEqual(JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...suffix])).stdout), []);
+  // The absence census is its own fixed command across the same worker.
+  assert.deepEqual(JSON.parse((await h.run(["compute", "droplet", "list", "--single-response", "--output", "json", ...suffix])).stdout), []);
+  await h.run.close();
+  const state = h.state(); assert.equal(state.consumes, 1); assert.equal(h.launches, 1);
+  assert.ok(state.calls.every((call) => call.originalCredential));
+  assert.equal(state.calls.filter((call) => call.method === "POST").length, 1);
+  assert.equal(state.calls.some((call) => call.method === "DELETE"), false);
+});
+
+test("create-errored IPC output outside an allowed create or with any other shape fails closed", async (t) => {
+  const suffix = account.slice(-2), identity = '[{"id":123,"actionId":456}]';
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
+  const errored = (stdout = identity, code = "create-action-errored") => ({ status: 1, stdout, stderr: "", providerDiagnostic: { code } });
+  for (const [args, allowFail, result] of [
+    [account, true, errored()], [["compute", "droplet", "get", "123", "--output", "json", ...suffix], true, errored()],
+    [create, false, errored()], [create, true, errored("")], [create, true, errored('[{"id":123}]')],
+    [create, true, errored('[{"id":123,"actionId":456,"raw":"SYNTHETIC_RAW_BODY"}]')], [create, true, errored('[{"id":0,"actionId":456}]')],
+    [create, true, errored(' [{"id":123,"actionId":456}]')], [create, true, errored(identity, "create-action-response")],
+    [create, true, { ...errored(), stderr: "SYNTHETIC_RAW_BODY" }],
+  ]) {
+    const h = harness(t, "success", undefined, undefined, (message) => message.sequence === 1 && message.ok ? { ...message, result } : message);
+    await assert.rejects(h.run(args, 1000, allowFail), (error) => error.controlTreeUncertain === true);
+  }
+});
+
+test("a pending-create envelope crosses IPC only on a rejected, permitted create with two canonical IDs", async (t) => {
+  const suffix = account.slice(-2), ids = { dropletId: "123", actionId: "456" };
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
+  const rejected = (pendingCreate) => (message) => message.sequence === 1
+    ? { schema: message.schema, nonce: message.nonce, sequence: 1, ok: false, result: null, pendingCreate } : message;
+  const positive = harness(t, "success", undefined, undefined, rejected(ids));
+  await assert.rejects(positive.run(create, 1000, true), (error) => error.controlTreeUncertain === true
+    && JSON.stringify(error.pendingCreate) === JSON.stringify(ids));
+  for (const [name, args, allowFail, receive] of [
+    ["account command", account, true, rejected(ids)], ["create without permission to fail", create, false, rejected(ids)],
+    ["leading zero", create, true, rejected({ ...ids, dropletId: "0123" })], ["numeric ID", create, true, rejected({ ...ids, actionId: 456 })],
+    ["zero ID", create, true, rejected({ ...ids, dropletId: "0" })], ["unsafe ID", create, true, rejected({ ...ids, dropletId: "9007199254740993" })],
+    ["extra key", create, true, rejected({ ...ids, raw: "SYNTHETIC_RAW_BODY" })],
+    ["successful reply", create, true, (message) => message.sequence === 1 ? { ...message, pendingCreate: ids } : message],
+  ]) {
+    const h = harness(t, "success", undefined, undefined, receive);
+    await assert.rejects(h.run(args, 1000, allowFail), (error) => error.controlTreeUncertain === true && error.pendingCreate === undefined, name);
+  }
+});
+
 test("supported lifecycle real worker GET404 is explicit absence and does not poison the credential worker", async (t) => {
   const h = harness(t), get = ["compute", "droplet", "get", "123", "--output", "json", ...account.slice(-2)];
   assert.deepEqual(await h.run(get, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
@@ -315,6 +432,18 @@ test("success IPC cannot smuggle diagnostics, unknown fields or nonempty failed 
     });
     assert.equal(h.launches, 1);
   }
+});
+
+test("cancellation at the create transport boundary never sends an action to the worker", async (t) => {
+  let cancelled = false;
+  const h = harness(t, "success", undefined, () => cancelled);
+  await h.run(account);
+  cancelled = true;
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
+  assert.equal(await h.run(create, 60000, true), unsentCreate);
+  await h.run.close();
+  assert.deepEqual(h.state().calls.map(({ method }) => method), ["GET"]);
 });
 
 test("deadline and cancellation reap an unsettled worker, preserve uncertainty and never retry", async (t) => {

@@ -36,25 +36,27 @@ See [Response compression](deploy.md#response-compression) for the Docker build 
 | Command | What it does |
 |---|---|
 | `corten new <dir>` | Creates an app that depends on the release matching the command's version, as `corten = { package = "corten-run", version = ".." }`: the package is `corten-run` and the library `corten`, so the app's code names it `corten`. `--name` sets the crate name, `--corten-path` uses a local checkout instead (the repository's root or its `crates/corten`; another directory is refused before anything is written). |
-| `corten dev` | Builds and runs the app, rebuilds and restarts on every change in the app's directory or a local package its build reads, like a workspace's shared crate (a failed build keeps the last good server running), and reloads open pages. `--port` or `PORT`. |
+| `corten dev` | Builds and runs the app, rebuilds and restarts on every change in the app's directory or a local package its build reads, like a workspace's shared crate (a failed build keeps the last good server running), and reloads open pages. The port is `--port <port>` (or `--port=<port>`), a number from 1 to 65535, else `PORT`, else 3000; any other argument is refused. |
 | `corten fmt` | Runs `cargo fmt`, then lays out the markup inside `html!`, which rustfmt leaves alone, so it fixes what `corten check` reports (`--check` only reports; given paths, only their markup). |
 | `corten check` | `corten fmt --check` (rustfmt's and the markup's), that every component with a stylesheet, script or view is named in a list in its crate or in a member that depends on it, `cargo clippy -D warnings`, `cargo build --all-targets` (so a route only a binary's `main` mounts is checked as `cargo build` checks it, which clippy and the tests do not), `cargo test`, then `tsc` over the app's scripts, after the tests have written `types/app.d.ts`. An app with scripts needs TypeScript 6.0 or later installed (`npm install --global typescript`, or in its `package.json`): without `tsc` the check fails rather than pass with the scripts unchecked. It uses the app's `node_modules/.bin/tsc`, then the one on the PATH; the `corten: script types:` line shows which compiler was selected. `corten check --no-script-types` skips that step and says so, for a machine that cannot run it; the app's CI should not. At a workspace root, each member that depends on `corten` is checked. |
-| `corten build` | Cargo's release build (`cargo build --release`). With `--profile-from <command>`, that build made with a profile of the app at work: an instrumented copy is built under `target/corten-profile` and started on a free port, `<command>` sends it requests (the port is in `PORT`), and the release (in `target/release`, Cargo's default) is built with the profile the copy wrote ([Deploying](deploy.md#a-profile-guided-build)). With `--profile-from` it needs the toolchain's `llvm-tools` component and a Unix system. Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, given before `--profile-from` if it is there, reach each build as written; any other argument is refused. |
+| `corten build` | Cargo's release build (`cargo build --release`). With `--profile-from <command>`, that build made with a profile of the app at work: an instrumented copy is built under `target/corten-profile` and started on a free port (or the one `--port <port>` names before `--profile-from`, for an app that binds a port of its own), `<command>` sends it requests (the port is in `PORT`), and the release (in `target/release`, Cargo's default) is built with the profile the copy wrote ([Deploying](deploy.md#a-profile-guided-build)). With `--profile-from` it needs the toolchain's `llvm-tools` component and a Unix system. Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, given before `--profile-from` if it is there, reach each build as written; any other argument is refused. |
 | `corten ui init`, `corten ui add <name>..`, `corten ui list` | The [UI kit](kit.md): theme tokens, then styled components copied into `src/ui/` as source the app owns. |
 
 Every command accepts `--help` or `-h`, including kit subcommands such as `corten ui add --help`:
 it prints that command's usage and exits successfully without inspecting or changing the app.
 `corten help <command>` does the same, and refuses a command it does not know. `corten --help`,
 or `corten help` alone, prints all commands. A `--help` that is the value of an option that takes one
-(`--name`, `--corten-path`, `--port`) is that value, not a request for help; `--` does not end a
+(`corten new`'s `--name` and `--corten-path`) is that value, not a request for help; `--` does not end a
 command's options, so a `--help` after it still asks for help. Help is answered before anything else
-is checked; otherwise `--name`, `--corten-path` or `--port` given twice is refused.
+is checked; otherwise `--name` or `--corten-path` given twice is refused.
 
-`corten build` is the exception: it reads its arguments as it builds with them. Help counts among
-the Cargo arguments it takes, in place of a value too (`--bin --help`); an argument it refuses
-(`--`, a misspelled flag, a value that reads as a flag) stops the reading there, and that argument
-is refused even with a `--help` after it; and everything after `--profile-from`, a `-h` included,
-is the command's.
+`corten build` and `corten dev` are the exceptions: they read their arguments as they run with them,
+and read `--port` the same way. Help counts in place of a value too (`--port --help`, and for
+`corten build` a Cargo argument's, as in `--bin --help`); an argument the command refuses (`--`, a
+misspelled flag, a value that reads as a flag, a `--port` that is no port number, a second `--port`
+with a value)
+stops the reading there, and that argument is refused even with a `--help` after it; and for
+`corten build`, everything after `--profile-from`, a `-h` included, is the command's.
 
 `corten check` names each step on stderr before running it, then reports its elapsed time and
 whether it finished or failed, even when output is redirected. Cargo's own output still goes

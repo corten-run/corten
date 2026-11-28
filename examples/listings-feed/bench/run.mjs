@@ -23,9 +23,9 @@ const docker = (...a) => {
   if (r.status !== 0 && !optional) throw new Error(`docker ${a.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
 };
-// nginx 1.31.9 since 2026-11-20; failover-r1 and -r2 ran nginx:1.27-alpine, so compare across
-// that change as a changed input. Each result records `nginx -v`.
-const nginxImage = "nginx:1.31.9-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7";
+// nginx 1.31.10 since 2026-11-26 (1.31.9 from 2026-11-20); failover-r1 and -r2 ran nginx:1.27-alpine,
+// so compare across those changes as a changed input. Each result records `nginx -v`.
+const nginxImage = "nginx:1.31.10-alpine@sha256:7fc0fb4af7bf006aeb31aea88069976060f8f0a0a86b667126742cc17f4e31ae";
 const containers = ["fb-lb", "fb-a", "fb-b", "fb-nats", "fb-pg"];
 const net = ["--network", "feedbench"];
 const db = "postgres://postgres:postgres@10.77.77.10/feeds";
@@ -82,7 +82,7 @@ await until("the page's feed", async () => (await shown()).status === "live");
 
 const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
 const client = spawn("docker", ["run", "--rm", ...net, "--ulimit", "nofile=65536:65536", "-v", "/var/run/docker.sock:/var/run/docker.sock",
-  "-v", `${here}:/bench`, ...envArgs, "node:24-bookworm-slim", "node", "/bench/failover.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
+  "-v", `${here}:/bench`, ...envArgs, "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067", "node", "/bench/failover.mjs"], { stdio: ["ignore", "pipe", "inherit"] });
 let stdout = "";
 client.stdout.on("data", (d) => (stdout += d));
 const code = await new Promise((r) => client.on("exit", r));

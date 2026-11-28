@@ -2,7 +2,6 @@
 // They establish snapshot consistency, not native host qualification.
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import childProcess, { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
@@ -10,13 +9,11 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { test } from "node:test";
-import { beginLifetime, captureBrowserParticipant, inspectBrowserParticipants, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
+import { storageLimits } from "./host-durable-writer.mjs";
+import { beginLifetime, captureBrowserParticipant, inspectBrowserParticipants, processIdentity } from "./host-lifetime.mjs";
 import { participantExecutables } from "./participant-executables.mjs";
 import { browserCpus } from "../../fullstack-browser/contract.mjs";
-
-const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
-const stat = (pid, name = "node", start = pid * 10, ppid = 1) => `${pid} (${name}) S ${[ppid, ...Array(17).fill(0), start, 0].join(" ")}`;
-const missing = (code = "ENOENT") => Object.assign(new Error("PRIVATE_NOT_RETAINED"), { code });
+import { fixture, missing, parent, stat } from "./test-fixtures/host-lifetime-observer.mjs";
 
 test("browser startup sets the owned child cpuset and rejects a narrower kernel readback before attachment", async (t) => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -217,163 +214,6 @@ for (const failure of ["helper-error", "invalid-json"]) test(`failed executable 
   f.pending.close(); assert.equal(f.held.size, 0);
 });
 
-async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0, catalog = false) {
-  const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
-    .map((key) => [key, fs[key]]));
-  const exec = childProcess.execFileSync;
-  const platform = Object.getOwnPropertyDescriptor(process, "platform");
-  const temporary = fs.mkdtempSync(join(tmpdir(), "host-snapshot-churn-")), directory = join(temporary, "host");
-  const f = { members: [], children: [], clock: 10000, wallOffset: 0, reads: [], cpu: 10, override() {}, scope: null };
-  const binding = { request: { group: browser ? "fullstack-browser" : catalog ? "catalog-page" : "client-heavy", round: "churn-control", commit: "a".repeat(40) } };
-  const executable = join(temporary, "executable"), nextExecutable = join(temporary, "next-executable"), held = new Set();
-  const deferred = browser || catalog, executableFor = (path) => f.nextExecutable || path === `/proc/${f.nextPid}/exe` ? nextExecutable : executable;
-  if (deferred) { fs.writeFileSync(executable, "original executable"); fs.writeFileSync(nextExecutable, "next executable"); }
-  const invocation = { executable: "node", argv: ["control"] }, campaign = "r21-0000000000000001", pid = nativePids[0] ?? 4242;
-  const result = { terminal: true, code: 0, signal: null, cancelled: false, forced: false, success: true, error: null };
-  let observer, finished = false;
-  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
-  t.after(async () => {
-    try {
-      f.releaseWrite?.();
-      if (deferred && observer && !finished) {
-        f.failSampleWrite = false; f.override = () => {}; f.members = []; f.children = [];
-        try { await observer.finish(result); } catch { /* Failed storage must remain unsealed. */ }
-      }
-      if (observer) await observer.pendingStorage;
-    } finally {
-      t.mock.restoreAll(); Object.defineProperty(process, "platform", platform); syncBuiltinESMExports();
-      assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); fs.rmSync(temporary, { recursive: true });
-    }
-    assert.equal(held.size, 0);
-  });
-  if (!nativePids.length) {
-    t.mock.method(Date, "now", () => f.clock + f.wallOffset);
-    t.mock.method(performance, "now", () => f.clock);
-    t.mock.method(Atomics, "wait", (_array, _index, _value, ms) => { f.clock += ms; return "timed-out"; });
-  }
-  t.mock.method(globalThis, "setInterval", (callback) => { f.tick = callback; return 1; });
-  t.mock.method(globalThis, "clearInterval", () => {});
-  if (deferred) {
-    t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
-      if (argv[1] !== "--hash-open-executables") {
-        assert.equal(browser, true, "catalog proof does not query the Docker daemon");
-        assert.deepEqual(argv, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]);
-        return "";
-      }
-      if (f.failHash) throw missing("EIO");
-      if (platform.value === "linux") return exec(file, ["--max-old-space-size=256", ...argv], options);
-      return JSON.stringify(JSON.parse(options.input).map((entry, i) => ({ ...entry,
-        sha256: createHash("sha256").update(original.readFileSync(options.stdio[i + 3])).digest("hex") })));
-    });
-    t.mock.method(fs, "openSync", (path, ...args) => {
-      if (f.failProofWrite && path === join(directory, "executables.json") && args[0] === "wx") throw missing("ENOSPC");
-      if (!/^\/proc\/\d+\/exe$/.test(String(path))) return original.openSync(path, ...args);
-      f.override(String(path), "open");
-      const fd = original.openSync(executableFor(path), ...args); held.add(fd); return fd;
-    });
-    t.mock.method(fs, "closeSync", (fd) => { held.delete(fd); return original.closeSync(fd); });
-    f.held = held;
-    f.proof = () => JSON.parse(original.readFileSync(join(directory, "executables.json")));
-    f.mutateImage = (which) => original.writeFileSync(which === "old" ? executable : nextExecutable, "modified executable");
-    f.hasTerminal = () => fs.existsSync(join(directory, "terminal.json"));
-  }
-  // Only the synthetic Linux platform needs this Windows directory-fsync shim.
-  t.mock.method(fs, "fsyncSync", (fd) => {
-    if (platform.value === "win32" && fs.fstatSync(fd).isDirectory()) return;
-    return original.fsyncSync(fd);
-  });
-  const open = fsp.open;
-  t.mock.method(fsp, "open", async (path, ...args) => {
-    if (platform.value === "win32" && fs.existsSync(path) && fs.statSync(path).isDirectory()) return {
-        async sync() {}, async close() {},
-    };
-    const handle = await open(path, ...args);
-    if (browser && String(path).endsWith("samples.jsonl")) {
-      const write = handle.write.bind(handle);
-      t.mock.method(handle, "write", async (...values) => {
-        if (f.writePause) { f.writeEntered(); await f.writePause; }
-        if (f.failSampleWrite) throw missing("ENOSPC");
-        return write(...values);
-      });
-    }
-    return handle;
-  });
-  f.pauseWrite = () => {
-    const entered = new Promise((resolve) => { f.writeEntered = resolve; });
-    f.writePause = new Promise((resolve) => { f.releaseWrite = resolve; });
-    return entered;
-  };
-  t.mock.method(fs, "mkdirSync", (path, ...args) => {
-    const text = String(path).replaceAll("\\", "/");
-    if (text.startsWith("/sys/fs/cgroup/")) { f.scope = text.slice("/sys/fs/cgroup".length); return; }
-    return original.mkdirSync(path, ...args);
-  });
-  t.mock.method(fs, "rmdirSync", (path, ...args) => {
-    if (String(path).replaceAll("\\", "/").startsWith("/sys/fs/cgroup/")) { f.removed = true; return; }
-    return original.rmdirSync(path, ...args);
-  });
-  t.mock.method(fs, "writeFileSync", (path, value, ...args) => {
-    if (String(path).replaceAll("\\", "/") === `/sys/fs/cgroup${f.scope}/cgroup.procs`) { f.members = [Number(value)]; return; }
-    return original.writeFileSync(path, value, ...args);
-  });
-  t.mock.method(fs, "lstatSync", (path, ...args) => String(path).replaceAll("\\", "/").startsWith("/sys/fs/cgroup")
-    ? { isSymbolicLink: () => false } : original.lstatSync(path, ...args));
-  t.mock.method(fs, "statSync", (path, ...args) => {
-    if (!/^\/proc\/\d+\/exe$/.test(String(path)) || nativePids.includes(Number(String(path).split("/")[2]))) return original.statSync(path, ...args);
-    if (!deferred) return { dev: 1, ino: 1, size: 10, mtimeMs: 1, ctimeMs: 1 };
-    const info = original.statSync(executableFor(path), ...args);
-    return f.executableStat?.(path, info) ?? info;
-  });
-  t.mock.method(fs, "readlinkSync", (path, ...args) => {
-    if (/^\/proc\/\d+\/exe$/.test(String(path))) {
-      const value = f.override(String(path), "link");
-      return value ?? (nativePids.includes(Number(String(path).split("/")[2])) ? original.readlinkSync(path, ...args) : "/bin/node");
-    }
-    return original.readlinkSync(path, ...args);
-  });
-  t.mock.method(fs, "readdirSync", (path, ...args) => {
-    const text = String(path).replaceAll("\\", "/");
-    if (text.startsWith("/sys/fs/cgroup")) return text === `/sys/fs/cgroup${f.scope}` ? f.children.map((name) =>
-      ({ name, isDirectory: () => true, isSymbolicLink: () => false })) : [];
-    return original.readdirSync(path, ...args);
-  });
-  t.mock.method(fs, "readFileSync", (path, ...args) => {
-    const text = String(path).replaceAll("\\", "/");
-    if (!text.startsWith("/sys/fs/cgroup") && !text.startsWith("/proc/")) return original.readFileSync(path, ...args);
-    f.reads.push(text); const value = f.override(text); if (value !== undefined) return value;
-    if (text === "/proc/self/cgroup") return `0::${parent}/supervisor\n`;
-    if (text === "/proc/sys/kernel/random/boot_id") return "boot\n";
-    if (["/proc/cpuinfo", "/proc/meminfo"].includes(text)) return "control\n";
-    const proc = /^\/proc\/(\d+)\/(stat|exe|cgroup|cmdline)$/.exec(text);
-    if (proc) {
-      const member = Number(proc[1]);
-      if (nativePids.includes(member) && proc[2] !== "cgroup") return original.readFileSync(path, ...args);
-      if (proc[2] === "stat") return stat(member);
-      if (proc[2] === "exe") return f.readExecutable?.(text) ?? Buffer.from("executable");
-      if (proc[2] === "cgroup") return `0::${f.scope}\n`;
-      return Buffer.from("node\0");
-    }
-    const key = text.slice(text.lastIndexOf("/") + 1), scope = text.slice("/sys/fs/cgroup".length, text.lastIndexOf("/"));
-    const members = scope === f.scope ? f.members : [];
-    return { "cgroup.subtree_control": "cpu cpuset memory\n", "cgroup.procs": members.map((p) => `${p}\n`).join(""),
-      "cgroup.events": `populated ${members.length ? 1 : 0}\n`, "cpu.stat": `usage_usec ${f.cpu}\n`, "cpu.max": "max 100000\n",
-      "cpuset.cpus.effective": "0-7\n", "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom_kill 0\n" }[key];
-  });
-  syncBuiltinESMExports();
-  observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault });
-  f.clock += attachGapMs; await observer.attach(pid);
-  f.capture = f.tick; f.drain = () => observer.drain();
-  f.tick = async () => { f.capture(); await f.drain(); };
-  f.samples = () => original.readFileSync(join(directory, "samples.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-  f.records = () => original.readdirSync(join(directory, "processes")).map((name) => JSON.parse(original.readFileSync(join(directory, "processes", name))));
-  f.finish = async () => {
-    f.override = () => {}; f.members = []; f.children = []; finished = true; await observer.finish(result);
-    f.terminal = JSON.parse(original.readFileSync(join(directory, "terminal.json")));
-    return inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
-  };
-  return f;
-}
-
 test("catalog pins a newly seen executable inside the remaining continuity budget and seals its exact bytes at finish", async (t) => {
   let faults = 0, reads = 0;
   const f = await fixture(t, [], false, () => faults++, 0, true);
@@ -532,6 +372,113 @@ for (const outcome of ["stable", "gone", "start-changed", "different-image", "su
   });
 }
 
+for (const [mode, outcome] of [["prepare", "anchored"], ["prepare", "unanchored"], ["prepare", "wrong-image"],
+  ["check-only-no-build", "anchored"], ["fixture", "anchored"]]) {
+  test(`JSON API ${mode} executable bookends: ${outcome}`, async (t) => {
+    let faults = 0, openings = 0, switched = false;
+    const f = await fixture(t, [], false, () => faults++, 0, false, mode);
+    const pid = outcome === "unanchored" ? 5000 : 4242;
+    if (pid !== 4242) f.members.push(pid);
+    f.override = (path, operation) => {
+      if (path === `/proc/${pid}/exe` && operation === "open" && ++openings === 2 && outcome === "wrong-image")
+        f.nextExecutable = false;
+      if (path === `/proc/${pid}/cmdline` && !switched) {
+        switched = true; f.nextExecutable = true;
+      }
+      if (path === `/proc/${pid}/exe` && operation === "link" && switched) return "/bin/successor";
+    };
+    f.readExecutable = () => Buffer.from(switched ? "next executable" : "original executable");
+    await f.tick(); assert.equal(switched, true);
+    const replay = await f.finish();
+    if (mode === "prepare" && outcome === "anchored") {
+      assert.equal(faults, 0); assert.equal(replay.status, "verified");
+      assert.equal(openings, 2); assert.equal(f.proof().executables.length, 2);
+      assert.deepEqual(replay.samples.flatMap((s) => s.processes.map((p) => p.executableSha256)),
+        ["original executable", "next executable"].map((s) => createHash("sha256").update(s).digest("hex")));
+    } else {
+      assert.equal(faults, 1); assert.equal(replay.status, "blocked");
+      assert.equal(f.terminal.observerFailures.first.operation, mode !== "prepare" ? "executable-recheck"
+        : outcome === "unanchored" ? "executable-recheck-inode" : "executable-recheck-successor");
+      assert.equal(f.terminal.observerFailures.first.executableRecheckReason,
+        mode === "prepare" ? undefined : mode === "check-only-no-build" ? "device-or-inode" : "link");
+      if (mode === "prepare") assert.equal(f.proof().executables.length, 1);
+    }
+  });
+}
+
+for (const outcome of ["unchanged", "admitted", "parent", "unanchored", "wrong-prior-image", "wrong-next-image",
+  "gone", "pid-changed", "start-changed", "cgroup-changed", "no-budget", "overslept", "late", "hash-overrun", "next-image-unreadable",
+  "parent-gone", "reparented", "mixed-open", "same-bytes", "old-mutated", "also-renamed"]) {
+  test(`JSON timing inline executable successor: ${outcome}`, async (t) => {
+    let faults = 0, attempts = 0, switched = false;
+    const f = await fixture(t, [], false, () => faults++, 0, false, "timing");
+    let retryReads = 0;
+    if (["late", "hash-overrun"].includes(outcome)) {
+      const read = fs.readSync;
+      t.mock.method(fs, "readSync", (fd, ...args) => {
+        if (attempts === 2 && f.held.has(fd) && ++retryReads === 1 && outcome === "hash-overrun") f.clock += 1000;
+        return read(fd, ...args);
+      });
+      syncBuiltinESMExports();
+    }
+    const leader = 4242, forked = ["parent", "parent-gone", "reparented", "unanchored"].includes(outcome);
+    const pid = forked ? 5000 : leader, at = `/proc/${pid}`, scope = `/sys/fs/cgroup${f.scope}`;
+    if (forked) f.members.push(pid);
+    if (outcome === "cgroup-changed") f.children = ["moving"];
+    if (outcome === "wrong-prior-image") f.thirdExecutable = true;
+    if (outcome === "same-bytes") f.mutateImage("new", "original executable");
+    if (outcome === "overslept") f.retryOversleep = 1000;
+    f.clock += 100;
+    f.override = (path, op) => {
+      if (path === `${scope}/cpu.stat` && ++attempts === 2) {
+        if (outcome === "wrong-next-image") f.thirdExecutable = true;
+        if (outcome === "gone") f.members = [];
+        if (outcome === "pid-changed") f.members = [4243];
+        if (outcome === "cgroup-changed") f.members = [];
+        if (outcome === "late") f.clock += 1000;
+        if (outcome === "parent-gone") f.members = [pid];
+      }
+      if (path === `${scope}/moving/cgroup.procs` && attempts === 2 && outcome === "cgroup-changed") return `${pid}\n`;
+      if (path === `${at}/cgroup` && attempts === 2 && outcome === "cgroup-changed") return `0::${f.scope}/moving\n`;
+      if (path === `${at}/stat`) {
+        if (forked) return stat(pid, "node", pid * 10, outcome === "unanchored" || (attempts === 2 && outcome === "reparented") ? 1 : leader);
+        if (attempts === 2 && outcome === "start-changed") return stat(pid, "node", 99999);
+        if (switched && outcome === "also-renamed") return stat(pid, "different-name");
+      }
+      if (path === `${at}/exe` && op === "open" && attempts === 2 && outcome === "next-image-unreadable") throw missing();
+      if (path === `${at}/exe` && op === "stat" && outcome === "mixed-open" && !switched) {
+        switched = true; f.nextPid = pid; // A hash from the opened file must not be paired with this stat.
+      }
+      if (path === `${at}/cmdline` && !switched && outcome !== "unchanged") {
+        switched = true; f.thirdExecutable = false; f.nextPid = pid;
+        if (outcome === "no-budget") f.clock += 1000;
+        if (outcome === "old-mutated") f.mutateImage("old", "mutated and longer");
+      }
+    };
+    await f.tick();
+    const accepted = ["unchanged", "admitted", "parent"].includes(outcome);
+    assert.equal(faults, accepted ? 0 : 1);
+    assert.equal(attempts, ["unchanged", "unanchored", "wrong-prior-image", "no-budget", "overslept", "mixed-open",
+      "same-bytes", "old-mutated", "also-renamed"].includes(outcome) ? 1 : 2);
+    if (outcome === "late") assert.equal(retryReads, 0, "do not start hashing after the retry deadline");
+    if (outcome === "hash-overrun") assert.equal(retryReads, 1, "do not start another read after one overruns");
+    assert.equal(f.samples().length, accepted ? 3 : 2);
+    if (outcome === "mixed-open") {
+      f.override = () => {}; f.members = [leader]; await f.tick();
+      assert.equal(f.samples().length, 3, "a failed split lookup must not poison a later coherent read");
+    }
+    const replay = await f.finish();
+    assert.equal(replay.status, accepted ? "verified" : "blocked");
+    assert.equal(f.terminal.empty, true);
+    assert.equal(f.terminal.observerFailures.count, accepted ? 0 : 1);
+    const last = replay.samples.at(-2).processes.find((p) => processIdentity(p.stat).pid === pid);
+    if (accepted || outcome === "mixed-open") {
+      assert.equal(last.executableSha256, createHash("sha256").update(outcome === "unchanged" ? "original executable" : "next executable").digest("hex"));
+      assert.equal(Object.hasOwn(last, "executableRef"), false);
+    }
+  });
+}
+
 for (const prior of ["mutated", "other-process"]) test(`catalog executable successor rejects ${prior} prior evidence`, async (t) => {
   let faults = 0, openings = 0;
   const f = await fixture(t, [], false, () => faults++, 0, true);
@@ -657,8 +604,8 @@ test("failed enqueue admission rolls back only that sample's captures and preser
   assert.equal(f.held.size, 1);
   const samples = f.samples().length;
   const entered = f.pauseWrite(); f.capture(); await entered;
-  for (let i = 1; i < 64; i++) f.capture();
-  f.nextExecutable = true; f.capture(); // The 65th frame is refused synchronously.
+  for (let i = 1; i < storageLimits.frames; i++) f.capture();
+  f.nextExecutable = true; f.capture(); // The next frame is refused synchronously.
   assert.equal(f.samples().length, samples); assert.deepEqual([...f.held], [acceptedFD]);
   assert.equal(createHash("sha256").update(fs.readFileSync(acceptedFD)).digest("hex"),
     createHash("sha256").update("original executable").digest("hex"));
@@ -835,16 +782,20 @@ test("healthy observation never notifies and retains verified lifetime proof", a
   assert.equal((await f.finish()).status, "verified"); assert.equal(faults, 0);
 });
 
-test("recorded browser participant gaps notify once without clearing failed validation", async (t) => {
+for (const code of ["EIO", "PRIVATE_VENDOR_CODE"]) test("browser gaps retain only the first sanitized diagnostic: " +
+  (code === "EIO" ? "allowlisted" : "unknown"), async (t) => {
   let faults = 0;
   const f = await fixture(t, [], true, () => { faults++; });
-  const id = "c".repeat(64), exec = childProcess.execFileSync;
-  t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
-    if (file !== "docker") return exec(file, argv, options);
+  const id = "c".repeat(64);
+  let inspections = 0;
+  f.docker = (argv) => {
     if (argv.includes("ls")) return id;
-    assert.ok(argv.includes("inspect")); throw missing("EIO");
-  });
-  syncBuiltinESMExports();
+    assert.ok(argv.includes("inspect"));
+    throw Object.assign(missing(inspections++ ? "ENOENT" : code), {
+      stage: "PRIVATE_STAGE", stderr: "PRIVATE_DAEMON", stdout: "PRIVATE_STDOUT",
+      argv: ["PRIVATE_ARGV"], path: "PRIVATE_PATH", env: { SAMPLE: "PRIVATE_ENV" },
+    });
+  };
   await f.tick(); const afterGap = faults;
   await f.tick(); const sample = f.samples().at(-1);
   const proof = await f.finish();
@@ -853,6 +804,63 @@ test("recorded browser participant gaps notify once without clearing failed vali
   assert.equal(sample.docker.participants.length, 0);
   assert.equal(inspectBrowserParticipants({ schema: "native-browser-host-subject/v2", participants: [{ id }] }, proof), false);
   assert.equal(f.terminal.observerError, null); assert.equal(f.terminal.observerFailures.count, 0);
+  assert.deepEqual(f.terminal.firstDockerGap, { stage: "inspect-open", code: code === "EIO" ? "EIO" : "unknown" });
+  assert.ok(!JSON.stringify(f.terminal).includes("PRIVATE_"));
+  assert.ok(!JSON.stringify(f.samples()).includes("PRIVATE_"));
+  assert.equal(f.held.size, 0);
+});
+
+for (const mode of ["startup transition", "stable startup", "persistent wrong PID"]) test("browser participant " + mode, async (t) => {
+  let faults = 0;
+  const f = await fixture(t, [], true, () => { faults++; });
+  const id = "c".repeat(64), pid = 5000, scope = "/system.slice/docker-" + id + ".scope";
+  let listed = true, running = false, statReads = 0, inspections = 0;
+  f.docker = (argv) => {
+    if (argv.includes("ls")) return listed ? id : "";
+    assert.deepEqual(argv.slice(-2), ["inspect", id]); inspections++;
+    return JSON.stringify([{ Id: id, Image: "sha256:" + "b".repeat(64), RestartCount: 0, State: {
+      Status: running ? "running" : "created", Running: running, Pid: running ? pid : 0,
+      StartedAt: running ? "start" : "zero", FinishedAt: "zero", OOMKilled: false, ExitCode: 0,
+    } }]);
+  };
+  f.override = (path) => {
+    if (path === "/sys/fs/cgroup" + scope + "/cgroup.procs") return pid + "\n";
+    if (path === "/proc/5000/cgroup") return "0::" + scope + "\n";
+    if (path === "/proc/5000/stat") {
+      statReads++;
+      if (mode === "persistent wrong PID") return stat(pid + 1);
+      return stat(pid, statReads === 1 && mode === "startup transition" ? "PRIVATE_STARTUP_NAME" : "node");
+    }
+  };
+  f.clock += 100; await f.tick();
+  const created = f.samples().at(-1).docker;
+  assert.deepEqual(created.gaps, []);
+  assert.equal(created.participants[0].container.state.Status, "created");
+  assert.equal(created.participants[0].kernel, null);
+  running = true; f.clock += 100; await f.tick();
+  const stable = mode === "stable startup", observed = f.samples().at(-1).docker;
+  assert.deepEqual(observed.inventory, [id]); assert.deepEqual(observed.gaps, stable ? [] : [id]);
+  assert.equal(observed.participants.length, stable ? 1 : 0);
+  assert.equal(statReads, mode === "persistent wrong PID" ? 1 : 4);
+  assert.equal(inspections, stable ? 3 : 2);
+  assert.equal(faults, stable ? 0 : 1);
+  if (!stable) assert.equal(f.held.size, 1, "only the command executable stays pinned after the rejected snapshot");
+  f.clock += 100; await f.tick();
+  const next = f.samples().at(-1).docker;
+  if (mode === "persistent wrong PID") assert.deepEqual(next.gaps, [id]);
+  else {
+    assert.deepEqual(next.gaps, []);
+    assert.equal(next.participants[0].kernel.processes.length, 1);
+  }
+  assert.equal(faults, stable ? 0 : 1, "a later sample neither clears nor repeats a fault");
+  listed = false; await f.finish();
+  if (stable) assert.equal(Object.hasOwn(f.terminal, "firstDockerGap"), false);
+  else assert.deepEqual(f.terminal.firstDockerGap, {
+    // "start" is not a Docker start time, so the name change is not rechecked.
+    stage: mode === "startup transition" ? "process-name-close" : "process-identity-open", code: "ERR_ASSERTION",
+  });
+  assert.ok(!JSON.stringify(f.terminal).includes("PRIVATE_STARTUP_NAME"));
+  assert.equal(f.terminal.observerFailures.count, 0);
   assert.equal(f.held.size, 0);
 });
 

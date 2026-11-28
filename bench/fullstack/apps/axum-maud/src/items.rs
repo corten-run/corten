@@ -39,7 +39,10 @@ impl Items {
             return Items::Fixture(items);
         }
         let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
-        Items::Api { client: reqwest::Client::new(), base: base.parse().expect("API_BASE is a URL") }
+        // Idle connections dropped under the item API's keep-alive (`record_http::UPSTREAM_IDLE`).
+        let client =
+            reqwest::Client::builder().pool_idle_timeout(crate::record_http::UPSTREAM_IDLE).build().expect("HTTP client");
+        Items::Api { client, base: base.parse().expect("API_BASE is a URL") }
     }
 
     /// The items the home page shows as cards: the first 50 by id with items in memory, none from

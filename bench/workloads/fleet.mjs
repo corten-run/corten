@@ -6,16 +6,17 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
-import { fleetCatalogCommand, fleetPlan, fleetRegion, requireStagedFleet, roundName } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetPlan, fleetRegion, jsonFleetPlacementFor, requireStagedFleet, roundName } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { continuationPeer, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckCollectedGroup, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
+  recheckCollectedGroup, replacementQuarantine, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
+import { acknowledgedBootstrapSeal } from "./cloud-control-runtime.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "group-continuation.mjs"].map((name) => `bench/workloads/${name}`);
@@ -34,10 +35,11 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 export function parseFleetArgs(args) {
   const o = { round: args[0] }, seen = new Set();
   const values = { "--fleet-root": "root", "--continuation-root": "continuationRoot", "--group": "group", "--commit": "commit",
-    "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval" };
+    "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval",
+    "--load-layout": "loadLayout", "--replace-quarantined-create": "replacesQuarantineSha256" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "fleet-option"); seen.add(flag);
-    if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval"].includes(flag)) o[flag.slice(2)] = true;
+    if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval", "--offline-handoff"].includes(flag)) o[flag.slice(2)] = true;
     else {
       assert.ok(Object.hasOwn(values, flag), "fleet-option");
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), "fleet-option"); o[values[flag]] = value;
@@ -51,6 +53,14 @@ export function parseFleetArgs(args) {
     o.root = join(o.continuationRoot, o.group);
   } else assert.equal(o.group, undefined, "group requires a continuation root");
   fleetRoot(o.root);
+  if (o["offline-handoff"]) assert.ok(o.prepare && o.continuationRoot, "offline handoff must be selected at single-group preparation");
+  // The opted-in layout is saved in the fleet at preparation; nothing later selects it.
+  if (o.loadLayout !== undefined) assert.ok(o.prepare && o.continuationRoot
+    && jsonFleetPlacementFor(o.group, o.loadLayout), "fleet-load-layout");
+  if (o.replacesQuarantineSha256 !== undefined) {
+    assert.ok(o.prepare && o.continuationRoot, "create quarantine replacement must be selected at single-group preparation");
+    full(o.replacesQuarantineSha256, /[a-f0-9]{64}/, "create quarantine replacement digest");
+  }
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -234,6 +244,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   if (launching) {
     requireStagedFleet(fleet.manifest);
     if (fleet.manifest.single) assert.ok(continuation && mode === "detach", "use continuation detach for an independent group");
+    if (fleet.manifest.single?.offlineHandoff) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
   }
   let deferred = false;
   if (mode === "collect" && present(join(root, "launch-intent.json")) && !present(join(root, "remaining-intent.json"))) {
@@ -327,21 +338,42 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
   let uncertain = false, attemptRoot = options.root, ownsLock = false, attemptLockOwned = false;
-  let preIntentStage = "continuation-admission";
+  let preIntentStage = "continuation-admission; lock-check";
   const release = () => {
     assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); ownsLock = false; syncDirectory(root);
   };
   try {
-    if (locked) { physical(root); durable(lock, owner); ownsLock = true; }
-    else assert.ok(!present(lock), "continuation operation busy");
-    const continuation = await continuationAdmission(root, options.group, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
+    if (locked) {
+      physical(root);
+      try { durable(lock, owner); }
+      catch (error) {
+        if (error?.code === "EEXIST") preIntentStage = "continuation-admission; lock-busy";
+        throw error;
+      }
+      ownsLock = true;
+    } else {
+      const busy = present(lock);
+      if (busy) preIntentStage = "continuation-admission; lock-busy";
+      assert.ok(!busy, "continuation operation busy");
+    }
+    preIntentStage = "continuation-admission; custody-read";
+    const continuation = await continuationAdmission(root, options.group, { repo, interrupted: deps.interrupted, inspect: deps.inspect,
+      admissionFailure(error, check) { preIntentFailures?.set(error, `continuation-admission; ${check}`); } });
     const row = continuation.rows.find(({ group }) => group === options.group);
+    preIntentStage = "continuation-admission; group-selection";
     assert.ok(!row.knownResult, "group already verified or pinned; never allocate again");
+    preIntentStage = "continuation-admission; custody-unresolved";
     assert.ok(!continuation.rows.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
+    preIntentStage = "continuation-admission; group-selection";
     const slot = continuation.slots.get(options.group);
     if (options.prepare) {
+      if (options["offline-handoff"]) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
       const superseding = continuation.unlaunched.has(slot?.root) && options.commit !== slot.manifest.commit;
-      assert.ok(row.outcome === "missing" || row.retryable || superseding, "group already reserved; never allocate again");
+      const quarantined = continuation.subject.quarantinedCreates ?? [];
+      const replacement = replacementQuarantine(quarantined, options.group, options.replacesQuarantineSha256);
+      const replacesLatest = replacement && slot?.root === replacement.root && row.outcome === "quarantined-create";
+      assert.ok(row.outcome === "missing" || row.retryable || superseding || replacesLatest, "group already reserved; never allocate again");
+      assert.ok(replacement || quarantined.every((earlier) => earlier.group !== options.group), "the group's create quarantine must be pinned");
       requireSetupRetryCommit(row.attempts, options.commit);
       if (slot) {
         assert.ok(Number(options.round.slice(1)) > Number(slot.manifest.round.slice(1)), "use a new, higher round for this group");
@@ -352,7 +384,9 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
       attemptRoot = slot.root;
     }
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
+    preIntentStage = "continuation-admission; custody-account";
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
+    preIntentStage = "continuation-admission; custody-recheck";
     continuation.recheck();
     preIntentStage = options.prepare ? "prepare-reservation" : undefined;
     return await runFleet({ ...options, root: attemptRoot }, deps, {
@@ -366,7 +400,7 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
     }, preIntentFailures);
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
-    if (preIntentStage) preIntentFailures?.set(error, preIntentStage);
+    if (preIntentStage && !preIntentFailures?.has(error)) preIntentFailures?.set(error, preIntentStage);
     throw error;
   } finally {
     // A contained worker may leave its fleet lock even when the batch returns
@@ -410,8 +444,11 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
-      const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo };
-      const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group });
+      const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo,
+        ...(options["offline-handoff"] ? { offlineHandoff: true } : {}), ...(options.loadLayout ? { loadLayout: options.loadLayout } : {}),
+        ...(options.replacesQuarantineSha256 ? { replacesQuarantineSha256: options.replacesQuarantineSha256 } : {}) };
+      const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group,
+        ...(single?.loadLayout ? { loadLayout: single.loadLayout } : {}) });
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
       const manifest = fleetPlan({ round: options.round, commit: options.commit, token: token(),
         tokens: Object.fromEntries((single ? [single.group] : groupNames).map((group) => [group, token()])),
@@ -442,6 +479,16 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
   let preIntentStage = continuation ? "initial-plan" : undefined;
   try {
     const preview = await fleetOperationPlan(options, deps);
+    if (options.detach && options["print-approval"]) {
+      const { manifest } = preview.fleet;
+      const layout = jsonFleetPlacementFor(manifest.single?.group, manifest.single?.loadLayout);
+      if (layout?.host.size === "c-32") {
+        await readPlacement(manifest.provider, placement, manifest.host.region,
+          { staged: true, group: manifest.single.group, loadLayout: layout.loadLayout });
+        assert.equal(readFleet(root, options.round).manifestSha256, preview.fleet.manifestSha256, "fleet-manifest-changed");
+        assert.deepEqual(rootRecords(preview.fleet), preview.subject.records, "fleet-records-changed");
+      }
+    }
     continuation?.recheck();
     if (options["print-approval"]) {
       preIntentStage = undefined;
@@ -461,7 +508,8 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     if (options.detach || options["admit-remaining"]) {
       const { manifest } = repeated.fleet;
       await readPlacement(manifest.provider, placement, repeated.subject.remainingRegion ?? manifest.host.region,
-        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true, group: manifest.single?.group });
+        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true, group: manifest.single?.group,
+          ...(manifest.single?.loadLayout ? { loadLayout: manifest.single.loadLayout } : {}) });
       assert.equal(readFleet(root, options.round).manifestSha256, repeated.fleet.manifestSha256, "fleet-manifest-changed");
       assert.deepEqual(rootRecords(repeated.fleet), repeated.subject.records, "fleet-records-changed");
       assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");
@@ -491,6 +539,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       write(JSON.stringify(row)); return row;
     };
     const launching = options.detach || options["admit-remaining"];
+    const offline = repeated.fleet.manifest.single?.offlineHandoff === true;
     const admittedIds = new Set(), admittedIps = new Set(), supervised = new Map();
     const claimHost = (group, proof) => {
       if (!proof) return false;
@@ -520,13 +569,17 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       } catch { /* Only validated saved identity is public. */ }
       const diagnostic = providerFailure(failure);
       const stage = controllerFailure(failure);
-      const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
-        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(failure || job.outcome === "planned" && ![0, 1, 3].includes(code) ? { error: "group-operation-failed" } : {}),
+      // The child saved its terminal provider-errored create; the provider sent no host.
+      const createErrored = (failure ? !failure.controlTreeUncertain && !failure.controlUncertain && diagnostic?.code === "create-errored-absent" : !launching && code === 1)
+        && job.outcome === "planned" && saved?.outcome === "available" && saved.state.status === "creating" && !!saved.state.createErrored
+        && !saved.state.createErrored.reappeared;
+      const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : createErrored ? "create-errored" : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
+        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(!createErrored && (failure || job.outcome === "planned" && ![0, 1, 3].includes(code)) ? { error: "group-operation-failed" } : {}),
         ...(failure ? { uncertain: !!(failure.controlTreeUncertain || failure.controlUncertain) } : {}),
         ...(diagnostic ? { providerDiagnostic: diagnostic } : {}), ...(stage ? { controllerStage: stage } : {}) };
       // Return codes cannot substitute for validated saved host state. In
       // particular, never print completion/deletion from a worker receipt alone.
-      if (!failure && job.outcome === "planned") {
+      if (!failure && job.outcome === "planned" && !createErrored) {
         const state = saved?.state;
         const first = job.group === preview.fleet.manifest.jobs[0].group;
         const bootstrapReady = state?.bootstrapReady;
@@ -536,13 +589,19 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
         const consistent = saved?.outcome === "available" && (launching
           ? code === 3 && state.status === "running" && state.id && state.ip && !state.deletionIntentAt && !state.destroyedAt
-            && bootstrap && (options["admit-remaining"] ? claimHost(job.group, closed)
+            && bootstrap && (!offline || state.control.sealed.includes("bootstrap") && acknowledgedBootstrapSeal(state.control.ledger))
+            && (options["admit-remaining"] ? claimHost(job.group, closed)
               : !admittedIds.has(state.id) && !admittedIps.has(state.ip))
           : code === 3 ? state.status === "running"
-          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
+          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt
+            && (state.exitCode === code || offline && code === 1 && state.exitCode === 2 && state.validation?.status === "blocked")
             && (code === 0 ? state.validation?.status === "verified" : ["failed", "blocked"].includes(state.validation?.status)));
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
         else if (closed) row.collection = "separate-child-approval-required";
+        else if (launching && offline) {
+          row.handoff = "acknowledged"; row.collection = "separate-child-approval-required";
+          admittedIds.add(state.id); admittedIps.add(state.ip);
+        }
         else if (launching) { admittedIds.add(state.id); admittedIps.add(state.ip); }
         else if (retired) row.outcome = `${state.retirement.kind}-retired`;
       }
@@ -582,7 +641,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           const done = operate(job, stopped, watch ? (proof) => {
             if (!claimHost(job.group, proof)) stopped = "prior-admission-failed";
             ready.resolve();
-          } : continuation?.onReady,
+          } : offline ? undefined : continuation?.onReady,
           watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
             settled[i] = { status: "fulfilled", value };
             if (!["pending", "deferred", "verified"].includes(value.outcome)) stopped ??= "prior-admission-failed";
@@ -600,7 +659,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     await controlCheckpoint(cancelled);
     write(JSON.stringify({ schema: "benchmark-group-fleet-operation/v1", action: preview.subject.action, groups, fullGroupQualified: false }));
     if (groups.some((g) => ["error", "missing", "ambiguous", "busy", "not-admitted"].includes(g.outcome))) return 2;
-    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired"].includes(g.outcome)) ? 1 : 0;
+    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired", "create-errored"].includes(g.outcome)) ? 1 : 0;
   } catch (error) {
     if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true;
     if (preIntentStage) preIntentFailures?.set(error, preIntentStage);

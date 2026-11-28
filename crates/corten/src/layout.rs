@@ -832,7 +832,10 @@ impl StartHere {
                     let message = format!(
                         "the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
                     );
-                    return crate::page::unserved(dev, message).into_response();
+                    return crate::cache::unshared_in_place_of(
+                        res.extensions(),
+                        crate::page::unserved(dev, message).into_response(),
+                    );
                 }
             }
             // A route that says its page gives a read (`gives(..)`) did not start it, so a page that
@@ -854,7 +857,10 @@ impl StartHere {
                             "the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
                             slot.name
                         );
-                        return crate::page::unserved(dev, message).into_response();
+                        return crate::cache::unshared_in_place_of(
+                            res.extensions(),
+                            crate::page::unserved(dev, message).into_response(),
+                        );
                     }
                 }
             }
@@ -870,7 +876,8 @@ impl StartHere {
             Err(error) => {
                 let error: &(dyn std::error::Error + 'static) = &*error;
                 tracing::error!(error, "corten: a page with layout reads could not be read to fill it");
-                return crate::Error::new("corten: the page could not be read").into_response();
+                let failed = crate::Error::corten("corten: the page could not be read").into_response();
+                return crate::cache::unshared_in_place_of(&head.extensions, failed);
             }
         };
         // Not text: a layer inside the route changed the body (compressed it), so its places
@@ -930,6 +937,7 @@ impl StartHere {
         }
         let mut res = Response::from_parts(head, Body::from(out));
         if drawing.drew() {
+            pending.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         res

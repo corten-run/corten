@@ -1,5 +1,14 @@
 use crate::model::Record;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+/// How long a connection to the upstream may sit idle in the pool before a request opens a new
+/// one instead. The marketplace fixture (`bench/marketplace/upstream.mjs`, on Node 26) answers
+/// with `Keep-Alive: timeout=5` and closes a connection idle for its 5 s keep-alive timeout plus
+/// Node's 1 s buffer. A request written to a pooled connection as the fixture closes it fails in
+/// the send (reqwest keeps an idle connection for 90 s unless told otherwise), so the pool drops a
+/// connection a second before the shortest time the fixture advertises. It is not a retry: each
+/// record is still one upstream GET.
+pub const UPSTREAM_IDLE: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 pub enum Source {
@@ -13,13 +22,22 @@ impl Source {
             return Ok(Self::Fixture(Arc::new(serde_json::from_slice(&std::fs::read(path)?)?)));
         }
         let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
-        Ok(Self::Api {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
-            base: base.parse()?,
-        })
+        Self::api(&base)
+    }
+
+    /// The records of the API at `base`.
+    pub fn api(base: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::api_pooled(base, Some(UPSTREAM_IDLE))
+    }
+
+    /// [`Source::api`] with `idle` as the pool's idle bound. `None` leaves reqwest's default of 90 s,
+    /// the policy before #1893, which a test keeps as the control that fails.
+    pub(crate) fn api_pooled(base: &str, idle: Option<Duration>) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut client = reqwest::Client::builder().timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::none());
+        if let Some(idle) = idle {
+            client = client.pool_idle_timeout(idle);
+        }
+        Ok(Self::Api { client: client.build()?, base: base.parse()? })
     }
     pub async fn record(&self, id: &str, traceparent: Option<&str>) -> corten::Result<Option<Arc<Record>>> {
         let (client, base) = match self {

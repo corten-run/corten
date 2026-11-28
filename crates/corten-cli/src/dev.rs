@@ -19,18 +19,16 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::option;
-
 /// Directories that never trigger a rebuild.
 const IGNORED: &[&str] = &["target", ".git", "node_modules", ".idea", ".vscode"];
 
-pub fn run(args: &[String]) -> Result<(), String> {
+/// `flag_port` is the port `--port` named, read by `dev_flags` in `main.rs`.
+pub fn run(flag_port: Option<u16>) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
     if !root.join("Cargo.toml").is_file() {
         return Err("run corten dev in the app's directory (where Cargo.toml is)".into());
     }
-    let port =
-        option(args, "--port")?.map(str::to_string).or_else(|| std::env::var("PORT").ok()).unwrap_or_else(|| "3000".into());
+    let port = flag_port.map(|port| port.to_string()).or_else(|| std::env::var("PORT").ok()).unwrap_or_else(|| "3000".into());
     let mut server: Option<Child> = None;
     let mut roots = vec![root.clone()];
     let mut seen = snapshot(&roots);

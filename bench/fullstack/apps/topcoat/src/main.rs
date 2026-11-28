@@ -5,6 +5,7 @@
 mod alerts;
 mod catalog;
 mod catalog_view;
+mod hosts;
 mod items;
 mod marketplace;
 mod marketplace_view;
@@ -23,20 +24,22 @@ use topcoat::{
     asset::{Asset, AssetBundle, RouterBuilderAssetExt, asset},
     context::Cx,
     router::{
-        HeaderName, HeaderValue, Layer, Router, StatusCode,
+        Body, HeaderName, HeaderValue, Layer, LayerFn, Router, StatusCode,
         content::{
             Form, Json,
             sse::{Event as SseEvent, KeepAlive, Sse},
         },
         error::not_found as not_found_error,
-        header, href, page, path_param, request, route,
-        tower::TowerLayer,
+        header, href, page, path_param, request,
+        response::Response,
+        route,
+        tower::{TowerLayer, TowerNext},
     },
     runtime::{Event, RuntimeLayer, link, procedure, shard, signal},
     view::{Child, View, ViewExt, attributes, component, view},
 };
-use tower::ServiceBuilder;
-use tower_http::{set_header::SetResponseHeaderLayer, timeout::TimeoutLayer};
+use tower::{Service, ServiceBuilder, service_fn};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::model::{ContentLine, ItemView, alert_message, sort_listings};
 
@@ -44,6 +47,19 @@ const STYLE: Asset = asset!("static/style.css");
 const COMPONENTS: Asset = asset!("static/components.css");
 const READY: Asset = asset!("static/ready.js");
 const CATALOG: Asset = asset!("static/catalog.css");
+
+macro_rules! matched_csp {
+    ($eval:literal) => {
+        concat!(
+            "default-src 'self'; script-src 'self'",
+            $eval,
+            "; style-src 'self'; img-src 'self' data: https:; object-src 'none'; ",
+            "base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        )
+    };
+}
+const MATCHED_RUNTIME_CSP: &str = matched_csp!(" 'unsafe-eval'");
+const MATCHED_MARKETPLACE_CSP: &str = matched_csp!("");
 
 #[tokio::main]
 async fn main() {
@@ -72,7 +88,15 @@ fn router() -> Router {
         .route(live_publish)
         .assets(AssetBundle::load().expect("asset bundle next to the binary (topcoat asset bundle)"))
         .layer(RuntimeLayer::new());
-    let builder = if matched() { builder.layer(profile_layer()) } else { builder };
+    let builder = if matched() {
+        builder
+            .route(live)
+            .layer(LayerFn::new(None::<&str>, marketplace_view::matched_responses))
+            .layer(profile_layer())
+            .layer(hosts::AllowedHosts::from_env())
+    } else {
+        builder
+    };
     builder.build()
 }
 
@@ -82,26 +106,27 @@ fn matched() -> bool {
     std::env::var("PROFILE").as_deref() == Ok("matched")
 }
 
-/// The rest of the matched tier's production profile, as axum-maud adds it: tower-http's header
-/// layers and its timeout, run by Topcoat's `TowerLayer` (its `tower` feature) as one layer around
+#[route(GET "/health/live")]
+async fn live(cx: &Cx) -> Result<&'static str> {
+    Ok("ok\n")
+}
+
+/// The matched tier's security and cache headers and deadline, run by Topcoat's `TowerLayer` around
 /// every request. The security headers, `Cache-Control: private, no-cache` on an answer that sets
 /// none (the assets keep Topcoat's `public, max-age=31536000, immutable`), and a 503 past a 10
-/// second deadline (card-market's). An answer a handler or Topcoat returns as an `Error` (a JSON
-/// 404, a 405, a failed read's 500, the 413 below) goes without them: `TowerLayer` passes the error
-/// through and the router makes its answer after every layer; the 403 below is refused before any
-/// layer runs. Topcoat's defaults already refuse a body over 2 MiB (413) and a cross-site form post
+/// second deadline (card-market's). An answer still returned as an `Error` (such as a 413) goes
+/// without these headers: `TowerLayer` passes the error through and the router makes its answer
+/// after every layer; a cross-site request is refused before any layer runs. Topcoat's defaults
+/// already refuse a body over 2 MiB (413) and a cross-site form post
 /// (403, its origin policy), compress, and close a request head left unfinished at 30 s. Its
-/// runtime compiles the expressions it reads from the page's markup with `new Function`, so the CSP
-/// has `'unsafe-eval'` on every answer this layer sets headers on.
+/// runtime compiles expressions from page markup with `new Function`. Keep that allowance in the
+/// fallback policy; the native Marketplace page uses only ordinary links and forms.
 fn profile_layer() -> impl Layer {
     let header =
         |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
     TowerLayer::new(
         ServiceBuilder::new()
-            .layer(header(
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
-            ))
+            .layer(header(header::CONTENT_SECURITY_POLICY, MATCHED_RUNTIME_CSP))
             .layer(header(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
             .layer(header(header::REFERRER_POLICY, "strict-origin-when-cross-origin"))
             .layer(header(header::X_FRAME_OPTIONS, "DENY"))
@@ -111,7 +136,25 @@ fn profile_layer() -> impl Layer {
                 "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
             ))
             .layer(header(header::CACHE_CONTROL, "private, no-cache"))
-            .layer(TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, Duration::from_secs(10))),
+            .layer_fn(|mut inner: TowerNext| {
+                service_fn(move |request| {
+                    let deadline = tokio::time::sleep(Duration::from_secs(10));
+                    let reply = inner.call(request);
+                    async move {
+                        // Keep the deadline-first poll order of tower-http's timeout. Dropping
+                        // the reply lets Topcoat cancel the still-running handler and upstream read.
+                        tokio::select! {
+                            biased;
+                            _ = deadline => Ok(Response::builder()
+                                .status(StatusCode::SERVICE_UNAVAILABLE)
+                                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                                .body(Body::from("Request deadline exceeded\n"))
+                                .expect("static deadline response")),
+                            response = reply => response,
+                        }
+                    }
+                })
+            }),
     )
 }
 

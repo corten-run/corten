@@ -16,7 +16,7 @@ import { limits as mixedLimits } from "../mixed-production/verify.mjs";
 import { groupNames } from "./registry.mjs";
 import { archive, metadata } from "./cloud-fixtures.mjs";
 import { archivePathLimits, archivePaths } from "./cloud-contract.mjs";
-import { archiveLimit, archiveMembers, checkPackage, digest, durableCopy, expandedLimit, extractArchive, fileHash, ioBytes, regular, tarLimit, treeHash } from "./cloud-local.mjs";
+import { archiveLimit, archiveMembers, checkPackage, digest, durableCopy, durableNew, expandedLimit, extractArchive, fileHash, ioBytes, regular, tarLimit, treeHash } from "./cloud-local.mjs";
 
 const GiB = 1024 ** 3, MiB = 1024 ** 2;
 const scratch = (t) => {
@@ -138,6 +138,39 @@ test("canonical tree receipts, exclusive copies, physical files and source snaps
   finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
 });
 
+// A replacement is a different file put at the stage's name; a rewrite keeps its inode.
+const replaceStage = (stage, bytes) => { fs.unlinkSync(stage); writeFileSync(stage, bytes); };
+test("a staged publication refuses a stage replaced or rewritten before its link and publishes nothing", (t) => {
+  const root = scratch(t);
+  for (const [name, change] of [["replaced", replaceStage], ["rewritten", (stage, bytes) => writeFileSync(stage, bytes)]]) {
+    const path = join(root, `${name}.json`), stage = `${path}.stage`;
+    let seen = false;
+    assert.throws(() => durableNew(path, "authored\n", () => { seen = true; change(stage, "foreign\n"); }),
+      /publication stage replaced before its link; nothing published, the replacement is kept/);
+    assert.ok(seen); assert.equal(fs.existsSync(path), false); assert.equal(readFileSync(stage, "utf8"), "foreign\n");
+  }
+});
+test("a refused staged publication keeps a replaced stage and removes only its own", (t) => {
+  const root = scratch(t), path = join(root, "receipt.json"), stage = `${path}.stage`;
+  let refused;
+  assert.throws(() => durableNew(path, "authored\n", () => { replaceStage(stage, "foreign\n"); throw new Error("custody refused"); }),
+    (error) => { refused = error; return true; });
+  assert.equal(fs.existsSync(path), false); assert.equal(fs.existsSync(stage) && readFileSync(stage, "utf8"), "foreign\n");
+  assert.equal(refused.message, "custody refused; the publication stage was replaced and is kept");
+  fs.unlinkSync(stage);
+  assert.throws(() => durableNew(path, "authored\n", () => { throw new Error("custody refused"); }), (error) => error.message === "custody refused");
+  assert.equal(fs.existsSync(path), false); assert.equal(fs.existsSync(stage), false);
+});
+test("an unchanged staged publication links exactly the authored bytes and removes its stage", (t) => {
+  const root = scratch(t), path = join(root, "receipt.json"), stage = `${path}.stage`;
+  let checked = 0;
+  durableNew(path, "authored\n", () => { checked++; assert.equal(readFileSync(stage, "utf8"), "authored\n"); });
+  assert.equal(checked, 1); assert.equal(readFileSync(path, "utf8"), "authored\n"); assert.equal(fs.existsSync(stage), false);
+  assert.equal(statSync(path).nlink, 1);
+  assert.throws(() => durableNew(path, "second\n"), /EEXIST/);
+  // A failed link leaves its complete stage, unread, for the next write to remove.
+  assert.equal(readFileSync(path, "utf8"), "authored\n"); assert.equal(readFileSync(stage, "utf8"), "second\n");
+});
 test("an extraction write failure preserves partial evidence and still removes only the owned spool", async (t) => {
   const root = scratch(t), target = join(root, "extract"), file = join(root, "archive.tgz"); mkdirSync(target);
   writeFileSync(file, archive([...metadata(), { name: "campaign/data", body: "not truncated into proof" }]));

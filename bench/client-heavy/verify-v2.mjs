@@ -6,7 +6,7 @@ import { selectedApps, definition } from "../workloads/registry.mjs";
 import { options, sourceRoots, buildOptions, documentMarkup, summarizeActions } from "./contract.mjs";
 import { snapshot, committed } from "./verify.mjs";
 import { need, keys, finite, digest, span, diagnostic, closure, replayV2 } from "./replay-v2.mjs";
-import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata } from "./compiler.mjs";
+import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata, solidCompilerFiles, solidCompilerVersion, solidManifestFiles, matchesSolidRuntime } from "./compiler.mjs";
 import { npmClosure, compilerGraph, vendorConfiguration } from "./build-replay.mjs";
 import { installLayout } from "./install-layout.mjs";
 import { executableBytes, launchOptions } from "./launch.mjs";
@@ -49,6 +49,20 @@ export function replayCandidateDisposition(policy, app, cell, build, filePaths) 
       && build.outcome === "not-run" && [unsupported.reason, "runner-failed-before-build"].includes(build.reason)
       && ![...filePaths].some((path) => path.startsWith(`native/${app}/`)), "unsupported-client-has-build-or-capture");
   } else if (cell.outcome === "unsupported" && cell.qualification === null) need(false, "unsupported-client-without-policy-or-capture");
+}
+
+export function replaySolidCompiler(receipt, platform, browserDependencies, inputs) {
+  need(receipt, "missing-solid-compiler-receipt");
+  keys(receipt, ["version", "target", "files"]);
+  const expected = solidCompilerFiles(receipt.target, platform);
+  need(receipt.version === solidCompilerVersion && same(expected, receipt.files)
+    && Object.entries(expected).every(([path, sha256]) => browserDependencies.get(path)?.sha256 === sha256),
+  "solid-compiler-differs-from-locked-install");
+  const manifestPaths = new Set([...browserDependencies.keys()].filter((path) => /\/package\.json$/i.test(path)).map((path) => path.toLowerCase()));
+  need(Object.entries(solidManifestFiles(receipt.target)).every(([path, sha256]) =>
+    sha256 === null ? !manifestPaths.has(path) : browserDependencies.get(path)?.sha256 === sha256),
+    "missing-or-modified-solid-package-manifest");
+  need(matchesSolidRuntime(inputs), "missing-or-modified-solid-runtime-build-input");
 }
 
 // Reconstruct the command's single-context timeline in scheduled order, not
@@ -321,7 +335,9 @@ export async function validateV2(request) {
       }
       keys(b, ["outcome", "inputs", "bundleSha256", "bytes", "artifacts"]); need(b.outcome === "built", "invalid-build-outcome");
       const receipt = json(`native/${app}/build-receipt.json`), opts = json(`native/${app}/build-options.json`), meta = json(`native/${app}/metafile.json`);
-      keys(receipt, ["schema", "app", "startedAt", "endedAt", "esbuild", "optionsSha256", "metafileSha256", "rawBundle", "footer", "inputs", "artifacts"]); span(receipt);
+      const solid2 = app === "solid" && !!candidatePolicy?.observation?.packages["@solidjs/compiler"];
+      keys(receipt, ["schema", "app", "startedAt", "endedAt", "esbuild", "optionsSha256", "metafileSha256", "rawBundle", "footer", "inputs", "artifacts"],
+        solid2 ? ["solidCompiler"] : []); span(receipt);
       need(receipt.startedAt >= lastBuildEnd, "overlapping-native-builds"); lastBuildEnd = receipt.endedAt;
       need(receipt.schema === "client-heavy-build-receipt/v1" && receipt.app === app && receipt.optionsSha256 === hash(files.get(`native/${app}/build-options.json`))
         && receipt.metafileSha256 === hash(files.get(`native/${app}/metafile.json`)) && same(receipt.artifacts, b.artifacts), "build-receipt-differs-from-raw");
@@ -331,6 +347,10 @@ export async function validateV2(request) {
       const inputs = entries(receipt.inputs);
       need(same(b.inputs, [...inputs].map(([path, ref]) => ({ path, sha256: ref.sha256 }))) && same([...inputs.keys()].sort(), Object.keys(meta.inputs).sort()), "metafile-input-inventory-differs");
       for (const [path, ref] of inputs) need(sourceRef(path)?.sha256 === ref.sha256, "build-input-not-bound-to-source-closure");
+      if (solid2) {
+        need(candidatePolicy.candidates.find((row) => row.app === "solid")?.latestStableEligible === true, "solid-2-compiler-policy-not-satisfied");
+        replaySolidCompiler(receipt.solidCompiler, plan.platform, browserDependencies, inputs);
+      }
       if (["vue", "svelte"].includes(app)) need(inputs.has(`bench/client-heavy/apps/${app}.${app === "vue" ? "vue" : "svelte"}`), "missing-native-component-input");
       if (app !== "corten") need([...inputs.keys()].some((p) => p.startsWith("bench/browser/node_modules/")), "missing-native-framework-input");
       const entry = app === "corten" ? "bench/browser/gen/src/bin/client.js" : `bench/client-heavy/apps/${app}.${["react", "solid"].includes(app) ? "jsx" : app === "remix" ? "tsx" : "js"}`;

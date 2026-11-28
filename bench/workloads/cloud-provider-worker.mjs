@@ -12,7 +12,7 @@ const stdinEntry = process.argv[1] === "-" && process.argv.length === 3;
 const directory = stdinEntry ? dirname(resolve(process.argv[2])) : dirname(fileURLToPath(import.meta.url));
 const exact = (value, keys) => assert.deepEqual(Object.keys(value ?? {}).sort(), [...keys].sort());
 const diagnosticEnv = /^(?:NODE_|SSL|OPENSSL|LD_|DYLD_)/i;
-function action(message, host, catalogCommand) {
+function action(message, host, catalogCommand, quarantineCensusTargets) {
   exact(message, ["schema", "sequence", "args", "timeout", "allowFail", ...(Object.hasOwn(message, "deleteProofExpiresAtMs") ? ["deleteProofExpiresAtMs"] : [])]);
   assert.ok(Array.isArray(message.args) && message.args.length <= 20 && message.args.every((value) => typeof value === "string" && value.length <= 512 && !value.includes("\0")));
   assert.ok(Number.isSafeInteger(message.timeout) && message.timeout > 0 && message.timeout <= 900000 && typeof message.allowFail === "boolean");
@@ -23,7 +23,16 @@ function action(message, host, catalogCommand) {
     && Number.isSafeInteger(message.deleteProofExpiresAtMs) && message.deleteProofExpiresAtMs > 0);
   if (command[0] === "account") assert.deepEqual(command, ["account", "get", "--output", "json"]);
   else if (command[1] === "placement") assert.deepEqual(command, catalogCommand);
-  else if (command[2] === "list") assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
+  else if (command[1] === "action") {
+    assert.equal(command.length, 6); assert.deepEqual([...command.slice(0, 3), ...command.slice(4)], ["compute", "action", "get", "--output", "json"]);
+    assert.match(command[3], /^[1-9]\d*$/); assert.ok(Number.isSafeInteger(Number(command[3])) && Number(command[3]) > 0);
+  }
+  else if (command[2] === "list" && command[3] === "--pre-create-census") {
+    assert.ok(host, "pre-create census is not authorized for this mode");
+    quarantineCensusTargets(command);
+  }
+  else if (command[2] === "list") assert.ok(['["compute","droplet","list","--output","json"]',
+    '["compute","droplet","list","--single-response","--output","json"]'].includes(JSON.stringify(command)), "unknown list command");
   else if (command[2] === "get") {
     assert.equal(command.length, 6); assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "get"]);
     assert.deepEqual(command.slice(4), ["--output", "json"]);
@@ -50,7 +59,8 @@ export function serveProviderWorker(dependencies = {}) {
   assert.deepEqual(process.execArgv, stdinEntry ? ["--input-type=module"] : []);
   if (stdinEntry) assert.equal(process.argv[2], join(directory, "cloud-provider-worker.mjs"));
   assert.ok(Object.keys(process.env).every((name) => !diagnosticEnv.test(name) || name === "NODE_CHANNEL_FD" || name === "NODE_CHANNEL_SERIALIZATION_MODE"));
-  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal = false, run, host, catalogCommand, providerFailure, isSettledAccountFailure;
+  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal, run, host, catalogCommand, providerFailure, pendingCreate, quarantineCensusTargets;
+  let isSettledAccountFailure, isSettledCatalogFailure;
   const stop = () => { closing = true; if (!active) process.exit(terminal ? 2 : 0); };
   process.on("disconnect", stop);
   process.on("SIGTERM", stop);
@@ -61,7 +71,7 @@ export function serveProviderWorker(dependencies = {}) {
     }
     if (active || failed || closing || terminal) { failed = true; process.exit(2); return; }
     active = true;
-    let ok = false, result = null, account = false, deadline;
+    let ok = false, result = null, account = false, catalog = false, create = false, posted, deadline;
     try {
       if (nonce === undefined) {
         exact(message, ["schema", "nonce", "sources", "createMode"]); assert.equal(message.schema, "cloud-provider-init/v2");
@@ -84,15 +94,16 @@ export function serveProviderWorker(dependencies = {}) {
           return { format: "module", source, shortCircuit: true };
         } });
         const engine = await import(pathToFileURL(join(directory, "cloud-provider-engine.mjs")).href);
-        providerFailure = (await import(pathToFileURL(join(directory, "cloud-options.mjs")).href)).providerFailure;
+        ({ providerFailure, pendingCreate, quarantineCensusTargets } = await import(pathToFileURL(join(directory, "cloud-options.mjs")).href));
         const contract = await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href);
         host = contract.providerCreateHost(message.createMode); catalogCommand = contract.fleetCatalogCommand;
         const { createProviderEngine } = engine;
-        isSettledAccountFailure = engine.isSettledAccountFailure;
+        ({ isSettledAccountFailure, isSettledCatalogFailure } = engine);
         run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing, createMode: message.createMode }); result = "ready";
       } else {
-        action(message, host, catalogCommand); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
-        account = message.args[0] === "account";
+        action(message, host, catalogCommand, quarantineCensusTargets); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
+        account = message.args[0] === "account"; create = message.args[2] === "create" && message.allowFail === true;
+        catalog = message.args[1] === "placement" && message.allowFail === true;
         deadline = Date.now() + message.timeout;
         result = await run(message.args, message.timeout, message.allowFail, message.deleteProofExpiresAtMs);
         // Never serialize exceptions, provider error bodies or native stderr.
@@ -103,13 +114,18 @@ export function serveProviderWorker(dependencies = {}) {
       ok = true;
     } catch (error) {
       result = providerFailure?.(error) ?? null;
-      terminal = account && !closing && Date.now() < deadline && isSettledAccountFailure?.(error) === true;
+      // An unsettled create may name only the IDs its accepted POST returned.
+      if (create && error?.controlUncertain === true) posted = pendingCreate(Object.getOwnPropertyDescriptor(error, "pendingCreate")?.value);
+      if (!closing && Date.now() < deadline) {
+        if (account && isSettledAccountFailure(error)) terminal = "cloud-provider-account-failed/v2";
+        if (catalog && isSettledCatalogFailure(error)) terminal = "cloud-provider-catalog-failed/v1";
+      }
       failed = !terminal;
     }
     finally {
       active = false;
-      const reply = terminal ? { schema: "cloud-provider-account-failed/v2", nonce, sequence, disposition: "resources-closed", diagnostic: result }
-        : { schema: "cloud-provider-result/v1", nonce: nonce ?? "", sequence, ok, result };
+      const reply = terminal ? { schema: terminal, nonce, sequence, disposition: "resources-closed", diagnostic: result }
+        : { schema: "cloud-provider-result/v1", nonce: nonce ?? "", sequence, ok, result, ...(posted ? { pendingCreate: posted } : {}) };
       if (process.connected) process.send(reply, (error) => {
         if (error || closing || failed || terminal) process.exit(error || failed || closing && terminal ? 2 : 0);
       });

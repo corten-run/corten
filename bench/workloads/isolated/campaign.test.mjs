@@ -5,14 +5,14 @@ import { isDeepStrictEqual } from "node:util";
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as evidence from "./evidence.mjs";
 import * as contracts from "./campaign-contract.mjs";
-import { groupNames, nativeArtifactRoot } from "../registry.mjs";
+import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot, runnerFor, selectedApps } from "../registry.mjs";
 import { fakeChild } from "./test-fixtures/process.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
@@ -22,27 +22,84 @@ import { reserveCompilerTarget } from "../../client-heavy/compiler.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
 import * as actualHost from "./host-observation.mjs";
+import { liveActorCpus, liveApplication } from "./native-roles.mjs";
 import * as controlAdmission from "./control-admission.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
+import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
+import { deploymentSha256 } from "../deployments.mjs";
+import { isolatedLiveCapture, isolatedLiveLifetime, isolatedLiveSuccess } from "./test-fixtures/live-campaign.mjs";
+import { registration as controlRegistration } from "../test-fixtures/control-stream-fixture.mjs";
+import { streamHash } from "./control-stream.mjs";
+import { limits, supervise } from "./process.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 let lifetimeStartup;
 let lifetimeRun;
-let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives, settleNativeFails;
-let liveOutput, compilerScratch;
-const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSecondWorker, settleSurvives, settleNativeFails;
+let liveOutput, liveRoundTrip, compilerScratch;
+let auditClock, offlinePrep;
+const liveFixturePid = 42042;
+let liveFixtureSignals;
+const osKill = process.kill.bind(process);
+mock.method(process, "kill", (pid, signal) => {
+  // Keep the fake PID fenced even if a test ends before a pending timer fires.
+  if (!liveFixtureSignals && pid !== liveFixturePid && pid !== -liveFixturePid) return osKill(pid, signal);
+  liveFixtureSignals?.push({ pid, signal });
+  throw new Error("synthetic Live fixture cannot signal an OS process");
+});
+
+function forbidLiveSignals(t) {
+  assert.equal(liveFixtureSignals, undefined);
+  const signals = liveFixtureSignals = [];
+  t.after(() => {
+    liveFixtureSignals = undefined;
+    assert.deepEqual(signals, [], "synthetic Live fixture attempted OS signaling");
+  });
+  return signals;
+}
+
+function liveFixtureChild(run) {
+  let cancelled = false;
+  const child = fakeChild((fake) => { if (!cancelled) run(fake); });
+  child.pid = liveFixturePid;
+  const send = child.send.bind(child);
+  child.send = (message, callback) => {
+    if (message.type !== "cancel") return send(message, callback);
+    if (!cancelled) {
+      cancelled = true;
+      queueMicrotask(() => child.close(null, message.signal));
+    }
+    callback?.(null);
+  };
+  return child;
+}
+
+const hourNs = 3600n * 1000000000n;
+const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true, env: fixtureGitEnv() });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
   beginControlWindow(binding) {
     assert.equal(binding.round, "r21"); controlWindows.push("open");
-    return () => { assert.ok(existsSync(join(controlWindows.directory, controlWindows.phase ?? "00-client-heavy-timing", "host-after.json"))); controlWindows.push("close"); };
+    liveRoundTrip?.events.push("window-open");
+    return () => {
+      assert.ok(existsSync(join(controlWindows.directory, controlWindows.phase ?? "00-client-heavy-timing", "host-after.json")));
+      controlWindows.push("close"); liveRoundTrip?.events.push("window-close");
+    };
   },
 } });
 const cpu = { app: { cpuset: "1", quota: 1 } };
 mock.module("./evidence.mjs", { namedExports: { ...evidence,
   physical: (path, ...rest) => evidence.physical(path === "/bench/campaign" ? root : path, ...rest),
+  transferEvidence(source, destination) {
+    if (liveRoundTrip?.mutateTransfer) {
+      const marker = join(source, actualHost.liveWorkloadEndFile), record = JSON.parse(readFileSync(marker));
+      record.clock.uptime = "141.23 31337.22\n";
+      writeFileSync(marker, JSON.stringify(record));
+    }
+    return evidence.transferEvidence(source, destination);
+  },
   inspectEvidence(binding, path) {
     evidence.tree(path); assert.ok(existsSync(join(path, "summary.json")));
     return { qualification: "blocked", rawCompleteness: "not-established" };
@@ -60,7 +117,7 @@ function jsonPhase(plan, phase, receiptPath) {
   assert.ok(plan.order.includes("json-api"), "unselected JSON preparation/freshness is forbidden");
   if (receiptPath?.startsWith("/bench/campaign/")) receiptPath = join(root, ...receiptPath.split("/").slice(3));
   const b = structuredClone(plan.bindings.find((b) => b.request.group === "json-api"));
-  b.request.round = phase === "prepare" ? "j34" : "j35";
+  b.request.round = phase === "prepare" ? jsonPreparationRound(plan.round) : campaignRounds(plan.round)["json-api"];
   b.execution.invocation.argv = ["bench/json-api/run.mjs", b.request.round, "--group", "json-api",
     ...(phase === "prepare" ? ["--build", "--check-only"] : ["--receipts", receiptPath])];
   b.validation.artifactRoot = relative(repo, join(temporary, `native-r${round}`, `json-${phase}`)).replaceAll("\\", "/");
@@ -98,37 +155,53 @@ function rawProcess({ pid, startTicks, cgroup, parentPid }, comm = "ordinary") {
   return { pid, startTicks, cgroup, stat: `${pid} (${comm}) S ${fields.join(" ")}\n` };
 }
 const udevClock = () => ({ bootId: admittedHost.bootId, uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" });
-function udevHost(observation) {
+const udevWorkers = () => [{ pid: 62274, startTicks: settleWorkerTicks }, ...(settleSecondWorker ? [{ pid: 62275, startTicks: "10603" }] : [])];
+function udevHost(observation, retainUdev = true) {
   const value = host();
-  value.processes = [...admittedApparatus.members, admittedApparatus.listener].map((p) => rawProcess(p));
-  value.processes.push({ ...rawProcess({ pid: 846, startTicks: "812", cgroup: udevPath, parentPid: 1 }, "systemd-udevd"), udevExecutable });
-  if (observation === 3 || observation === 4 && settleSurvives)
-    value.processes.push({ ...rawProcess({ pid: 62274, startTicks: settleWorkerTicks, cgroup: udevPath, parentPid: 846 }, "(udev-worker)"), udevExecutable });
-  value.uptime = `${["100.00", "101.00", "106.15", "111.16"][observation - 1]} 1280.13\n`;
-  value.controlApparatus.sample.monoNs = ["2000000", "2000000", "5000000", "5015000000"][observation - 1];
+  value.processes = admittedApparatus ? [...admittedApparatus.members, admittedApparatus.listener].map((p) => rawProcess(p)) : [];
+  const provenance = retainUdev ? { udevExecutable } : {};
+  value.processes.push({ ...rawProcess({ pid: 846, startTicks: "812", cgroup: udevPath, parentPid: 1 }, "systemd-udevd"), ...provenance });
+  if (observation === 3 || observation === 4 && settleSurvives) for (const worker of udevWorkers())
+    value.processes.push({ ...rawProcess({ ...worker, cgroup: udevPath, parentPid: 846 }, "(udev-worker)"), ...provenance });
+  if (retainUdev) value.uptime = `${["100.00", "101.00", "106.15", "111.16"][observation - 1]} 1280.13\n`;
+  if (admittedApparatus) value.controlApparatus.sample.monoNs = ["2000000", "2000000", "5000000", "5015000000"][observation - 1];
   return value;
 }
 mock.module("./host-observation.mjs", { namedExports: {
   ...actualHost, udevSettleMs: 0,
+  sampleAuditClock: () => ({ ...auditClock }),
   observeHost(_apparatus, retainUdev = false) {
     observations++;
+    if (liveRoundTrip) {
+      const value = udevHost(observations, retainUdev), { capture, offlineClock } = liveRoundTrip;
+      value.at = new Date(observations < 3 ? capture.start - 10 : capture.end + (observations === 4 ? 5010 : 5)).toISOString();
+      if (retainUdev && offlineClock) value.offlineMonoNs = offlineClock[observations];
+      if (retainUdev && liveRoundTrip.clockAt) value.uptime = liveRoundTrip.clockAt([0, 0, 0, 45000, 50010][observations]).uptime;
+      if (observations === 4) liveRoundTrip.events.push("settled-census");
+      return value;
+    }
+    if (offlinePrep && retainUdev) {
+      const value = offlinePrep.settled ? udevHost(observations) : host();
+      return { ...value, offlineMonoNs: offlinePrep[["", "before", "after", "settled"][observations - 1]] };
+    }
     if (mode === "udev-settle") {
-      assert.equal(retainUdev, observations > 1);
       if (observations === 3 && settleAbort) queueMicrotask(() => settleAbort.abort(new Error("abort during udev settle")));
-      return udevHost(observations);
+      return udevHost(observations, retainUdev);
     }
     const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value;
   },
   verifyHostBoundary(before, after) {
-    if (mode === "udev-settle") return actualHost.verifyHostBoundary(before, after);
+    if (mode === "udev-settle" || offlinePrep) return actualHost.verifyHostBoundary(before, after);
     assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" };
   },
 } });
 mock.module("./host-lifetime.mjs", { exports: {
+  ...actualLifetime,
   beginLifetime(args) {
+    if (liveRoundTrip) return isolatedLiveLifetime(liveRoundTrip.capture, args, liveRoundTrip.clock);
     if (lifetimeRun) {
       const run = lifetimeRun;
-      return actualLifetime.beginLifetime(args).then((observer) => {
+      return run.setup = actualLifetime.beginLifetime(args).then((observer) => {
         run.observer = observer;
         return run.beforeAttach ? Object.freeze({ ...observer, attach(pid) { run.beforeAttach(); return observer.attach(pid); } }) : observer;
       });
@@ -136,33 +209,51 @@ mock.module("./host-lifetime.mjs", { exports: {
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
+    const observer = { attach() { if (startup) { startup.attached++; startup.onAttach?.(); } }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
-      if (retainTerminalClock) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
+      const proveUdevTerminal = retainTerminalClock && mode === "udev-settle";
+      if (proveUdevTerminal) { assert.equal(command, 1); assert.equal(observations, 2); }
       if (compilerScratch && command === 1) assert.ok(existsSync(join(compilerScratch.target, "scratch")), "target must exist during descriptor sealing");
-      writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(retainTerminalClock ? { terminalClock: udevClock() } : {}) }));
+      const terminalClock = retainTerminalClock && (offlinePrep?.terminal
+        ? { ...udevClock(), monoNs: offlinePrep.terminal } : proveUdevTerminal ? udevClock() : undefined);
+      writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(terminalClock ? { terminalClock } : {}) }));
       if (checks.terminal && checks.empty) settled?.();
       return evidence.tree(directory);
     } };
     if (!startup) return observer;
     assert.ok(startupSignal instanceof AbortSignal);
     startup.signal = startupSignal; startup.directory = directory; startup.enter();
-    return startup.gate.then(() => { if (startup.failure) throw new Error("PRIVATE_SETUP_FAILURE"); return observer; });
+    return startup.gate.then(() => {
+      if (startup.failure) throw Object.assign(new Error("PRIVATE_SETUP_FAILURE"), { operation: "sample-open", code: "EIO" });
+      return observer;
+    });
   },
   inspectLifetime(binding, invocation, directory, expected) {
-    if (lifetimeRun) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
+    if (lifetimeRun || liveRoundTrip) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
     const { terminalClock, ...checks } = JSON.parse(readFileSync(join(directory, "terminal.json")));
     if (replayLifetimeFailure === expected.command) checks.accounting = false;
     const complete = Object.values(checks).every(Boolean);
     return { status: complete ? "verified" : "blocked", cleanupComplete: complete, checks,
       context: { bootId: host().bootId }, manifestSha256: evidence.tree(directory).sha256, terminalClock };
   },
-  composeHostProof() { return { resources: mode === "complete" ? "verified" : "blocked", cleanupComplete: mode === "complete" }; },
+  composeHostProof(...args) {
+    if (liveRoundTrip) return actualLifetime.composeHostProof(...args);
+    return { resources: mode === "complete" ? "verified" : "blocked", cleanupComplete: mode === "complete" };
+  },
 } });
 mock.module("./native-replay.mjs", { exports: { ...nativeReplay,
   async inspectNative(binding, native) {
+    if (liveRoundTrip) {
+      if (!liveRoundTrip.nativeReads.length) {
+        const events = fs.readdirSync(dirname(dirname(native))).filter((name) => /^\d{5}-/.test(name)).sort();
+        assert.match(events.at(-1), /-phase-sealed\.json$/, "live inspection must run on the writer's phase-sealed prefix");
+      }
+      const result = await nativeReplay.inspectNative(binding, native);
+      liveRoundTrip.nativeReads.push(result);
+      return result;
+    }
     evidence.tree(native);
     if (mode === "complete") return completeNative(binding);
     return { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
@@ -196,6 +287,16 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1"); assert.equal(options.env.GIT_NO_LAZY_FETCH, "1");
   const invocation = args.slice(1); calls.push(invocation); currentInvocation = invocation;
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");
+  if (liveRoundTrip) return liveFixtureChild((child) => {
+    const { capture, output, workloadEnd } = liveRoundTrip;
+    assert.deepEqual(invocation, capture.binding.execution.invocation.argv);
+    mkdirSync(dirname(output), { recursive: true }); renameSync(capture.folder, output);
+    if (workloadEnd) writeFileSync(join(output, actualHost.liveWorkloadEndFile), JSON.stringify({
+      schema: actualHost.liveWorkloadEndSchema, round: capture.binding.request.round, commit: capture.binding.request.commit,
+      pid: liveFixturePid, clock: workloadEnd,
+    }));
+    child.close(workloadEnd ? 0 : 1);
+  });
   const child = fakeChild((child) => {
     if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
     const native = !invocation[0].endsWith("fixtures.mjs");
@@ -244,10 +345,15 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     };
   }
   if (lifetimeStartup) {
-    lifetimeStartup.child = child;
+    const startup = lifetimeStartup;
+    startup.child = child;
     const send = child.send.bind(child);
     child.send = (message, callback) => {
-      if (message.type === "cancel") { callback?.(null); queueMicrotask(() => child.close(0)); return; }
+      if (message.type === "cancel") {
+        callback?.(null);
+        if (startup.onCancel) startup.onCancel(); else queueMicrotask(() => child.close(0));
+        return;
+      }
       return send(message, callback);
     };
   }
@@ -255,10 +361,11 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
 });
 const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
+const { replaySealedPhase } = await import("./campaign-journal.mjs");
 let round = 100;
 function setup(policy = () => true) {
-  admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null;
-  liveOutput = null; compilerScratch = null;
+  admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null; settleSecondWorker = false;
+  liveOutput = null; liveRoundTrip = null; compilerScratch = null; offlinePrep = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -278,6 +385,14 @@ function setupGroup(group, policy) {
   s.plan.schema = contracts.groupCampaignSchema; s.plan.order = [group];
   s.plan.bindings = s.plan.bindings.filter((b) => b.request.group === group);
   return s;
+}
+function controlledRound(plan) {
+  plan.round = "r21";
+  for (const binding of plan.bindings) {
+    const { group } = binding.request, { entry, selection } = runnerFor(group);
+    binding.request.round = campaignRounds(plan.round)[group];
+    binding.execution.invocation.argv = [entry, binding.request.round, ...selection];
+  }
 }
 const delivery = (handle) => audit.auditDelivery(JSON.parse(readFileSync(join(handle.directory, "json-audit-subject.json"))).subjectSha256);
 const mixedDelivery = (subjectSha256) => ({ schema: "benchmark-mixed-audit-delivery/v1", subjectSha256,
@@ -317,6 +432,397 @@ test("v4 live campaign retains actual bootstrap proof before baseline and bracke
   writeFileSync(collectionPath, JSON.stringify(collection));
   assert.equal((await validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit })).status, "invalid",
     "rehashed journal/collection cannot substitute for watcher termination");
+});
+
+function syntheticBootstrap(t) {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024 });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+function monitoredSettlementControl(proof, cpus, events) {
+  const { binding, admission } = proof;
+  admittedApparatus = { ...structuredClone(controlRegistration), binding, host: admission.host };
+  admission.apparatus = admittedApparatus;
+  admission.apparatusSample = { host: admission.host, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
+  const stream = { registration: admittedApparatus, check() { events.push("check"); },
+    open(observed) { assert.deepEqual(observed, cpus); events.push("open"); },
+    close() { events.push("close"); }, async seal() {
+      events.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
+        observations: Array.from({ length: 21 }, (_, i) => ({ sequence: i + 1,
+          monoNs: String(2000000 + i * 250500000), registrationSha256: streamHash(admittedApparatus) })),
+        sealedMonoNs: "5016000000",
+        lease: { id: admittedApparatus.id, host: admission.host, expiresMonoNs: "15000000000" } };
+    } };
+  return { binding, admission, stream };
+}
+
+function writeSettlementDrain(handle) {
+  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
+    host: admittedHost, monoNs: "5017000000", identitiesAbsent: true, listener: admittedApparatus.listener,
+    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
+  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+}
+
+function fakeOfflineFenceCommands(t, binding, packets, commandCount = 2) {
+  const table = "corten_bench_native", tcpMatch = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
+  const policy = { nftables: [
+    { metainfo: { json_schema_version: 1 } },
+    { table: { handle: 1, family: "inet", name: table } },
+    { chain: { handle: 2, family: "inet", table, name: "input", type: "filter", hook: "input", prio: 10, policy: "accept" } },
+    { rule: { handle: 3, family: "inet", table, chain: "input", expr: [
+      tcpMatch, { match: { op: "==", left: { "&": [{ payload: { protocol: "tcp", field: "flags" } }, ["fin", "syn", "rst", "ack"]] }, right: "syn" } },
+      { limit: { rate: 8, burst: 8, per: "minute" } }, { counter: { packets: 0, bytes: 0 } }, { drop: null },
+    ] } },
+    { rule: { handle: 4, family: "inet", table, chain: "input", expr: [tcpMatch, { counter: { packets: 0, bytes: 0 } }, { drop: null }] } },
+  ] };
+  const events = [];
+  t.mock.method(childProcess, "spawnSync", (program, args, opts) => {
+    if (program === "/usr/bin/python3") {
+      const op = args.at(-2);
+      assert.ok(["window-open", "window-close"].includes(op));
+      assert.equal(calls.length, op === "window-open" ? 0 : commandCount);
+      assert.equal(args.at(-1), binding.token);
+      events.push(op);
+    } else {
+      assert.equal(program, "/usr/bin/taskset");
+      assert.deepEqual(args.slice(0, 3), ["-c", "0", "/usr/sbin/nft"]);
+      // The fence installs as one argv batch with no stdin input.
+      const install = args.length === 4 && args[3] === controlAdmission.offlineFenceRules;
+      events.push(install ? "install" : args[3]);
+      if (install) assert.equal(opts.input, "");
+      else assert.deepEqual(args.slice(-3), ["table", "inet", table]);
+      if (args[3] === "-j" && events.includes("window-close"))
+        policy.nftables[3].rule.expr[3].counter = { packets, bytes: 60 * packets };
+    }
+    return { status: 0, stdout: JSON.stringify(policy) };
+  });
+  syncBuiltinESMExports();
+  return events;
+}
+
+async function offlineCampaign(t, group, packets = 2, settle = false) {
+  const { binding, admission } = syntheticBootstrap(t), s = setupGroup(group);
+  controlledRound(s.plan); admittedHost = admission.host;
+  const closed = BigInt(admission.closedMonoNs), after = closed + 6n * hourNs;
+  if (group === "json-api") {
+    offlinePrep = { before: String(closed + 5n * hourNs), after: String(after),
+      ...(settle ? { terminal: String(after - 1n), settled: String(after + BigInt(actualHost.udevSettleMs) * 1000000n) } : {}) };
+    settleWorkerTicks = "10400"; settleSurvives = false;
+  }
+  auditClock = { bootId: admittedHost.bootId, monoNs: offlinePrep?.settled ?? offlinePrep?.after ?? admission.closedMonoNs };
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
+  const events = fakeOfflineFenceCommands(t, binding, packets);
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding, admission, offlineHandoff: true } });
+  return { ...s, binding, admission, events, handle, collection: join(handle.directory, "collection-manifest.json"),
+    validate: () => validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit }) };
+}
+
+test("offline timed probe hits preserve evidence but disqualify an otherwise verified native phase", async (t) => {
+  const s = await offlineCampaign(t, "localized-marketplace");
+  const { handle, binding, admission, events, collection, validate } = s;
+  mode = "complete";
+  assert.equal(s.campaign.status(handle).executionVersion, 6);
+  const status = await s.campaign.advance(handle);
+  assert.equal(status.state, "finished");
+  assert.equal(status.outcomes[0].outcome, "blocked");
+  assert.equal(status.outcomes[0].nativeStatus, "verified");
+  assert.ok(status.outcomes[0].appOutcomes.every(({ comparisonEligible }) => !comparisonEligible));
+  assert.deepEqual(events, ["install", "-j", "window-open", "window-close", "-j", "delete"]);
+  writeFileSync(collection, JSON.stringify(s.campaign.collect(handle)));
+  const saved = await validate();
+  assert.equal(saved.status, "blocked", JSON.stringify(saved));
+  assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 2, bytes: 120 }]);
+  assert.ok(saved.blockers.includes("localized-marketplace/timing: denied pre-login probe traffic"));
+  assert.deepEqual(saved.offlineTerminal, { ...admission.host, token: binding.token,
+    bootstrapSealSha256: evidence.digest(JSON.stringify(admission.seal.ledger)) });
+  const phase = "00-localized-marketplace-timing", raw = join(handle.directory, phase, "control-ingress.json");
+  const changed = JSON.parse(readFileSync(raw));
+  assert.deepEqual(changed.after.nftables[3].rule.expr[3].counter, { packets: 2, bytes: 120 });
+  assert.deepEqual(controlAdmission.verifyOfflineWindow(changed), { packets: 2, bytes: 120 });
+  for (const mutate of [
+    ({ before }) => { before.nftables[3].rule.expr[3].counter = { packets: 3, bytes: 180 }; },
+    ({ after }) => { after.nftables[3].rule.handle++; },
+    ({ after }) => { after.nftables[3].rule.expr[1].match.right = "ack"; },
+    ({ after }) => { after.nftables[3].rule.expr[2].limit.burst++; },
+  ]) {
+    const wrong = structuredClone(changed); mutate(wrong);
+    assert.throws(() => controlAdmission.verifyOfflineWindow(wrong));
+  }
+  changed.after.nftables[4].rule.expr[1].counter = { packets: 1, bytes: 60 };
+  assert.throws(() => controlAdmission.verifyOfflineWindow(changed));
+  // Matching hashes cannot repair a bad fence observation.
+  writeFileSync(raw, JSON.stringify(changed));
+  const phaseSeal = evidence.tree(handle.directory).entries.find(({ path }) => /^\d{5}-phase-sealed\.json$/.test(path));
+  const sealPath = join(handle.directory, phaseSeal.path), event = JSON.parse(readFileSync(sealPath));
+  event.phaseManifestSha256 = evidence.phaseSnapshot(join(handle.directory, phase)).sha256;
+  writeFileSync(sealPath, JSON.stringify(event));
+  const retained = JSON.parse(readFileSync(collection)), entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
+  writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: evidence.digest(JSON.stringify(entries)) } }));
+  assert.equal((await validate()).status, "invalid");
+});
+
+test("offline timed phase with zero denied probes remains eligible for ordinary replay", async (t) => {
+  const { campaign, handle, collection, validate } = await offlineCampaign(t, "localized-marketplace", 0);
+  mode = "complete";
+  const status = await campaign.advance(handle);
+  assert.equal(status.outcomes[0].outcome, "native-validated");
+  writeFileSync(collection, JSON.stringify(campaign.collect(handle)));
+  const saved = await validate();
+  assert.equal(saved.status, "verified", JSON.stringify(saved));
+  assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 0, bytes: 0 }]);
+});
+
+test("isolated Live fixture drains a setup fault without OS signaling", { timeout: 3000 }, async (t) => {
+  const signals = forbidLiveSignals(t);
+  t.mock.property(process, "platform", "linux");
+  const start = t.mock.fn(), child = liveFixtureChild(start);
+  const ipc = t.mock.method(child, "send"), force = t.mock.method(child, "kill");
+  t.mock.method(childProcess, "spawn", () => child);
+  let attachedPid;
+  const result = await supervise({ executable: "node", argv: ["synthetic-live"], shell: false }, {
+    cwd: repo, env: {}, log() {},
+    onStart(pid) { attachedPid = pid; throw new Error("synthetic observer attach fault"); },
+  }, { readyMs: 1000, runMs: 1000, stopMs: 10, killMs: 10 });
+  assert.equal(attachedPid, liveFixturePid);
+  assert.equal(start.mock.callCount(), 0);
+  assert.deepEqual(ipc.mock.calls.map(({ arguments: [message] }) => message), [{ type: "cancel", signal: "SIGTERM" }]);
+  assert.deepEqual(signals, [], "synthetic Live fixture attempted OS signaling");
+  assert.equal(force.mock.callCount(), 0);
+  assert.deepEqual(result, { terminal: true, code: null, signal: "SIGTERM", cancelled: true, forced: false,
+    error: "native host observation setup failed", success: false });
+});
+
+for (const [group, offline, early = false] of [["live-delivery", false], ["live-delivery", true],
+  ["recoverable-live", false], ["recoverable-live", true], ["live-delivery", true, true]]) {
+  test(`isolated Live round trip: ${group} ${offline ? "offline" : "monitored"}${early ? " refuses unproved early settle" : ""}`, async (t) => {
+    forbidLiveSignals(t);
+    const { campaign, plan } = setupGroup(group), proof = syntheticBootstrap(t);
+    plan.round = proof.binding.round;
+    const capture = await isolatedLiveCapture(t, group, campaignRounds(plan.round)[group]);
+    const output = join(temporary, `native-r${round}`, group);
+    capture.binding.validation = { artifactRoot: relative(repo, output).replaceAll("\\", "/") };
+    capture.binding.latestStable = plan.bindings[0].latestStable;
+    plan.bindings[0] = capture.binding;
+    delete plan.campaignSha256; plan.campaignSha256 = deploymentSha256(plan);
+    admittedHost = proof.admission.host;
+    settleWorkerTicks = early ? "10304" : "10601"; settleSurvives = false;
+    const boot = offline ? BigInt(proof.admission.closedMonoNs) : 0n;
+    const clock = { ...udevClock(), monoNs: String(boot + 4000000n) };
+    const events = offline ? fakeOfflineFenceCommands(t, proof.binding, 0, 1) : [];
+    const control = offline ? { ...proof, offlineHandoff: true } : monitoredSettlementControl(proof, liveActorCpus, events);
+    const offlineClock = offline ? [0n, 0n, 2000000n, 5000000n, 5015000000n].map((offset) => String(boot + offset)) : null;
+    const workloadEnd = early ? { bootId: clock.bootId, uptime: "103.03 1277.00\n", monoNs: String(boot + 3500000n) } : undefined;
+    liveRoundTrip = { capture, output, clock, workloadEnd, offlineClock, events, nativeReads: [] };
+    const handle = await campaign.begin(plan, { stateRoot: "/bench/campaign", control });
+    controlWindows.directory = handle.directory; controlWindows.phase = `00-${group}-timing`;
+    if (early) {
+      // Exit zero and a sealed marker are not substitutes for successful native actor windows.
+      await assert.rejects(campaign.advance(handle), /early udev settlement requires verified live workload evidence/);
+      assert.ok(events.includes("settled-census"));
+      assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, cleanupComplete }) => [status, cleanupComplete]), [["invalid", false]]);
+      assert.equal(campaign.status(handle).state, "preserved-uncertain");
+      assert.ok(!readdirSync(handle.directory).some((name) => name.endsWith("-group-finished.json")));
+      return;
+    }
+    const status = await campaign.advance(handle);
+    assert.equal(status.state, "finished"); assert.equal(status.executionVersion, offline ? 6 : 5);
+    assert.deepEqual(events.filter((kind) => kind !== "check"), offline
+      ? ["install", "-j", "window-open", "settled-census", "window-close", "-j", "delete"]
+      : ["open", "window-open", "settled-census", "window-close", "close", "seal"], "control window must cover the settled census");
+    assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "10601" }]);
+    assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, resources, cleanupComplete }) => [status, resources, cleanupComplete]),
+      [["failed", "verified", true]], "synthetic target failures must not prevent a complete, isolated cleanup proof");
+    assert.equal(status.outcomes[0].outcome, "native-validated");
+    if (!offline) writeSettlementDrain(handle);
+    writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(campaign.collect(handle)));
+    const saved = await validateSavedCampaign({ folder: root, round: plan.round, commit: plan.commit });
+    assert.equal(saved.status, "verified", JSON.stringify(saved));
+    assert.equal(saved.collectionIntegrity, "manifest-verified");
+    assert.deepEqual(saved.groups[0].appOutcomes, status.outcomes[0].appOutcomes);
+    assert.ok(saved.groups[0].appOutcomes.every(({ outcome, comparisonEligible }) => outcome === "failed" && !comparisonEligible));
+    assert.deepEqual(liveRoundTrip.nativeReads.map(({ resources, cleanupComplete }) => [resources, cleanupComplete]),
+      [["verified", true], ["verified", true]], "both live prefix and saved archive must use real isolated replay");
+    if (offline) assert.deepEqual(saved.offlineIngress, [{ group, phase: "timing", packets: 0, bytes: 0 }]);
+  });
+}
+
+const successfulLive = "isolated Live successful early settlement and clock-only mutations";
+test(successfulLive, { timeout: 125000 }, async (t) => {
+  const group = "live-delivery";
+  if (selectedApps(group).length !== 1) {
+    // Start a test-only single-app registry before loading the production
+    // readers. Keep all of their checks, including verifyRound and fan-out.
+    for (const variant of ["replay", "changed-transfer"]) {
+      const run = childProcess.execFileSync(process.execPath, ["--experimental-test-module-mocks", "--test-name-pattern", successfulLive,
+        "--input-type=module", "-", variant], { cwd: repo, encoding: "utf8", timeout: 60000, input: `
+        import { mock } from "node:test";
+        const registry = new URL("../registry.mjs", ${JSON.stringify(import.meta.url)});
+        const actual = await import(registry);
+        mock.module(registry, { exports: { ...actual, selectedApps: (group) => group === "live-delivery" ? ["express"] : actual.selectedApps(group) } });
+        await import(${JSON.stringify(import.meta.url)});
+      ` });
+      assert.match(run, /pass 1/);
+    }
+    return;
+  }
+  forbidLiveSignals(t);
+  const { campaign, plan } = setupGroup(group), proof = syntheticBootstrap(t);
+  plan.round = proof.binding.round;
+  const clockAt = (ms) => ({ bootId: proof.admission.host.bootId, uptime: `${((100000 + ms) / 1000).toFixed(2)} 0.00\n`,
+    monoNs: String(BigInt(proof.admission.closedMonoNs) + BigInt(ms + 100000) * 1000000n) });
+  const capture = await isolatedLiveSuccess(t, campaignRounds(plan.round)[group], clockAt);
+  const output = join(temporary, `native-r${round}`, "success");
+  capture.binding.validation = { artifactRoot: relative(repo, output).replaceAll("\\", "/") };
+  capture.binding.latestStable = plan.bindings[0].latestStable;
+  plan.bindings[0] = capture.binding;
+  delete plan.campaignSha256; plan.campaignSha256 = deploymentSha256(plan);
+  admittedHost = proof.admission.host; settleWorkerTicks = "14100";
+  const events = fakeOfflineFenceCommands(t, proof.binding, 0, 1);
+  const clock = { ...clockAt(44000), ticksPerSecond: 100 };
+  liveRoundTrip = { capture, output, clock, clockAt, workloadEnd: clockAt(40000), events, nativeReads: [],
+    offlineClock: [0, 0, 0, 45000, 50010].map((ms) => clockAt(ms).monoNs),
+    mutateTransfer: process.argv.includes("changed-transfer") };
+  const handle = await campaign.begin(plan, { stateRoot: "/bench/campaign", control: { ...proof, offlineHandoff: true } });
+  const phase = join(handle.directory, "00-live-delivery-timing"), native = join(phase, "native");
+  if (liveRoundTrip.mutateTransfer) {
+    await assert.rejects(campaign.advance(handle), { message: "live workload end changed during collection" });
+    const halt = readdirSync(handle.directory).find((name) => name.endsWith("-halted.json"));
+    assert.ok(halt);
+    const bytes = readFileSync(join(handle.directory, halt), "utf8");
+    assert.match(bytes, /live workload end changed during collection/);
+    assert.doesNotMatch(bytes, /31337\.22/);
+    return;
+  }
+  const status = await campaign.advance(handle);
+  assert.equal(status.outcomes[0].outcome, "native-validated", JSON.stringify(liveRoundTrip.nativeReads));
+  assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "14100" }]);
+  const collection = join(handle.directory, "collection-manifest.json");
+  writeFileSync(collection, JSON.stringify(campaign.collect(handle)));
+  const saved = await validateSavedCampaign({ folder: root, round: plan.round, commit: plan.commit });
+  assert.equal(saved.status, "verified", JSON.stringify(saved));
+  assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, resources, cleanupComplete }) => [status, resources, cleanupComplete]),
+    [["verified", "verified", true], ["verified", "verified", true]]);
+
+  const marker = join(native, actualHost.liveWorkloadEndFile), record = JSON.parse(readFileSync(marker));
+  const sealPath = join(handle.directory, readdirSync(handle.directory).find((name) => name.endsWith("-phase-sealed.json")));
+  const seal = JSON.parse(readFileSync(sealPath));
+  // Rebind the native and phase seals so the independent native reader has
+  // to judge the clock itself, not a stale hash or a different command exit.
+  record.clock.uptime = clockAt(1000).uptime;
+  writeFileSync(marker, JSON.stringify(record));
+  const manifest = evidence.tree(native);
+  writeFileSync(join(phase, "native-manifest.json"), JSON.stringify(manifest));
+  writeFileSync(sealPath, JSON.stringify({ ...seal, nativeManifestSha256: manifest.sha256, phaseManifestSha256: evidence.phaseSnapshot(phase).sha256 }));
+  const refused = await nativeReplay.inspectNative(capture.binding, native);
+  assert.deepEqual(refused.outcomes, [{ app: "express", outcome: "passed" }], "native v3 measurements must still pass");
+  assert.equal(refused.status, "invalid");
+  assert.equal(refused.resources, "invalid");
+  assert.equal(refused.cleanupComplete, false);
+});
+
+test("offline audit cannot start before the guest has closed bootstrap", async (t) => {
+  const { campaign, handle, admission } = await offlineCampaign(t, "mixed-production");
+  auditClock.monoNs = String(BigInt(admission.closedMonoNs) - 1n);
+  await assert.rejects(campaign.advance(handle), /audit wait predates bootstrap closure/);
+  assert.equal(campaign.status(handle).state, "preserved-uncertain");
+});
+
+for (const settle of [false, true]) test("offline JSON wait cannot start before " + (settle ? "settled" : "first") + " preparation boundary", async (t) => {
+  const { campaign, handle, admission } = await offlineCampaign(t, "json-api", 2, settle);
+  auditClock.monoNs = settle ? offlinePrep.after : String(BigInt(admission.closedMonoNs) + hourNs);
+  await assert.rejects(campaign.advance(handle), /audit wait predates preparation completion/);
+  assert.equal(campaign.status(handle).state, "preserved-uncertain");
+});
+
+for (const [group, settle] of [["json-api", false], ["json-api", true], ["mixed-production", false]]) test(
+  "offline audit expiry seals only the pre-timing evidence: " + group + (settle ? " settled" : ""), async (t) => {
+  const { campaign, handle, collection, validate, admission } = await offlineCampaign(t, group, 2, settle);
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T00:00:00Z") });
+  const waiting = await campaign.advance(handle);
+  assert.equal(waiting.state, "blocked-review-needed", "untimed preparation may see denied probes");
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/);
+  t.mock.timers.tick(contracts.auditWaitMs * 2);
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/, "a forward wall step must not expire the wait");
+  const bootId = auditClock.bootId;
+  auditClock = { bootId: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    monoNs: String(BigInt(auditClock.monoNs) + BigInt(contracts.auditWaitMs) * 1000000n) };
+  assert.throws(() => campaign.expireOfflineAudit(handle), /audit clock boot differs/);
+  auditClock.bootId = bootId;
+  const completeNs = BigInt(auditClock.monoNs);
+  auditClock.monoNs = String(completeNs - 1n);
+  assert.equal(campaign.offlineAuditRemainingMs(handle), 1);
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/);
+  auditClock.monoNs = String(completeNs);
+  t.mock.timers.setTime(new Date("2026-11-21T00:00:00Z").valueOf());
+  const prefix = group === "json-api" ? "json" : "mixed", inbox = join(handle.directory, prefix + "-audit-delivery-pending.json");
+  writeFileSync(inbox, "{}");
+  assert.throws(() => campaign.expireOfflineAudit(handle), /delivery may have started/);
+  fs.unlinkSync(inbox);
+  writeFileSync(collection, JSON.stringify(campaign.expireOfflineAudit(handle)));
+  const result = await validate();
+  assert.equal(result.status, "blocked", JSON.stringify(result));
+  assert.deepEqual(result.groups, []);
+  assert.equal(result.collectionIntegrity, "manifest-verified");
+  assert.equal(result.commandLifecycle, "observed-terminal");
+  assert.deepEqual(result.offlineAuditExpired, { group, subjectSha256: group === "json-api" ? waiting.auditSubjectSha256 : waiting.mixedAuditSubjectSha256 });
+  assert.deepEqual(result.offlineIngress, group === "json-api" ? [{ group, phase: "prepare", packets: 2, bytes: 120 }] : []);
+  const retained = JSON.parse(readFileSync(collection));
+  const { deploymentSha256 } = await import("../deployments.mjs");
+  const reseal = () => {
+    const entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
+    writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: deploymentSha256(entries) } }));
+  };
+  reseal(); assert.equal((await validate()).status, "blocked", "control: an unchanged archive survives resealing");
+  writeFileSync(inbox, "{}"); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot excuse an unsettled audit delivery");
+  fs.unlinkSync(inbox);
+  const expiry = retained.manifest.entries.find(({ path }) => /^\d{5}-offline-audit-expired\.json$/.test(path));
+  const expiryPath = join(handle.directory, expiry.path), terminal = JSON.parse(readFileSync(expiryPath));
+  const goodClock = { ...terminal.auditClock };
+  terminal.auditClock.monoNs = String(BigInt(goodClock.monoNs) - 1n);
+  writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot authorize an early expiry");
+  terminal.auditClock = { ...goodClock, bootId: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff" };
+  writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot join samples from different boots");
+  const waitingEvent = retained.manifest.entries.find(({ path }) => /^\d{5}-(?:mixed-)?review-needed\.json$/.test(path));
+  const waitPath = join(handle.directory, waitingEvent.path), wait = JSON.parse(readFileSync(waitPath));
+  const savedWaitClock = { ...wait.auditClock };
+  wait.auditClock.bootId = terminal.auditClock.bootId;
+  writeFileSync(waitPath, JSON.stringify(wait));
+  reseal();
+  assert.equal((await validate()).status, "invalid", "two samples on a different boot cannot qualify the admitted host");
+  const beforeBootstrap = BigInt(admission.closedMonoNs) - 1n;
+  wait.auditClock = { bootId, monoNs: String(beforeBootstrap) };
+  terminal.auditClock = { bootId, monoNs: String(beforeBootstrap + BigInt(contracts.auditWaitMs) * 1000000n) };
+  writeFileSync(waitPath, JSON.stringify(wait)); writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "the full wait must begin after bootstrap has closed");
+  if (group === "json-api") {
+    const early = settle ? BigInt(offlinePrep.after) : BigInt(admission.closedMonoNs) + hourNs;
+    wait.auditClock = { bootId, monoNs: String(early) };
+    terminal.auditClock = { bootId, monoNs: String(early + BigInt(contracts.auditWaitMs) * 1000000n) };
+    writeFileSync(waitPath, JSON.stringify(wait)); writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+    assert.equal((await validate()).status, "invalid", "a canonically resealed wait cannot borrow time from preparation");
+    if (!settle) {
+      wait.auditClock = savedWaitClock; terminal.auditClock = goodClock;
+      writeFileSync(waitPath, JSON.stringify(wait)); writeFileSync(expiryPath, JSON.stringify(terminal));
+      const phase = join(handle.directory, "00-json-api-prepare");
+      const seal = retained.manifest.entries.find(({ path }) => /^\d{5}-phase-sealed\.json$/.test(path));
+      const sealPath = join(handle.directory, seal.path), sealEvent = JSON.parse(readFileSync(sealPath));
+      const afterPath = join(phase, "host-after.json"), after = JSON.parse(readFileSync(afterPath));
+      for (const [badClock, reason] of [[undefined, "missing"], [String(BigInt(offlinePrep.before) - 1n), "regressing"]]) {
+        writeFileSync(afterPath, JSON.stringify({ ...after, offlineMonoNs: badClock }));
+        sealEvent.phaseManifestSha256 = evidence.phaseSnapshot(phase, true).sha256;
+        writeFileSync(sealPath, JSON.stringify(sealEvent)); reseal();
+        assert.equal((await validate()).status, "invalid", `resealing cannot excuse a ${reason} preparation end clock`);
+      }
+    }
+  }
 });
 
 test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {
@@ -460,11 +966,16 @@ for (const [fault, shutdown = "drained"] of [
     assert.equal(state.outcomes[0].outcome, "preserved-uncertain");
     assert.equal(existsSync(join(root, ".host-attempt.json")), true);
     const directory = join(h.directory, "00-client-heavy-timing/command-0-host");
+    const halted = readdirSync(h.directory).find((name) => /^\d+-halted\.json$/.test(name));
+    const savedHalt = readFileSync(join(h.directory, halted), "utf8");
     if (fault === "write") {
       assert.match(outcome.error.message, /storage incomplete/);
       assert.equal(outcome.error.code, "EIO");
       assert.equal(existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+      assert.deepEqual(JSON.parse(savedHalt).hostStorageFailure, { operation: "sample-write", code: "EIO" });
+      assert.ok(!savedHalt.includes("PRIVATE_STORAGE_DETAIL"));
     } else {
+      assert.equal(JSON.parse(savedHalt).hostStorageFailure, undefined);
       const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
       if (fault === "continuity") {
         assert.equal(terminal.observerError, null); assert.equal(terminal.observerFailures.count, 0);
@@ -491,6 +1002,139 @@ for (const [fault, shutdown = "drained"] of [
     if (!settled) run.child?.close(0);
     await advancing; lifetimeRun = null;
   }
+});
+
+for (const kind of ["fault", "fault then cleanup failure", "cancel", "cancel then fault", "deadline", "cancel through deadline",
+  "deadline then cancel", "deadline then fault", "exit through deadline", "attachment deadline"])
+test(`actual campaign startup storage: ${kind} preserves only a real writer diagnostic`, { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  const h = await begin(s), parent = new AbortController();
+  t.mock.method(globalThis, "setInterval", () => null);
+  const f = await samplingControl(t);
+  f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  const run = lifetimeRun = { started: false, cancels: 0 };
+  const cancelled = new Promise((resolve) => { run.cancel = resolve; });
+  run.start = () => run.child.close(0);
+  let openFaults = 0, cleanupFaults = 0, settled = false;
+  const directory = join(h.directory, "00-client-heavy-timing"), host = join(directory, "command-0-host");
+  const sample = join(host, "samples.jsonl");
+  const held = !kind.startsWith("fault");
+  const attaching = kind === "attachment deadline", earlyExit = kind === "exit through deadline";
+  const pause = attaching ? f.pause("sync", (path) => path.startsWith(join(host, "processes")) && path.endsWith(".json"))
+    : held ? f.pause("open", (path) => path === sample) : null;
+  const before = f.before;
+  const deadline = kind.includes("deadline"), earlyCancel = kind.startsWith("cancel"), lateCancel = kind === "deadline then cancel";
+  const lateFault = kind === "deadline then fault";
+  if (deadline) t.mock.timers.enable({ apis: ["setTimeout"] });
+  if (kind === "fault then cleanup failure") {
+    const rmdir = fs.rmdirSync;
+    t.mock.method(fs, "rmdirSync", (path, ...args) => {
+      if (String(path).replaceAll("\\", "/").startsWith("/sys/fs/cgroup/")) {
+        cleanupFaults++;
+        throw Object.assign(new Error("PRIVATE_CLEANUP_DETAIL"), { code: "EBUSY" });
+      }
+      return rmdir(path, ...args);
+    });
+    syncBuiltinESMExports();
+  }
+  f.before = async (step, path) => {
+    await before(step, path);
+    if (step === "open" && path === sample && (!held || kind === "cancel then fault" || lateFault)) { openFaults++; throw ioError(); }
+  };
+  const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
+    () => { settled = true; }, (error) => { settled = true; return error; });
+  try {
+    if (pause) await pause.entered;
+    if (earlyCancel) parent.abort();
+    if (earlyExit) run.child.emit("exit", 0, null);
+    if (deadline) t.mock.timers.tick(30000);
+    if (lateCancel) parent.abort();
+    await Promise.race([cancelled, advancing.then(() => { throw new Error("startup did not request owned cancellation"); })]);
+    assert.equal(run.started, false); assert.equal(run.cancels, 1);
+    assert.equal(parent.signal.aborted, earlyCancel || lateCancel); assert.equal(settled, false);
+    assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
+    if (!deadline || lateFault) pause?.release();
+    if (lateFault) await new Promise((resolve) => setImmediate(resolve));
+    run.child.close(0);
+    const error = await advancing;
+    const files = readdirSync(h.directory);
+    const exitFile = files.find((name) => name.endsWith("-command-exited.json"));
+    assert.ok(exitFile, "supervisor outcome must be journaled before halt, while attachment I/O is still held");
+    const exited = JSON.parse(readFileSync(join(h.directory, exitFile)));
+    assert.match(error?.message, /lifetime or cleanup unproven/);
+    if (!held) assert.equal(exited.error, "native host observation setup failed");
+    if (deadline) assert.equal(exited.error, "native host observation setup incomplete");
+    assert.equal(exited.cancelled, true); assert.equal(exited.success, false);
+    assert.equal(exited.hostManifestSha256, undefined);
+    const halted = readFileSync(join(h.directory, files.find((name) => name.endsWith("-halted.json"))), "utf8");
+    const halt = JSON.parse(halted);
+    assert.ok(exited.sequence < halt.sequence, "the observed command exit precedes the halt");
+    const code = deadline && !earlyCancel && !earlyExit ? "ETIMEDOUT" : kind.includes("fault") ? "EIO" : undefined;
+    assert.deepEqual(halt.hostStorageFailure,
+      code ? { operation: attaching ? "process-record-sync" : "sample-open", code } : undefined);
+    if (attaching) {
+      assert.ok(f.live.size > 0, "the writer still owns the held fsync");
+      assert.equal(f.removed, false);
+    }
+    assert.equal(openFaults, code === "EIO" || lateFault ? 1 : 0);
+    assert.equal(cleanupFaults, kind === "fault then cleanup failure" ? 1 : 0);
+    if (cleanupFaults) assert.equal(f.removed, false);
+    assert.ok(!/PRIVATE_(?:STORAGE|CLEANUP)_DETAIL/.test(halted));
+    assert.equal(existsSync(join(host, "terminal.json")), false);
+    assert.equal(existsSync(join(root, ".host-attempt.json")), true);
+    assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
+    await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
+  } finally {
+    pause?.release();
+    if (!settled) run.child?.close(0);
+    await advancing; await run.setup?.catch(() => {});
+    lifetimeRun = null;
+  }
+});
+
+test("actual campaign compiler cleanup preserves its wrapped writer fault", { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  t.mock.method(globalThis, "setInterval", () => null);
+  const windows = process.platform === "win32";
+  const f = await samplingControl(t);
+  f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  const target = `${join(repo, s.plan.bindings[0].validation.artifactRoot)}.compiler`;
+  if (windows) {
+    const exec = childProcess.execFileSync;
+    t.mock.method(childProcess, "execFileSync", (file, args, ...rest) => {
+      if (file !== "/bin/mv") return exec(file, args, ...rest);
+      assert.equal(args[0], "-n"); assert.equal(args[2], fs.realpathSync(dirname(target)));
+      renameSync(args[1], target);
+    });
+  }
+  let cleanupFaults = 0;
+  const rmdir = fs.rmdirSync;
+  t.mock.method(fs, "rmdirSync", (path, ...args) => {
+    if (String(path).startsWith(join(fs.realpathSync(dirname(target)), ".compiler-owner-"))) {
+      cleanupFaults++; throw new Error("PRIVATE_COMPILER_CLEANUP");
+    }
+    return rmdir(path, ...args);
+  });
+  syncBuiltinESMExports();
+  const host = join(h.directory, "00-client-heavy-timing/command-0-host");
+  f.before = (step, path) => { if (step === "sync" && path === join(host, "samples.jsonl")) throw ioError(); };
+  const run = lifetimeRun = { started: false, cancels: 0, start() { f.members = []; run.child.close(0); } };
+  try {
+    await assert.rejects(s.campaign.advance(h), (error) => /compiler target cleanup failed/.test(error.message) && error.cause?.code === "EIO");
+    const halted = readdirSync(h.directory).find((name) => name.endsWith("-halted.json"));
+    const saved = readFileSync(join(h.directory, halted), "utf8");
+    assert.deepEqual(JSON.parse(saved).hostStorageFailure, { operation: "sample-sync", code: "EIO" });
+    assert.ok(!/PRIVATE_(?:COMPILER|STORAGE)/.test(saved));
+    assert.equal(run.started, true); assert.equal(cleanupFaults, 1);
+    assert.equal(existsSync(target), true); assert.equal(existsSync(join(host, "terminal.json")), false);
+    assert.equal(s.campaign.status(h).state, "preserved-uncertain");
+  } finally { lifetimeRun = null; }
 });
 
 test("actual campaign attachment gap cancels before native start or interval creation", { timeout: 15000 }, async (t) => {
@@ -547,11 +1191,121 @@ for (const stop of ["cancel", "close"]) for (const failure of [false, true]) tes
     release(); await rejected;
     assert.equal(owner.attached, 0); assert.equal(owner.disposed, failure ? 0 : 1);
     assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+    const halted = readdirSync(h.directory).find((name) => name.endsWith("-halted.json"));
+    const saved = readFileSync(join(h.directory, halted), "utf8");
+    assert.equal(JSON.parse(saved).hostStorageFailure, undefined);
+    assert.ok(!saved.includes("PRIVATE_SETUP_FAILURE"));
     const status = s.campaign.status(h);
     assert.equal(status.state, "preserved-uncertain"); assert.equal(status.uncollectedNativeRoots.length, 1);
     assert.equal(calls.length, 1);
     await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
   } finally { release(); await rejected; }
+});
+
+for (const crossed of [false, true]) test(`command-started journal ${crossed ? "crosses" : "stays within"} the observation startup cutoff`, async (t) => {
+  const s = setupGroup("catalog-page"); s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  let now = 100, journalFd, journalSyncs = 0, setups = 0;
+  const open = fs.openSync, sync = fs.fsyncSync;
+  t.mock.method(performance, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(fs, "openSync", (path, ...args) => {
+    const fd = open(path, ...args);
+    if (args[0] === "wx" && typeof path === "string" && path.endsWith("-command-started.json")) journalFd = fd;
+    return fd;
+  });
+  t.mock.method(fs, "fsyncSync", (fd) => {
+    sync(fd);
+    if (fd === journalFd) {
+      journalFd = undefined; journalSyncs++;
+      now += limits.readyMs + (crossed ? 1 : -1);
+    }
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const owner = lifetimeStartup = { enter() { setups++; }, gate: Promise.resolve(), attached: 0, disposed: 0 };
+  if (crossed) await assert.rejects(s.campaign.advance(h), /lifetime or cleanup unproven/);
+  else assert.equal((await s.campaign.advance(h)).state, "finished");
+
+  const files = readdirSync(h.directory);
+  const receipt = (kind) => JSON.parse(readFileSync(join(h.directory, files.find((name) => name.endsWith(`-${kind}.json`))), "utf8"));
+  const started = receipt("command-started"), exited = receipt("command-exited");
+  assert.equal(journalSyncs, 1);
+  assert.equal(started.kind, "command-started");
+  assert.ok(started.sequence < exited.sequence);
+  assert.equal(exited.success, !crossed);
+  assert.equal(exited.cancelled, crossed);
+  assert.equal(exited.error, crossed ? "native host observation setup incomplete" : null);
+  assert.equal(setups, crossed ? 0 : 1);
+  assert.equal(owner.attached, crossed ? 0 : 1);
+  const host = join(h.directory, "00-catalog-page-timing", "command-0-host");
+  assert.equal(existsSync(host), !crossed);
+  assert.equal(existsSync(join(host, "terminal.json")), !crossed);
+});
+
+for (const boundary of ["before attach", "after attach", "after attachment check"]) {
+  test(`campaign startup cutoff without dispatching timers: ${boundary}`, { timeout: 10000 }, async (t) => {
+    const s = setupGroup("client-heavy"), h = await begin(s);
+    let elapsed = 100, readsUntilCutoff = Infinity, enter, release, onCancel;
+    t.mock.method(performance, "now", () => elapsed + (readsUntilCutoff-- <= 0 ? 30000 : 0));
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const entered = new Promise((resolve) => { enter = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    const cancelled = new Promise((resolve) => { onCancel = resolve; });
+    const expire = () => { elapsed += 30000; };
+    const owner = lifetimeStartup = { enter, gate, onCancel, attached: 0, disposed: 0, onAttach() {
+      if (boundary === "after attach") expire();
+      if (boundary === "after attachment check") readsUntilCutoff = 1;
+    } };
+    let returned = false;
+    const advancing = s.campaign.advance(h).then(() => null, (error) => error).finally(() => { returned = true; });
+    let closed = false;
+    function close() { if (!closed && owner.child) { closed = true; owner.child.close(0); } }
+    try {
+      await entered;
+      if (boundary === "before attach") expire();
+      release();
+      await cancelled;
+      assert.equal(returned, false, "the child has not drained");
+      assert.equal(owner.disposed, 1, "rejection disposes before child shutdown");
+      assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+      close();
+      assert.match((await advancing)?.message ?? "", /lifetime or cleanup unproven/);
+      assert.equal(owner.attached, boundary === "before attach" ? 0 : 1);
+      assert.equal(owner.disposed, 1);
+      assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+      const exit = readdirSync(h.directory).find((name) => name.endsWith("-command-exited.json"));
+      const result = JSON.parse(readFileSync(join(h.directory, exit), "utf8"));
+      assert.equal(result.error, "native host observation setup incomplete");
+      assert.equal(result.success, false);
+      assert.equal(result.hostManifestSha256, undefined);
+      const state = s.campaign.status(h);
+      assert.equal(state.state, "preserved-uncertain");
+      assert.equal(state.uncollectedNativeRoots.length, 1);
+      assert.equal(calls.length, 1);
+    } finally { release(); close(); await advancing; }
+  });
+}
+
+for (const cancelled of [false, true]) test(`campaign admitted startup seals ${cancelled ? "drained cancellation" : "healthy exit"}`, async () => {
+  const s = setupGroup("catalog-page"); s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  abort = new AbortController();
+  if (cancelled) mode = "abort-native";
+  const owner = lifetimeStartup = { enter() {}, gate: Promise.resolve(), attached: 0, disposed: 0, onCancel() {} };
+  const status = await s.campaign.advance(h, { signal: abort.signal });
+  assert.equal(owner.attached, 1);
+  assert.equal(owner.disposed, 0, "an accepted attachment is not disposed during runtime cancellation or exit");
+  const seal = JSON.parse(readFileSync(join(owner.directory, "terminal.json"), "utf8"));
+  assert.equal(seal.unforced, !cancelled);
+  const exit = readdirSync(h.directory).find((name) => name.endsWith("-command-exited.json"));
+  const result = JSON.parse(readFileSync(join(h.directory, exit), "utf8"));
+  assert.equal(result.success, !cancelled);
+  assert.equal(result.cancelled, cancelled);
+  assert.match(result.hostManifestSha256, /^[0-9a-f]{64}$/);
+  assert.equal(status.state, cancelled ? "preserved-uncertain" : "finished");
+  assert.equal(status.uncollectedNativeRoots.length, 0);
+  assert.equal(calls.length, 1);
 });
 
 for (const group of groupNames) test(`${group}: one complete group runs and replays without inventing other groups`, async () => {
@@ -847,6 +1601,12 @@ test("one root, opaque handle, all nine fixed native commands and retained faile
   for (const seal of seals) {
     const index = groupNames.indexOf(seal.group), path = `${String(index).padStart(2, "0")}-${seal.group}-${seal.phase}`;
     assert.equal(seal.nativeManifestSha256, JSON.parse(readFileSync(join(handle.directory, path, "native-manifest.json"))).sha256);
+    if (["live-delivery", "recoverable-live"].includes(seal.group)) {
+      const prefix = replaySealedPhase(handle.directory, s.plan, handle.id, seal.group, path);
+      assert.equal(prefix.version, 3);
+      assert.equal(prefix.phase.phaseManifestSha256, evidence.phaseSnapshot(join(handle.directory, path)).sha256);
+      assert.deepEqual(prefix.phase.binding, s.plan.bindings[index]);
+    }
   }
   assert.equal(status.controllerReady, false); assert.equal(campaign.collect(handle).deletionAuthorized, false);
   assert.equal(JSON.parse(readFileSync(join(handle.directory, "campaign-result.json"))).status.outcomes[0].outcome, "failed");
@@ -1077,35 +1837,25 @@ test("audit wait mutation and image replacement halt before timing", async () =>
 for (const [group, scenario] of [
   ["localized-marketplace", "settles"], ["localized-marketplace", "aborts"], ["localized-marketplace", "native failure"],
   ["json-api", "settles"], ["json-api", "aborts"], ["json-api", "worker survives"],
+  ["live-delivery", "settles"], ["live-delivery", "worker survives"], ["live-delivery", "worker born during timing"],
 ]) test(`v5 ${group} udev settlement: ${scenario}`, async (t) => {
-  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
-    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
-  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
-  const proof = JSON.parse(result.stdout), s = setupGroup(group); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  const proof = syntheticBootstrap(t), s = setupGroup(group); controlledRound(s.plan); admittedHost = proof.admission.host;
   const jsonPreparation = group === "json-api";
-  settleWorkerTicks = jsonPreparation ? "10400" : "10601";
+  const live = group === "live-delivery";
+  const bornDuringTiming = scenario === "worker born during timing";
+  settleWorkerTicks = jsonPreparation || bornDuringTiming ? "10400" : "10601";
+  settleSecondWorker = live;
   settleSurvives = scenario === "worker survives";
   settleNativeFails = scenario === "native failure";
   mode = "udev-settle";
-  const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
-  const { streamHash } = await import("./control-stream.mjs");
-  const { deploymentSha256 } = await import("../deployments.mjs");
-  admittedApparatus = { ...structuredClone(fixture), binding: proof.binding, host: proof.admission.host };
-  proof.admission.apparatus = admittedApparatus;
-  proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
-  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2-3" }, load: { cpuset: "4-7" } };
-  const calls = [], stream = { registration: admittedApparatus, check() { calls.push("check"); },
-    open(cpus) { assert.deepEqual(cpus, { app: "1", api: "2-3", load: "4-7" }); calls.push("open"); },
-    close() { calls.push("close"); }, async seal() {
-      calls.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
-        observations: Array.from({ length: 21 }, (_, i) => ({ sequence: i + 1,
-          monoNs: String(2000000 + i * 250500000), registrationSha256: streamHash(admittedApparatus) })),
-        sealedMonoNs: "5016000000",
-        lease: { id: admittedApparatus.id, host: admittedHost, expiresMonoNs: "15000000000" } };
-    } };
-  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
+  const binding = s.plan.bindings[0];
+  const cpus = live ? liveActorCpus : { app: "1", api: "2-3", load: "4-7" };
+  if (live) {
+    Object.assign(binding.resources, { actorCpus: liveActorCpus, app: liveApplication });
+    binding.execution.effectiveOptions = { isolated: true };
+  } else binding.resources.expectedCpus = Object.fromEntries(Object.entries(cpus).map(([role, cpuset]) => [role, { cpuset }]));
+  const calls = [], control = monitoredSettlementControl(proof, cpus, calls);
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control });
   controlWindows.directory = handle.directory; controlWindows.phase = `00-${group}-${jsonPreparation ? "prepare" : "timing"}`;
   if (scenario === "aborts") settleAbort = new AbortController();
   const advanced = await s.campaign.advance(handle, { signal: settleAbort?.signal }).catch((error) => error);
@@ -1120,17 +1870,26 @@ for (const [group, scenario] of [
     assert.equal(existsSync(join(handle.directory, "json-audit-subject.json")), false);
     return;
   }
+  const request = { folder: root, round: "r21", commit: s.plan.commit };
+  if (bornDuringTiming) {
+    assert.equal(observations, 3, "one in-window worker disqualifies the entire cohort before any second census");
+    assert.deepEqual(first, { ...udevHost(3), terminalClock: udevClock() });
+    assert.equal(existsSync(join(phase, "host-after-settled.json")), false);
+    assert.match(advanced.message, /new persistent host processes remain: 2/);
+    assert.equal(s.campaign.status(handle).state, "preserved-uncertain");
+    assert.ok((await validateSavedCampaign(request)).blockers.includes("live-delivery/timing: host boundary uncertain"));
+    return;
+  }
   const status = advanced;
   assert.equal(observations, 4);
   assert.deepEqual(first, { ...udevHost(3), terminalClock: udevClock() });
   assert.deepEqual(JSON.parse(readFileSync(join(phase, "command-1-host", "terminal.json"))).terminalClock, first.terminalClock);
   assert.deepEqual(JSON.parse(readFileSync(join(phase, "host-after-settled.json"))), udevHost(4));
-  const request = { folder: root, round: "r21", commit: s.plan.commit };
   if (settleSurvives) {
-    assert.match(advanced.message, /new persistent host processes remain: 1/);
+    assert.match(advanced.message, new RegExp(`new persistent host processes remain: ${udevWorkers().length}`));
     assert.equal(s.campaign.status(handle).state, "preserved-uncertain");
     assert.equal(existsSync(join(handle.directory, "json-audit-subject.json")), false);
-    assert.ok((await validateSavedCampaign(request)).blockers.includes("json-api/prepare: host boundary uncertain"));
+    assert.ok((await validateSavedCampaign(request)).blockers.includes(`${group}/${jsonPreparation ? "prepare" : "timing"}: host boundary uncertain`));
     return;
   }
   if (jsonPreparation) {
@@ -1153,6 +1912,12 @@ for (const [group, scenario] of [
     return;
   }
   assert.equal(status.state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  if (live) {
+    const prefix = replaySealedPhase(handle.directory, s.plan, handle.id, group, controlWindows.phase);
+    assert.equal(prefix.version, 5);
+    assert.equal(prefix.phase.phaseManifestSha256, evidence.phaseSnapshot(phase).sha256);
+    assert.equal(prefix.phase.results.at(-1).hostManifestSha256, evidence.tree(join(phase, "command-1-host")).sha256);
+  }
   if (settleNativeFails) {
     assert.equal(status.outcomes[0].outcome, "failed");
     const events = fs.readdirSync(handle.directory).filter((name) => /^\d{5}-/.test(name)).sort()
@@ -1160,14 +1925,12 @@ for (const [group, scenario] of [
     assert.deepEqual(events.slice(-3), ["group-finished", "stream-sealed", "finished"]);
     assert.ok(!events.includes("review-needed") && existsSync(join(handle.directory, "control-stream-seal.json")));
   }
-  assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: settleWorkerTicks }]);
-  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
-    host: admittedHost, monoNs: "5017000000", identitiesAbsent: true, listener: admittedApparatus.listener,
-    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
-  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, udevWorkers());
+  writeSettlementDrain(handle);
   writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
   const inspected = await validateSavedCampaign(request);
   assert.notEqual(inspected.status, "invalid");
+  assert.ok(!inspected.blockers.includes(`${group}/timing: host boundary uncertain`));
   if (settleNativeFails) {
     assert.equal(inspected.status, "failed");
     assert.equal(inspected.collectionIntegrity, "manifest-verified");
@@ -1188,6 +1951,11 @@ for (const [group, scenario] of [
     writeFileSync(phaseEventPath, JSON.stringify({ ...phaseEvent, phaseManifestSha256: evidence.phaseSnapshot(phase).sha256 }));
     resealCollection();
   };
+  if (live) {
+    fs.unlinkSync(receipt);
+    resealPhase();
+    assert.equal((await validateSavedCampaign(request)).status, "invalid", "a live cohort without a settled census cannot qualify");
+  }
   const settled = udevHost(4);
   settled.controlApparatus.sample.monoNs = String(BigInt(first.controlApparatus.sample.monoNs) + 1n);
   writeFileSync(receipt, JSON.stringify(settled));

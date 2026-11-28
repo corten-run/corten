@@ -48,10 +48,10 @@ export async function httpChecks(base, check) {
 
   // A DNS-rebound page reaches the server under a name the app is not: 421, and nothing of the app.
   {
-    /** @param {string} host @returns {Promise<[number | undefined, string]>} */
+    /** @param {string | null} host its `Host` line, or `null` for none @returns {Promise<[number | undefined, string]>} */
     const get = (host) =>
       new Promise((resolve, reject) => {
-        const req = http.get(base, { headers: { host } }, (res) => {
+        const req = http.get(base, host === null ? { setHost: false } : { headers: { host } }, (res) => {
           let text = "";
           res.on("data", (chunk) => (text += chunk));
           res.on("end", () => resolve([res.statusCode, text]));
@@ -63,5 +63,11 @@ export async function httpChecks(base, check) {
     check("a request for another host (DNS rebinding) is misdirected", rebound === 421 && !body.includes("<html"), `${rebound} ${body.slice(0, 40)}`);
     const [local] = await get(`localhost:${port}`);
     check("localhost is answered", local === 200, String(local));
+    // A request HTTP/1.1 does not allow (RFC 9112 3.2) is a 400 the same way: no `Host` line, or
+    // one that is no host. Of a request-target only the host it names itself is held to the same.
+    const [unnamed, said] = await get(null);
+    check("an HTTP/1.1 request with no Host line is a 400", unnamed === 400 && said === "Bad request.", `${unnamed} ${said.slice(0, 40)}`);
+    const [pathed, why] = await get(`localhost:${port}/x`);
+    check("a Host that is not a host and a port is a 400", pathed === 400 && why === "Bad request.", `${pathed} ${why.slice(0, 40)}`);
   }
 }

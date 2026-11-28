@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/var/cache/cargo \
     && cargo leptos build --release --cargo-locked \
     && mkdir -p /out && cp target/release/live-parity-leptos /out/server && cp -r target/site /out/site
 
-FROM debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+FROM debian:trixie-20261123-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
 WORKDIR /app
 COPY --from=build /out/ /app/
 ENV LEPTOS_OUTPUT_NAME=live_parity LEPTOS_SITE_ROOT=site LEPTOS_SITE_PKG_DIR=pkg LEPTOS_SITE_ADDR=0.0.0.0:8080 LEPTOS_ENV=PROD

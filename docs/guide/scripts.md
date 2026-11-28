@@ -174,27 +174,37 @@ user types sit in a `GET` form that filters them on the server without JavaScrip
 ### A control only the script makes work
 
 A control that does nothing without its handler (a `type="button"` that steps a count, clears a
-selection) is not drawn when scripts are off, and one only a page without them needs (the
-`Filter` button of a form a handler filters as the user types) is not drawn when they are on.
-Both are rules in the component's stylesheet, beside its other rules:
+selection) is not drawn when scripts are off, by a rule in the component's stylesheet, beside its
+other rules:
 
 ```css
 @media (scripting: none) { .clear { display: none; } }
-@media (scripting: enabled) { .filter { display: none; } }
 ```
 
 The browser decides before it draws, so nothing moves as the script loads and no handler runs
 to do it. A control that also needs something the browser may lack (the clipboard) is drawn
 `hidden` and shown by its `on:connect` handler once it knows, as corten-ui's `CopyButton` is.
 Not `<noscript>`: it can only add markup when scripts are off, not leave out a control that needs
-them, and the media query does both in the component's stylesheet. `examples/deck-builder`'s
-stylesheet has both rules. `examples/seller-desk`'s grid keeps both its controls without scripts:
-its filter is a `GET` form whose Filter button is not drawn with them, and its sort headers are
-links to the sorted page, which the handlers sort in place instead of following. The query
-follows whether scripts are on, not whether this one ran: with JavaScript off for the site it matches `none`, but a script an extension blocks or that
-fails to load still matches `enabled`, so its controls are drawn and do nothing. A browser
-without the `scripting` media feature (before Chromium 120, Firefox 113, Safari 17) draws both, as
-it did.
+them. The media query hides the browser-only listing sort button on
+[Card Market's item page](../../examples/card-market/src/views/item_detail.css); the listings
+keep the server's order. The query follows whether scripts are on, not whether this one ran: with
+JavaScript off for the site it matches `none`, but a script an extension blocks or that fails to
+load still matches `enabled`, so a script-only control is drawn and does nothing. A browser without
+the `scripting` media feature (before Chromium 120, Firefox 113, Safari 17) draws it, as it did.
+
+A submit button or link that is the visible way to do an ordinary server action is not such a
+control, even when a handler makes the action instant: it stays drawn with scripts on.
+`examples/seller-desk`'s grid filters its rows as the seller types, and its filter is still a
+`GET` form with its Filter button drawn in every browser. Where the grid's script runs, the form's
+submit handler keeps the page, since the rows are already filtered; where it does not (scripts off,
+or its module did not load), the button sends the form and the server answers with the rows
+filtered. Its sort headers are links to the sorted page the same way, which the handlers sort in
+place instead of following. Hiding such a control under `@media (scripting: enabled)` leaves a
+page whose module did not load with no visible way to do what its server still does, because the
+query stays true. Hide it, if replacing it is worth that, only once the component's replacement
+works: from the component's own handler, or on a state only the working component sets, as a slow
+part's link is hidden only while a read is on its way ([A slow part](live-data.md#a-slow-part)).
+There is no page-wide flag that says a script loaded.
 
 ### A value both sides compute
 
@@ -309,9 +319,17 @@ and refs, which calling the export alone would miss. Check cancellation by remov
 with a client-side navigation or patch, which keeps the document alive, and checking that its
 work was running before and stops after; a full page load ends every script with its document,
 so it would pass even if the handler ignored `signal`. Do not supply a different lifecycle in
-the test. [The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection,
-filtering and sorting this way; [the runtime smoke areas](../../scripts/smoke/) cover connection and
-cleanup. Neither harness needs per-app implementations of Corten's modules. Browser tests run
+the test. For an enhancement a task depends on, also load the page with JavaScript on and the
+component's module blocked (`page.route` aborting its URL before the page loads, which also
+aborts the runtime's retries), check that the block took effect, and finish the task through the
+visible native control. Check the server's answer did the task (the response body, not only the
+page it leaves), then that the page shows what the answer carried, so a script that fakes the
+result on screen cannot pass for it. Keep the test with scripts off as well; an interaction only
+a browser with scripts can do (a drag) needs neither.
+[The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection, filtering and
+sorting with the grid's module running; filtering also with that module blocked and with scripts
+off, and sorting with scripts off. [The runtime smoke areas](../../scripts/smoke/) cover connection
+and cleanup. Neither harness needs per-app implementations of Corten's modules. Browser tests run
 separately from `cargo test` and `corten check`; keep them in the app's CI too.
 
 ## Components and their roots
@@ -412,7 +430,8 @@ matching. The page as first loaded has had no save answered, and a generated dec
 optional at a call (the table at the top of this page), so that is a variant of its own, `Loaded`,
 for which `answered` dispatches nothing. A submit with no answer to draw (other than a bare `204` or
 `205`, the submit done with nothing to draw) is `corten:error` on the
-form (it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
+form (when a read drew over it while the write was out, on the form the read drew in its place
+on the same page, else on the document; it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
 corten-ui's `Toaster` quiet), and a redirect's notice the page did not draw is `corten:notice` on the document
 ([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's:
 `on:corten:error={js::failed(event, target)}` on the form (or `on:document:corten:error` for every

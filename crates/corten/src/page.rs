@@ -66,9 +66,9 @@ pub(crate) const PLAIN_NOTICE_COOKIE: &str = "corten-notice";
 const NOTICE_MAX: usize = 500;
 
 /// Responses depend on the mode header and, for [`Mode::Data`], on `Accept`.
-const VARY: &str = "corten, accept";
+pub(crate) const VARY: &str = "corten, accept";
 /// The same, for an answer whose locale follows `Accept-Language`.
-const VARY_LANGUAGE: &str = "corten, accept, accept-language";
+pub(crate) const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 
 /// Settles the answer's dependency on `Accept-Language` as it leaves the app, whatever made it: a
 /// page, JSON, a redirect, the error page, or a middleware that read messages after `next` or put
@@ -185,8 +185,10 @@ impl Mode {
     /// mode. With them, that `Accept` as text, empty where it was not asked for, not sent or not
     /// text. The rule is written here and nowhere else in the request's path: [`Mode::asked`]
     /// looks the two up and `crate::kept` gives them from its pass over a request's headers, so
-    /// a header this function is made to read is an argument each of them has to give. Browsers
-    /// never put JSON first for a navigation.
+    /// a header this function is made to read is an argument each of them has to give. A request
+    /// under an API is the one the stages do not pass here: they ask nothing of its mode
+    /// ([`RequestPage::read`]), and a handler's [`Req`] there still does. Browsers never put JSON
+    /// first for a navigation.
     pub(crate) fn said<'a>(
         runtime: Option<&HeaderValue>,
         accept: impl FnOnce() -> Option<&'a HeaderValue>,
@@ -214,7 +216,10 @@ impl Mode {
     /// whether a kept page can answer without this function.
     fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
         let (asked, accept) = Mode::said(headers.get(MODE_HEADER), || headers.get(header::ACCEPT));
-        (asked, check_html && asked.0 == Mode::Document && accept.contains("text/html"))
+        // A browser's navigation names HTML first, so the start is looked at before the line is
+        // searched: `str::contains` prepares a search made for long text before it looks.
+        let html = || accept.starts_with("text/html") || accept.contains("text/html");
+        (asked, check_html && asked.0 == Mode::Document && html())
     }
 }
 
@@ -310,9 +315,27 @@ pub(crate) fn is_prefetch(headers: &HeaderMap) -> bool {
     headers.get("purpose").is_some_and(|v| v.as_bytes() == b"prefetch")
 }
 
+/// Whether a nav link to `href` holds the page at `path`, by the runtime's rule (`markCurrent` in
+/// `corten.js`): never for a URL that is not a path on this site ([`is_path`]).
 fn is_current(path: &str, href: &str, section: bool) -> bool {
     let href = href.split(['?', '#']).next().unwrap_or(href);
-    path == href || (section && path.strip_prefix(href.trim_end_matches('/')).is_some_and(|rest| rest.starts_with('/')))
+    // The check after the comparison, which rules out most links before it.
+    (path == href || (section && path.strip_prefix(href.trim_end_matches('/')).is_some_and(|rest| rest.starts_with('/'))))
+        && is_path(href)
+}
+
+/// Whether a nav link's URL, as written, is a path on this site, the only kind a nav compares with
+/// the page: one `/` first, then neither `/` nor `\` (`//host/x` and `/\host/x` name another
+/// host) nor a tab or line break, a syntax restriction kept for safety: a browser drops one, so
+/// `/<tab>x` is this site's `/x` and `/<tab>/host/x` another host's. Anything else (a full URL, a
+/// relative one, `?tab=2`, one that starts with a space) is never current, on the server and in the
+/// runtime (`isPath` in `corten.js`), which tests the same text, the `href` the server wrote. The
+/// start of [`crate::Local::parse`]'s rule, without its refusal of a character the URL Standard
+/// keeps in a path or encodes, which only changes the path a nav compares.
+#[inline(always)]
+fn is_path(href: &str) -> bool {
+    let bytes = href.as_bytes();
+    bytes.first() == Some(&b'/') && !matches!(bytes.get(1), Some(b'/' | b'\\' | b'\t' | b'\n' | b'\r'))
 }
 
 /// A nav link's attributes, from [`Req::nav`] or [`Req::nav_section`]: `href`, `data-nav` and,
@@ -406,22 +429,233 @@ impl NavTarget for crate::Local {
     }
 }
 
+/// Writes the comparison key of `url`, a URL on this site: its path as the browser's
+/// `location.pathname` shows it at that URL, by the URL Standard's parser
+/// (<https://url.spec.whatwg.org/#concept-basic-url-parser>) for a path that starts with `/`:
+/// leading and trailing spaces and control characters trimmed, every tab and line break dropped,
+/// the query and fragment left out, `\` read as `/`, the `.` and `..` segments resolved (`%2e` for a
+/// dot too, in either case), and a control character, a space, `` "<>^`{} `` and each byte of a
+/// character beyond ASCII percent-encoded. Then the spellings engines differ on are made one
+/// ([`keyed`]): `|` is encoded, and each escape's hex digits are uppercased. [`key`] makes the page's
+/// path the same key before comparing. The result has no space in it.
+fn pathname(url: &str, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let from = out.len();
+    let url = url.trim_matches(|c: char| c <= ' ');
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let path = path.strip_prefix(['/', '\\']).unwrap_or(path);
+    let mut chars = path.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r'));
+    // Where each segment kept so far starts in `out`, at its `/`.
+    let mut kept: Vec<usize> = Vec::new();
+    loop {
+        let start = out.len();
+        out.push('/');
+        let mut end = true;
+        for c in chars.by_ref() {
+            match c {
+                '/' | '\\' => {
+                    end = false;
+                    break;
+                }
+                '\0'..=' ' | '"' | '<' | '>' | '^' | '`' | '{' | '}' | '|' | '\x7f'.. => {
+                    for byte in c.encode_utf8(&mut [0; 4]).bytes() {
+                        out.push('%');
+                        out.push(HEX[byte as usize >> 4] as char);
+                        out.push(HEX[byte as usize & 15] as char);
+                    }
+                }
+                c => out.push(c),
+            }
+        }
+        let segment = &out[start + 1..];
+        let is = |forms: &[&str]| forms.iter().any(|form| segment.eq_ignore_ascii_case(form));
+        let double = is(&["..", ".%2e", "%2e.", "%2e%2e"]);
+        if double || is(&[".", "%2e"]) {
+            out.truncate(start);
+            if double {
+                if let Some(previous) = kept.pop() {
+                    out.truncate(previous);
+                }
+            }
+            // A `.` or `..` that ends the path leaves it ending in `/`.
+            if end {
+                kept.push(out.len());
+                out.push('/');
+            }
+        } else {
+            kept.push(start);
+        }
+        if end {
+            break;
+        }
+    }
+    let written = out.split_off(from);
+    keyed(&written, out);
+}
+
+/// Writes `text`, a path, as a comparison key to `out`: each `|` as `%7C`, Chromium's spelling,
+/// where Firefox and WebKit keep `|` in a request and in `location.pathname`, and the two hex digits
+/// of each percent escape uppercase, as WebKit asks for `%7c` as `%7C` while its
+/// `location.pathname` keeps `%7c`. Nothing is decoded, and a `%` without two hex digits after it
+/// is kept as it is, so the server's key of a request and the runtime's of `location.pathname` are
+/// the same text whenever the two are. A path with an escaped unreserved character is not one
+/// Corten writes ([`crate::route::escapes_unreserved`]); one typed by hand is compared as written.
+fn keyed(text: &str, out: &mut String) {
+    let bytes = text.as_bytes();
+    let hex = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_hexdigit);
+    let (mut kept, mut i) = (0, 0);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'|' => {
+                out.push_str(&text[kept..i]);
+                out.push_str("%7C");
+                i += 1;
+            }
+            b'%' if hex(i + 1) && hex(i + 2) => {
+                // `%` and the hex digits are ASCII, so these are whole characters.
+                out.push_str(&text[kept..i + 1]);
+                out.push(bytes[i + 1].to_ascii_uppercase() as char);
+                out.push(bytes[i + 2].to_ascii_uppercase() as char);
+                i += 3;
+            }
+            _ => {
+                i += 1;
+                continue;
+            }
+        }
+        kept = i;
+    }
+    out.push_str(&text[kept..]);
+}
+
 /// One entry of a nav, for [`Req::nav_of`].
 pub struct NavTo<'a> {
     to: &'a dyn NavTarget,
     section: bool,
+    /// Other addresses that serve the entry's page ([`NavTo::also`]), boxed so an entry without
+    /// them is one word larger than before they existed.
+    // Boxed, not a `Vec` in place: an eight-entry nav without aliases measured about 60 instructions
+    // a request more with the `Vec`.
+    also: Option<Box<Others<'a>>>,
+}
+
+/// An entry's other addresses ([`NavTo::also`]): the first in the box, so an entry with one costs
+/// one allocation, and any more after it.
+struct Others<'a> {
+    first: &'a dyn NavTarget,
+    rest: Vec<&'a dyn NavTarget>,
 }
 
 impl<'a> NavTo<'a> {
     /// An entry current on its own URL alone (the query and fragment aside), as [`Req::nav`].
     pub fn page(to: &'a (impl NavTarget + 'a)) -> Self {
-        NavTo { to, section: false }
+        NavTo { to, section: false, also: None }
     }
 
     /// An entry current on its own URL and every one under it, as [`Req::nav_section`]: a
     /// deeper entry of the same nav that also holds the page wins over it.
     pub fn section(to: &'a (impl NavTarget + 'a)) -> Self {
-        NavTo { to, section: true }
+        NavTo { to, section: true, also: None }
+    }
+
+    /// The entry is current at `other` too, another address that serves its page (an older one
+    /// that stored links still carry), by the same rule as at its own URL. Where several of its
+    /// addresses hold the page, the deepest of them is the entry's depth, so an `other` deeper than
+    /// the entry's URL wins over an entry whose URL is between the two. The link still goes to its
+    /// own URL. `other`'s path is written in `data-nav-also` once, as a
+    /// comparison key: the path the browser's `location.pathname` shows at that address
+    /// (`/old/./a/../b ` as `/old/b`, `/old/café` as `/old/caf%C3%A9`), with the two spellings
+    /// engines differ on made one, a `|` as `%7C` (which Chromium shows and Firefox and WebKit do
+    /// not) and an escape's hex digits uppercase (`%7c` as `%7C`, which WebKit asks for while its
+    /// `location.pathname` keeps `%7c`); no escape is decoded. In a nav with other addresses every
+    /// entry's own URL is compared by its key too. The server compares the keys with the request
+    /// path's and the runtime with `location.pathname`'s, each made the same way and compared as
+    /// plain text, so for every address Corten writes they mark the same link at first render and
+    /// after a client navigation in Chromium, Firefox and WebKit.
+    ///
+    /// An address whose path, once its `.` and `..` segments are resolved, has a percent escape of
+    /// a letter, a digit, `-`, `.`, `_` or `~` (`/old/%41`, `/old/%2e%2ex`) is left out, on the
+    /// server and so in the runtime: WebKit asks for it decoded while its `location.pathname` keeps
+    /// the escape, so the two would mark different links. A dot segment written escaped is resolved
+    /// first, as every engine does, so `/old/%2e%2e/x` is `/x` and kept. A typed route never writes
+    /// such an escape and a [`crate::Local`] cannot hold one; only a route
+    /// implemented by hand can. A path with such an escape typed by hand is compared as written, so
+    /// it is never the address with the plain character. That is one limit, in any nav: WebKit asks
+    /// for `/%73ettings` as `/settings`, so its first render marks the entry at `/settings` and its
+    /// runtime, at the same address, does not; Chromium and Firefox ask for it as written and
+    /// neither marks it. The other is a nav without other addresses, which compares the paths as
+    /// written: an entry at `/old%7chome` is unmarked in WebKit's first render, which asks for
+    /// `/old%7Chome`, and marked by its runtime, whose `location.pathname` keeps `%7c`, as an entry
+    /// at `/a|b` is in Chromium, which asks for and shows `/a%7Cb`.
+    ///
+    /// An address that is not a path on this site, `//host/old` or `/\host/old`, names another
+    /// host, so it is left out, as the runtime would read its pathname as that host's; and an entry
+    /// whose own URL is one is never current, at any of its addresses ([`Req::nav_of`]). A tab or
+    /// line break straight after the first `/` is refused the same way, a syntax restriction kept
+    /// for safety rather than a browser's rule: a browser drops it, so `/<tab>old` is this site's
+    /// `/old`, and it names another host only when a `/` or `\` follows (`/<tab>/host/old`). Only a
+    /// route implemented by hand can write one.
+    ///
+    /// A NUL in the entry's own URL, which only a route implemented by hand writes, is read by the
+    /// HTML parser as U+FFFD in the `href` the runtime parses, so the link to `/old<NUL>x` goes to
+    /// `/old%EF%BF%BDx`, where the entry is ranked, not `/old%00x`. An other address is not an
+    /// `href`, and one holding a raw NUL is not a usable address: Chromium and WebKit ask for
+    /// `/old%00x` and Firefox cuts it at the NUL and asks for `/old`, so it is left out and the
+    /// entry is never current by it, as for an address that is not a path on this site. An app that
+    /// means that address writes the escape, `/old%00x`, which is kept.
+    ///
+    /// A typed route or a [`crate::Local`], as the entry's own:
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    /// use corten::NavTo;
+    ///
+    /// #[derive(Route)]
+    /// #[route("/settings")]
+    /// struct Settings;
+    /// #[derive(Route)]
+    /// #[route("/governance")]
+    /// struct Governance;
+    ///
+    /// // On /governance: <a href="/settings" data-nav data-nav-group=".." data-nav-also="/governance" aria-current="page">
+    /// fn nav(req: &Req) -> String {
+    ///     let nav = req.nav_of([(NavTo::page(&Settings).also(&Governance), "Settings")]);
+    ///     html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> }.to_html()
+    /// }
+    /// let _: fn(&Req) -> String = nav;
+    /// ```
+    ///
+    /// A URL written as text is not one:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Route)]
+    /// #[route("/settings")]
+    /// struct Settings;
+    /// let _ = corten::NavTo::page(&Settings).also(&"/governance");
+    /// ```
+    ///
+    /// Nor can a tag write `data-nav-also` as an attribute of its own, in any case, which the server
+    /// did not rank (a spread of attribute pairs still passes it through, as it does `data-nav`):
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// let link = html! { <a data-nav-also="/governance">"Settings"</a> };
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// let link = html! { <a data-Nav-Also="/governance">"Settings"</a> };
+    /// ```
+    pub fn also(mut self, other: &'a (impl NavTarget + 'a)) -> Self {
+        match &mut self.also {
+            Some(others) => others.rest.push(other),
+            None => self.also = Some(Box::new(Others { first: other, rest: Vec::new() })),
+        }
+        self
     }
 }
 
@@ -437,8 +671,73 @@ pub struct NavLinks<T> {
     deepest: Option<usize>,
     /// The group the runtime ranks these links in (`data-nav-group`): 32 bits of a hash of the
     /// entries, so a patch's nav does not join another of the page's, and two equal navs agree
-    /// anyway. Navs made to collide only mark the wrong link after a navigation.
+    /// anyway. Navs made to collide only mark the wrong link after a navigation. A nav with other
+    /// addresses writes its group, followed by a `+`, from [`Also`] ([`Also::write_text`]).
     group: [u8; 8],
+    /// The entries' other addresses ([`NavTo::also`]), when one has some; none, and the nav is drawn
+    /// as it was before they existed.
+    also: Option<Box<Also>>,
+}
+
+/// The other addresses of a nav's entries ([`NavTo::also`]).
+struct Also {
+    /// Their paths ([`pathname`]), one entry's after another, separated by spaces within an entry,
+    /// not escaped; then, from `text` on, what each link writes as its `data-nav-group` value
+    /// ([`Also::write_text`]).
+    paths: String,
+    /// Each entry that has some, in the nav's order: where its URL ends in [`NavLinks`]'s `urls`,
+    /// which names the entry, where its paths end, and where its `data-nav-group` value ends.
+    ends: Vec<(usize, usize, usize)>,
+    /// Where the `data-nav-group` values start in `paths`.
+    text: usize,
+}
+
+impl Also {
+    /// Writes after the paths, escaped, what each link writes as its `data-nav-group` value: first
+    /// the group and its `+`, for a link without other addresses, then for each entry of `ends` the
+    /// group, its `+`, the quote that closes the attribute, and ` data-nav-also="` with the entry's
+    /// paths, which the link's own closing quote ends. So a link carries its other addresses in the
+    /// text it already writes, and is no larger than a link of a nav without them; and the text
+    /// shares the paths' allocation.
+    #[cold]
+    #[inline(never)]
+    fn write_text(&mut self, group: &[u8; 8]) {
+        let group = std::str::from_utf8(group).expect("hex digits");
+        let Also { paths, ends, text } = self;
+        *text = paths.len();
+        paths.push_str(group);
+        paths.push('+');
+        let mut start = 0;
+        for (_, end, written) in ends.iter_mut() {
+            paths.push_str(group);
+            paths.push_str(r#"+" data-nav-also=""#);
+            if crate::ascii::any(&paths.as_bytes()[start..*end], crate::ascii::html) {
+                crate::view::escape_from_within(paths, start..*end);
+            } else {
+                paths.extend_from_within(start..*end);
+            }
+            *written = paths.len();
+            start = *end;
+        }
+    }
+
+    /// The `data-nav-group` value of the link whose URL is `url` and ends at `url_end`: its
+    /// entry's, when it has other addresses, else the plain group's. Only an entry whose URL is a
+    /// path on this site has some ([`other_addresses`]), and such a URL, never empty, ends where no
+    /// other entry's does but an empty URL straight after it, which has none. Out of line and
+    /// reached only from a nav that has some, so a link of a nav without them looks nothing up.
+    #[cold]
+    #[inline(never)]
+    fn group(&self, url: &str, url_end: usize) -> &str {
+        let plain = self.text..self.text + 9;
+        match self.ends.binary_search_by_key(&url_end, |&(of, ..)| of) {
+            Ok(i) if !url.is_empty() => {
+                let start = if i == 0 { plain.end } else { self.ends[i - 1].2 };
+                &self.paths[start..self.ends[i].2]
+            }
+            _ => &self.paths[plain],
+        }
+    }
 }
 
 impl<T> NavLinks<T> {
@@ -447,10 +746,15 @@ impl<T> NavLinks<T> {
     /// runtime ranks the links in the page, the server ranked them all.
     pub fn links(&self) -> impl Iterator<Item = (NavLink<'_>, &T)> {
         let mut start = 0;
-        let group = std::str::from_utf8(&self.group).expect("hex digits");
+        let plain = std::str::from_utf8(&self.group).expect("hex digits");
+        let also = self.also.as_deref();
         self.entries.iter().map(move |(end, section, depth, item, prefetch)| {
             let url = &self.urls[start..*end];
             start = *end;
+            let group = match also {
+                None => plain,
+                Some(also) => also.group(url, *end),
+            };
             (
                 NavLink {
                     url,
@@ -465,20 +769,23 @@ impl<T> NavLinks<T> {
     }
 }
 
-/// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, when current
-/// `aria-current="page"`, and `data-no-prefetch` for a URL its route says a hover may not fetch
-/// ([`crate::Route::may_prefetch`]).
+/// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, for an entry with other
+/// addresses `data-nav-also` ([`NavTo::also`]), when current `aria-current="page"`, and
+/// `data-no-prefetch` for a URL its route says a hover may not fetch ([`crate::Route::may_prefetch`]).
 pub struct NavLink<'a> {
     url: &'a str,
     section: bool,
     current: bool,
+    /// The group, and for a link with other addresses its `data-nav-also` after it
+    /// ([`Also::write_text`]).
     group: &'a str,
     prefetch: bool,
 }
 
 impl crate::view::__private::Writes for NavLink<'_> {
     type Static = NavLink<'static>;
-    const WRITES: &'static [&'static str] = &["href", "data-nav", "data-nav-group", "aria-current", "data-no-prefetch"];
+    const WRITES: &'static [&'static str] =
+        &["href", "data-nav", "data-nav-group", "data-nav-also", "aria-current", "data-no-prefetch"];
 }
 
 impl crate::view::Attrs for NavLink<'_> {
@@ -503,27 +810,220 @@ fn holds(path: &str, url: &str, section: bool) -> Option<usize> {
     is_current(path, url, section).then(|| url.split(['?', '#']).next().unwrap_or(url).trim_end_matches('/').len())
 }
 
+/// [`holds`] for `href`, a path without a query or fragment, such as a comparison key, which it
+/// need not look for.
+fn holds_path(path: &str, href: &str, section: bool) -> Option<usize> {
+    let held =
+        path == href || (section && path.strip_prefix(href.trim_end_matches('/')).is_some_and(|rest| rest.starts_with('/')));
+    held.then(|| href.trim_end_matches('/').len())
+}
+
+/// Where the path of `url`, a URL on this site, ends when that path is its own comparison key
+/// ([`pathname`]), so the key need not be written: it starts with `/`, every character of it is one
+/// the URL Standard keeps in a path as it is and [`keyed`] does not rewrite (a letter, a digit,
+/// `/` or one of `` -._~!$&'()*+,;=:@ ``: no `%`, `|`, `\`, space or control character), and it has
+/// no `.` or `..` segment. Every typed route's URL without an escape is one.
+fn own_key(url: &str) -> Option<usize> {
+    // What each byte is in such a path: 1 a character kept as written, 2 `/`, 3 the `?` or `#`
+    // that ends it, 0 anything else. A table, so a byte costs one lookup.
+    const CLASS: [u8; 256] = {
+        let kept = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@";
+        let mut class = [0; 256];
+        let mut i = 0;
+        while i < kept.len() {
+            class[kept[i] as usize] = 1;
+            i += 1;
+        }
+        class[b'/' as usize] = 2;
+        class[b'?' as usize] = 3;
+        class[b'#' as usize] = 3;
+        class
+    };
+    let dots = |segment: &[u8]| matches!(segment, b"." | b"..");
+    let bytes = url.as_bytes();
+    if bytes.first() != Some(&b'/') {
+        return None;
+    }
+    // Where the segment being read starts.
+    let (mut segment, mut i) = (1, 1);
+    while i < bytes.len() {
+        match CLASS[bytes[i] as usize] {
+            1 => {}
+            2 if dots(&bytes[segment..i]) => return None,
+            2 => segment = i + 1,
+            3 => return (!dots(&bytes[segment..i])).then_some(i),
+            _ => return None,
+        }
+        i += 1;
+    }
+    (!dots(&bytes[segment..])).then_some(bytes.len())
+}
+
+#[cfg(test)]
+pub(crate) fn own_key_for_tests(url: &str) -> (Option<usize>, String) {
+    let mut key = String::new();
+    pathname(url, &mut key);
+    (own_key(url), key)
+}
+
+/// Writes the other addresses ([`NavTo::also`]) of the entry whose URL ends at `url_end` to
+/// `also`, separated by spaces, each as its comparison key ([`pathname`]), and leaves out one whose
+/// key, its `.` and `..` segments resolved, has an escaped unreserved character
+/// ([`crate::route::escapes_unreserved`]), which WebKit asks for in another spelling than its
+/// `location.pathname` shows, one that is not a path on this site ([`is_path`]), which is never
+/// compared, and one holding a raw NUL, which engines ask for at different addresses. An entry left
+/// with none is written as one without them. Each URL is written straight into the paths, and one
+/// that is its own key ([`own_key`]) is kept as written. Out of line, so a nav without them is drawn
+/// as it was before they existed.
+#[cold]
+#[inline(never)]
+fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Also>>) {
+    let had = also.is_some();
+    let held =
+        also.get_or_insert_with(|| Box::new(Also { paths: String::with_capacity(128), ends: Vec::with_capacity(4), text: 0 }));
+    let paths = &mut held.paths;
+    let from = paths.len();
+    for other in std::iter::once(others.first).chain(others.rest.iter().copied()) {
+        let start = paths.len();
+        if start > from {
+            paths.push(' ');
+        }
+        let at = paths.len();
+        other.write_url(paths);
+        // Not a path on this site (`//host/old`): never compared, so not written.
+        if !is_path(&paths[at..]) {
+            paths.truncate(start);
+            continue;
+        }
+        match own_key(&paths[at..]) {
+            // A raw NUL anywhere (in the query or fragment of an address that is its own key,
+            // which refuses one in its path): not a usable address. Firefox cuts the URL there and
+            // asks for what comes before it where Chromium and WebKit ask for `%00`, so no key holds
+            // it in every engine; an app that means `%00` writes it so.
+            Some(len) if paths[at + len..].contains('\0') => paths.truncate(start),
+            Some(len) => paths.truncate(at + len),
+            None if paths[at..].contains('\0') => paths.truncate(start),
+            None => {
+                let url = paths.split_off(at);
+                pathname(&url, paths);
+                if crate::route::escapes_unreserved(&paths[at..]) {
+                    paths.truncate(start);
+                }
+            }
+        }
+    }
+    let end = paths.len();
+    if end > from {
+        held.ends.push((url_end, end, 0));
+    } else if !had {
+        *also = None;
+    }
+}
+
+/// The comparison key of the page's path ([`keyed`]), which the runtime makes of
+/// `location.pathname` the same way.
+fn key(path: &str) -> std::borrow::Cow<'_, str> {
+    if !path.bytes().any(|b| b == b'|' || b == b'%') {
+        return path.into();
+    }
+    let mut key = String::with_capacity(path.len());
+    keyed(path, &mut key);
+    key.into()
+}
+
+/// Ranks every entry of a nav with other addresses ([`NavTo::also`]) by comparison keys: the page's
+/// path's ([`key`]) with each entry's own URL's and each of its other addresses' ([`pathname`]), as
+/// the runtime does in a group named with a trailing `+`, so the server and the runtime mark the
+/// same entry whether an engine asks for and shows a `|` or an escape's hex digits in one case or
+/// another. An entry whose URL is its own key ([`own_key`]) on a page whose path is its own keeps
+/// the depth it was ranked with as written, which is the same; one whose URL is not a path on this
+/// site ([`is_path`]) holds no page and has no other addresses. An entry's own URL is keyed as the
+/// runtime reads it from the `href` the server wrote, where the HTML parser has made each NUL
+/// U+FFFD, so the link goes to `/a%EF%BF%BD` rather than `/a%00`. Out of line, so a nav without
+/// them is ranked as it was before they existed, by the request path as written.
+#[cold]
+#[inline(never)]
+fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<usize>, T, bool)], also: &Also) {
+    let page = key(path);
+    let as_written = matches!(page, std::borrow::Cow::Borrowed(_));
+    let (mut start, mut from, mut own) = (0, 0, String::new());
+    let mut ends = also.ends.iter();
+    let mut next = ends.next();
+    for entry in entries {
+        let url = &urls[start..entry.0];
+        start = entry.0;
+        let mut depth = match own_key(url) {
+            _ if !is_path(url) => None,
+            Some(_) if as_written => entry.2,
+            Some(end) => holds_path(&page, &url[..end], entry.1),
+            None => {
+                own.clear();
+                // `own_key` refuses a NUL, so only a URL keyed here can hold one.
+                if url.contains('\0') {
+                    pathname(&url.replace('\0', "\u{FFFD}"), &mut own);
+                } else {
+                    pathname(url, &mut own);
+                }
+                holds_path(&page, &own, entry.1)
+            }
+        };
+        if let Some(&(_, end, _)) = next.filter(|&&(url_end, ..)| url_end == entry.0) {
+            for other in also.paths[from..end].split(' ') {
+                depth = depth.max(holds_path(&page, other, entry.1));
+            }
+            from = end;
+            next = ends.next();
+        }
+        entry.2 = depth;
+    }
+}
+
 /// [`Req::nav_of`] at `path`.
 pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (NavTo<'a>, T)>) -> NavLinks<T> {
-    let mut urls = String::new();
-    let entries: Vec<_> = entries
+    let (mut urls, mut also) = (String::new(), None);
+    let mut entries: Vec<_> = entries
         .into_iter()
         .map(|(entry, item)| {
             let start = urls.len();
             entry.to.write_url(&mut urls);
+            // An entry whose URL leads off this site is never current, at another address either.
+            if let Some(others) = entry.also.as_deref().filter(|_| is_path(&urls[start..])) {
+                other_addresses(others, urls.len(), &mut also);
+            }
             (urls.len(), entry.section, holds(path, &urls[start..], entry.section), item, entry.to.prefetch())
         })
         .collect();
+    if let Some(also) = &also {
+        rank_by_keys(path, &urls, &mut entries, also);
+    }
     let deepest = entries.iter().filter_map(|entry| entry.2).max();
-    // The URLs and which are sections name the group; its 32 low bits, as hex.
-    let hash = entries.iter().fold(crate::fnv::extend(crate::fnv::OFFSET, urls.as_bytes()), |hash, entry| {
-        crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])
-    });
+    // The URLs, which are sections and any other addresses name the group; its 32 low bits, as
+    // hex. A nav with no other addresses hashes as it did before they existed, with the low 16 bits
+    // of where each URL ends. One with them hashes where each URL ends in full, which entry each
+    // other address belongs to (where its URL ends) and where its paths end, so no two layouts of
+    // the same text share a group: the runtime would clear the mark of one of them.
+    let text = crate::fnv::extend(crate::fnv::OFFSET, urls.as_bytes());
+    let hash = match &also {
+        None => entries
+            .iter()
+            .fold(text, |hash, entry| crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])),
+        Some(also) => {
+            let hash = entries.iter().fold(text, |hash, entry| {
+                crate::fnv::extend(crate::fnv::extend(hash, &[entry.1 as u8]), &(entry.0 as u64).to_le_bytes())
+            });
+            also.ends.iter().fold(crate::fnv::extend(hash, also.paths.as_bytes()), |hash, &(url_end, end, _)| {
+                crate::fnv::extend(crate::fnv::extend(hash, &(url_end as u64).to_le_bytes()), &(end as u64).to_le_bytes())
+            })
+        }
+    };
     let mut group = [0; 8];
     for (i, digit) in group.iter_mut().enumerate() {
         *digit = b"0123456789abcdef"[(hash >> (28 - 4 * i) & 15) as usize];
     }
-    NavLinks { urls, entries, deepest, group }
+    if let Some(also) = &mut also {
+        also.write_text(&group);
+    }
+    NavLinks { urls, entries, deepest, group, also }
 }
 
 #[cfg(test)]
@@ -708,7 +1208,9 @@ impl std::error::Error for Unserved {}
 #[cold]
 pub(crate) fn unserved(dev: bool, message: String) -> Error {
     print_unserved(dev, &message);
-    Error::new(Unserved(message))
+    // Corten's, not the handler's, wherever it is answered: inside the handler, behind the app's
+    // middleware, or in an answer's place.
+    Error::corten(Unserved(message))
 }
 
 /// Prints a debug build's error about the app's code to stderr outside `corten dev`, where a router
@@ -787,7 +1289,8 @@ pub(crate) type ErrorPage = dyn Fn(Failure, Parts) -> Pin<Box<dyn Future<Output 
 ///
 /// It is sent with the failure's status (or as it answers, when it redirects). The extractors see
 /// the request's URL, `Cookie` and `Authorization` (so a caller is found as for the handler),
-/// `Accept-Language` and its mode; not its other headers or its body:
+/// `Accept-Language` and its mode; not its other headers or its body. An extractor's rejection
+/// is sent in the page's place, and is never shared, as a handler's extractor's is not:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -828,7 +1331,8 @@ macro_rules! error_page_fn {
                 $(
                     let $t = match $t::from_request_parts(&mut parts, &state).await {
                         Ok(value) => value,
-                        Err(rejection) => return rejection.into_response(),
+                        // About who is asking, as a handler's extractor's rejection may be.
+                        Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                     };
                 )*
                 match self(failure, $($t,)*).await {
@@ -873,12 +1377,14 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {
         // The error page itself failed (in a debug build, a component the app does not list):
-        // plain text, so a broken error page cannot fail again.
+        // plain text, so a broken error page cannot fail again, kept from a CDN as the failed page
+        // was (an extractor's rejection is).
         tracing::error!(status = res.status().as_u16(), "corten: the error page failed");
-        res = match detail {
+        let plain = match detail {
             Some(detail) => (status, format!("The page could not be shown.\n\n{detail}")).into_response(),
             None => (status, "The page could not be shown.").into_response(),
         };
+        res = crate::cache::unshared_in_place_of(res.extensions(), plain);
     }
     // Search engines skip it, whatever the layout says: the offline page is a 200.
     res.headers_mut().insert(HeaderName::from_static("x-robots-tag"), HeaderValue::from_static("noindex"));
@@ -896,6 +1402,9 @@ pub(crate) struct Credentials {
 /// What the stages know about the page before dispatch. A handler or its extractors see the
 /// actual, possibly changed request, not this snapshot.
 pub(crate) struct RequestPage {
+    /// The request's mode where it is under no API. Under one it is `(Mode::Data, false)` and
+    /// `accepts_html` is `false` whatever the request said ([`RequestPage::read`]), so a stage
+    /// that reads either for a request under an API reads the request's headers instead.
     pub mode: (Mode, bool),
     pub accepts_html: bool,
     pub credentials: Credentials,
@@ -904,8 +1413,12 @@ pub(crate) struct RequestPage {
 }
 
 impl RequestPage {
+    /// `is_page`: the request is under no API. Under one, the stages ask nothing of the mode
+    /// (every failure there is JSON, no answer a document the runtime swaps in, and a handler's
+    /// `Req` reads the request itself), so neither header is looked up and the mode is set to a
+    /// data client's, whatever the request said.
     pub(crate) fn read(headers: &HeaderMap, is_page: bool) -> Self {
-        let (mode, accepts_html) = Mode::read(headers, is_page);
+        let (mode, accepts_html) = if is_page { Mode::read(headers, true) } else { ((Mode::Data, false), false) };
         RequestPage {
             mode,
             accepts_html,
@@ -1073,8 +1586,9 @@ pub(crate) struct Shared {
     /// The values only the layout shows ([`crate::App::layout_read`]), started for each request
     /// for a whole document.
     pub layout_reads: Box<[Arc<dyn crate::layout::Erased>]>,
-    /// The `Public` pages, JSON, text and files the app keeps to give again ([`crate::App::kept_answers`]); none under
-    /// `corten dev`, or with a bound of 0.
+    /// The `Public` pages, JSON, text and files the app keeps to give again ([`crate::App::kept_answers`]); none with
+    /// a bound of 0, or without a `Public` route it keeps. Under `corten dev` it keeps and gives none
+    /// (`crate::kept::Verdict`).
     pub kept: Option<crate::kept::Answers>,
 }
 
@@ -1283,6 +1797,7 @@ impl Action<'_> {
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
+            self.0.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
@@ -1464,12 +1979,14 @@ fn notice_cookie(headers: &HeaderMap, plain: bool) -> Option<(&str, Gone)> {
 /// the notice is held to as well), and an `Origin` of this host, as the same-origin check on a
 /// write without that header requires ([`crate::security::Policy::same_origin`]), a default
 /// port written or left out alike.
-pub(crate) fn plain_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn plain_origin(uri: &Uri, headers: &HeaderMap) -> bool {
     if headers.contains_key("sec-fetch-site") {
         return false;
     }
-    let text = |name| headers.get(name).and_then(|v: &HeaderValue| v.to_str().ok());
-    let (Some(origin), Some(host)) = (text(header::ORIGIN), text(header::HOST)) else { return false };
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else { return false };
+    let Some(host) = crate::security::request_host(uri, || headers.get(header::HOST)).and_then(|at| at.text()) else {
+        return false;
+    };
     matches!(crate::security::on_host(origin, host), Some(("http", at)) if !crate::security::loopback(at))
 }
 
@@ -1546,6 +2063,15 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
     }
 }
 
+/// The signal of a request a middleware passed on without one ([`crate::signal::Detached`]),
+/// shared by every `Req` of it and read as its answer comes back, or a signal of the `Req`'s own
+/// where there is none (a bare router in a test).
+#[cold]
+#[inline(never)]
+fn detached(extensions: &Extensions) -> crate::Signal {
+    extensions.get::<crate::signal::Detached>().map_or_else(crate::Signal::default, |detached| detached.0.clone())
+}
+
 impl Req {
     /// `notice`: read the request's notice (its answer then removes it). Only a write's `Origin`
     /// is looked at for the plain cookie; a `GET` looks up one header more, the notice a page
@@ -1564,7 +2090,7 @@ impl Req {
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
         let whole_action =
             mode == Mode::Action && write && signal.map_or_else(|| prefers_whole(headers), |signal| signal.draws_whole(headers));
-        let signal = signal.cloned().unwrap_or_default();
+        let signal = signal.cloned().unwrap_or_else(|| detached(extensions));
         Req {
             mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
@@ -1575,7 +2101,7 @@ impl Req {
             } else {
                 None
             },
-            plain_write: write && !shared.https_only && plain_origin(headers),
+            plain_write: write && !shared.https_only && plain_origin(uri, headers),
             write,
             whole_action,
             fetched,
@@ -1816,7 +2342,7 @@ impl Req {
             (modules?, vars, crate::layout::Places::default())
         };
         let Some(at) = HEAD_AT.take() else {
-            return Err(Error::new("corten: the document's <head> has no <Corten />"));
+            return Err(Error::corten("corten: the document's <head> has no <Corten />"));
         };
         #[cfg(debug_assertions)]
         if self.shared.dev && !swap {
@@ -1883,6 +2409,7 @@ impl Req {
         }
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
+            self.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
@@ -1907,7 +2434,8 @@ impl Req {
 
     /// True when `href` (a typed route) is the current page, or with `section` any page under
     /// it: the rule the runtime applies to `<a data-nav>` (`data-nav="section"`) after each
-    /// navigation.
+    /// navigation. A URL that is not a path on this site (`//host/x`, `/\host/x`, a full or a
+    /// relative URL) is never the current page, even at a request path with its text.
     pub fn is_current(&self, href: &(impl crate::route::Href + ?Sized), section: bool) -> bool {
         match href.as_text() {
             Some(text) => is_current(self.uri.path(), text, section),
@@ -1979,9 +2507,13 @@ impl Req {
     /// read from data, each with its item (a label, or the row it came from), which
     /// [`NavLinks::links`] hands back with its link. The links name their group (`data-nav-group`),
     /// so the runtime ranks the same links after a client navigation wherever the markup puts
-    /// them; a link of [`Req::nav`] or [`Req::nav_section`] is still judged alone. Leave out an
+    /// them; a link of [`Req::nav`] or [`Req::nav_section`] is still judged alone. An entry whose
+    /// page also answers at another address is current there too with [`NavTo::also`]. Leave out an
     /// entry the user may not see before the call, not in the markup: the runtime ranks only the
-    /// links in the page.
+    /// links in the page. An entry whose URL is not a path on this site, one `/` and then not `/` or
+    /// `\` (`//host/x`, which only a route implemented by hand writes), is never current, on the
+    /// server and in the runtime alike; nor, as a syntax restriction rather than a browser's rule, is
+    /// one with a tab or a line break straight after its first `/`.
     ///
     /// ```
     /// use corten::prelude::*;
@@ -2024,10 +2556,16 @@ impl Req {
 
     /// Renders `view` once, as the page would (in the visitor's time zone under
     /// [`crate::App::zoned_dates`]), to place in several answers: see [`crate::Rendered`].
+    /// One that draws a form's new submit key keeps this request's answer out of shared caches,
+    /// as a page whose render drew one is, wherever it is placed.
     pub fn rendered(&self, view: impl Render) -> crate::Rendered {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
-        crate::Rendered::new(view)
+        let rendered = crate::Rendered::new(view);
+        if rendered.drew_key() {
+            self.signal.mark_key_drawn();
+        }
+        rendered
     }
 
     /// This request's CSP nonce, for the layout's own inline scripts. Empty without a policy.
@@ -3014,7 +3552,7 @@ impl Req {
     /// `corten::http::Uri` to leave the app. Works with and without
     /// JavaScript.
     pub fn redirect<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)))
     }
 
@@ -3078,15 +3616,15 @@ impl Req {
     /// ```
     pub fn resend_to<For>(&self, to: &(impl crate::route::OnSite + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         if !self.write {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::resend_to sends a write's form on, and this request is a GET or HEAD, which a redirect repeats as it is: use req.redirect",
             ));
         }
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         // A derived route always writes a path on this site; a hand-written `write_href` might not:
         // never send a form's body elsewhere.
         if !on_site(&value) {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::resend_to sends a form only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
             ));
         }
@@ -3147,10 +3685,10 @@ impl Req {
     /// }
     /// ```
     pub fn redirect_with_notice(&self, to: &(impl crate::route::OnSite + ?Sized), notice: impl std::fmt::Display) -> HtmlResult {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         // A derived route always writes a path on this site; a hand-written `write_href` might not.
         if !on_site(&value) {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::redirect_with_notice sends the browser only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
             ));
         }
@@ -3236,7 +3774,7 @@ impl Req {
     /// [`Req::redirect`]. Parameters the old URL had are the route's to carry
     /// (`#[route(prefix = ..)]` for ones named by data), so only the ones it knows move with it.
     pub fn moved<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         if self.mode == Mode::Action || (self.fetched && (has_fragment(&value) || elsewhere(&value))) {
             return Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)));
         }
@@ -3275,11 +3813,12 @@ fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
     if !(res.headers().contains_key(SHELL_HEADER) && res.headers().contains_key("refresh")) {
         return res;
     }
-    unserved(
+    let error = unserved(
         dev,
         "this page sends a Refresh header, which the browser keeps after the runtime navigates away and then loads this URL again: put <ReadAgain after={..} /> in the page's head tags instead".to_owned(),
     )
-    .into_response()
+    .into_response();
+    crate::cache::unshared_in_place_of(res.extensions(), error)
 }
 
 /// A page answering a browser's post, with a success status, at a path whose route has no `GET`
@@ -3382,7 +3921,7 @@ fn in_place_of(res: Response, dev: bool, message: String) -> Response {
             error.headers_mut().append(name.clone(), value.clone());
         }
     }
-    error
+    crate::cache::unshared_in_place_of(&parts.extensions, error)
 }
 
 /// A write's redirect to an origin the form's page does not allow in `form-action`: Chromium
@@ -3412,7 +3951,7 @@ fn redirect_outside_form_action(res: Response, check: Option<&crate::security::F
             error.headers_mut().append(name, value.clone());
         }
     }
-    error
+    crate::cache::unshared_in_place_of(&parts.extensions, error)
 }
 
 /// What a debug build says of a write redirected to `to`, when the form's page does not allow it.
@@ -3660,6 +4199,9 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let mut res = res;
     let status = res.status();
     let error = status.is_client_error() || status.is_server_error();
+    // A refusal goes out as it was made (a `200` an extractor's rejection chose, a redirect, a
+    // relayed failure): its mark is on it, and the app's cache rule reads it as it goes out
+    // ([`crate::cache::Unshared`]).
     if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
         return res;
     }
@@ -3669,7 +4211,12 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
         drop(asked);
         return crate::api::json_failure(res, shared.dev, None).await;
     }
+    // A `NoStore` answer: the page that replaces it is one too; and one that is no handler's own (a
+    // refusal, the router's own failure, a panic, the deadline), which the page in its place is too.
+    let marks = crate::cache::Marks::of(res.extensions());
     if let Some(crate::caller::SignIn(to)) = res.extensions().get::<crate::caller::SignIn>().cloned() {
+        // A refusal, whoever made it: the redirect or page in its place is never shared either.
+        let marks = crate::cache::Marks { unshared: true, ..marks };
         let kept = std::mem::take(res.headers_mut());
         let Some(message) = sign_in_loops(asked.path(), &to) else {
             #[cfg(debug_assertions)]
@@ -3678,14 +4225,14 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
                 tracing::error!("corten: {message}");
                 print_unserved(shared.dev, &message);
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
-                return carried(kept, error_page(shared, asked, failure).await);
+                return carried(kept, marks, error_page(shared, asked, failure).await);
             }
-            return carried(kept, redirect(asked.mode, asked.fetched, to));
+            return carried(kept, marks, redirect(asked.mode, asked.fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
         let failure = if shared.dev { failure } else { failure.without_detail() };
-        return carried(kept, error_page(shared, asked, failure).await);
+        return carried(kept, marks, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
     // Read here, before the answer's body is taken; not in a release build, where it would be one
@@ -3707,20 +4254,25 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // under it in dev mode; any other client (probes, webhooks) still gets the text.
     let rejection = failed.is_none() && cause.is_none() && browser && crate::api::is_plain_text(res.headers());
     if failed.is_none() && cause.is_none() && !empty_error && !rejection {
+        // A failure sent as it is: to a client that does not ask for HTML, or with a body that is
+        // not plain text. Its marks go out with it.
         return res;
     }
     // What the handler and the app's middleware said besides the body (a request id,
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
     if rejection {
-        let text = crate::body::to_bytes(res.into_body(), 16 * 1024).await.unwrap_or_default();
+        // The body alone: the answer's extensions are read again once the page is drawn.
+        let text = crate::body::to_bytes(std::mem::take(res.body_mut()), 16 * 1024).await.unwrap_or_default();
         let text = String::from_utf8_lossy(&text);
         tracing::debug!(status = status.as_u16(), "corten: request rejected: {text}");
         failed = Some(crate::Failed(Arc::from(text.trim())));
     }
     if offline && status == StatusCode::NOT_FOUND {
-        // The PWA's offline page, which the service worker keeps: a 200.
-        return carried(kept, error_page(shared, asked, Failure::Offline).await);
+        // The PWA's offline page, which the service worker keeps: a 200. It is the app's error page
+        // in place of the router's `404`, so it is settled as one too; the worker's own cache keeps
+        // it whatever its `Cache-Control` says.
+        return carried_from(kept, marks, error_page(shared, asked, Failure::Offline).await, res.extensions_mut());
     }
     let detail = failed.map(|crate::Failed(message)| message);
     let failure = match cause {
@@ -3744,7 +4296,20 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     #[cfg(not(debug_assertions))]
     let shows = shared.dev;
     let failure = if shows { failure } else { failure.without_detail() };
-    carried(kept, error_page(shared, asked, failure).await)
+    carried_from(kept, marks, error_page(shared, asked, failure).await, res.extensions_mut())
+}
+
+/// [`carried`], for the error page drawn in the place of the failed answer whose extensions are
+/// `answer`: when they hold its `Unshared` mark alone and the page has none (the router's `404`
+/// with the error page), the page takes that map, rather than a new one made for the same mark.
+/// Nothing else of the failed answer's is carried. `answer` is borrowed after the page is drawn,
+/// so the request's future holds nothing more across that await.
+fn carried_from(kept: HeaderMap, marks: crate::cache::Marks, mut res: Response, answer: &mut http::Extensions) -> Response {
+    if marks.unshared && !marks.no_store && answer.len() == 1 && res.extensions().is_empty() {
+        *res.extensions_mut() = std::mem::take(answer);
+        return carried(kept, crate::cache::Marks { unshared: false, no_store: false }, res);
+    }
+    carried(kept, marks, res)
 }
 
 /// [`Req::asset`] with no static directory: a bug, which panics in debug builds.
@@ -3765,14 +4330,22 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 /// on still decides this one. A `Cache-Control` that names `no-store` (`NoStore`, or one written
 /// by hand, on any of its lines, however a reader could find it) makes `res` `no-store` too:
 /// whoever set it said nothing may keep the answer, a failure included. Its other directives
-/// described the failed answer, so they are not carried.
-fn carried(kept: HeaderMap, mut res: Response) -> Response {
+/// described the failed answer, so they are not carried. `res` gets the failed answer's `marks`
+/// ([`crate::cache::Marks`]): the page that replaces a `NoStore` answer is `NoStore` too, whatever
+/// a middleware made of the answer's header, and the page in place of an answer that is no
+/// handler's own (a refusal, a failure no handler answered) is never shared, by the app's cache
+/// rule or another app's that relays it inline. A plain-text failure a browser gets the error page
+/// for (an extractor's rejection is marked where it was made) is only that: a handler's own is
+/// its answer.
+fn carried(kept: HeaderMap, marks: crate::cache::Marks, mut res: Response) -> Response {
+    marks.put(&mut res);
     if kept.is_empty() {
         return res;
     }
     use http::header::Entry;
     let headers = res.headers_mut();
-    if kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
+    if !marks.no_store && kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()))
+    {
         headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
     }
     // Allocates only for a failure that varied on something.
@@ -3880,7 +4453,7 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "a panic with no message".to_string());
             tracing::error!("corten: {method} {} panicked: {message}", uri.path());
-            let mut res = Error::new(format!("the handler panicked: {message}")).into_response();
+            let mut res = Error::corten(format!("the handler panicked: {message}")).into_response();
             res.extensions_mut().insert(Cause::Panicked);
             res
         }
@@ -3902,11 +4475,12 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
-            Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
+            Error::corten("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
         }
         // A body over its limit, read past so the client reads the 413: still the 413.
         Waited::PastLimit(over) => {
             signal.abort(crate::Abort::Deadline);
+            // Corten's own errors ([`Error::corten`]).
             match over {
                 Over::Body(limit) => Error::from(crate::extract::BodyError::TooLarge { limit }),
                 Over::Upload(limit) => Error::from(crate::form::UploadError::TooLarge { limit }),
@@ -3917,7 +4491,7 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
-            let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
+            let mut res = crate::cache::unshared(StatusCode::SERVICE_UNAVAILABLE.into_response());
             res.extensions_mut().insert(Cause::TimedOut);
             res
         }
@@ -3944,12 +4518,13 @@ struct Late(Waited);
 
 /// `fut`'s output, or [`Late`] once it has waited `limit`. The timer starts the first time `fut`
 /// is not ready, so a handler that answers at once (a page rendered from memory) never registers
-/// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
+/// one: about 600 ns a request measured with `tokio::time::timeout`. It is the connection's where
+/// the connection keeps one ([`crate::deadline`]). Each poll of `fut` starts
 /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
 async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
     use std::{pin::pin, task::Poll};
     let mut fut = pin!(fut);
-    let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut timer = pin!(crate::deadline::Timer::Unset);
     std::future::poll_fn(|cx| {
         crate::extract::forget_wait();
         if let Poll::Ready(out) = fut.as_mut().poll(cx) {
@@ -3969,7 +4544,7 @@ async fn within_late<S: crate::app::Steps>(
 ) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
     let mut fut = pin!(Some(next.run(pending.take())));
-    let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut timer = pin!(crate::deadline::Timer::Unset);
     let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
     std::future::poll_fn(|cx| {
         if limit.is_some() {
@@ -4001,18 +4576,11 @@ async fn within_late<S: crate::app::Steps>(
 
 #[inline]
 fn waited_until<T>(
-    mut timer: std::pin::Pin<&mut Option<tokio::time::Sleep>>,
+    timer: std::pin::Pin<&mut crate::deadline::Timer>,
     limit: std::time::Duration,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<Result<T, Late>> {
-    use std::task::Poll;
-    if timer.is_none() {
-        timer.set(Some(tokio::time::sleep(limit)));
-    }
-    match timer.as_pin_mut().map(|timer| timer.poll(cx)) {
-        Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
-        _ => Poll::Pending,
-    }
+    timer.poll(limit, cx).map(|()| Err(Late(crate::extract::waited())))
 }
 
 thread_local! {
@@ -4423,7 +4991,7 @@ fn unruled_vars(page: &str, rules: &str) -> Result<()> {
             }
             let Some(value) = tag.attr("data-vars") else { continue };
             if !rules.contains(&format!("[data-vars=\"{value}\"]")) {
-                return Err(Error::new(format!(
+                return Err(Error::corten(format!(
                     "the page has data-vars=\"{value}\" and no rule for it, so that size paints at its initial value: markup placed with raw() keeps no values; render the view into a corten::Rendered and place that"
                 )));
             }
@@ -4506,7 +5074,7 @@ mod carried_tests {
         kept.append(header::VARY, HeaderValue::from_bytes(b"caf\xe9").unwrap());
         let mut res = Response::new(Body::empty());
         res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
-        let res = carried(kept, res);
+        let res = carried(kept, crate::cache::Marks { unshared: false, no_store: false }, res);
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
     }
@@ -4560,7 +5128,7 @@ mod carried_tests {
         };
         // The mode, whether the runtime sent the request, and whether a document was asked for by
         // an `Accept` that names HTML.
-        let cases: [(Lines, Lines, Mode, bool, bool); 21] = [
+        let cases: [(Lines, Lines, Mode, bool, bool); 24] = [
             // No `corten`: the first item of the first `Accept` line, JSON or anything else.
             (&[], &[], Mode::Document, false, false),
             (&[], &[b"text/html,application/xhtml+xml,*/*;q=0.8"], Mode::Document, false, true),
@@ -4572,6 +5140,11 @@ mod carried_tests {
             (&[], &[b"application/problem+json"], Mode::Document, false, false),
             (&[], &[b"text/html", b"application/json"], Mode::Document, false, true),
             (&[], &[b"application/json", b"text/html"], Mode::Data, false, false),
+            // HTML is named or it is not, wherever in the line: another `text/` type at the start
+            // is not HTML, and HTML after it is.
+            (&[], &[b"text/plain"], Mode::Document, false, false),
+            (&[], &[b"text/event-stream"], Mode::Document, false, false),
+            (&[], &[b"text/plain, text/html;q=0.9"], Mode::Document, false, true),
             // One that is not text is read as none.
             (&[], &[b"application/json\xff"], Mode::Document, false, false),
             (&[], &[b"text/html\xff"], Mode::Document, false, false),

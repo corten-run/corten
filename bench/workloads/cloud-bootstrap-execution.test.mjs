@@ -438,9 +438,9 @@ test("new dedicated reservations check the manager before cloud-init and native 
   assert.equal(quiet.slice(quiet.indexOf("bootstrap_stage=ssh-ingress-verification")),
     original.slice(original.indexOf("bootstrap_stage=ssh-ingress-verification")));
   for (const plain of [state, { ...state, control }, dedicated, { ...dedicated, control: ledger }])
-    assert.throws(() => productionFiles({ ...plain, quietBootstrap: true }), /quiet bootstrap requires a supervised group/);
-  assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a supervised group/);
-  assert.throws(() => productionFiles({ ...saved, quietBootstrap: "other" }), /quiet bootstrap requires a supervised group/);
+    assert.throws(() => productionFiles({ ...plain, quietBootstrap: true }), /quiet bootstrap requires a registered group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a registered group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: "other" }), /quiet bootstrap requires a registered group/);
 });
 
 test("post-start idle evidence distinguishes natural drain, persistent manager and a late proof", {
@@ -492,6 +492,36 @@ test("prelogin condition precedes guardian custody; both idle gates survive the 
   const unbound = executeRootManager(t, job, { quiet, marker: false });
   assert.notEqual(unbound.status, 0);
   assert.equal(unbound.contents, "[Unit]\nConditionPathExists=!" + dropin + "\n");
+});
+
+function offlineInstallState() {
+  const plan = fleetPlan({ round: state.round, commit: state.commit, token: "f".repeat(16),
+    tokens: { [group]: dedicated.token }, provider: fleet.provider, sshKey: fleet.sshKey }, fleet.createdAt, fleet.host.region,
+  { stagedPlacement: true, single: { group, indexSha256: "a".repeat(64), checkout: "/synthetic-measured", offlineHandoff: true } });
+  const saved = { ...reservation({ round: state.round, commit: state.commit, token: dedicated.token, group, fleet: plan }),
+    quietBootstrap: "prelogin", control: structuredClone(ledger) };
+  for (const [script, ms] of [["true", 30000], [bootstrapWorkspaceScript(saved, { launch: true }), 60000]])
+    saved.control.ledger.push({ request: controlRequest(saved, "ssh", [script], ms, "bootstrap"), localTerminal: true, code: 0 });
+  return saved;
+}
+
+test("generated offline installer requires the exact guardian binding, not a monitor", () => {
+  const install = installBenchmarkUnit(offlineInstallState());
+  assert.match(install, new RegExp("test -f '" + binding.replaceAll(".", "\\.") + "'"));
+  assert.doesNotMatch(install, /'null'/);
+});
+
+test("generated offline prelogin switch and job gates execute with only offline guardian custody", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = offlineInstallState(), script = productionFiles(quiet)["job.sh"];
+  const installed = executeRootManager(t, script, { quiet });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(installed.contents, policy);
+  assert.match(installed.stdout, /NATIVE_ENTRY_REACHED/);
+  const unbound = executeRootManager(t, script, { quiet, marker: false });
+  assert.notEqual(unbound.status, 0);
+  assert.doesNotMatch(unbound.stdout, /NATIVE_ENTRY_REACHED/);
 });
 
 test("new dedicated setup requires an intact handoff and idle manager at both gates", {

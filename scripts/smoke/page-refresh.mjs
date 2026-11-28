@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, steps, pollFor } from "./helpers.mjs";
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
@@ -111,13 +111,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // The rest reads the page whole: the page as one that asks only that (its head's ReadAgain,
     // without the part's tag). Fetched uncompressed: Playwright does not decode zstd, which
     // Firefox asks for.
+    /** A page's markup without its parts' read-again tags, so it asks to be read whole. @param {string} body */
+    const asWhole = (body) => body.replace(/<template data-corten-read-again[^>]*><\/template>/g, "");
     const wholeOnly = async (/** @type {import("@playwright/test").Route} */ route) => {
       if (route.request().headers()["corten"] === "action") return route.fallback();
       const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
-      const body = (await res.text()).replace(/<template data-corten-read-again[^>]*><\/template>/g, "");
+      const body = asWhole(await res.text());
       await route.fulfill({ status: res.status(), headers, body });
     };
     await page.route("**/alerts?saved=*", wholeOnly);
@@ -155,40 +157,203 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       );
     }
     // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
-    // read; the next is still made, so the page does not stop short of the write.
+    // read; the next is still made, at the address the script put, so the page does not stop short
+    // of the write.
     if (swaps) {
-      // The page must come in still saving, or it starts no read to cancel; a write that landed
-      // first is tried again.
-      let waiting = false;
-      for (let tries = 0; tries < 3 && !waiting; tries++) {
-        await page.goto(await pending());
-        waiting = (await saved()) === "Saving...";
-      }
+      // The page's load is given a document still saving for a write's receipt whatever the store
+      // says by then (#2014): the page the server draws for that receipt, with its status line and
+      // its head's read-again tag as the server draws them while the write has not landed. The
+      // store's reads see a write 1.5 s after it, and the round trip between the write and the read
+      // of its page can take longer on a loaded machine, so the case does not depend on it. The
+      // runtime's reads of a page (a `corten: nav` or `page` request that is not a prefetch) are
+      // recorded from the start of that document whatever their address, which is loaded after a
+      // blank one so no read of an earlier document counts, and its first read of the alerts page is
+      // held from before the load, so the read held is the first however soon it comes; it must be
+      // the document's first read, of the receipt's address. The case requires that read still on its
+      // way when the script replaces the address (the navigation reading it not yet ended), that
+      // navigation cancelled by the replaceState, and the read failing after it while it is still
+      // held (not once it is let go); then every later read made at its address with only `shown`
+      // changed, one of them answered with success, `Saved.` drawn in the same document, and the
+      // page left at that address. Each wait has its own bound, and a result after it fails the case;
+      // once a step fails, the case does no more page work. The hold is let go and the route and
+      // listeners removed however the case ends.
+      const name = "a read a script's replaceState cancels on its way is made again";
+      /** A write, and the page the server draws for its receipt's address. */
+      const capture = () =>
+        page.evaluate(async () => {
+          const res = await fetch("/alerts", { method: "POST", headers: { corten: "action", "content-type": "application/x-www-form-urlencoded" }, body: "id=ACME&above=175" });
+          const from = /data-from="([^"]+)"/.exec(await res.text())?.[1];
+          if (!from) return null;
+          // Drawn as the page a write's redirect brings (`corten: page`), a full load's.
+          const doc = await fetch(from, { headers: { corten: "page" }, cache: "no-store" });
+          return { from, status: doc.status, headers: [...doc.headers], body: await doc.text() };
+        });
+      const statusLine = /<p id="alert-status" role="status">(?:Saving\.\.\.|Saved\.)<\/p>/;
+      /** The head's read-again tag the server draws (`ReadAgain`, one of the page's own head tags) while a write has not landed. */
+      const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
+      /**
+       * The receipt's page as the server draws it while the write has not landed, read whole, or
+       * null for a page that is not the receipt's: the same document whether the store had the
+       * write by the time of the read or not, as its status line and its head's read-again tag are
+       * put in place of whatever the server drew for them.
+       * @param {string} body
+       */
+      const asSaving = (body) => {
+        if (!statusLine.test(body) || !body.includes("</title>")) return null;
+        const untagged = body.replace(/<noscript data-corten-read-again[^>]*>[\s\S]*?<\/noscript>/g, "");
+        return asWhole(untagged.replace(statusLine, '<p id="alert-status" role="status">Saving...</p>').replace("</title>", `</title>${readAgainTag}`));
+      };
+      /** The address without its fragment, which a request does not carry. @param {string} url */
+      const bare = (url) => {
+        const at = new URL(url);
+        at.hash = "";
+        return at.href;
+      };
+      /** The alerts page and its reads. @param {URL} url */
+      const alerts = (url) => url.pathname === "/alerts";
+      /**
+       * Whether `request` is the runtime's read of a page (not a load, and not a prefetch), whatever
+       * its address. @param {import("@playwright/test").Request} request
+       */
+      const isRead = (request) =>
+        !request.isNavigationRequest() && request.method() === "GET" && ["nav", "page"].includes(request.headers()["corten"] ?? "") && request.headers()["purpose"] !== "prefetch";
+      /** The document the page's load is given. @type {{ status: number, headers: Record<string, string>, body: string } | null} */
+      let served = null;
+      /** The receipt's address, and the one every read after the held one must be of. */
+      let address = "";
+      let expected = "";
+      /** The page's reads of itself, from the start of the replayed document. @type {import("@playwright/test").Request[]} */
+      const polls = [];
+      let recording = false;
+      /** The read held, once there is one, and whether it failed while the hold was still on. @type {import("@playwright/test").Request | null} */
+      let heldRead = null;
+      let shut = true;
+      /** Set as the script's replaceState is about to run. */
+      let mutating = false;
+      /** When the held read failed while still held: before the replaceState or after it. @type {"" | "before" | "after"} */
+      let failedShut = "";
+      let release = () => {};
+      const released = new Promise((resolve) => (release = () => resolve(undefined)));
+      let holding = () => {};
+      const isHeld = new Promise((resolve) => (holding = () => resolve(true)));
+      let loaded = false;
       const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        const request = route.request();
+        if (!loaded && served && request.isNavigationRequest() && bare(request.url()) === address) {
+          loaded = true;
+          return route.fulfill(served);
+        }
+        if (heldRead || !isRead(request)) return route.fallback();
+        heldRead = request;
+        holding();
+        await released;
         await route.fallback().catch(() => {});
       };
-      await page.route("**/alerts?saved=*", slow);
-      let cancelled = 0;
-      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().includes("/alerts?saved=") && cancelled++);
+      /** The status of each finished read of the address the next must read. @type {Promise<number>[]} */
+      const answered = [];
+      const onRequest = (/** @type {import("@playwright/test").Request} */ r) => void (recording && isRead(r) && polls.push(r));
+      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r === heldRead && shut && !failedShut && (failedShut = mutating ? "after" : "before"));
+      const onFinished = (/** @type {import("@playwright/test").Request} */ r) =>
+        void (expected && isRead(r) && bare(r.url()) === expected && answered.push(r.response().then((res) => res?.status() ?? 0, () => 0)));
+      /** Where the case stopped, if it did. */
+      let stopped = "";
+      let waiting = "";
+      /** The case's outcome, read before its teardown. */
+      let outcome = { status: "", at: "", later: /** @type {string[]} */ ([]), statuses: /** @type {number[]} */ ([]) };
+      page.on("request", onRequest);
       page.on("requestfailed", onFailed);
-      const from = reads.length;
-      for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
-      await page.evaluate(() => {
-        const to = new URL(location.href);
-        to.searchParams.set("shown", "2");
-        history.replaceState(history.state, "", to);
-      });
-      await page.unroute("**/alerts?saved=*", slow);
-      await savedSoon();
-      page.off("requestfailed", onFailed);
-      if (waiting)
-        check(
-          "a read a script's replaceState cancels on its way is made again",
-          (await saved()) === "Saved." && cancelled > 0 && reads.length > from + 1,
-          `${await saved()} after ${reads.length - from} reads, ${cancelled} cancelled`,
-        );
-      else skip("a read a script's replaceState cancels on its way is made again", "each write landed before its page came in");
+      page.on("requestfinished", onFinished);
+      try {
+        // Armed inside the guard: the read the route holds is let go however the steps end.
+        try {
+          const got = await capture();
+          const body = got?.status === 200 ? asSaving(got.body) : null;
+          if (!got || !body) stopped = `the fixture drew no page for its write: ${got ? `${got.status}` : "no receipt"}`;
+          else {
+            address = bare(new URL(got.from, base).href);
+            const next = new URL(address);
+            next.searchParams.set("shown", "2");
+            expected = next.href;
+            served = { status: got.status, headers: Object.fromEntries(got.headers.filter(([header]) => !/^content-(encoding|length)$/i.test(header))), body };
+            await page.goto("about:blank");
+            recording = true;
+            await page.route(alerts, slow);
+            await page.goto(address);
+            await page.evaluate(() => ((/** @type {any} */ (window)).__replayed = 7));
+            waiting = (await saved()) ?? "";
+            const held = await steps(5000, "no read held within 5 s").step(() => isHeld).catch(() => false);
+            // The page's event for the read held may come a moment after its route.
+            if (held) await pollFor(1000, async () => polls.length > 0);
+            if (!held) stopped = "no read held within 5 s";
+            else if (polls[0] !== heldRead || bare(/** @type {import("@playwright/test").Request} */ (heldRead).url()) !== address)
+              stopped = `the document's first read was ${polls[0]?.url() ?? "none"}, not ${address}`;
+            else if (failedShut) stopped = "the held read failed before the script replaced the address";
+            else {
+              // In one task: whether the runtime's navigation reading the page is still on its way (a
+              // navigation that ended is no longer `navigation.transition`), then the replaceState,
+              // and how that navigation ends. Its read is the one held: the document's first read, and
+              // still held.
+              mutating = true;
+              const cancelled = await within(
+                5000,
+                "the navigation reading the page did not end within 5 s of the replaceState",
+                page.evaluate(
+                  () =>
+                    new Promise((resolve) => {
+                      const on = /** @type {any} */ (window).navigation?.transition;
+                      if (!on) return resolve("no navigation reading the page was on its way at the replaceState");
+                      on.finished.then(
+                        () => resolve("the navigation reading the page finished after the replaceState"),
+                        (/** @type {unknown} */ e) => resolve(e instanceof DOMException && e.name === "AbortError" ? "" : `the navigation reading the page failed with ${String(e)}`),
+                      );
+                      const to = new URL(location.href);
+                      to.searchParams.set("shown", "2");
+                      history.replaceState(history.state, "", to);
+                    }),
+                ),
+              ).catch((/** @type {unknown} */ e) => (e instanceof Error ? e.message.split("\n")[0] : String(e)));
+              if (cancelled) stopped = cancelled;
+              // Its failure's event may come a moment after the navigation ends; "" is no answer yet.
+              else if (!(await pollFor(5000, async () => failedShut || undefined))) stopped = "the held read did not fail while held within 5 s";
+              else if (failedShut !== "after") stopped = "the held read failed before the script replaced the address";
+            }
+          }
+        } finally {
+          shut = false;
+          release();
+          await page.unroute(alerts, slow);
+        }
+        if (!stopped) {
+          const drawn = await pollFor(6000, () =>
+            page.evaluate(() => document.getElementById("alert-status")?.textContent === "Saved." && (/** @type {any} */ (window)).__replayed === 7),
+          );
+          if (!drawn) stopped = "Saved. not drawn in the same document within 6 s";
+          // The answered read's event may come a moment after its page is drawn.
+          else if (!(await pollFor(1000, async () => answered.length > 0))) stopped = "no read of the replaced address finished within 1 s";
+          else
+            outcome = {
+              status: (await saved()) ?? "",
+              at: page.url(),
+              later: polls.slice(1).map((r) => r.url()),
+              statuses: await steps(1000, "the reads' answers not read within 1 s").step(() => Promise.all(answered)).catch(() => []),
+            };
+        }
+      } finally {
+        page.off("request", onRequest);
+        page.off("requestfailed", onFailed);
+        page.off("requestfinished", onFinished);
+      }
+      check(
+        name,
+        !stopped &&
+          waiting === "Saving..." &&
+          outcome.status === "Saved." &&
+          outcome.later.length > 0 &&
+          outcome.later.every((url) => bare(url) === expected) &&
+          outcome.statuses.some((code) => code >= 200 && code < 300) &&
+          outcome.at === expected,
+        `${stopped ? `${stopped}; ` : ""}${waiting || "(not loaded)"} -> ${outcome.status || "(not read)"} at ${outcome.at || "(not read)"}; reads after the held one ${outcome.later.join() || "none"}, wanted ${expected || "(none)"}; answered ${outcome.statuses.join() || "none"}`,
+      );
     } else {
       skip("a read a script's replaceState cancels on its way is made again", noSwaps);
     }

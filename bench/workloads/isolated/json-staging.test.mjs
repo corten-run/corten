@@ -14,6 +14,7 @@ import { inspectNative } from "./native-replay.mjs";
 import { composePhase } from "./composition.mjs";
 import { latestStableSchema } from "../latest-stable.mjs";
 import { jsonSources as boundSources, saveJsonFixture } from "./test-fixtures/json.mjs";
+import { c16Env } from "../../json-api/placement.mjs";
 
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-json-stage-test-"));
 const native = join(temporary, "native"), source = join(temporary, "sources"); mkdirSync(native); mkdirSync(source);
@@ -54,8 +55,11 @@ test("actual native raw functional replay can stage only an honestly blocked che
   const prepared = inspectPreparation(binding, native);
   assert.equal(prepared.report.baseline, false); assert.equal(s.options.build, true); assert.equal(s.options.checkOnly, true);
   assert.equal(auditSubject(plan, prepared, tree(native), manifest, images).subjectSha256, subject.subjectSha256);
-  assert.equal(subject.qualified, false); assert.equal(subject.identities.length, 36);
+  assert.equal(subject.qualified, false); assert.equal(subject.identities.length, 40);
   assert.throws(() => inspectPreparation({ ...binding, sources: undefined }, native), /producer commit/);
+  // An unmarked preparation cannot stage under a binding that requested the c-16 layout.
+  assert.throws(() => inspectPreparation({ ...binding, resources: { ...binding.resources, requestedCpuEnv: c16Env } }, native),
+    /JSON API load layout differs from binding/);
   for (const mutate of [(x) => { x.schema = "json-api-results/v1"; }, (x) => { x.attemptComplete = true; },
     (x) => { x.apps.corten.projections[descriptor().cases[0].key] = {}; }, (x) => { x.apps.corten.aggregates[descriptor().cases[0].key].fixed = {}; },
     (x) => x.cleanupFailures.push({ resource: "leaked" }), (x) => x.failures.pop(),
@@ -83,7 +87,7 @@ test("replayed negative preparation can await the same independent image/source 
   assert.equal(prepared.report.apps.corten[descriptor().cases[0].key].functional, false);
   const target = auditSubject({ campaignSha256: "campaign", commit: summary.commit, sourceSha256: "sources" }, prepared, tree(folder),
     { files: sourceFiles }, []);
-  assert.equal(target.qualified, false); assert.equal(target.identities.length, 36);
+  assert.equal(target.qualified, false); assert.equal(target.identities.length, 40);
   delete summary.cleanup; save(); assert.throws(() => inspectPreparation(b, folder), "missing cleanup must not stage");
 });
 test("sealed JSON preparation with Docker-omitted WorkingDir reaches the exact independent audit", () => {
@@ -108,15 +112,15 @@ test("sealed JSON preparation with Docker-omitted WorkingDir reaches the exact i
     const replayed = JSON.parse(JSON.stringify(proof));
     assert.deepEqual(proof, replayed, "the live proof must be identical to the saved image evidence");
     assert.deepEqual(target, auditSubject(plan, prepared, sealed, manifest, replayed));
-    assert.equal(target.qualified, false); assert.equal(target.identities.length, 36);
-    assert.equal(proof.length, 20); assert.ok(!JSON.stringify(proof).includes("SECRET"));
+    assert.equal(target.qualified, false); assert.equal(target.identities.length, 40);
+    assert.equal(proof.length, descriptor().apps.length * descriptor().payloads.length + 2); assert.ok(!JSON.stringify(proof).includes("SECRET"));
     assert.equal(proof.filter(({ config }) => !Object.hasOwn(config, "workingDir")).length, 3);
     assert.ok(proof.filter(({ app, tool }) => app === "corten" || tool === "node")
       .every(({ config }) => !Object.hasOwn(config, "workingDir")));
     assert.deepEqual(proof.find(({ tool }) => tool === "k6").config,
       { entrypoint: s.toolExecutions.k6.Entrypoint, cmd: null, workingDir: "/home/k6" });
     const review = delivery(target);
-    assert.equal(validateAuditDelivery(review, target, sealedSources).bundle.receipts.length, 36);
+    assert.equal(validateAuditDelivery(review, target, sealedSources).bundle.receipts.length, 40);
 
     change = (info, saved) => { if (saved.tool === "k6") info.Config.WorkingDir = ""; };
     const changed = auditSubject(plan, prepared, sealed, manifest, imageProof(prepared.summary));
@@ -253,11 +257,11 @@ test("k6 execution rewrites cannot pass the actual accepted-audit and core bridg
   assert.notEqual(compose(changed, audited).outcome, "native-validated");
 });
 
-test("independent review data must match all 36 actual subjects and sealed source bytes", () => {
+test("independent review data must match all 40 actual subjects and sealed source bytes", () => {
   const delivery = { schema: "benchmark-json-audit-delivery/v1", subjectSha256: subject.subjectSha256,
     review: { reviewer: "independent-human", reviewedAt: "2026-11-12T12:00:00Z", subjectSha256: subject.subjectSha256, findings: [], decision: "approved" },
     bundle: { schema: "json-api-native-audits/v2", receipts } };
-  assert.equal(validateAuditDelivery(delivery, subject, sealedSources).bundle.receipts.length, 36);
+  assert.equal(validateAuditDelivery(delivery, subject, sealedSources).bundle.receipts.length, 40);
   for (const mutate of [(d) => { d.subjectSha256 = "stale"; }, (d) => { d.operatorAuthorized = true; },
     (d) => d.bundle.receipts.pop(), (d) => { d.bundle.receipts[1] = d.bundle.receipts[0]; },
     (d) => { d.bundle.receipts[0].identity.imageId = "sha256:wrong"; },

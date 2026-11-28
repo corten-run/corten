@@ -2,11 +2,15 @@
 //   node flood-memory.mjs <out-dir> <image> [runs] [floods]
 // The image is an app built with the template's jemalloc lines (card-market's Dockerfile has them).
 // Each variant runs that one image with only the allocator changed by its environment: jemalloc
-// with no settings, with its background thread (MALLOC_CONF), and with that and a 64 KiB thread
-// cache (the template's); glibc's allocator (LD_PRELOAD empty); glibc's with two arenas or one and
+// with no settings, with its background thread (MALLOC_CONF), and with that and a thread cache of
+// 512 KiB (the template's), 64 KiB (the template's before, named `jemalloc-tuned` in
+// results/flood-memory-tuned and in results kept before 2026-11-23) or 1 MiB; glibc's allocator (LD_PRELOAD
+// empty); glibc's with two arenas or one and
 // its trim threshold held at its default (glibc otherwise raises it); and two arenas with a 16 KiB
 // mmap threshold. FLOOD_VARIANTS (names, comma-separated) runs only those. For each variant and run
-// (3 unless given) the app starts on its own (--cpus 1 --memory 1g), takes a few requests, and
+// (3 unless given) the app starts on its own (--cpus 1 --memory 1g, and room for 65,536 open
+// files, since a Docker whose containers get 1,024 would refuse most of a flood), takes a few
+// requests, and
 // then `floods` times (8 unless given) 4,000 connections each send a 30 KiB request head without
 // its blank line, hold it 12 s and close; a probe container on the same network sends them. Memory
 // is the app's cgroup: memory.current and memory.stat's anon, read at rest before the first flood,
@@ -63,7 +67,9 @@ const fixtures = join(here, "..", "..", "examples", "card-market", "fixtures");
 const variants = {
   jemalloc: ["-e", "MALLOC_CONF="],
   "jemalloc-bg": ["-e", "MALLOC_CONF=background_thread:true"],
-  "jemalloc-tuned": ["-e", "MALLOC_CONF=background_thread:true,tcache_max:65536"], // the template's
+  "jemalloc-tcache-512k": ["-e", "MALLOC_CONF=background_thread:true,tcache_max:524288"], // the template's
+  "jemalloc-tcache-64k": ["-e", "MALLOC_CONF=background_thread:true,tcache_max:65536"], // the template's before
+  "jemalloc-tcache-1m": ["-e", "MALLOC_CONF=background_thread:true,tcache_max:1048576"],
   glibc: ["-e", "LD_PRELOAD="],
   "glibc-arena2": ["-e", "LD_PRELOAD=", "-e", "GLIBC_TUNABLES=glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=131072"],
   "glibc-arena1": ["-e", "LD_PRELOAD=", "-e", "GLIBC_TUNABLES=glibc.malloc.arena_max=1:glibc.malloc.trim_threshold=131072"],
@@ -127,7 +133,7 @@ try {
   for (let run = 1; run <= runs; run++) {
     for (const [variant, env] of Object.entries(variants)) {
       docker("rm", "-f", app);
-      const r = docker("run", "-d", "--name", app, "--network", net, "--cpus", "1", "--memory", "1g", "-v", fixtures + ":/fixtures:ro", "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/smoke.json", "-e", "PORT=8080", "-e", `HOSTS=${app}`, ...env, image);
+      const r = docker("run", "-d", "--name", app, "--network", net, "--cpus", "1", "--memory", "1g", "--ulimit", "nofile=65536:65536", "-v", fixtures + ":/fixtures:ro", "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/smoke.json", "-e", "PORT=8080", "-e", `HOSTS=${app}`, ...env, image);
       if (r.status !== 0) throw new Error("app: " + r.stderr);
       await sleep(3000);
       for (let i = 0; i < 20; i++) docker("exec", probe, "wget", "-q", "-O", "/dev/null", "--header", "host: localhost", `http://${app}:8080/api/items/item_5`);

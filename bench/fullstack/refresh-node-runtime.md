@@ -7,6 +7,107 @@ frozen author lane, plus the two explicitly authorized Node recipe pins in
 It changes benchmark Node runtime inputs, not framework APIs, benchmark workloads,
 historical results, htmx, root tooling or CI. Integration and independent review are pending.
 
+## Debian 13 refresh, 2026-11-24
+
+A later refresh, from main `799c6e56d`, moves bench's remaining Debian 12 images to
+Debian 13 by digest
+([#1704 bench's Node images and the Gin item-page app still run on Debian 12 after the template and examples moved to Debian 13](https://github.com/corten-run/corten/issues/1704)).
+The Node version stays 26.13.1. The rest of this note records the earlier Bookworm
+refresh as it was done; its Bookworm digest and results are not rewritten.
+
+| Exact official image | Verified index digest |
+|---|---|
+| `node:26.13.1-trixie-slim` | `sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067` |
+| `debian:trixie-20261104-slim` | `sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2` |
+
+`docker buildx imagetools inspect` on 2026-11-24 listed linux/amd64 and linux/arm64
+images in both indexes. The Debian digest is the one the live Gin app and the Rust bench
+apps already run on ([version-refresh-rust.md](../workloads/version-refresh-rust.md)).
+On 2026-11-26 Gin and the cold-start probe moved on with them to `trixie-20261123-slim`
+([Debian 13.8 refresh](../workloads/version-refresh-rust.md#debian-138-refresh-2026-11-26)).
+
+What moved:
+
+1. Every use of `node:26.13.1-bookworm-slim` by digest becomes `node:26.13.1-trixie-slim`
+   by digest: the seven fullstack JS apps' Dockerfiles and SvelteKit's
+   `Dockerfile.marketplace`, the live Express and Laravel Dockerfiles, the Express/Bun
+   deployment pin, both `builds.mjs` recipes, and the helper images of catalog, JSON API,
+   marketplace, hardening, mixed production, the native browser group, `conform.mjs`,
+   `harden.mjs`, `run-all.mjs`, `bench/live/run.mjs` and the Django qualifier.
+2. The script-started `node:24-bookworm-slim` images (the browser suite's item API in
+   `droplet.mjs` and the listings-feed failover client) and the `node:24-bookworm` default
+   of `fixture-publication.test.mjs` take the same slim image. That test's container runs
+   only `sh`, `mkdir`, `cp` and `node`, which the slim image has; nothing in it needed
+   the full image.
+3. The Gin item-page app's runtime and `cold-start.mjs`'s probe move from unpinned
+   `debian:bookworm-slim` to `debian:trixie-20261104-slim` by digest. Gin's binary is
+   built with `CGO_ENABLED=0` on Alpine, so it does not depend on the runtime's glibc; the
+   probe still has bash's `/dev/tcp` and GNU `date +%s%N`.
+4. A new cloud reservation saves `trixieUpstream: true` and its job pulls the Debian 13
+   image; a reservation saved before keeps the job bytes it uploaded, which pull the
+   Debian 12 one ([CLOUD.md](../workloads/CLOUD.md#public-source-permissions)).
+
+The two old pins that [Scope and integration](#scope-and-integration) left to other owners
+are resolved: `droplet.mjs` moves here, and the Django qualifier, which already ran
+Node 26.13.1 by digest (that table's `node:24-bookworm-slim` was stale), moves here too.
+
+**Comparison note (2026-11-24).** These base images are comparison inputs that changed at
+this commit. Groups measured from it record the Debian 13 images; earlier rounds keep the
+images they recorded. Debian 13 brings a different glibc (2.41 against 2.36) and OS
+packages. No speedup or slowdown is measured or implied.
+
+Not changed: historical results, saved evidence (`bench/live/evidence/`), recorded job
+fixtures (`bench/workloads/test-fixtures/`), and the lines in `CHANGELOG.0.2.0.md`,
+`docs/design.md`, `docs/guide/deploy.md` and `bench/http2/README.md` that record where an
+earlier measurement was taken.
+
+### Debian 13 verification
+
+Run from commit `ecd96fa15` on one Windows workstation with Docker Desktop, linux/amd64
+only; no arm64 image was built. These are build and correctness checks, not timing.
+
+1. All eleven changed Dockerfiles built: the seven fullstack JS apps, SvelteKit's
+   `Dockerfile.marketplace`, Gin, and the live Express and Laravel apps. The Node images
+   and live Express report Debian 13.8 and Node v26.13.1; Gin and the Laravel final
+   stage report Debian 13.7. The Express/Bun image built from `pins.json` reports
+   Debian 13.8, Node v26.13.1 and Bun 1.4.5.
+2. In `node:26.13.1-trixie-slim`, the fast unit files (those that need no running server
+   or browser) passed 93 of 93: Astro 13, Next.js 26, Nuxt 13, React Router 14, SvelteKit
+   13, TanStack Start 14. Express's marketplace, request-lifetime and traceparent files
+   passed 36 of 36 inside its built image; its `htmx.test.mjs` reads the Spring app's
+   Dockerfile, which is outside the image, and was not run there. After a build, the
+   Astro, Nuxt and SvelteKit `marketplace-http.test.mjs` files passed 3 of 3 each, and
+   React Router's `alerts-http.test.mjs` passed 2 of 2 against its built image with the
+   fixture source. The other alert, browser and Next.js production suites were not run.
+3. The unchanged `bench/marketplace/check.mjs` oracle passed against the rebuilt Express
+   image with the fixture source: 500 records, 264 pages, 12 of 12 profiles. No other
+   app/source pair was run.
+4. The Debian 13 Gin container answered the `cold-start.mjs` probe's bash `/dev/tcp`
+   request with 200, and GNU `date +%s%N` ran in the probe image. `go test ./...` in
+   Gin's Alpine build stage, which this refresh does not change, failed
+   `TestNativeProductionBoundsAndFollowup` five times of five with a connection reset by
+   peer. It runs in the unchanged build stage on unchanged sources, so the runtime image
+   is not its cause; it was not diagnosed.
+5. In `node:26.13.1-trixie` (Node v26.13.1) without a Docker CLI or systemd, these passed:
+   `npm run check` (341 and 35), `check:catalog` (348, 1 skipped), `check:json-api` (92),
+   `check:workloads` (1,524, 7 skipped), `check:groups:host` (215, 1 skipped; 8; 18),
+   `check:groups:browser` (641, 12 skipped), `check:groups:evidence:core` (837),
+   `check:groups:evidence:contracts` (418), `check:groups:evidence:browser` (503,
+   1 skipped; 134) and `check:client-heavy` (117). The skips are opt-in Linux or Docker
+   tests. The first `evidence:core` run failed 31 tests because a diagnostic report
+   file had been left in the checkout; with the checkout clean it passed.
+   `check:marketplace` passed 267 and failed 1: its `droplet.test.mjs` systemd unit
+   check, which spawns `systemd-analyze`, absent from the container; neither that test
+   nor its contract changes here.
+6. `native-controls.test.mjs` failed both tests in that container. Its Docker ledger test
+   passed 1 of 1 against host Docker with the Debian 13 image. Its Chromium worker test,
+   which does not use the image, fails with `native-target-discovery-command-missing` in
+   that container and on the workstation, from this commit and from base `799c6e56d`
+   alike, so the image change does not cause it.
+7. The opt-in Docker test of `fixture-publication.test.mjs` passed 1 of 1 with the
+   slim default: Gin's uid 65534 and Rails's uid 1000 read the published fixtures, and
+   private evidence stayed unreadable.
+
 ## Current official metadata
 
 Checked 2026-11-13, after reading GitHub REST issue metadata and every comment using
@@ -92,12 +193,13 @@ Eligible helper pins were updated in catalog, JSON API, marketplace raw contract
 live, nodelay and fullstack diagnostics. A focused test checks exact digest references
 in every owned application stage and eligible helper.
 
-Other owners must reconcile these discovered old pins; they were not edited here:
+Other owners were to reconcile these discovered old pins; they were not edited here.
+Both are resolved by the Debian 13 refresh above:
 
-| File | Existing input | Owner boundary |
-|---|---|---|
-| `bench/fullstack/droplet.mjs` | `node:24-bookworm-slim` for the browser item API | Cloud owner |
-| `bench/fullstack/apps/django/qualify-production.mjs` | `node:24-bookworm-slim` for upstream | Server owner |
+| File | Existing input | Owner boundary | Resolution |
+|---|---|---|---|
+| `bench/fullstack/droplet.mjs` | `node:24-bookworm-slim` for the browser item API | Cloud owner | `node:26.13.1-trixie-slim` by digest, 2026-11-24 |
+| `bench/fullstack/apps/django/qualify-production.mjs` | `node:24-bookworm-slim` for upstream (already `node:26.13.1-bookworm-slim` by digest; this entry was stale) | Server owner | `node:26.13.1-trixie-slim` by digest, 2026-11-24 |
 
 The search also covered `bench/workloads/cloud-*.mjs`, `droplet.mjs` and
 `isolated/**`; no additional literal Node image pins were found there at the base.

@@ -10,7 +10,7 @@ not remove that requirement.
 | Concern | Default | Override |
 |---|---|---|
 | Address | `HOST` (both loopback addresses, `127.0.0.1` and `[::1]`, so `localhost` answers at once however it resolves), `PORT` (`3000`) | environment; `corten::serve_on(listeners, app)` for listeners of your own (a Unix socket) with the same shutdown, `corten::serve_wrapped(listeners, move \|tcp\| acceptor.accept(tcp), app)` for HTTPS ([below](#your-own-listeners)) |
-| Names it answers to | `localhost`, IP addresses; any other `Host` gets `421` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
+| Names it answers to | `localhost`, names under it and IP addresses; any other requested name gets `421`; a missing HTTP/1.1 `Host`, or a repeated or malformed `Host`, gets `400` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
 | What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
@@ -147,14 +147,23 @@ connections wait in each listener's queue (up to 511 from `corten::listeners` on
 Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
 receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
 the connection, so it lands as the cap frees room. The Dockerfile `corten new` writes preloads jemalloc in the image's last
-stage with that background thread and a 64 KiB thread cache, which keeps brotli's buffers between
-responses ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
+stage with that background thread and a 512 KiB thread cache, which keeps brotli's buffers between
+responses for a page up to about 200 KB ([design Choice 23](../design.md#choice-jemalloc-image));
+with it, on a quiet Linux host, the floods above left 9.3 to 10.3 MiB where glibc's allocator left
+329 to 354 (card-market's image of `bcf4aa073`, three runs each, as are the figures that follow).
+The cache holds what its threads used and an idle app does not give it back: on eight CPUs
+card-market held 38 to 40 MiB at rest after brotli pages of 9.8 KB to 496 KB, and 40 to 54 after
+bursts of 2,000 slow readers of those pages uncompressed, where it held 14 and 16 with a 64 KiB
+cache (and 34 to 35 and 399 to 426 on glibc's allocator). So count 3 to 5 MiB a CPU for it in the
+container's memory when responses run to hundreds of KB. jemalloc's own rule, up to 20 buffers of
+each size a thread, allows 57 MiB a thread at the most; no run here came near that and none was
+built to reach it. An image of the app's own adds
 the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
-ENV MALLOC_CONF=background_thread:true,tcache_max:65536
+ENV MALLOC_CONF=background_thread:true,tcache_max:524288
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
@@ -245,7 +254,17 @@ come on top.
 
 ## Host names
 
-An app answers a request only when its `Host` is `localhost` (or a name under it, such as
+A request for a path takes its host and port from `Host`. When the request-target names its
+own authority (host and optional port), that authority takes precedence over `Host`.
+[RFC 9112 section 3.2.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2.2) requires this
+for absolute-form targets; Corten also uses the authority of an authority-form target. A different
+but valid `Host` does not change the requested host or by itself cause a refusal. The header
+still has to pass the checks below. Without `Sec-Fetch-Site`, the write check compares
+`Origin` with the requested authority. If a proxy puts an internal address there, the
+check trusts that internal origin rather than the public one, and can refuse the app's own
+browsers. Forward a path with the public `Host`, or an absolute URL with the public authority.
+
+An app answers a request only when the requested host is `localhost` (or a name under it, such as
 `app.localhost`), an IP address, missing (HTTP/1.0, a test's `app().test()`), or a name the app lists.
 Any other name gets `421 Misdirected Request` before routing: no handler, middleware, caller
 lookup or error page runs (at a route that says `unstaged` too;
@@ -255,18 +274,79 @@ included, since the browser treats the rebound page as same-origin. On loopback,
 machine can reach the app, that is the access model it would break, so the check is the default
 rather than a setting to remember.
 
+The same check answers `400 Bad Request` to a request HTTP does not allow, whatever names the
+app has and with `Policy::any_host()` too, and nothing of the app runs for it either. The
+first two are what HTTP requires, and the third is Corten's choice where HTTP leaves one:
+
+1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
+   not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
+2. a `Host` that is not a host and maybe a port, which it requires too: one with a user
+   (`user@shop.example`), a path (`shop.example/x`), a space (`shop.example, other.example`),
+   a port that is no number, or an IPv6 address with a zone (`[fe80::1%25eth0]`, which
+   [RFC 9844](https://www.rfc-editor.org/rfc/rfc9844) took back out of a URI's host). Names
+   joined by a comma alone (`shop.example,other.example`) are not refused: a comma is a
+   character a host's name may hold
+   ([RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.2.2), 3.2.2), so the value
+   is read as one name, as it was before: the `421` unless the app answers to any host, and a
+   subdomain where its end is under a name the app lists with a leading dot;
+3. by Corten's choice: a `Host` with nothing in it, or a port alone, which HTTP lets a server
+   read as its own default name (also beside a target that names its host, as in
+   `GET http://shop.example/ HTTP/1.1` with `Host:`, where HTTP has a server ignore what `Host`
+   says); an address in brackets that is not IPv6 (`[v1.fe80]`: the grammar has a place
+   for an address of a later version, none is defined, and RFC 3986 asks for an error where
+   the version is not known); and a target that names its host
+   (`GET http://shop.example/ HTTP/1.1`, or a host alone) where that host and port are not
+   what a `Host` is held to above: a user in it (`http://user@shop.example/`), which HTTP says
+   a server should treat as an error, a port that is no number (`http://shop.example:abc/`),
+   or an address in brackets that is not IPv6 or has a zone (`http://[v1.fe80]/`,
+   `http://[fe80::1%25eth0]/`). The target's host is the one the request asks for, so the
+   check reads it where it would read `Host`, and by the same rule.
+
+Nothing else in a request-target is refused: the check reads none of its path or query, and
+whatever the parse lets through there is routed as before, though HTTP says a server should
+answer an invalid request-line with a `400` or a redirect. That is a byte outside ASCII (`/café`
+from a client that sends it as typed, where a browser sends `/caf%C3%A9`), a `|` or a `%` before
+no hex digits, `*` with any method, and a host alone with a method other than `CONNECT`.
+
+The connection stays open after it, as after the `421`: the server knows where the request
+ends, so the next one on the connection is answered (one whose body had not all arrived is
+closed, as after any answer that leaves a body unread). A request-line that cannot be parsed at
+all (a target that is not UTF-8) never reaches the check: the server answers its own bare `400`
+and closes. A request with no `Host` is still answered when it is HTTP/1.0, and when Corten's
+server did not read it off a connection: a test's `app().test()`, or a `Router` another
+library's server calls as a tower `Service`, which answers for the requests it reads (every
+other case above is a `400` there too). What reaches the server is what counts: a proxy that
+speaks HTTP/1.1 to the app and passes on no `Host` for a client that sent none sends a request
+that gets the `400`. nginx as [the deploy guide](deploy.md#nginx) sets it up is not
+such a proxy. Run with that configuration (nginx 1.31.9, `proxy_set_header Host $http_host`,
+the app with `HOSTS=shop.example`): for an HTTP/1.0 client that sends no `Host`, nginx writes
+`Host: app`, the name of its `upstream` block, as the first line of an HTTP/1.1 request, and
+the app answers that name with the `421`, as it did before this check refused anything; an
+HTTP/1.1 client with no `Host` gets nginx's own `400` and the app is not asked; a client that
+names `shop.example`, over HTTP/1.0 or HTTP/1.1, is answered. The first request
+refused for each reason is logged, with its method, its path and the reason: never its query,
+and of a `Host` or a target's host that is none only the name in it, without a user before or a
+path after (no name at all where an `@` comes after a `/`, a `?` or a `#`, since which part is
+the user cannot then be told; a name with a space in it is logged as sent). A method, a path or
+a name longer than 200 bytes is given by its first 200 and its length, in that line and in the
+`421`'s.
+
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
 ```sh
 HOSTS=shop.example,.shop.example   # the domain, and (leading dot) every subdomain
 ```
 
-or in code, `App::policy(Policy::new().host("shop.example"))`. Behind a proxy that rewrites
-`Host`, it is the name the proxy sends. A health check that calls the app by an IP address, or
-by `localhost`, is answered as before. The first refused name is logged, so a deploy that forgot
+or in code, `App::policy(Policy::new().host("shop.example"))`. When a proxy sends a path to
+the app and rewrites `Host`, list the name it sends. A health check that calls the app by an IP address, or
+by `localhost`, is answered as before, when it sends a `Host` line or speaks HTTP/1.0: a check
+written by hand as `GET /health/live HTTP/1.1` with no `Host` is the `400` above. The first refused name is logged, so a deploy that forgot
 its name says why it answers 421. An app served under names it cannot list in advance (each
-customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself. The check
-compares one header with a short list.
+customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself; its `Host`
+is still read, for the `400` above. The check reads one header and compares it with a short
+list; what it does not find there as written (a subdomain's own part, another host's name, any
+name when the app answers to any) is also checked, and is taken only when every byte of it
+passes; a name with a byte that does not is refused.
 
 ## The client's address
 
@@ -596,6 +676,11 @@ Corten has no scheduler of its own: a task and tokio's intervals are the one way
 is down. A check that has not answered in 800 ms is dropped and `/health/ready` answers
 `unavailable`, inside Kubernetes' one-second probe timeout, and one warning is logged until it
 answers again; `App::ready_within(d)` changes the limit, kept under the probe's own timeout.
+The `200` sends `Cache-Control: no-store` by default; it is a plain header, so a staged middleware
+that rewrites `Cache-Control` or adds a CDN's own caching header can change what caches do with
+it. The `503` is a `NoStore` answer and Corten's own failure, so it goes out `private, no-store`
+with no CDN caching header whatever a middleware writes on it, as does the error page a browser
+gets in its place.
 
 With a database, set the pool's wait for a connection well under the app's deadline
 (`App::deadline`): sqlx's `acquire_timeout` and Corten's deadline are both 30 seconds by default,
@@ -719,6 +804,19 @@ name on an element that also has text, a contrast over an image).
 That runs in Chromium, Firefox and WebKit (axe-core 4.14 with Playwright 1.64, measured on the
 ui-gallery's pages). Open each dialog, popover and menu before an audit, since what is closed is
 not checked.
+
+An audit reads the page and presses no key. A widget's keys (a menu's or the tabs' arrow keys,
+Home, End, Escape) are a browser test's to press, with the browser's own keyboard (Playwright's
+`page.keyboard.press`), as [`examples/ui-gallery/smoke/`](../../examples/ui-gallery/smoke) does
+for every key corten-ui's scripts handle and for Enter and Space on a menu's items. A checker
+that dispatches key events from a script in the page tests only what scripts do with them: what
+the browser does with a key itself (Escape closing a popover, Tab staying in a modal `<dialog>`)
+does not answer a dispatched event, so the platform's own elements read as broken. UI SDK's
+`checkPattern` is one (`@ui-sdk/core` 0.1.0-beta.16, run on the ui-gallery's pages in Chromium
+159 on 2026-11-23): it found no fault in corten-ui's tabs, choice group and combo box, and
+reported a popover menu that Escape does not close and a modal `<dialog>` that Tab leaves,
+neither of which a pressed key reproduces, and each `<details>` as no disclosure, for having no
+button with `aria-expanded`.
 
 ### In a browser
 
@@ -883,9 +981,11 @@ the same build moves by up to 2,000 instructions between runs:
 | unknown URL, JSON 404 | 26,930 | 19,892 | 19,892 (19,876-19,943) | 20,218 (19,899-20,714) | |
 | unknown URL, HTML 404 page | 37,130 | 29,325 | 29,325 (29,033-29,900) | 28,376 (27,182-29,333) | |
 
-Caching adds one header lookup and insert to every response (`Cache-Control`) and two to read
+Caching added one header lookup and insert to every response (`Cache-Control`) and two to read
 the request's credentials: a few hundred instructions on JSON. Pages got cheaper, because a
-page no longer makes a nonce (16 random bytes, base64, and the CSP string around it).
+page no longer makes a nonce (16 random bytes, base64, and the CSP string around it). An answer
+that brings no header but its `Content-Type` has since been given `Cache-Control` with its
+scope's other lines in one pass, without the lookup (the last table of this section).
 
 When the route's answer type, `Caller` and `Middleware` replaced the app's context and guards,
 the same requests were measured before and after (callgrind, release build, in-process
@@ -979,6 +1079,47 @@ The last row is the cost: an unstaged text answer gets the same room and holds t
 (its `Content-Type`, `nosniff` and `sandbox`), as an unstaged JSON answer already did, and the
 larger block is one glibc's thread cache does not hold.
 
+The last stage used to give every answer each security header and its `Cache-Control` by a
+lookup and an insert. Each scope (the app, an area, an API) now keeps the lines those give an
+answer that brings none of them, made once when the router is built, and an answer with no
+header, or its `Content-Type` alone, is given them in one pass; any other answer (a page, an
+answer with a header of its own) has each inserted as before
+([design Choice 28](../design.md#choice-fixed-stages)). Counted with
+`crates/corten/tests/router_cost.rs` the same way (the median of three runs each, which
+differed by at most 9; before at `c9666dc96` with the test as it is at the after commit,
+`fad2caf29`):
+
+| Request | Before, glibc | After, glibc | Before, jemalloc | After, jemalloc |
+|---|---|---|---|---|
+| text from a route with a parameter | 12,207 | 11,716 | 10,694 | 10,244 |
+| text from a route under an API (`ROUTER_TARGET=api`) | 9,518 | 9,155 | 8,207 | 7,895 |
+| text answering a `POST` (`ROUTER_TARGET=write`) | 12,682 | 12,235 | 11,075 | 10,625 |
+| unknown URL, HTML 404 page (`ROUTER_TARGET=missing`) | 17,078 | 17,105 | 15,322 | 15,343 |
+| text from an [`unstaged`](#a-route-outside-the-stages) route (`ROUTER_TARGET=unstaged`) | 5,330 | 5,332 | 4,523 | 4,523 |
+
+The 404 page is the cost: an answer that is not given its lines this way pays the test that
+tells it apart, 21 to 27 instructions here. The first three rows are also what shows that the
+pass is taken. What is sent is the same either way, so no test of answers fails when it is not:
+a change to the last stage counts these rows again.
+
+An answer given its scope's lines this way brought its `Content-Type` at most, and none of the
+scope's lines is part of an `ETag` or leaves an answer without one, so its
+[`ETag`](#the-pages-the-app-keeps) is made without looking through its lines: the hash takes
+its body and its type, as it did. Any other answer's lines are searched as before, and the tag
+is the same bytes either way. Counted over a socket with
+[`bench/request-cost`](../../bench/request-cost/README.md) (instructions a request, the median
+of three counts, `e87ad02da` before and `10bfc8a21` after):
+
+| Request | Before | After |
+|---|---|---|
+| a short text from a page route, a browser's request headers (`text-browser`): tagged, lines given in one pass | 25,840 | 25,275 |
+| the same without them (`text`): not tagged | 17,193 | 17,194 |
+| a short text from a route under an API (`get`): not tagged | 18,352 | 18,353 |
+| a 12 KB page compressed for a browser (`page-browser`): tagged, lines searched | 211,828 | 211,836 |
+
+The cost is one or two instructions on an answer that is not tagged, for the last stage to carry
+whether the pass was taken to where the tag is made, and eight on a tagged page.
+
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
@@ -1027,9 +1168,14 @@ before it (a route that says `unstaged` goes through none;
 
 Corten's stages hold the request once and hand it to the first middleware, or straight to the
 handler when there is none. The outer stages keep only what they need to finish the response.
-They read the incoming request's mode, credentials and cache validators before middleware. Those
+They read the incoming request's mode, credentials and cache validators before middleware (under
+an API they do not read the mode: nothing there depends on it). Those
 decisions and the error page's saved request are not changed by middleware edits. A `Req` taken
 by middleware or the handler reads the headers there, including edits by an earlier extractor.
+The WebSocket origin check and the choice of notice cookie also use the URI at extraction.
+If middleware replaces a whole URL with a path, those two use `Host`, not the authority the
+stages used for admission. As before, an `Origin` matching that `Host` can pass the handshake
+check or match for the notice cookie even though admission never judged that name. Preserve the authority when rewriting the path if these must agree.
 For an API or data request there is no HTML error snapshot: a session cookie can settle the cache
 decision without reading `Authorization`.
 
@@ -1138,7 +1284,8 @@ routes module, the app's, an area's or an API's; the probes a load balancer send
 `/health/live` and `/health/ready`. It goes through none of the stages above: no same-origin
 check, signal or deadline, no middleware (the app's, its area's or its API's), no error page,
 security headers, `Cache-Control`, tag, compression or allowed origins. What it keeps adds no
-stage: the host check every request meets (a name the app does not answer to gets `421`),
+stage: the host check every request meets (a name the app does not answer to gets `421`, and a
+request HTTP does not allow `400`),
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` on its answer (below),
 a panic answered `500`, and, under an API's prefix, the API's JSON for a failure. Its handler's
 answer is otherwise sent as it made it, a raw `Response` too, and every other route keeps every
@@ -1250,11 +1397,20 @@ header reads the answer's type or policy, so no type or policy a handler writes 
 answer whose own script must run is a page, not an unstaged route's. Its answer has no
 `Cache-Control` unless the handler sets one, so a shared cache may keep it by its own rules
 ([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
-says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie is `private,
-no-cache` (`no-store` when it says one), whatever caching it says, and loses any
-`*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
-lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
-to another.
+says so (`NoStore`, which sends `private, no-store`, or `Public`), as the figure above does. One
+that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-store`), whatever
+caching it says, and it and a `NoStore` one (a `NoStore<Relay>`'s upstream headers included) lose
+any `*-cache-control` header and the other caching headers a CDN reads first that
+[Caching](#caching) lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one
+visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
+staged answer does: another app of Corten's whose staged middleware relays it inline and takes
+the cookie off still sends it as that visitor's ([Caching](#caching)).
+A `Public` answer, or one of an answer type of the app's own or a JSON answer (`JsonResponse`,
+whose response the handler may replace with a `Public` one), whose handler drew a form's new
+submit key ([Caching](#caching)), in `NoStore` or a tuple of headers too, goes out as one that
+sets a cookie does, carrying that with it to an app that relays it inline as that one does, and
+also loses a tag (`ETag`) it was given: its handler is watched for one, as a staged route's is,
+and any other unstaged handler runs with nothing around it.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1277,7 +1433,29 @@ more than the same checks written into the handler (86 in an API's module; 67 an
 glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
-check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
+([Host names](#host-names)) added to a request whose first header line is not `Host`: 17 to 19
+with `Host` second, and 49 to 54 with it last of a browser's eight lines, about where
+Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first, and so does
+nginx as the deploy guide sets it up). A request with `Host` first is no longer searched for it
+and costs 90 to 126 fewer than before in an app that names its hosts. An app that answers to any
+host now reads `Host` too, every byte of it, to refuse one that is no host: 111 to 113 more with
+it first, of which 34 to 36 find the line and the rest read `localhost:8080`, and 311 to 312 with
+it last of eight
+(counted over a socket at `5c7b006dc`, each build in turn, each figure the
+difference of the two builds' medians of three runs, with main built a
+second time counting within 2 of main but for one request, 6 away, so the 49 is not told from
+55; [design Choice 28](../design.md#choice-fixed-stages)). Since its name is read sixteen bytes at a
+look, an unstaged request to it costs 84.5 more than before the refusals with `Host` first
+(0.75%), 226.9 with it second and 285.6 with it last of eight, most of that for a later line the
+two searches for it, and a `GET` through the stages 84.1 (0.51%) with it first and 283.4 with
+it last of eight; an app that names its hosts pays 2 to 9 fewer than with the first reader
+(`b52f57475` against `fca4ccd58` and main, measured the same way).
+[`bench/request-cost`](../../bench/request-cost/README.md) counted an earlier tree of the change,
+`ea3983d0b` against `3d84f7de4`, as 17 to 28 fewer a request in an app that answers to any
+host and 1 to 9 fewer in one that names its hosts; its hosted job's table counts the change's
+last head against its merge base, with names of 6, 40 and 4,096 bytes as well, and a name under
+`localhost` in one that names its hosts. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
@@ -1418,22 +1596,70 @@ but an unstaged one):
 | a full document, no `Cookie` or `Authorization`, nothing read a caller | as asked, plus `Vary: cookie` |
 | a request with a `Cookie` or `Authorization`, or one whose handler or middleware read a caller | `private, no-cache` |
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
-| a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
+| a response that sets a cookie, HTML with the request's nonce, a page that draws a form's new submit key (`SubmitKey::field`), or a `Public` answer (or an answer type of the app's own) whose handler drew one, however it rendered it | `private, no-cache`, logged under `corten dev` |
 
-A page that draws a submit key also goes out without the caching headers a CDN or proxy reads
-before `Cache-Control` that a middleware wrote, even when its `Cache-Control` already says
-`private` or `no-store`: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
+An answer Corten knows is personal goes out without the caching headers a CDN or proxy reads
+before `Cache-Control` that a middleware wrote, whatever its own `Cache-Control` says (none, a
+plain `private`, or `no-store`), so a CDN that obeys them does not keep one visitor's answer for
+the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
-`X-Accel-Expires`. A `no-store` on it goes out `private, no-store`: some CDNs ignore a bare
-`no-store`, and none keeps a `private` answer. Those names, matched exactly, are the whole list
-(a `Public` answer cannot set one either). Keeping a page with a form out of a shared cache by
-any other means is the deployment's: a name its CDN is configured to read (RFC 9213 allows any),
-a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
-rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
-the layout's reads, and a `Rendered` placed in one. A live stream's fragments are text rendered
-after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
-says `Cache-Control: private` itself and carries none of those headers
-([live data](live-data.md)).
+`X-Accel-Expires`. Such an answer read a caller, sets a cookie (an unstaged route's too), has the
+request's nonce or draws a submit key, or is a `Public` answer to a request with credentials, or
+is a tool's answer from an MCP endpoint whose `Tools::auth` found its caller (with
+`Tools::authorization` too, any answer that check let through, the list of tools included). The
+answer carries that with it: another app
+of Corten's whose staged middleware asks it for an answer inline and relays it (as it is, or
+changed in place, its cookie taken off included) sends it the same way, though that app's own
+request read no caller, while an answer that middleware makes in its place, or a relayed answer
+nothing made personal, keeps what it writes. An answer relayed over HTTP carries only its
+headers. A `no-store` on it goes out
+`private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private` answer. A
+`NoStore` answer, a `Public` one the third row sends as the browser's alone, a refused write's
+error page, the error page for a failure Corten made rather than a handler, and a refusal or the router's own
+failure in any other form it goes out in (all below) lose those headers too,
+whatever a middleware made of their `Cache-Control` (a `NoStore` one still goes out
+`private, no-store`, below, and so does a `Public` one sent as the browser's alone whose header
+names `no-store` anywhere: `must-understand`, a second line, or `no-store=1` beside a plain
+`private` included). Those names, matched
+exactly, are the whole list (a `Public` answer cannot set one either); any other answer keeps the
+ones a middleware wrote. An answer that draws a submit key loses a tag (`ETag`) too, not only
+the one Corten would make: one the app (`Public::header`), a middleware or a relayed upstream
+gave it names a body whose key the browser may already have sent, and a `304` to it would keep
+that body.
+
+Keeping a personal answer out of a shared cache by any other means is the deployment's: a name
+its CDN is configured to read (RFC 9213 allows any), a layer around the app (`App::layer`, which
+runs after Corten settles the answer), and an edge rule that caches whatever the origin says. A
+submit key marks the answer it is rendered for: a page, a patch, the layout's reads, and a
+`Rendered` placed in one; one made with `req.rendered` marks the request's answer wherever it is
+placed (in text or `Json<T>` too). A `Public` route's handler is also watched
+for a key it draws any other way, rendered to a string and put in JSON, in text, in a file or
+relay it made, or in a page as `raw` markup, and such an answer goes out as a page that draws
+one does, in every build, with or without the app's kept answers, and on a route that says
+`unstaged` too. So is the handler of an answer type of the app's own (one that implements
+`Answer`), since it may hold a `Public` answer on one branch, and of `NoStore` or a tuple of
+headers around either (a `no-store` there does not take away a CDN's own caching header), or a
+tuple whose header part of the app's own refuses with one, since a refusal is the whole answer.
+So is the handler of a page or a JSON answer (`HtmlResult`, `PageOr`, `JsonResponse`, and
+`JsonResult<T>`, whose `JsonError` may hold a `JsonResponse`): its `DerefMut` lets the handler
+put a `Public` answer it converted in its place (`*page = Public::new(..).into_response()`). The
+stages keep the mark past the app's middleware for an answer that comes back through the `next`
+of the request they gave it: a middleware that makes a new response of that answer does not take
+the mark away, nor one that also gives `next` a request rebuilt without the first one's
+extensions or with a signal of its own (a key `req.rendered` drew into text or `Json<T>`
+included), on whatever thread it calls or polls `next`. A middleware that asks another router
+for an answer of its own (a router it holds, called on its own) and makes a new response of that
+one must keep the response's extensions (`Response::from_parts` with the parts it was given):
+without them this app may tag that answer, keep it, or keep a lifetime a middleware gives it. The watch
+sees what the handler draws itself, before it returns: a key a bare render (`to_html()`) draws in
+a task it spawned, a blocking task or a thread of its own is not seen, nor is one drawn as a
+body is sent after the handler returned (`Media::stream`, a relay's body, a live stream's
+fragments), nor one already in bytes the app relays or in a feed's rows. A render that marks the
+answer itself (a page's, a patch's, one made with `req.rendered`) does not rely on the watch and is
+seen on whatever thread it runs. So a `Public` handler
+draws its forms itself, an answer whose body may draw a key later is not `Public`, says
+`Cache-Control: private` itself and carries none of those headers ([live data](live-data.md)),
+and a per-visitor key never goes in a feed's rows, snapshot or replay.
 
 A `Public` answer cannot set a cookie the way a private one does: the page inside
 `Public<HtmlResult>` is made for everyone (`HtmlResponse<ForAll>`), and `with_cookie` on it does
@@ -1454,8 +1680,13 @@ stay public for clients without credentials. A cache in front of the app must ke
 `accept-language` with `App::messages`, unless the handler took the page's locale from its URL, and on any other answer whose handler, error page or middleware read messages in the language the header asks for (`req.t()`) before the answer left the app: a page, built before or after the read, a screen's JSON, an `App::api` answer, a redirect, the error page of a refused cross-site write). Messages read while a streamed body is written come after its headers: negotiate before answering, or keep that answer out of shared caches. A middleware may change the request's `Accept-Language` only before any extractor that reads the request runs: a `Req` keeps the header as it was when extracted, with `App::messages` the locale first chosen holds for the whole request, and a kept page is keyed on the header the handler sees, so once any `Req` has been extracted, leave the header alone. An answer that depends on another header the middleware read needs that header in `Vary` from the middleware, or a private policy. The [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 A `Public` page in an app with several locales is one copy per `Accept-Language` string in a cache that keys on it, and one language for everyone in one that ignores `Vary`: put its locale in its URL ([Views](views.md#a-locale-in-the-url)), so the cache keys on the URL alone.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
-`async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
-the error page for an expired code or someone else's statement goes out `no-store` too. In a
+`async fn statement(req: Req) -> NoStore<HtmlResult>`. It goes out `private, no-store` (`private`
+for a CDN that ignores a bare `no-store`) with none of the CDN caching headers above, whatever a
+staged middleware made of its `Cache-Control`: `NoStore` may be all that says an answer is someone's
+(a code in a link, before sign-in). A failure it returns is not kept either: the error page for
+an expired code or someone else's statement goes out the same way, as does the error a debug build
+sends in place of an answer a browser would show wrongly (a `Refresh` header, a redirect outside
+`form-action`). In a
 routes module the route can say it instead, `#[route("/statement", get = statement, no_store)]`,
 and the handler keeps its own result: a handler that uses `?` (`async fn statement(req: Req) ->
 HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
@@ -1464,11 +1695,62 @@ and so is a request its extractors refuse before the handler runs (a path that d
 `Caller` that is not signed in). A route whose page is ordinary and whose write's answer
 carries the secret (a new key shown once) names the methods instead,
 `#[route("/account/key", get = page, post = rotate, no_store(post))]`: only `rotate`'s answers
-and refusals are `no-store`, and the page keeps its usual caching (and the back/forward cache).
+and refusals are `private, no-store`, and the page keeps its usual caching (and the back/forward cache).
 Use `no_store` in a routes module and `NoStore<..>` for a handler added by hand (`Api::route`,
-`Area::route`). Two failures never reach either and get the default:
-a handler that panics and one past its deadline; `NoStore<..>` also misses a request refused before
-the handler runs. A handler
+`Area::route`). Some failures never reach either: a handler that panics, one past its deadline,
+and, for `NoStore<..>`, a request refused before the handler runs. Each sends the app's error page,
+which can read the request's `Cookie` and `Authorization` without reading a caller, so Corten never
+lets it be shared, as for a refused write: it goes out `private, no-cache` (`private, no-store`
+when a middleware's header or its own names `no-store`), with none of the CDN caching headers
+above, whoever wrote them. The same holds for the error page in place of the router's own answer
+to a request no handler takes (the 404 of an unknown URL, the 405 of a method the route lacks,
+the 501 of one no route has, the 400 of a post whose `do` names none of the page's posts or
+names two), the PWA's offline page included, which its service worker keeps
+whatever its `Cache-Control` says, and for the 404 of a request for the app's static files that
+names no file (one the version served lacks, an old version's included) or its 400 for a path that
+is not one, and for the 500 Corten sends when a page whose layout reads it fills cannot be read
+(its body fails), whatever that page was; a handler's own 404 is its answer, under the rules above. Nor
+is the router's own failure shared as it is or as JSON (an API's 404 for a path under its prefix
+that a route outside it matched included), whatever a middleware wrote into it or made of it in
+place (another status, a redirect, a body of its own): the router marks the answer as it makes it.
+A response a middleware makes of its own in its place, whether or not it ran the route
+(`next.run(req)`), is the middleware's, a failure included, and keeps what it says. A
+request refused before the handler runs is not shared in the other forms it goes out in either,
+whatever the refusal is: a `200` its extractor's rejection chose, a redirect, a relayed failure
+or a sign-in goes out as it was made, a failure as it is to a client that does not ask for HTML,
+or as JSON. Nor is a `Refused` in any form, whoever returns it (an extractor, a handler, a
+middleware turning a request away), whatever status a handler (`Error::with_status`, a 404 in
+place of a 403) or a middleware gives it after (a redirect, a `200`), nor a panic's or the
+deadline's failure as JSON, nor the answer an extractor of the app's error page refuses with in
+the page's place (a redirect, or the plain text a failed error page is replaced with); a response a
+middleware makes in a refusal's place is its own. Corten marks each of these answers where it makes it, and the mark goes
+out with the answer: a refusal made in a task the handler spawned, before the request came in, or
+by another app of Corten's that a middleware asks for an answer inline (the error page or sign-in
+redirect that app drew in a refusal's place included) is never shared, whatever status the
+middleware sends it with. So is every other failure Corten makes rather than a handler: an
+extractor's or a protocol's refusal of the request (a body over its limit, too slow, or not what
+the route reads, a WebSocket handshake), an MCP endpoint's own errors (a JSON-RPC error it answers
+`200` with, a call that names no tool it has or whose arguments do not fit the tool's input, a
+refusal before any tool ran; an error result the tool itself returns is the tool's), the 503 of
+`/health/ready` (`NoStore` too), a static
+file's 416, the 421 for another host, the 403 for a cross-site write, the 500 for an answer whose
+header is not one (`private, no-store` when the answer was `NoStore` or a `Cache::no_store()` part
+of the same tuple asks for it, whatever order the parts are in), a document with no `<Corten />` or a
+kept page that cannot be read, the empty answer sent in place of one whose body failed as Corten
+read it to tag or compress it (`private, no-store`, without the answer's validators), and a debug
+build's error about the app's code, which keeps a `NoStore` answer's `private, no-store` where it
+replaces one. A handler that passes such a failure on with `?`, or gives it another status, keeps
+the mark, as one does that met an extractor's rejection as a value (`Result<Json<T>, BodyRejection>`,
+a `FormRejection` the extractor made) and passes it on with `?`. A `BodyError` or `UploadError`
+is the request's refusal whoever made it: one a handler builds itself and passes on with `?` is
+never shared either, so a failure of the handler's own is an `Error` of its own (`Error::status`); a `FormRejection` the handler made
+itself (`FormRejection::new`) is its own, passed on or answered, and one that wraps a rejection
+(`Error::new(error)`) makes it its own, except an `Error` that holds a refusal (`Refused`), which `Error::new` keeps as the refusal it
+is (inside an error of another type, `io::Error::other(error)`, it is the handler's). A handler's own failure is its answer, a plain-text one too: the error
+page a browser gets in its place keeps what a middleware wrote, as for its own 404. An unstaged route's `NoStore`
+answer goes out `private, no-store` with none of them either
+([a route outside the stages](#a-route-outside-the-stages)); its other answers, refusals
+included, go out as its handler made them, since no stage runs the cache rule there. A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
 can name, and if anything read a caller the answer is private whatever its header says.
 
@@ -1485,8 +1767,7 @@ or a byte that is not text it goes out alone (its other directives dropped, so n
 anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, draws a
 form's new submit key, or is a `Cache` answer to a request with credentials) whose header does
 not count goes out
-`private, no-cache`, or `no-store` if any reader could find one in its header (`private,
-no-store` for a page that draws a submit key).
+`private, no-cache`, or `private, no-store` if any reader could find a `no-store` in its header.
 
 An answer at a URL that names its content (a hash of its bytes, as an uploaded picture's can be)
 never changes there. `Public::immutable(answer)` sends it as Corten's versioned files are sent,
@@ -1551,10 +1832,17 @@ and 46.3% fewer where each answer is, at the medians of 12 paired rounds
 
 What makes it safe is the rule above, checked when the app compiles: a `Public` handler takes
 only inputs that cannot tell who is asking. A page is kept when each of them is one of Corten's
-own for a page (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), since all those
-read of a page's request is in the key below. An extractor of the app's own that is `Anonymous`
+own for a page (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), as Corten fills
+it, since all those read of a page's request is in the key below. An `Option` of one is not,
+nor a `Form` before the handler's last argument: Corten fills neither, so it would be the app's
+own. (`State` is not yet held to this: [#2031 An app can fill `State<T>` with an extractor of its own and read a header under a kept page](https://github.com/corten-run/corten/issues/2031).) An extractor of the app's own that is `Anonymous`
 may read another header (a device, a country) and still not tell who asks, so a page whose
-handler takes one is made for every request, and an extractor has no way to say otherwise. The request must show nothing
+handler takes one is made for every request, and an extractor has no way to say otherwise. A
+value the URL alone gives (a page number, a filter) is read with `Params` instead, as a query
+field of the page's route, plain or a type of the app's own that implements
+`corten::route::FromQuery` for a rule over the fields it declares
+([Requests and forms](requests-and-forms.md)), or from `Uri` in the handler, and the page stays
+eligible to be kept under the rest of the rules below. The request must show nothing
 else a page could differ by, and the answer nothing made for one request:
 
 | | Kept and given again | The handler answers |
@@ -1563,7 +1851,42 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
+| what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one a bare `to_html()` draws in a task it spawned, a blocking task or a thread of its own is not seen; one `req.rendered` or a page's render draws is seen on any thread), a `Vary` of the app's own |
+
+Nothing is kept under `corten dev`, so the log says instead what a release build does with a
+`Public` route's answer to a `GET`: that it would keep it, and for how long, while its store has
+room (at `INFO`), or the first reason it does not and what to change (at `WARN`), such as an
+extractor of the app's own, a cookie it sets, the request's nonce, a form's submit key, a body
+under 1,024 bytes, a status other than `200` or a bound of `0` (`kept_answers(0)`):
+
+```text
+WARN corten: /items is Public, but a release build does not keep its answer: it sets a cookie; set it on an answer that is not Public
+```
+
+The reasons come from the code that decides what a release build keeps, which runs under
+`corten dev` with a store that keeps nothing and gives nothing (writes are counted as a release
+build counts them), so they cannot say other than that build does. That an answer would be kept
+says it may be, not that it is: the store under `corten dev` holds nothing, so it is never full,
+and a full one keeps the answer for a URL only when that URL was asked for before (below). A
+page's body is held whole, so its verdict is said as the answer leaves. Any other body of a known
+size is said as it ends, not before, and it still reaches your middleware and the browser as it
+comes, trailers and all. That verdict is what `corten dev` saw as the body was sent, after the
+route answered: a release build reads the body before the answer leaves, within the route's
+deadline, and keeps it only if it reads whole there. So "would keep its answer ... if it reads
+the body whole within the route's deadline" means a slow body may still miss it, and a body that
+failed under `corten dev` is said to have failed as `corten dev` read it, without a status a
+release build would answer, since one that fails only once the request's signal has ended
+(`Abort::Responded`, as the answer leaves) reads whole in a release build. A
+reason the route's type decides (its handler's inputs, an answer that is neither a page nor a
+whole body, `unstaged`) is said for any `GET`; one a middleware decides before the handler (a
+caller it read, a URL it
+changed) or the answer decides, only for a request a kept answer could stand for, one that shows
+nothing about who asks. So open the page signed out, or in a private window: a request
+with a session's cookie, a navigation inside the app, a `HEAD` or a write is its handler's whatever
+the page does, and says nothing. Each route says each verdict once while the app runs (kept with its body held whole, kept if
+it reads the body in time, or each reason, whatever its numbers), so loading a page again adds nothing, and a page that answers
+another way says the new verdict once; `corten dev` starts the app again on each change, so a
+changed page says its verdict again.
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1587,10 +1910,12 @@ the page cost before the app kept pages and the copy into the store. Only a writ
 reach the app's middleware is not counted: one another site sent, one for a host the app does
 not answer, or one a layer in front (`App::layer`) answered itself. A write
 that went through also drops the page at the place on the site its answer
-names (`Location` or `Content-Location`, as a path from the root or a whole URL with the
-request's `Host`;
-[RFC 9111 section 4.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.4)), and a page
-whose handler was reading while a write went through is sent and not kept. So the process that
+names (`Location`, `Content-Location` or the runtime's `corten-location`). A path from the root
+counts. An `http://`, `https://` or `//` URL counts only when its authority matches the write's
+[requested host and port](#host-names), compared as written without regard to case
+([RFC 9111 section 4.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.4)). This applies
+to a write with an absolute-form target even though a `GET` in that form bypasses the store.
+A page whose handler was reading while a write went through is sent and not kept. So the process that
 answered a form posted to its own page, or one that redirects to the list, shows what was saved
 on the next load. A write that fails before it names the list (it passes its deadline, or its
 client leaves) drops its own path alone.
@@ -1631,7 +1956,7 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app with no `Public` page and no `Public` JSON, text or file route keeps nothing whatever the
+so a change shows on the next load (the log says what a release build keeps, above). An app with no `Public` page and no `Public` JSON, text or file route keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON, text and files
 are all too small to keep, or streams or files at URLs that name their content, still holds a store, since a body's size is known only when it is made, and
 pays for no count by path: writes are counted by path from the first answer the app may keep,
@@ -1969,11 +2294,27 @@ Under the prefix:
    endpoint's JSON-RPC errors, as `examples/card-market`'s `/mcp` answers them): it returns a
    `ToJson` value, so a key check in `Identify` and the API's unknown URLs, wrong methods,
    methods no route has (501), deadline and refusals all answer as its clients parse them. A `421` for a host the app does
-   not answer is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
+   not answer, or the `400` for a request HTTP does not allow ([Host names](#host-names)), is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
 5. `Api::allow_origin` lets one site's pages call these routes from the browser: Corten answers
    its CORS preflight, adds `Access-Control-Allow-Origin` and lets its writes through. The
    pages keep refusing that site's writes. The site authenticates with a token: a write from it
    that carries the user's cookies is refused, and no `Access-Control-Allow-Credentials` is sent.
+   It takes one origin, as `Policy::allow_origin` (a site whose pages may write with the user's
+   cookies) does: a scheme, a host (a name, an IPv4 address or a bracketed IPv6 one) and a
+   port. Both keep it as a browser writes it in `Origin` (RFC 6454) and compare a request's
+   `Origin` with that: the scheme and host lowercase, and the scheme's default port (`:443` for
+   `https`, `:80` for `http`) and a trailing `/` left out, so `https://partner.example:443/` is
+   `https://partner.example` and `https://partner.example:8443` keeps its port. An app webview's
+   or a browser extension's own scheme is kept the same way with any port it names, so
+   `capacitor://localhost`, `tauri://localhost` or `chrome-extension://<id>` can be allowed
+   ([why](../design.md#choice-allowed-origin-schemes)). `capacitor://localhost` is every
+   Capacitor iOS app's default origin, so prefer a distinct `server.hostname`; Capacitor on
+   Android defaults to `https://localhost` and Tauri on Windows to `http://tauri.localhost` (or
+   `https://`), loopback origins any local server can also serve in an ordinary browser. A name
+   may hold `_`; a Unicode name is written in its `xn--` form, as browsers send it. A value no
+   `Origin` could equal (no scheme, a path, a query, a user, a wildcard, a comma-separated list,
+   `null`, or a scheme no page sends from: `file`, `data`, `blob`, `javascript`, `about`,
+   `ws`, `wss`, `ftp`) panics at startup and names the setter.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
    `FromJson` (item 8) with the value and the rejections axum's `Json` gave (recorded from axum
    0.8.9 and held by a test): a body with a JSON content type (`application/json`,
@@ -2212,7 +2553,8 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    `Api::allow_origin` sites too, without cookies), or a client that is not a browser. Another
    site's page gets a 403. A browser sends `Sec-Fetch-Site` only to a secure origin, Chromium
    and Firefox not on a handshake at all, and browsers too old for it not on a write; then the
-   `Origin` must be an `http` or `https` origin on the request's `Host`: the same name and port,
+   `Origin` must be an `http` or `https` origin on the [requested host](#host-names): the same
+   name and port as the target's authority, or as `Host` when the target names none,
    a port left out being its scheme's default (80 for `http`, 443 for `https`, so
    `https://app.example` is `Host: app.example:443`). Another scheme (an app's own,
    `capacitor://localhost`) is refused. Under `Policy::hsts` the `Origin` must also be `https`,
@@ -2865,7 +3207,8 @@ origin and `Policy::form_action` (the error page's detail in every debug build, 
    `multipart/form-data` or `text/plain`), plain or `data-patch` (the same form without
    JavaScript is stopped),
 2. from one of the app's pages: `Sec-Fetch-Site: same-origin` with an `Origin`, an `Origin` on
-   the request's host, or neither header, as a test or a client that is not a browser sends,
+   the [requested host](#host-names) when `Sec-Fetch-Site` is absent, or neither header, as a
+   test or a client that is not a browser sends,
 3. whose redirect (any a handler answers: `req.redirect`, a `Location` set by hand, a sign-in
    redirect, or a `data-patch` answer's `corten-location`) goes to an origin that is not the
    page's own (its `Origin`, else its host; for a request that names neither, the app's
@@ -3097,7 +3440,21 @@ failure still reaches the client. The ones that described the old body (`Content
 `Last-Modified`) and `Cache-Control` are the error page's own, and a header the error page sets
 wins, except a `Cache-Control` that names `no-store` (`NoStore`, `no_store` on its route, or one written by hand, on any
 of its lines and however a cache could find it): the failure said nothing may keep it, so the
-error page goes out `no-store`.
+error page goes out `no-store`. It is `private, no-store` for `NoStore` and `no_store`, whatever a
+middleware made of the failure's header, and on a page Corten never lets be shared
+([Caching](#caching): in place of a failure Corten made rather than a handler, a refusal, or the router's own
+404, 405, 501 or a named post's 400), where a `no-store` written by hand goes out so as well and none of the failure's
+CDN caching headers is kept. On the page for a handler's own failure, a `no-store` written by hand
+goes out bare unless the page is personal.
+
+That page for a handler's own failure (its 404, its `Error`) keeps what a middleware wrote,
+`CDN-Cache-Control` and `Surrogate-Control` included, as the handler's answer would: whether it
+may be shared is the app's policy. So a middleware that tells a CDN to keep every answer must not
+do so for an error page that reads the raw `Cookie` or `Authorization` header itself (an
+extractor of the app's own, with no `Caller`): a CDN would keep one visitor's page and give it to
+the next. Have such a middleware leave failures alone (`res.status().is_client_error()` or
+`is_server_error()`), or have the error page find who is asking through a `Caller`, which makes
+its answer private.
 
 The error page is an async function of the `Failure` and then extractors, as a handler's
 arguments are, with the state they read given beside it (`()` for none). A layout that shows

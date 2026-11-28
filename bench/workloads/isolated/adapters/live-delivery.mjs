@@ -8,10 +8,13 @@ import { retainedPrefix, verifyRound } from "../../../live/verify.mjs";
 import { groupNames } from "../../registry.mjs";
 import { deploymentSha256 } from "../../deployments.mjs";
 import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
+import { replaySealedPhase } from "../campaign-journal.mjs";
+import { commandResult } from "../composition.mjs";
 import { readRegular, tree } from "../evidence.mjs";
 import { inspectLifetime, inspectLiveActors } from "../host-lifetime.mjs";
 import { nativeControlPartition } from "../native-roles.mjs";
-import { verifyHostBoundary } from "../host-observation.mjs";
+import { verifyOfflineWindow } from "../control-admission.mjs";
+import { readLiveWorkloadEnd, verifyHostBoundary, verifyLifetimeSettledBoundary, verifyLiveWorkloadWindows } from "../host-observation.mjs";
 import { liveCaptureSchema, liveContracts } from "../../live.mjs";
 import { negativeRequests } from "../../../live/admission.mjs";
 
@@ -48,7 +51,7 @@ function sourceHashes(files, entry) {
   sha(cargo); sha(lock); return { app, crates, cargo, lock };
 }
 
-function phaseProof(binding, folder, startedAt, actors) {
+function phaseProof(binding, folder, startedAt, actors, passed) {
   if (basename(folder) !== "native") return null;
   const phase = dirname(folder), campaignRoot = dirname(phase), campaign = basename(campaignRoot), { group, round, commit } = binding.request;
   assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
@@ -70,29 +73,61 @@ function phaseProof(binding, folder, startedAt, actors) {
   assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
   assert.equal(reservation.campaignSha256, campaignSha256);
   assert.equal(basename(phase), `${String(index).padStart(2, "0")}-${group}-timing`);
-  const beforeTree = tree(phase), read = (name) => JSON.parse(readRegular(join(phase, name)));
-  assert.ok(isDeepStrictEqual(read("native-manifest.json"), tree(folder)), "native manifest differs");
+  const beforeTree = tree(phase);
+  const read = (name) => {
+    const bytes = readRegular(join(phase, name)), entry = beforeTree.entries.find(({ path }) => path === name);
+    assert.equal(digest(bytes), entry?.sha256, "live boundary record differs from phase snapshot");
+    return JSON.parse(bytes);
+  };
+  const nativeManifest = tree(folder);
+  assert.ok(isDeepStrictEqual(read("native-manifest.json"), nativeManifest), "native manifest differs");
   const before = read("host-before.json"), after = read("host-after.json");
-  verifyHostBoundary(before, after);
+  const seal = replaySealedPhase(campaignRoot, plan, campaign, group, basename(phase));
+  const { phase: recorded, version } = seal, offline = version === 6;
+  assert.equal(beforeTree.sha256, recorded.phaseManifestSha256, "live phase differs from journal seal");
+  assert.equal(nativeManifest.sha256, recorded.manifestSha256, "live native tree differs from journal seal");
+  assert.equal(recorded.results.length, 1); assert.equal(recorded.invocations.length, 1);
+  const [record] = recorded.results, [invocation] = recorded.invocations, result = commandResult(record);
+  assert.ok(beforeTree.entries.some(({ path, type }) => path === `command-${record.number}.log` && type === "file"),
+    "live command log missing from phase seal");
   // The single fresh host has no participant containers outside the native run.
   assert.deepEqual(before.containers, []); assert.deepEqual(after.containers, []);
+  const hostPath = `command-${record.number}-host`;
   const names = beforeTree.entries.filter((e) => e.type === "directory" && /^command-\d+-host$/.test(e.path));
-  assert.equal(names.length, 1, "live phase requires its one exact native command");
-  const directory = join(phase, names[0].path), context = JSON.parse(readRegular(join(directory, "binding.json")));
-  const terminal = JSON.parse(readRegular(join(directory, "terminal.json"))), command = Number(/^command-(\d+)-host$/.exec(names[0].path)[1]);
-  assert.equal(context.bootId, before.bootId);
-  const observation = inspectLifetime(binding, binding.execution.invocation, directory,
-    { campaign, command, pid: context.leaderPid, result: terminal.command });
+  assert.deepEqual(names.map(({ path }) => path), [hostPath], "live phase requires its one exact native command");
+  const observation = inspectLifetime(binding, invocation, join(phase, hostPath),
+    { campaign, command: record.number, pid: record.pid, result, phase: "timing" });
+  assert.equal(observation.manifestSha256, record.hostManifestSha256, "live terminal lifetime differs from journal seal");
+  assert.equal(observation.context.bootId, before.bootId);
+  if (offline) {
+    for (const census of [before, after]) assert.equal(census.controlApparatus, undefined);
+    verifyOfflineWindow(read("control-ingress.json"));
+  }
+  if (beforeTree.entries.some(({ path }) => path === "host-after-settled.json")) {
+    assert.ok(version === 5 || offline, "settled live phase lacks monitored or offline scope");
+    assert.equal(recorded.transferDestination, `${recorded.key}/native`, "settled live phase lacks its transfer commitment");
+    const settled = read("host-after-settled.json");
+    if (offline) assert.equal(settled.controlApparatus, undefined);
+    verifyLifetimeSettledBoundary({ binding, invocation, round, phase: "timing",
+      lifetime: observation, before, after, settled, offline, liveWorkloadEnd() {
+        const end = readLiveWorkloadEnd({ binding, invocation, round, phase: "timing", result: record, folder });
+        if (!end) return;
+        assert.ok(passed && actors, "live workload end requires complete successful measured work");
+        verifyLiveWorkloadWindows(before, offline, end, actors.measuredEnds,
+          binding.selection.apps.length * binding.execution.settings.measurement.clients.length);
+        return end;
+      } });
+  } else verifyHostBoundary(before, after);
   assert.equal(binding.execution.effectiveOptions.build, true);
   const first = observation.samples[0].at, last = observation.samples.at(-1).at, started = clock(startedAt);
   assert.ok(clock(before.at) <= first && first <= started && started <= last && last <= clock(after.at));
-  const result = terminal.command;
   assert.equal(result.error, null); assert.equal(result.signal, null);
   assert.ok([0, 1].includes(result.code)); assert.equal(result.success, result.code === 0 && !result.cancelled && !result.forced);
   const browser = binding.execution.effectiveOptions.isolated
     ? actors && inspectLiveActors(binding, observation, actors.tools, actors.participants, actors.windows)
     : observation.identities.some((p) => p.type === "--type=renderer");
   assert.ok(isDeepStrictEqual(tree(phase), beforeTree), "external phase evidence mutated");
+  seal.verifyUnchanged();
   assert.ok(readRegular(planPath).equals(planBytes) && readRegular(reservationPath).equals(reservationBytes), "campaign membership mutated");
   return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
 }
@@ -182,7 +217,7 @@ export async function inspectLiveSaved(binding, folder, group) {
     if (cancelled) missing.add("native-live-run-cancelled");
     const actorFiles = [...names].filter((name) => name.endsWith("-host-actor.json"));
     assert.equal(plan.isolated ?? false, options.isolated ?? false, "live isolation differs from binding");
-    const actors = options.isolated ? { tools: null, participants: [], windows: [] } : null;
+    const actors = options.isolated ? { tools: null, participants: [], windows: [], measuredEnds: [] } : null;
     if (actors) {
       nativeControlPartition(binding);
       if (need(names.has("host-actor-tools.json"), "native-live-actor-tools-missing")) actors.tools = await json("host-actor-tools.json");
@@ -312,6 +347,7 @@ export async function inspectLiveSaved(binding, folder, group) {
         if (provenance.has(app)) assert.ok(isDeepStrictEqual(p, provenance.get(app)), "native build provenance differs"); else provenance.set(app, p);
         if (actors && need(a.actorWindow?.renderer !== undefined, `native-live-actor-window-missing:${app}`)) {
           actors.windows.push(liveActorWindow(a, app));
+          if (a.schema === "native-live-fanout/v3") actors.measuredEnds.push(a.actorWindow.endedClock);
         }
       }
     }
@@ -354,7 +390,7 @@ export async function inspectLiveSaved(binding, folder, group) {
       "native-actual-browser-driver-os-resource-proof-not-produced", "native-positive-os-terminal-cleanup-proof-not-produced"];
     if (result.attemptComplete) {
       let proof;
-      try { proof = phaseProof(binding, folder, plan.startedAt, actors); }
+      try { proof = phaseProof(binding, folder, plan.startedAt, actors, passed); }
       catch (error) {
         if (error?.code !== "ENOENT") throw error;
         result.status = "blocked";

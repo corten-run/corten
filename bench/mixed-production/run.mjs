@@ -9,7 +9,7 @@ import { commands } from "../json-api/process.mjs";
 import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
-import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
+import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit, nativeDeployment, validateDeploymentOption, verifyDeploymentCommand, verifyImageDeployment } from "./source-audit.mjs";
 import { extractNativeSource, nativeBuildContext } from "./build-context.mjs";
 import { createAttachedParticipant, createExecutionEvidence, executionContext, participantSetupCause } from "./execution-evidence.mjs";
 import { withImmutableGit } from "./immutable-git.mjs";
@@ -27,6 +27,8 @@ export function parseArgs(args) {
     const flag = args[i++]; assert.ok(flag?.startsWith("--") && !seen.has(flag), "missing/duplicate option"); seen.add(flag);
     if (["--build", "--measure"].includes(flag)) { options[flag.slice(2)] = true; continue; }
     assert.ok(args[i] && !args[i].startsWith("--"), "option value required");
+    if (flag === "--django-deployment") { options.djangoDeployment = args[i++]; continue; }
+    if (flag === "--spring-deployment") { options.springDeployment = args[i++]; continue; }
     const key = flag === "--build-ref" ? "buildRef" : flag === "--native-audits" ? "nativeAudits" : names[flag.slice(2)] ?? flag.slice(2); assert.ok(key !== "round" && Object.hasOwn(options, key), "unknown option");
     options[key] = ["apps", "images", "readbacks", "nativeAudits", "buildRef", "profile"].includes(key) ? args[i++] : Number(args[i++]);
   }
@@ -38,6 +40,7 @@ export function parseArgs(args) {
   assert.ok(!options.build || !options.images, "--build cannot use arbitrary image overrides");
   assert.ok(!options.buildRef || options.build && /^[a-f0-9]{7,40}$/i.test(options.buildRef), "--build-ref requires --build and a local commit hash");
   assert.ok(["defaults", "matched"].includes(options.profile), "unknown native configuration variant");
+  validateDeploymentOption(options);
   for (const [key, min, max] of [["passes", 1, 5], ["duration", 1, 300], ["warmup", 1, 120], ["calibration", 1, 120], ["tailSeconds", 1, 120], ["maxCycles", 1, 128]]) {
     assert.ok(Number.isSafeInteger(options[key]) && options[key] >= min && options[key] <= max, "bounded load settings required");
   }
@@ -146,7 +149,7 @@ export async function run(args) {
     summary.executionMounts = JSON.parse(readFileSync(join(folder, "execution/inputs.json"))).mounts;
     summary.tools.docker = await io.command("docker", ["version", "--format", "{{.Server.Version}}"]);
     const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).devDependencies["@playwright/test"];
-    const nodeImage = await toolImage("node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1");
+    const nodeImage = await toolImage("node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067");
     const browserImage = await toolImage(`mcr.microsoft.com/playwright:v${version}-noble`);
     summary.tools.nodeImage = nodeImage.Id; summary.tools.browserImage = browserImage.Id; summary.tools.playwright = version;
     assert.ok(existsSync(join(repo, "node_modules", "@playwright", "test")), "install tooling dependencies or link main checkout dependencies");
@@ -156,6 +159,7 @@ export async function run(args) {
     for (const app of options.apps) {
       if (io.interrupted) throw new Error("run interrupted");
       const entry = summary.apps[app];
+      const deployment = nativeDeployment(options, app);
       try {
         const paths = (await io.command("git", ["ls-tree", "-r", "--name-only", nativeSource.commit, "--", ...buildInputPaths(app)])).split(/\r?\n/).filter(Boolean);
         entry.buildInputs = sourceSnapshot(buildRoot, paths).sourceFiles;
@@ -169,8 +173,11 @@ export async function run(args) {
           await docker(["build", "--label", "agent.owner=codex", "--label", `agent.task=${runId}`,
             "--label", `run.corten.marketplace.commit=${nativeSource.commit}`, "--label", `run.corten.marketplace.dirty=${nativeSource.dirty}`,
             "--label", `run.corten.mixed-production.context=${context.sha256}`,
-            "--label", `run.corten.marketplace.profile=${options.profile}`, "--build-arg", `PROFILE=${options.profile}`,
-            "-t", tag, "-f", context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });
+            "--label", `run.corten.marketplace.profile=${options.profile}`,
+            ...(deployment ? ["--label", `run.corten.mixed-production.deployment=${deployment.deployment}`,
+              "--label", `run.corten.mixed-production.build-profile=${deployment.buildProfile}`] : []),
+            ...(!deployment?.dockerfile ? ["--build-arg", `PROFILE=${deployment?.buildProfile ?? options.profile}`] : []),
+            "-t", tag, "-f", deployment?.dockerfile ?? context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });
           if (!options.buildRef) {
             assert.equal(await io.command("git", ["rev-parse", "HEAD"]), summary.provenance.commit, "checkout changed during build");
             assert.equal(await io.command("git", ["status", "--porcelain"]), summary.provenance.dirty, "working tree changed during build");
@@ -178,11 +185,15 @@ export async function run(args) {
           assert.deepEqual(sourceSnapshot(buildRoot, paths).sourceFiles, entry.buildInputs, "native build inputs changed during build");
         }
         const image = JSON.parse(await docker(["image", "inspect", tag]))[0];
+        verifyImageDeployment({ nativeDeployment: image.Config.Labels?.["run.corten.mixed-production.deployment"],
+          buildProfile: image.Config.Labels?.["run.corten.mixed-production.build-profile"] }, deployment);
+        if (deployment) verifyDeploymentCommand(image.Config, deployment);
         entry.image = { tag, id: image.Id, repoDigests: image.RepoDigests, bytes: image.Size,
           buildCommit: image.Config.Labels?.["run.corten.marketplace.commit"] ?? null,
           buildDirty: image.Config.Labels?.["run.corten.marketplace.dirty"] ?? null,
           contextArchiveSha256: image.Config.Labels?.["run.corten.mixed-production.context"] ?? null,
-          profile: image.Config.Labels?.["run.corten.marketplace.profile"] ?? null };
+          profile: image.Config.Labels?.["run.corten.marketplace.profile"] ?? null,
+          ...(deployment && { nativeDeployment: deployment.deployment, buildProfile: deployment.buildProfile }) };
         writeFileSync(join(folder, `${app}-source-audit-request.json`), JSON.stringify({ schema: "mixed-native-source-audit-request/v1",
           identity: sourceAuditIdentity(summary, app), sourceFiles: entry.buildInputs }, null, 2));
       } catch { fail(app, null, "native-image-unavailable"); entry.cells.forEach((cell) => cell.gaps = ["native-image-unavailable"]); continue; }

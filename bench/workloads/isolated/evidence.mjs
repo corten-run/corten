@@ -9,8 +9,9 @@ import { validateCollected } from "../../catalog/droplet-contract.mjs";
 import { inspectCatalog } from "../../catalog/report.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { reader } from "../../json-api/artifacts.mjs";
-import { inspectJson } from "../../json-api/report.mjs";
-import { producerSources } from "../../json-api/production.mjs";
+import { inspectBoundJson } from "../../json-api/report.mjs";
+import { producerSourceNames } from "../../json-api/production.mjs";
+import { scheduledProducerMarker, scheduledProducerSchema } from "../../json-api/contract.mjs";
 import { timedSummarySchema } from "../../json-api/timed-outcomes.mjs";
 import { validateSummary } from "../../marketplace/report.mjs";
 import { admitted, boundedFeatureProfile } from "../../marketplace/feature-contract.mjs";
@@ -154,19 +155,22 @@ export function copyEvidence(source, destination) {
 }
 
 export function verifyJsonProducer(binding, summary) {
-  assert.equal(summary.schema, timedSummarySchema, "current JSON campaign requires v2 evidence");
-  assert.equal(summary.producer?.schema, "json-api-producer/v2");
-  assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...producerSources].sort(), "JSON producer inventory differs");
-  assert.equal(binding.sources?.commit, binding.request.commit, "JSON producer commit differs");
+  assert.ok(summary.schema === timedSummarySchema, "current JSON campaign requires v2 evidence");
+  const names = producerSourceNames(summary.producer?.schema);
+  assert.ok(isDeepStrictEqual(Object.keys(summary.producer.sources).sort(), [...names].sort()), "JSON producer inventory differs");
+  assert.ok(binding.sources?.commit === binding.request.commit, "JSON producer commit differs");
   const files = binding.sources.files;
   assert.ok(Array.isArray(files), "JSON bound sources missing");
   const sources = new Map(files.map((row) => [row.path, row.sha256]));
   assert.equal(sources.size, files.length, "duplicate bound source");
-  for (const name of producerSources) {
+  if (sources.has(scheduledProducerMarker)) assert.ok(summary.producer.schema === scheduledProducerSchema,
+    "JSON producer cannot downgrade the bound load-resource capture");
+  for (const name of names) {
     const path = `bench/json-api/${name}`;
     assert.ok(sources.has(path), "JSON producer missing from bound commit");
-    assert.match(summary.producer.sources[name], /^[a-f0-9]{64}$/);
-    assert.equal(summary.producer.sources[name], sources.get(path), "JSON producer differs from bound commit");
+    const sha256 = summary.producer.sources[name];
+    assert.ok(typeof sha256 === "string" && /^[a-f0-9]{64}$/.test(sha256), `invalid JSON producer digest: ${name}`);
+    assert.ok(sha256 === sources.get(path), `JSON producer differs from bound commit: ${name}`);
   }
 }
 
@@ -197,8 +201,9 @@ export function inspectEvidence(binding, root) {
       options: binding.execution.effectiveOptions, cpus: binding.resources.expectedCpus }, inspectCatalog);
     report = rawProofBlocked(group, diagnosticNativeReport, inspectRawSupport(group, summary, root, before));
   } else if (group === "json-api") {
-    verifyJsonProducer(binding, summary);
-    report = inspectJson(summary, { load: reader(root), commit });
+    // The opt-in c-16 binding requests JSON_API_LOAD_LAYOUT; a default binding requests none and its result records none.
+    assert.equal(summary.measurement?.loadLayout, binding.resources.requestedCpuEnv?.JSON_API_LOAD_LAYOUT, "JSON API load layout differs from binding");
+    report = inspectBoundJson(summary, { load: reader(root), commit, verifyBoundProducer: (value) => verifyJsonProducer(binding, value) });
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {
     validateSummary(summary);

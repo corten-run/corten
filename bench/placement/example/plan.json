@@ -1,0 +1,37 @@
+{
+  "plan": 1,
+  "name": "placement-example",
+  "base": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+  "head": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+  "probe": {
+    "dir": "probe",
+    "tree": ["Cargo.toml", "Cargo.lock", "README.md", "crates", "docs"],
+    "toolchain": "1.100.0",
+    "env": { "ZSTD_SYS_USE_PKG_CONFIG": "1" },
+    "build": "cargo build --release",
+    "binary": "release/probe",
+    "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain"
+  },
+  "host": {
+    "cpuModel": null,
+    "cpus": { "server": 2, "load": [4, 5], "driver": 7 }
+  },
+  "load": { "threads": 2, "connections": 64, "seconds": 3 },
+  "R": 8,
+  "placementSeconds": 600,
+  "pilot": { "K": 100 },
+  "workloads": [
+    {
+      "name": "plain",
+      "declared": "GET /private to the probe's configuration plain, no request header of its own: the record page for one visitor, about 6 KB, not kept. An example: main against itself, so it reads no change.",
+      "request": { "path": "/private", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112401,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false
+    }
+  ]
+}

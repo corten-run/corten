@@ -3,7 +3,7 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { timedProfilesFor, v3Schema, v4Schema, v5Schema } from "./run-contract.mjs";
-import { afterPhase, appStop, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, profileStop, readLoadSummary, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { afterPhase, appStop, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, profileStop, readLoadSummary, readOutcome, resultSchema, roundIdentity, stageAggregate, statsPhaseErrors, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 test("versioned round namespace and safe defaults", () => {
   assert.match(inventory.nextjs.label, /Pages Router/);
   assert.doesNotMatch(inventory.phoenix.label, /LiveView/);
@@ -210,9 +210,6 @@ test("a phase ends in the app's stop only when nothing else the phase depends on
   assert.throws(() => phaseEnd({ pass: 1, phase: "fixed", app: null, errors: [error("inspect", "no such container")] }), /no such container/);
   // the container stopped and the sidecars are the same running containers: the app's outcome
   assert.deepEqual(phaseEnd(seen()), stop);
-  // docker stats failing after the app finished, each error stamped when it happened (stats.mjs),
-  // is explained by the stop: its container went away under the sampler
-  assert.deepEqual(phaseEnd(seen({ errors: [error("stats", "invalid docker memory value --"), error("stats", "docker stats stopped early: 1")] })), stop);
   // a process OOM-killed in a container that kept running, with Docker's oom event in the phase
   const runningOom = { Running: true, OOMKilled: true, ExitCode: 0, Error: "" };
   assert.deepEqual(phaseEnd(seen({ app: runningOom })), { ...stop, exitCode: null });
@@ -240,18 +237,35 @@ test("a phase ends in the app's stop only when nothing else the phase depends on
     [{ errors: [error("k6", "docker create: exit 125")] }, /exit 125/],
     [{ errors: [error("summary", "no such file")] }, /no such file/],
     [{ errors: [error("stats", "stats sampler exceeded its deadline")] }, /deadline/],
+    [{ errors: [error("stats", "docker stats client pipes did not close within the stop grace")] }, /pipes did not close/],
+    // Time is not proof that the app's exit caused a client or sample failure.
+    [{ errors: [error("stats", "invalid docker memory value --")] }, /^Error: docker stats sample failed$/],
+    [{ errors: [error("stats", "docker stats stopped early: 1")] }, /^Error: docker stats sample failed$/],
     // a stats error from before the app finished, such as a sample that did not parse
-    [{ errors: [error("stats", "Unexpected token } in JSON", before)] }, /Unexpected token/],
+    [{ errors: [error("stats", "Unexpected token } in JSON", before)] }, /^Error: docker stats sample failed$/],
     // the sampler failing to stop or save, which carries no per-error time
-    [{ errors: [error("sampler", "EACCES: permission denied")] }, /EACCES/],
+    [{ errors: [error("sampler", "EACCES: permission denied")] }, /^Error: docker stats sampler infrastructure failed$/],
     // the CPU counter read before k6 started, even when it failed after the app finished: the
     // app stopped before any load, which is not an outcome under the phase
     [{ errors: [error("cpu", "missing CPU counter")] }, /missing CPU counter/],
     // a container still running after an OOM kill explains no stats error
-    [{ app: runningOom, errors: [error("stats", "bad sample")] }, /bad sample/],
+    [{ app: runningOom, errors: [error("stats", "bad sample")] }, /^Error: docker stats sample failed$/],
     // a 200 of the wrong content type before the crash is a parity failure
     [{ summary: content(3) }, /wrong content type/],
   ]) assert.throws(() => phaseEnd(seen(change)), message);
+});
+test("capture records only fixed sampler diagnostics", () => {
+  const raw = new Error("CAPTURESTATSCANARY");
+  assert.equal(statsPhaseErrors(raw)[0].error.message, "docker stats sampler infrastructure failed");
+  const at = "2026-01-01T00:00:00.000Z";
+  const faults = statsPhaseErrors({ errors: [
+    { kind: "stats", message: raw.message, at },
+    { kind: "client-stderr", message: raw.message, at },
+  ] });
+  assert.deepEqual(faults.map(({ step, error, at: time }) => [step, error.message, time]), [
+    ["stats", "docker stats sample failed", at],
+    ["sampler", "docker stats client wrote to stderr", at],
+  ]);
 });
 test("after a phase run.mjs skips the CPU read when the app stopped and reads the sidecars only then (#1128)", async () => {
   const phase = { pass: 1, phase: "fixed", phaseStart: "2026-01-01T00:00:01.000Z" };
@@ -278,7 +292,9 @@ test("after a phase run.mjs skips the CPU read when the app stopped and reads th
   assert.deepEqual(dead.calls, ["app", "summary", "sidecars", "events"]);
   assert.deepEqual(stopped.after, {});
   assert.deepEqual(noted, ["stats"], "each error is logged as the app stopped");
-  assert.deepEqual(phaseEnd(stopped.seen), { pass: 1, phase: "fixed", exitCode: 1, oomKilled: false });
+  assert.throws(() => phaseEnd(stopped.seen), /^Error: docker stats sample failed$/);
+  const cleanStop = await afterPhase(phase, [], reader(exited).read);
+  assert.deepEqual(phaseEnd(cleanStop.seen), { pass: 1, phase: "fixed", exitCode: 1, oomKilled: false });
 
   // the same stop, but before the phase began: a failure, not the app's outcome
   const early = await afterPhase({ ...phase, phaseStart: "2026-01-01T00:00:11.000Z" }, [], reader(exited).read);

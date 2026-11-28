@@ -182,3 +182,32 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
     let message = line("error=the store went away");
     assert!(!message.contains("error.sources"), "a message has no cause under it: {message}");
 }
+
+/// A line written to [`Lines`] ([`log_to`]) starts with its level and holds no time, so a test
+/// that looks for a status or a number in what was logged cannot match a time's digits.
+#[test]
+fn a_line_logged_to_lines_holds_no_time() {
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    tracing::info!("corten: a line with no time");
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(text.trim_start().starts_with("INFO "), "{text}");
+    assert!(text.trim_end().ends_with("corten: a line with no time"), "{text}");
+    assert!(!text.chars().any(|c| c.is_ascii_digit()), "{text}");
+}
+
+/// A line a thread with no subscriber logs first is still logged by a test's thread that logs to
+/// [`Lines`] ([`log_to`]): with that test's subscriber alone registered, `tracing` would decide
+/// for the whole process, by the first thread's, that the line is wanted by none.
+#[test]
+fn a_line_another_thread_reached_first_is_still_logged() {
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    fn line() {
+        tracing::info!("corten: first reached on a thread with no subscriber");
+    }
+    std::thread::spawn(line).join().unwrap();
+    line();
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("corten: first reached on a thread with no subscriber"), "{text}");
+}

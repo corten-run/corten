@@ -74,6 +74,8 @@ fn help_names_a_command_as_its_own_help_does() {
         // The Dockerfile `corten new` writes refuses a `corten` whose `help build` does not name
         // the option (template/Dockerfile), so this command's must.
         assert!(command != ["build"] || stdout.contains("--profile-from"), "{stdout}");
+        // And it names `--port` as the profiled build's own, which is refused without it.
+        assert!(command != ["build"] || stdout.contains("[[--port <port>] --profile-from <command>"), "{stdout}");
     }
     for flag in ["--help", "-h"] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).args(["help", flag]).output().unwrap();
@@ -117,6 +119,8 @@ fn build_refuses_a_bad_argument_before_a_later_help() {
         (&["-p", "shop", "--profile-form", "sh", "-h"][..], "not \"--profile-form\""),
         (&["--bin", "--profile-from", "sh", "-h"], "--bin needs a value"),
         (&["--", "--help"], "not \"--\""),
+        (&["--port", "http", "--help"], "--port takes the number of the port the app binds"),
+        (&["--port", "8443", "--port=8443", "-h"], "--port is given more than once"),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).arg("build").args(args).current_dir(&root).output().unwrap();
         let stderr = String::from_utf8(out.stderr).unwrap();
@@ -124,7 +128,9 @@ fn build_refuses_a_bad_argument_before_a_later_help() {
         assert!(stderr.contains(says), "build {}: {stderr}", args.join(" "));
         assert!(!String::from_utf8(out.stdout).unwrap().contains("Usage:"), "build {}", args.join(" "));
     }
-    for args in [&["--help"][..], &["--locked", "-p", "shop", "-h"], &["--bin", "--help"]] {
+    for args in
+        [&["--help"][..], &["--locked", "-p", "shop", "-h"], &["--bin", "--help"], &["--port", "8443", "-h"], &["--port", "-h"]]
+    {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).arg("build").args(args).current_dir(&root).output().unwrap();
         assert!(out.status.success(), "build {}", args.join(" "));
         assert!(String::from_utf8(out.stdout).unwrap().starts_with("Usage:\n  corten build "), "build {}", args.join(" "));

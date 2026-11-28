@@ -404,15 +404,14 @@ impl<P: Prefix> Api<P> {
     /// `Access-Control-Allow-Origin` itself if a site reads it): the app's pages still refuse
     /// writes from it. The site
     /// authenticates with a token: a write from it that carries cookies is refused, and no
-    /// `Access-Control-Allow-Credentials` is sent.
+    /// `Access-Control-Allow-Credentials` is sent. It takes an origin as
+    /// [`crate::security::Policy::allow_origin`] does, and keeps it as a browser writes it in
+    /// `Origin` (`https://partner.example:443/` is `https://partner.example`), including the
+    /// scheme an app's webview or a browser extension sends (`capacitor://localhost`,
+    /// `chrome-extension://<id>`); anything else, including a scheme no page sends from (`file`,
+    /// `ws`, `ftp`, ...), is a startup panic.
     pub fn allow_origin(mut self, origin: &str) -> Self {
-        let origin = origin.trim_end_matches('/').to_ascii_lowercase();
-        let host = origin.split_once("://").map_or("", |(_, rest)| rest);
-        assert!(
-            !host.is_empty() && !host.contains(['/', '*', ',', ' ']),
-            "corten: an allowed origin is a scheme and a host, like https://partner.example: {origin:?}"
-        );
-        self.origins.push(origin);
+        self.origins.push(crate::security::allowed_origin("Api::allow_origin", origin));
         self
     }
 }
@@ -728,7 +727,10 @@ pub(crate) const PROBLEM: &str = "application/problem+json";
 /// `text/html` of `text/html; charset=utf-8`, with ASCII whitespace (the space and tab a header
 /// may have around it) trimmed. A header's text is ASCII, so no other whitespace can be there.
 pub(crate) fn media_type(value: &str) -> &str {
-    value.split_once(';').map_or(value, |(essence, _)| essence).trim_ascii()
+    // Byte by byte: a media type is a few bytes long, and `split_once` starts a search made for
+    // long text.
+    let end = value.bytes().position(|b| b == b';').unwrap_or(value.len());
+    value[..end].trim_ascii()
 }
 
 pub(crate) fn is_plain_text(headers: &HeaderMap) -> bool {
@@ -778,9 +780,95 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a scheme and a host")]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
     fn an_allowed_origin_is_one_origin() {
         let _ = Api::<ApiRoot>::new().allow_origin("*");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_user() {
+        let _ = Api::<ApiRoot>::new().allow_origin("https://u@partner.example");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_query() {
+        let _ = Api::<ApiRoot>::new().allow_origin("https://partner.example?x");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
+    fn an_allowed_origin_is_not_null() {
+        let _ = Api::<ApiRoot>::new().allow_origin("null");
+    }
+
+    #[test]
+    #[should_panic(expected = "write the name in its xn-- (punycode) form")]
+    fn an_allowed_origin_names_its_host_in_ascii() {
+        let _ = Api::<ApiRoot>::new().allow_origin("https://b\u{fc}cher.example");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin a browser sends in Origin")]
+    fn an_allowed_origin_is_not_a_websocket_url() {
+        let _ = Api::<ApiRoot>::new().allow_origin("wss://partner.example");
+    }
+
+    #[test]
+    fn an_allowed_origin_is_kept_as_a_browser_sends_it() {
+        let api = Api::<ApiRoot>::new()
+            .allow_origin("HTTPS://Partner.Example:443/")
+            .allow_origin("https://a.example:8443")
+            .allow_origin("http://[::1]:80")
+            .allow_origin("https://my_app.partner.example")
+            .allow_origin("Capacitor://LocalHost/")
+            .allow_origin("tauri://localhost")
+            .allow_origin("chrome-extension://abcdefghijklmnopabcdefghijklmnop")
+            .allow_origin("moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b")
+            .allow_origin("capacitor://localhost:80");
+        assert_eq!(
+            api.origins,
+            [
+                "https://partner.example",
+                "https://a.example:8443",
+                "http://[::1]",
+                "https://my_app.partner.example",
+                "capacitor://localhost",
+                "tauri://localhost",
+                "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+                "moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b",
+                "capacitor://localhost:80",
+            ]
+        );
+    }
+
+    /// Each of these is a startup panic: none is an `Origin` a browser could send. All but
+    /// `null`, the empty host, the path and `file:` used to start, when the setting was any
+    /// `scheme://host`.
+    #[test]
+    fn an_allowed_origin_that_no_browser_sends_does_not_start() {
+        for bad in [
+            "null",
+            "https://u@partner.example",
+            "https://partner.example?x",
+            "https://partner.example:",
+            "https://partner.1",
+            "https://b\u{fc}cher.example",
+            "capacitor://localhost?x",
+            "capacitor://u@localhost",
+            "capacitor://localhost/app",
+            "capacitor://localhost#x",
+            "capacitor://",
+            "1app://localhost",
+            "file:///",
+            "wss://partner.example",
+            "ftp://partner.example",
+            "blob:https://partner.example",
+        ] {
+            let started = std::panic::catch_unwind(|| Api::<ApiRoot>::new().allow_origin(bad));
+            assert!(started.is_err(), "{bad:?}");
+        }
     }
 
     #[test]

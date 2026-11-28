@@ -43,7 +43,8 @@ function checkIdentity(fd, identity) {
   assert.deepEqual(actual, identity, "sampled executable inode changed");
 }
 
-export function hashExecutableDescriptor(fd, identity) {
+export function hashExecutableDescriptor(fd, identity, checkDeadline) {
+  checkDeadline?.();
   const ref = executableReference(identity);
   const stage = (operation, work) => {
     try { return work(); } catch (error) { throw executableProofFailure(operation, error, ref); }
@@ -52,7 +53,9 @@ export function hashExecutableDescriptor(fd, identity) {
   const digest = createHash("sha256"), buffer = Buffer.alloc(1024 * 1024);
   stage("executable-hash-read", () => {
     for (let offset = 0;;) {
+      checkDeadline?.();
       const n = readSync(fd, buffer, 0, buffer.length, offset);
+      checkDeadline?.();
       if (n === 0) { assert.equal(String(offset), identity.size); break; }
       digest.update(buffer.subarray(0, n)); offset += n;
     }

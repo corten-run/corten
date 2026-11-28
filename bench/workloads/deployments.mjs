@@ -7,7 +7,7 @@ import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
 import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
 import { cpuSettings as marketplaceCpus, parseArgs as marketplaceOptions } from "../marketplace/run-contract.mjs";
-import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "./registry.mjs";
+import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps, springWebflux } from "./registry.mjs";
 
 export const deploymentSchema = "benchmark-deployments/v1";
 export const receiptSchema = "benchmark-deployment-review/v1";
@@ -38,7 +38,7 @@ const sourceState = (refs) => refs.every((path) => existsSync(new URL(`../../${p
 
 // These are the dispatched keyed live applications, not historical price transports.
 const liveNative = freeze({
-  rails: { framework: "Rails Turbo keyed DOM / Action Cable native application", runtime: "CRuby 4.0.9",
+  rails: { framework: "Rails Turbo keyed DOM / Action Cable native application", runtime: "CRuby 4.0.10",
     build: "bundle install; bundle exec ruby assets.rb", server: "Puma / Action Cable native async adapter / Turbo Streams",
     workers: "one Puma process; 1:4 request threads; --workers 0; in-process bounded acknowledged reader state",
     command: ["bundle", "exec", "puma", "--bind", "tcp://0.0.0.0:8080", "--threads", "1:4", "--workers", "0"],
@@ -142,13 +142,15 @@ const native = freeze({
   fastapi: { framework: "FastAPI + Jinja2", runtime: "CPython 3.15.2", build: "pip install requirements.txt", server: "Uvicorn via fastapi run; matched uses uvicorn directly", workers: "one application process; loop/http auto selection from installed uvicorn[standard], must be recorded in receipts", command: ["sh", "-c", 'if [ "$PROFILE" = matched ]; then exec uvicorn app.main:app --host 0.0.0.0 --port 8080 ${MAX_CONNECTIONS:+--limit-concurrency "$MAX_CONNECTIONS"}; else exec fastapi run app/main.py --host 0.0.0.0 --port 8080; fi'], refs: ["requirements.txt", "app/main.py"], middleware: "app/main.py: matched TrustedHost, GZip, production headers and RequestBodyLimit; default leaves these off" },
   django: { framework: "Django templates + htmx", runtime: "CPython 3.15.2", build: "pip install requirements.txt; collectstatic", server: "Gunicorn WSGI sync", workers: "three preloaded sync workers", command: ["gunicorn", "itempage.wsgi", "--bind", "0.0.0.0:8080", "--workers", "3", "--preload"], refs: ["requirements.txt", "itempage/settings.py", "start_matched.py", "requirements-matched.txt"], middleware: "itempage/settings.py: Security, WhiteNoise, Common, CSRF, clickjacking; matched adds CSP, GZip, ProductionHeaders, host/body bounds" },
   nextjs: { framework: "Next.js Pages Router + React SSR", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "custom Node Next.js server", workers: "one application process", command: ["node", "server.mjs"], refs: ["package.json", "server.mjs", "server-profile.mjs", "next.config.mjs"], middleware: "server-profile.mjs and next.config.mjs; PROFILE=matched is a separate build and runtime configuration" },
-  spring: { framework: "Spring Boot + Thymeleaf", runtime: "Temurin 27.0.1.0.2+1 JRE", build: "mvn package -DskipTests", server: "embedded Tomcat", workers: "one JVM; Tomcat-managed thread pool", command: ["java", "-jar", "app.jar"], refs: ["pom.xml", "src/main/resources/application.properties"], middleware: "Spring application and application.properties; no extra production profile asserted" },
+  spring: { framework: "Spring Boot + Thymeleaf", runtime: "Temurin 27.0.1.1+4 JRE", build: "mvn package -DskipTests", server: "embedded Tomcat", workers: "one JVM; Tomcat-managed thread pool", command: ["java", "-jar", "app.jar"], refs: ["pom.xml", "src/main/resources/application.properties"], middleware: "Spring application and application.properties; no extra production profile asserted" },
   "axum-maud": { framework: "axum + Maud", runtime: "Rust native release", build: "cargo build --release --locked", server: "axum", workers: "one process; Tokio runtime as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native tower/axum layers" },
+  proa: { framework: "Proa", runtime: "Rust native release", build: "cargo build --release --locked", server: "Proa FrameworkBuilder on axum", workers: "one process; default Tokio runtime", command: ["/app/server"], refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/source.rs", "src/catalog.rs"], middleware: "native Proa security and CSP layers; catalog document headers" },
+  ntex: { framework: "ntex", runtime: "Rust native release", build: "cargo build --release --locked", server: "ntex HttpServer", workers: "framework default worker count; Tokio backend", command: ["/app/server"], refs: ["Cargo.toml", "Cargo.lock", "src/main.rs", "src/source.rs", "src/catalog.rs", "src/marketplace.rs"], middleware: "native ntex JSON and negotiated compression" },
   gin: { framework: "Gin + templ", runtime: "Go native", build: "templ generate; CGO_ENABLED=0 go build -trimpath -ldflags=-s -w", server: "Go net/http", workers: "one process; Go scheduler", command: ["/app/itempage"], refs: ["go.mod", "main.go"], middleware: "main.go native Gin handlers; GIN_MODE=release" },
   drogon: { framework: "Drogon CSP views", runtime: "C++ native release", build: "CMake Release; compiled CSP views", server: "Drogon", workers: "one process; IO threads from cpuCount() in src/main.cc", command: ["/app/server"], refs: ["CMakeLists.txt", "src/main.cc"], middleware: "src/main.cc native handlers and static document root" },
   leptos: { framework: "Leptos SSR + WASM hydration", runtime: "Rust native server + browser WASM", build: "cargo leptos build --release --cargo-locked", server: "axum / Leptos", workers: "one process; Tokio runtime as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native layers; LEPTOS_ENV=PROD" },
   topcoat: { framework: "Topcoat", runtime: "Rust native release", build: "cargo build --release --locked; topcoat asset bundle --release", server: "Topcoat", workers: "one process; native shards as source configures", command: ["/app/server"], refs: ["Cargo.toml", "src/main.rs"], middleware: "src/main.rs native Topcoat configuration" },
-  rails: { framework: "Rails + Hotwire", runtime: "CRuby 4.0.9", build: "bundle install; bootsnap precompile; assets:precompile", server: "Puma", workers: "one worker by checked-in default; three request threads (config/puma.rb); receipt must record WEB_CONCURRENCY and RAILS_MAX_THREADS", command: ["./bin/rails", "server"], refs: ["Gemfile", "config/puma.rb", "config/environments/production.rb", "config/cable.yml"], middleware: "Rails production middleware; Action Cable async adapter for live transport; jemalloc preload in Dockerfile" },
+  rails: { framework: "Rails + Hotwire", runtime: "CRuby 4.0.10", build: "bundle install; bootsnap precompile; assets:precompile", server: "Puma", workers: "one worker by checked-in default; three request threads (config/puma.rb); receipt must record WEB_CONCURRENCY and RAILS_MAX_THREADS", command: ["./bin/rails", "server"], refs: ["Gemfile", "config/puma.rb", "config/environments/production.rb", "config/cable.yml"], middleware: "Rails production middleware; Action Cable async adapter for live transport; jemalloc preload in Dockerfile" },
   laravel: { framework: "Laravel + Blade / Livewire", runtime: "PHP 8.5.12 ZTS", build: "composer --no-dev; optimized autoload; route:cache; view:cache", server: "Octane on FrankenPHP", workers: "two explicitly configured persistent workers; not CPU auto", command: ["php", "artisan", "octane:frankenphp", "--host=0.0.0.0", "--port=8080", "--workers=2"], refs: ["composer.json", "bootstrap/app.php"], middleware: "Laravel bootstrap/app.php middleware; pcntl,intl,zip,opcache,uv installed; php.ini-production; no JIT claim" },
   nuxt: { framework: "Nuxt + Vue", runtime: "Node 26.13.1", build: "npm run build", server: "Nitro node output", workers: "one application process", command: ["node", ".output/server/index.mjs"], refs: ["package.json", "nuxt.config.ts"], middleware: "Nuxt/Nitro checked-in configuration" },
   astro: { framework: "Astro + client router", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "Astro Node adapter", workers: "one application process", command: ["node", "--import", "./dist/server/virtual_astro_middleware.mjs", "dist/server/entry.mjs"], refs: ["package.json", "astro.config.mjs"], middleware: "generated middleware preloaded before listening; astro.config.mjs" },
@@ -228,6 +230,30 @@ function candidates(group, app, baseline) {
     candidate("django-uvicorn-asgi", { server: "Uvicorn ASGI", command: ["uvicorn", "itempage.asgi:application", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"], sourceRefs: ["bench/live/apps.mjs"], scope: "existing live launch override; not qualified for other groups" }, [optionSources.pythonServers], "source-present");
     choices.at(-1).configuration = { ...baseline.configuration, server: "Uvicorn ASGI", command: choices.at(-1).change.command,
       workers: "one application process; Uvicorn loop/http auto selection must be captured", sourceRefs: [...baseline.configuration.sourceRefs, "bench/live/apps.mjs"] };
+  }
+  if (app === "django" && group === "mixed-production") {
+    const context = appRoot(app);
+    candidate("django-granian-asgi", { scope: "dedicated Mixed Production only", buildProfile: "matched-asgi",
+      productionParity: "requires full native Mixed qualification before timing" }, [optionSources.granian], "source-present");
+    choices.at(-1).configuration = { ...baseline.configuration, server: "Granian ASGI HTTP/1",
+      workers: "one worker; one runtime thread; one runtime blocking thread; one Python blocking thread (start_mixed_asgi.py)",
+      command: ["sh", "-c", "python -m django migrate --noinput && exec python start_mixed_asgi.py"],
+      build: "matched Django build plus requirements-matched-asgi.txt", environment: { ...baseline.configuration.environment,
+        DJANGO_SETTINGS_MODULE: "itempage.mixed_asgi_settings" },
+      builds: { app: { context, dockerfile: `${context}/Dockerfile`, args: { PROFILE: "matched-asgi" } } },
+      sourceRefs: [...baseline.configuration.sourceRefs, ...["requirements-matched-asgi.txt", "start_mixed_asgi.py", "itempage/mixed_asgi.py",
+        "itempage/mixed_asgi_settings.py", "itempage/mixed_asgi_urls.py", "itempage/mixed_asgi_views.py"].map((path) => `${context}/${path}`)] };
+  }
+  if (app === "spring" && group === "mixed-production") {
+    const context = appRoot(app), dockerfile = `${context}/${springWebflux.dockerfile}`;
+    candidate(springWebflux.deployment, { scope: "dedicated Mixed Production only", buildProfile: springWebflux.buildProfile,
+      productionParity: "requires full native Mixed qualification before timing" }, [dockerfile], "source-present");
+    choices.at(-1).configuration = { ...baseline.configuration, framework: "Spring Boot WebFlux + Thymeleaf", server: "Reactor Netty",
+      workers: "one JVM; Reactor Netty event loops", command: [...springWebflux.entrypoint], middleware: "WebFlux request and upstream cancellation; native session middleware",
+      profile: "matched", environment: { ...baseline.configuration.environment, PROFILE: "matched" },
+      builds: { app: { context, dockerfile, args: {} } }, sourceRefs: [dockerfile, ...["mixed/pom.xml",
+        "mixed/src/main/resources/application.properties", "mixed/src/main/java/bench/mixed/MarketplaceApplication.java",
+        "mixed/src/main/java/bench/mixed/MarketplaceController.java", "mixed/src/main/java/bench/mixed/MarketplaceSource.java"].map((path) => `${context}/${path}`)] };
   }
   if (app === "fastapi") {
     candidate("fastapi-uvicorn-asyncio", { server: "Uvicorn", loop: "asyncio; explicit selection rather than auto", compiler: "CPython" }, [optionSources.uvicorn]);

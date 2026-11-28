@@ -1,15 +1,112 @@
 # Native JSON API Group
 
 This explicit, independent native runner implements the registry's `json-api` matrix:
-Corten, ordinary ASP.NET, FastAPI, Express, Spring, axum/Maud, Drogon, Gin and ASP.NET AOT.
+Corten, ordinary ASP.NET, FastAPI, Express, Spring, axum/Maud, Drogon, Gin, ASP.NET AOT and ntex.
 No app is filtered, substituted or borrowed from another framework. Both `catalog-v1`
 (strings-only records) and `marketplace-v2` (rich machine-numeric records) are measured in
 fixture and API modes. The four cases have `target: "json"` and `locale: null`.
+The nine-app historical contract can still be read; strict qualification uses its
+measured checkout, not the ten-app roster.
+
+### Optional transport comparison
+
+For a small **fixture-only diagnostic**, use the already-running native JSON app rather
+than a new group. Publish its port 8080 only on loopback; pass the full container ID:
+
+```sh
+node bench/json-api/transport.mjs FULL_CONTAINER_ID marketplace-v2 "middleware and gzip level from the measured image, or unknown"
+```
+
+Three arms share the same three rotating records, four sequential HTTP/1.1 lanes and
+150 scheduled requests/second by default. On a constrained generator, specify 10, 30 or 75
+as the final argument for **every** adapter; never pool different rates. Compare persistent identity against persistent gzip to
+isolate compression; compare persistent identity against identity with a clean close
+every ten requests to isolate connection turnover. There is no fourth combined arm and
+no duplicate identity run per question. The driver warms each arm, rotates order over
+three passes, and reports each pass separately. Each received body is checked against
+the fixture after decoding. No validators, proxy, upstream or output cache should be in
+this experiment. Native source review is still required to rule out cached output.
+
+Read wire **body** bytes (not headers), successful throughput, p99, failures, dropped
+offers, observed connection counts and counted app CPU together. Wall latency stops at
+body receipt, before client decoding; validation still costs generator CPU. CPU brackets
+the pass using the container's cgroup v2 counter, including observer overhead. Compare
+codec CPU only for matching verified settings; the recorded operator declaration is not proof. Record
+the adapter, image, codec settings, host, CPU placement and resource budget when comparing
+deployments. A server ignoring gzip is unsupported for that arm; reconnects in a persistent
+arm or a generator that misses scheduled work invalidate the comparison. These short,
+fixed-rate observations do not establish maximum capacity or an official group result.
+The driver withholds ranges and paired deltas on missed offers, event-loop utilization
+of 80% or more, or p99 start lag of half a lane interval or more, including warmup.
+These checks can rule out a run; passing them does not prove the host was isolated.
+The pinned ntex adapter compresses the freshly serialized response in-process:
+`ntex 4.11.1`'s `src/http/encoding/encoder.rs` selects flate2's fast (level 1)
+for gzip (zlib-rs backend). Corten's dynamic `Json` response also uses in-process
+gzip level 1 (`crates/corten/src/compress.rs`), with flate2's default miniz_oxide
+backend. These are matched wire codecs and levels, not identical encoders:
+attribute a within-app delta to the deployment rather than ranking compressors.
+A framework-default axum adapter without a compression layer is unsupported,
+not a zero-cost compression result.
+The existing identity-only group and native-source gates remain unchanged in purpose.
+
+**Admission pilot, 2026-11-27.** The ntex 4.11.1 release adapter passed all four
+functional cases (500 records each, including numeric marketplace records and the
+upstream mutation/error checks). Source inspection confirmed fresh serde serialization
+and per-request in-process gzip, not pre-encoded fixture bytes. Keep ntex as a JSON
+peer, not an HTML or marketplace-page implementation.
+
+On one shared host we also tried the marketplace fixture with Corten and axum from
+`468264ace` and the new ntex adapter, each pinned to the same CPU with 1 GiB.
+At 30 offers/s (four lanes, 240 measured requests per arm per pass), complete
+persistent passes observed four sockets; complete turnover passes observed 24.
+The default axum image answered gzip negotiation with identity. Each adapter
+had at least one missing offer or inadequate generator headroom in an identity
+or comparison pass, so **none produced a three-pass paired estimate**. The pilot
+does not support ranking these apps by CPU or latency or quantifying the cost of
+reconnecting.
+
+**Paired follow-up, 2026-11-27.** The three release images from `a8ddd78d3`
+ran sequentially with the marketplace fixture, the same one-CPU pin and 1 GiB.
+Node 26.13.1 ran on two other logical CPUs in Linux (WSL2); the machine was
+shared. At 30 offers/s axum completed its supported arms, but Corten and ntex
+dropped eight and three identity offers respectively. At **10 offers/s**
+(`f8709c010`), all supported arms passed all three rotated passes, with no
+failures or drops in warmup or measurement. Each measured pass made 120 GETs:
+four sockets with 30 requests each for persistent identity/gzip, versus twelve
+with ten each for turnover. All opened sockets closed. The default axum gzip
+arm returned correct identity bodies in all 360 measured responses; it is
+unsupported, not zero-cost.
+
+Medians [min, max] across those three 10/s passes. Body bytes are per successful
+response, excluding headers; CPU is counted app microseconds per success.
+
+| App | Arm | Body bytes | App CPU µs | p99 ms | Successful requests/s |
+|---|---|---:|---:|---:|---:|
+| Corten | Identity | 5,948 | 530 [446, 552] | 90.0 [22.7, 252.1] | 10.08 [10.07, 10.08] |
+| Corten | Gzip | 1,361 | 512 [436, 528] | 139.6 [20.8, 298.4] | 10.07 [10.06, 10.08] |
+| Corten | Reconnect | 5,948 | 483 [418, 646] | 25.0 [22.6, 28.8] | 10.08 [10.07, 10.08] |
+| axum | Identity | 5,948 | 516 [446, 665] | 41.6 [25.4, 164.6] | 10.08 [10.04, 10.08] |
+| axum | Reconnect | 5,948 | 576 [552, 691] | 55.3 [44.5, 66.8] | 10.08 [10.08, 10.08] |
+| ntex | Identity | 5,948 | 827 [645, 1,021] | 23.4 [21.5, 44.9] | 10.08 [10.07, 10.08] |
+| ntex | Gzip | 1,542 | 855 [692, 864] | 20.1 [17.9, 65.7] | 10.08 [10.05, 10.08] |
+| ntex | Reconnect | 5,948 | 850 [800, 1,222] | 20.6 [19.0, 29.9] | 10.08 [10.08, 10.08] |
+
+Gzip saved **77%** of Corten's body bytes and **74%** of ntex's, unchanged
+across passes. Its within-pass app CPU differences were −18 [−116, +82] and
++37 [−329, +210] µs/success respectively. Reconnecting instead of keeping the
+connection changed app CPU by −29 [−70, +116] for Corten, +105 [−89, +175]
+for axum and +155 [−171, +395] for ntex. Those intervals span both directions.
+This pilot shows bytes saved and the connections actually replaced; it does
+not establish a CPU advantage, a saturation rate or a framework ranking.
+The [per-pass summary](transport-pilot-2026-11-27.json) retains both rates,
+image identities, failures, paired inputs and generator headroom. An official
+group round still requires the independent exact-image audits.
 
 ```sh
 node --test bench/json-api/*.test.mjs
 node bench/json-api/run.mjs j1 --group json-api --build --check-only
 node bench/json-api/run.mjs j2 --group json-api --build --receipts /path/to/audited-receipts.json
+# From a checkout of FULL_MEASURED_SHA; tool image references are checked against its pins:
 node bench/json-api/report.mjs bench/json-api/results/j2/summary.json --require-complete --commit FULL_MEASURED_SHA
 ```
 
@@ -59,7 +156,7 @@ boundary, not something an unsigned JSON receipt proves cryptographically.
 
 Missing images, routes, functional checks or native receipts leave their selected rows
 visible and incomplete. Every member/case is attempted. **No timing begins unless the entire
-36-cell matrix passes both gates.** In particular an AOT failure cannot be hidden by an
+40-cell matrix passes both gates.** In particular an AOT failure cannot be hidden by an
 ordinary ASP.NET result, and functional success alone never admits an app to load.
 
 ## Measurement And Evidence
@@ -92,7 +189,7 @@ load receipts must use their complete fixed native commands and inspected tool e
 All roles retain and replay the container's actual `Config.Entrypoint`, `Config.Cmd`, `Path`
 and `Args`. A same-image replacement command or executable is invalid apparatus, not a
 complete observed framework failure. Historical captures without these fields remain incomplete.
-The isolated audit handoff independently inspects all 18 app images and both Node/k6 tool images;
+The isolated audit handoff independently inspects each app's two payload images and both Node/k6 tool images;
 timing execution metadata must also equal those accepted image observations, not just a
 consistently rewritten runtime snapshot. No default command is invented by the runner.
 Both tools are prepared before checks, including check-only and negative attempts. The
@@ -110,16 +207,137 @@ phases require zero upstream read deltas; API cold reads must fit the successful
 attempt count. Both sources retain before/after counter observations, never a null placeholder.
 The timing order is pass, explicit registry profile, then app. App order rotates by
 `floor((pass - 1) * appCount / passes)`, the existing native marketplace convention; the
-three-pass offsets for nine apps are 0, 3 and 6. Every pass still covers all 36 cells.
+three-pass offsets for ten apps are 0, 3 and 6. Every pass covers all 40 cells.
 The runner saves and consumes the exact effective schedule in `summary.timingPlan`; the
 report rejects a missing or changed schedule. A saved plan alone is not execution evidence.
 
 CPU quotas are app 1, load 4, upstream 2 cores; memory limits are app 1 GiB, load 2 GiB,
 each upstream 512 MiB. `JSON_API_APP_CPUS`, `JSON_API_LOAD_CPUS`, `JSON_API_API_CPUS` optionally
 pin disjoint CPU sets. Legacy tier/subset and catalog CPU selectors cannot change this group.
-The CPU sidecar reads cgroup v2 counters. Docker stats provide raw CPU/memory samples.
+The CPU sidecar reads cgroup v2 counters. Docker stats provide app and upstream
+CPU/memory samples. New load-generator samples read the live container's cgroup directly.
 Each payload's upstream is one Node process; its CPU limit does not imply parallelism.
 Low app utilization or a busy upstream can limit throughput, not establish app capacity.
+
+#### Opt-in c-16 load placement
+
+[#2057 JSON API r67 has insufficient apparatus headroom during fast adapters' warmups](https://github.com/corten-run/corten/issues/2057)
+found k6 at its headroom bound during warmup on a `c-8`. `placement.mjs` defines an
+opt-in layout, `JSON_API_LOAD_LAYOUT=json-c16-generator-v1`, for a 16-CPU host. It
+requires exactly `JSON_API_APP_CPUS=1`, `JSON_API_API_CPUS=2-3` and
+`JSON_API_LOAD_CPUS=4-15`, and the runner refuses it before creating a result folder
+on a host with fewer than 16 logical CPUs. Only k6 changes: quota 12 on CPUs 4-15.
+The app (quota 1 on CPU 1) and the upstream (quota 2 on CPUs 2-3) keep their pins and
+quotas. The untimed cold probe stays on CPUs 4-7 at quota 4, and the CPU counter
+reader runs at one CPU (`--cpus 1`) on the same CPUs 4-7. The load resource sampler
+accounts for all twelve k6 CPUs.
+
+The summary records the layout explicitly: `measurement.loadLayout` and
+`measurement.generatorPlacement` (cold probe `{ quota: 4, cpuset: "4-7" }`, load
+sampler `{ quota: 12, cpuset: "4-15" }`), beside the usual `measurement.cpus`. The
+report accepts a quota-12 load only with that marker and both exact records, checks
+the cold probe's participant receipts against the recorded 4-7 budget, and prints a
+fixed line naming the layout. An unmarked summary is the default placement, replayed
+exactly as before; neither field is ever written without the selector.
+
+No headroom fence changes. The load bound remains below 80% of k6's quota per
+allocated core, which is 320% on the default and 960% on c-16. The single-process
+upstream bounds stay below 80% of one core, sampled and counted. The layout changes
+apparatus placement for future runs only. It does not by itself resolve the separate
+upstream peak seen in the Corten API warmups, it is not a measured speedup, and
+timings across placements are not comparable. How a fleet selects it is in
+[CLOUD.md](../workloads/CLOUD.md#json-api-c-16-placement-opt-in).
+
+#### Opt-in c-32 load placement
+
+The preserved r93 c-16 fixture warmups for Corten and axum reached k6 CPU upper
+bounds of 983.13% and 974.46%, respectively, against the 960% fence. The apps
+counted 94% and 95% of their one-core budgets, with no failed HTTP requests in
+those warmups. `JSON_API_LOAD_LAYOUT=json-c32-generator-v1` requires at least
+32 available logical CPUs and the same app and upstream pins as c-16, with
+`JSON_API_LOAD_CPUS=4-23` for k6 at quota 20. CPU 0 remains for host work and CPUs
+24-31 are not assigned to benchmark containers. The cold probe and counter reader
+stay on 4-7. The sampler accounts for all 20 load CPUs; the same 80%-per-core
+fence now requires below 1600%. Upstream bounds, rates, warmups and scenarios are
+unchanged. Replay requires the exact marker and its CPU and generator records.
+This is apparatus calibration, not a qualified result or a speedup.
+See [CLOUD.md](../workloads/CLOUD.md#json-api-c-32-placement-opt-in) for selection.
+
+#### Load resource acquisition
+
+[#2056 JSON API r67 rejects 91 timing attempts on late load-resource rows](https://github.com/corten-run/corten/issues/2056)
+tracks why the JSON API runner now brackets load-generator samples. The producer is
+`json-api-producer/v3`; older producer evidence keeps its original rules, and the
+change does not reclassify saved r67 rows. Run on the Linux Docker host itself,
+in the daemon's host PID/cgroup namespaces
+with the full cgroup v2 mount. A Docker socket mounted into a build container does
+not provide those namespaces. Live Docker inspection by exact container ID is the
+PID authority; replay never opens a path from saved data. The read-only sampler
+holds the process and cgroup directories open and compares device/inode, PID start
+ticks, exact membership path, and populated status across each read. All samples
+must belong to the same process and cgroup. This assumes a dedicated host without
+privileged process migration or mount manipulation. It cannot see between-read state.
+
+Host timestamps bracket all kernel reads, not stdout arrival. The upper bound
+includes the complete final millisecond and must fit in Docker's nanosecond
+lifetime, with no grace. Slots start one second after the rounded-up Docker start
+timestamp. Replay derives the schedule from the exact lifetime and requires a
+complete acquisition for each full slot. A final partial slot can contribute a
+sample only if the entire acquisition fits. A successful read that may have
+started before exit but whose bracket crosses it can be omitted only after its
+identity, clocks and CPU counter agree with the preceding read. A resource read
+whose bracket starts at or after exit fails the phase, as does a process or
+cgroup disappearance during the read, even in the last partial slot. Before
+reading any counters, an absent PID directory or an opening process check that
+finds the same process already exiting can end sampling. This requires an exact,
+clean Docker exit for the same start, a matching final receipt, and no missing
+full slot. No wall-clock inference excuses a failed counter read. The
+attached client's exit stops new reads without waiting for its output pipes to
+close. A late scheduler wake without a read is acceptable only if no full slot
+is missing. The existing
+five-second bound applies at both edges and across gaps. At least two observations are needed for a timed
+phase to qualify; a very short diagnostic run may end too early to prove headroom.
+CPU is the upper bound on percent of a core: the difference in cgroup
+`usage_usec` divided by the shortest possible elapsed interval (times 100 after
+unit conversion). The first observation anchors CPU without inventing a value
+and still supplies memory. This is not Docker's host CPU-counter/online-CPU
+calculation or rounded CLI output. Memory subtracts cgroup v2 `inactive_file`
+from `memory.current` only when it is strictly smaller, matching Docker's cache
+rule, but uses unrounded bytes and separate reads, not an atomic snapshot.
+Memory must be positive and below budget. The CPU upper bound must stay strictly
+below 80% of quota for load headroom. No missing read is skipped.
+
+After approval for one disposable host probe, set `PROBE_IMAGE_ID` to a locally
+present immutable Node image ID. This short synthetic process has no network and
+does not run a benchmark. Create it without starting it. The probe checks its
+identity and limits, starts it by ID and joins the same sampler the runner uses.
+Then remove only that synthetic container.
+
+```sh
+docker_local() { docker --host unix:///var/run/docker.sock "$@"; }
+id=$(docker_local create --pull=never --network none --cpus 1 --memory 128m \
+  --restart=no --label corten.json.resource-probe=1 --entrypoint node "${PROBE_IMAGE_ID:?}" \
+  -e 'const mem = Buffer.alloc(8 * 1024 * 1024, 1);
+      const work = setInterval(() => {
+        const until = performance.now() + 10;
+        while (performance.now() < until) mem[0] ^= 1;
+      }, 100);
+      setTimeout(() => clearInterval(work), 9000);') &&
+timeout --kill-after=2s 30s node bench/json-api/load-resource-probe.mjs "$id"
+```
+
+The probe replays the captured schedule after exit plus 120 ms. Success prints
+the observed sample and interval counts, positive CPU and memory, and
+`loadHasHeadroom: true`. Neither this synthetic probe nor fake tests establishes
+headroom for k6 in an official run or qualifies historical results.
+Hosted probe teardown retries an unavailable inspect of the same full container ID
+within its cleanup budget. It searches by the unique attempt label only if create
+returned no usable ID, and refuses removal on an ownership mismatch. If removal
+times out, a successful exact-ID census can prove absence. If the container is
+still listed, cleanup may retry once after rechecking ownership, only when the
+earlier inspection left enough budget. If the ownership recheck is unavailable,
+one final exact-ID census can confirm absence without sending another removal.
+The job fails on unresolved removal.
 
 Every load phase retains host start/end clocks and k6's measured `testRunDurationMs` via
 [`handleSummary`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/).
@@ -167,7 +385,7 @@ one more control reading. Its per-record starts must match the sweep counter, an
 the response-finish observer must show one completed 200 for every start and no
 aborts. A missing witness, non-200 answer, or unhealthy upstream setting leaves
 the observed app responses on disk but cannot establish a target failure.
-All 36 cells are attempted and all native source audits remain required, even for a negative
+Every app's four cells are attempted and all native source audits remain required, even for a negative
 cell. Any such negative gates timing globally (`timingDisposition: "gated-functional"`),
 with empty runs/aggregates and retained owned-container/network cleanup inventory.
 `inspectJson` returns `attemptComplete`, per-app `outcomes` and `comparisonEligibleApps`
@@ -175,7 +393,7 @@ separately from `baseline`. A complete functional negative attempt has `baseline
 comparisons and process exit one. Check-only preparation remains unqualified pending the
 independent exact-image audit, whether its observed functional outcome passed or failed.
 
-This implementation has unit/fake-operation and HTTP test coverage, not a measured nine-app
+This implementation has unit/fake-operation and HTTP test coverage, not a measured full-group
 native baseline. It makes no independent-review, serialization-audit, deployment-parity,
 build-cost, instruction-count or browser-experience claim. The catalog upstream's functional
 gate cannot inject redirects; the marketplace gate does exercise refusal of redirects.
@@ -186,8 +404,14 @@ New `run.mjs` captures use `json-api-results/v2`. The reader explicitly dispatch
 that schema; the standalone reader keeps historical v1 readable with its original
 exact fixed-offer and zero-error checks. Current isolated campaigns require v2 evidence;
 a self-declared v1 schema cannot bypass the producer-to-measured-commit join.
-Thresholds, rates, VUs, durations, budgets,
-the full nine-app/four-profile roster and pass rotation are unchanged.
+The current producer binds the load sampler and its replay source to the measured
+commit. That commit cannot fall back to the legacy Docker-stats load policy.
+The standalone `--require-complete` report and `inspectJson(summary, { load, commit })`
+read the measured Git commit in the repository they run from; an unavailable commit
+refuses strict reporting. Report-only inspection without a commit does not consult Git.
+Isolated replay instead checks the producer against the campaign's bound source digests.
+Thresholds, rates, VUs, durations, budgets and pass rotation are unchanged.
+Each selected app still runs the same four profiles.
 
 Production fixed phases use the instrumented fixed script below and retain **all**
 original stock JSON stdout, not a selected-event replacement. Closed phases use
@@ -264,6 +488,9 @@ a timing schedule executed or admit a baseline.
 Client timeouts do not observe app-handler completion: their classification is retained,
 but attribution remains incomplete, as do later phases with an unresolved server tail.
 No quiet interval or favorable counter count is taken as a server-drain proof.
+A structured k6 `Request Failed` warning counts against observed timeouts only when
+its error is `request timeout` or Go's `Get "<HTTP(S) URL>": request timeout` form.
+Neither form changes the status or threshold checks, and rejection messages omit the target.
 
 Fixed nominal arrivals, all observed starts/offers and observed endpoint variation remain
 separate. A late ordinary start is not rejected at zero nanoseconds or nominal-plus-N.
@@ -279,7 +506,7 @@ timing. At least 528 MiB free disk is checked before each phase; this is not a f
 reservation. Fixed replay uses 64 KiB chunks/lines, at most 2,000,000 events / 128 metrics,
 and a growing typed latency vector capped at 16 MiB final size (under 32 MiB across growth
 allocations). Original bytes are never decompressed: no gzip is accepted on this path.
-At defaults, 108 fixed captures can retain at most **54 GiB of admitted raw streams**;
+At defaults, 120 fixed captures can retain at most **60 GiB of admitted raw streams**;
 stderr/auxiliary/raw-JSON/stat/app logs are additional. This is an evidence cap, not an
 estimate of native output or generator/internal-k6 memory. Actual native output, added
 CPU, collector/disk behavior and headroom still need measurement with pinned k6 before

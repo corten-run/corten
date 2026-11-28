@@ -235,19 +235,21 @@ impl Violations {
     }
 }
 
+/// Each refusal is Corten's, never shared wherever it is answered ([`crate::cache::Unshared`]).
 impl<S: Send + Sync> FromRequest<S> for Violations {
     type Rejection = Response;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, Self::Rejection> {
+        let refused = |answer: (StatusCode, &'static str)| crate::cache::unshared(answer.into_response());
         let content_type = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_owned);
         let length = req.headers().get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
         if length.is_some_and(|length| length > LIMIT as u64) {
-            return Err((StatusCode::PAYLOAD_TOO_LARGE, "The reports are over 256 KiB.").into_response());
+            return Err(refused((StatusCode::PAYLOAD_TOO_LARGE, "The reports are over 256 KiB.")));
         }
         let body = crate::body::to_bytes(req.into_body(), LIMIT)
             .await
-            .map_err(|_| (StatusCode::BAD_REQUEST, "The reports did not arrive whole, or are over 256 KiB.").into_response())?;
-        Violations::read(content_type.as_deref(), &body).map_err(IntoResponse::into_response)
+            .map_err(|_| refused((StatusCode::BAD_REQUEST, "The reports did not arrive whole, or are over 256 KiB.")))?;
+        Violations::read(content_type.as_deref(), &body).map_err(refused)
     }
 }
 

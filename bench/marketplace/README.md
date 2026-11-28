@@ -40,6 +40,14 @@ See the [generated report](results/r20/report.md), [saved summary](results/r20/s
 [exact measured commit](results/r20/commit.txt) and [archive checksum receipt](results/r20/archive-sha256.txt).
 The original hash-verified archive remains outside Git; raw qualifications, browser checks,
 build logs, counted CPU, load summaries and sample streams are retained with these results.
+Those r20 files stay where they are; its `summary.json`, over 256 KiB, is listed in
+`scripts/bench-size.allow`. A new round commits its report, commit and provenance, small enough to
+diff, its summary only when that is within the limit and approved for public disclosure (else its
+SHA-256), and leaves its raw receipts in the archive
+([nightly procedure](nightly.md#finished-results)). A maintainer chooses
+where the archive is kept and publishes it there, and the committed provenance records where it
+can be fetched as well as its SHA-256: a checksum receipt alone says how to check a copy, not where
+to get one ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
 
 Each admitted adapter completed 8 profiles in 3 rotated passes: pages in
 en-US, fr-FR, de-DE and locale-neutral JSON once per source/pass, using memory and uncached HTTP
@@ -151,6 +159,401 @@ Use a fresh official `rN` with N >= 17 for each nightly round. The dedicated c-8
 passes with `--duration 15 --warmup 10 --rate 150`, pinned to app CPU 1, upstream CPUs 2-3
 and load-generator CPUs 4-7. These are short measurement windows: publish medians and ranges,
 not a guaranteed finish by 7 am or an unsupported claim about small differences.
+
+### Convergence and soak passes
+
+No report here establishes whether each adapter had stopped changing by the end of the timed
+10-second warmup, or whether its memory and tail latency hold over time
+([#1851 Load phases run 15 s after a 10 s warmup, and nothing shows the JIT runtimes had reached steady state or that any app's memory holds over time](https://github.com/corten-run/corten/issues/1851)).
+Two passes, separate from the timed rounds, take screening readings toward those questions; neither
+establishes either answer. Neither changes a timed phase, the warmup, the rate, the droplet job or a saved round, and neither is part of the nightly.
+
+```sh
+# One closed loop per adapter, source and target: the timed warmup's 32 users for 5 minutes in 15 s windows.
+node bench/marketplace/steady.mjs convergence w3 --group production --build
+# A fixed 150 requests/second for 30 to 60 minutes, in 60 s intervals.
+node bench/marketplace/steady.mjs soak w4 --group production --minutes 30
+node bench/marketplace/steady-report.mjs bench/marketplace/results/convergence/w3/summary.json
+```
+
+Each adapter, source and target gets a fresh container, started the way `run.mjs` starts one
+before a timed warmup (created, then started while a sidecar polls that target's own path, the JSON
+item or the first locale's page, until its first 200), and then one long k6 pass (`window-load.js`:
+the timed requests and checks, with each answer counted in the window it completed in).
+`--admitted-from <round>/summary.json`
+measures only the adapters that saved timed round admitted; without it every selected adapter
+runs and the report says admission was not checked. A saved pass with `--group` reads back only
+with that group's adapters, or the subset of them its admission admitted. A round that cannot be read or does not
+validate fails the pass with a fixed refusal on the console and in `run.log`; why, which can quote
+the file, is kept only in `errors.log`. `--minutes`, `--window` (convergence),
+`--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults;
+`--label key=value` (repeatable) adds a label to every container and network the pass creates,
+beside its ownership label. Like a timed round, a pass refuses to start without the current
+generated fixture (`node bench/marketplace/fixtures.mjs`). It reads that fixture once into a copy
+in the pass's own folder (`mounted-fixture`), checks and hashes the copy, and mounts only the copy,
+read-only, for the upstream and every app, so an edit to the original during a pass cannot change
+what a later cell serves. The copy is published as the timed runners publish theirs (directory
+0711, file 0644, whatever the umask), so an adapter running as another user can read it; it is hashed again before the pass can be complete. Teardown removes
+the copy only once every container of the pass is confirmed removed, and keeps it otherwise, since a
+container may still mount it; a copy that could not be removed makes the pass incomplete. A
+container's log (`cold.log`, `app.log`) is written straight to its file with its stderr as well as
+its stdout, and is not read back. The cold probe's readiness and result are read from its stdout
+alone: each read writes the probe's stdout, without its stderr, straight to `cold-stdout.log`
+(Catalog's `commandRunner` with its opt-in `fileStderr: false`; its defaults are unchanged), and
+the file is read back only up to 4,096 bytes, a longer one failing the cold start (`readBounded`).
+It must hold exactly what `bench/catalog/cold.mjs` writes (`coldOutput`): the readiness line, then
+one result line as `JSON.stringify` writes the fields it names and the path it polled, each line
+ended by one newline; padding, a blank line or anything else fails the cold start, nothing is
+trimmed. While the probe runs the file is only polled for the readiness line; once the probe has
+exited, the final read (`coldResult`) requires both lines, each ended by its newline, so an empty
+file, a readiness line alone or a result line without its newline fails the cold start. The result must then pass the timed validator's own cold-start rules
+(`validateColdStart` in [report.mjs](report.mjs)), so a first 200 with an empty body fails the cold
+start in a pass as it fails a timed round. What the probe wrote, stderr included, is in `cold.log`,
+collected before the probe is removed even when it never became ready (a collection that fails is
+recorded in `errors.log` and leaves the original failure as it was). Results
+go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
+The pass's name is kept in its run ID (`marketplace-<kind>-<name>-<random>`), which `summary.json`
+records and the owner label carries. Its containers and network are named `mkt-` and 12 hex digits
+of the run ID's SHA-256, then a role or adapter, because the containers reach one another by those
+names and a name built from a long pass name would not be a DNS label (63 characters at most).
+Every container is read, logged, sampled and removed by the ID Docker printed for it, after its
+owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
+A create whose ID Docker did not return is looked for by its own label for a bounded time; if
+nothing turns up its cleanup is reported unconfirmed and the pass is incomplete. Each ID that lookup
+finds is removed, or confirmed absent, by that ID itself (a lookup by the ID, then its owner label
+checked, then removal), whatever the owner-label sweep lists: a listing that leaves it out proves
+nothing about it. Cleanup is complete only when every create Docker acknowledged is among the
+resources confirmed removed by its ID and every ID found by an attempt's label was removed or
+confirmed absent that way; otherwise the fixture copy is kept. A
+create Docker did not acknowledge ends the pass at the step that made it, even when teardown finds
+it by its label and removes it, so the pass is incomplete; the record of it stays in `cleanup.json`
+and in that summary, for diagnosis. Both name an ID only once the pass has it from its own create
+or has confirmed its owner label on it: what survived teardown is counted, not listed, and a
+failure on an ID a listing returned, or of a listing itself, is a fixed message (Docker's own
+output stays in `errors.log`). A saved pass is refused, whatever its `complete` flag says,
+unless its removed count equals its acknowledged creates (each is removed by its ID), it has no
+unacknowledged create and recovered nothing by its label, and its acknowledged creates are the
+ones its cells imply: four for the pass
+(host probe, k6 version probe, network, upstream) and, for each cell, four (app, cold-start
+sidecar, k6 and the event marker), all of them for a measured cell and at most that many for a
+failed one (`passCreates` and `cellCreates`). Each cell's
+containers are removed before the next cell starts; a cell that leaves one behind ends the pass.
+For the production group's seven candidates a convergence pass is 28 five-minute passes, about
+two and a half hours with container starts, plus image builds (estimated, not measured). A pass
+describes only the inputs it ran (below), so any change to them needs a new pass: an adapter change
+or rebuild (a new commit or image of any measured adapter), a runtime or framework version, a new
+fixture, upstream or k6 image, or another host, kernel or CPU setting.
+
+A convergence pass keeps each window's throughput, p95 and p99, and gives each cell one tolerance
+reading (`flattenRule`, `marketplace-tolerance/v4`, in [steady-contract.mjs](steady-contract.mjs),
+which states the steps). It is a screening reading of throughput, not a certificate of steady
+state. Its spans are in seconds (`--window` must divide 60). The tail is the median throughput of
+the last 60 s. Otherwise it reads "within the stated tolerance from the window ending at N s"
+when, from that window to the end and for at least 60 s, every window is within 10% of the tail
+median, every three-window median within 5%, and the least-squares line through those windows
+changes by at most 5% of the tail; the onset window must itself be within 5% of the tail, and
+neither the first 60 s nor the 60 s before the tail may have a median more than 5% above it
+(those two are comparisons between medians, not of each window).
+A reading of "not within tolerance at the end" names the comparison that decided it, never a
+direction of travel:
+
+1. the median of the first 60 s, or of the 60 s before the last 60 s, is more than 5% above the
+   last 60 s median;
+2. the final stretch inside the bounds (every window within 10%, every three-window median within
+   5% of the tail) is shorter than 60 s, sometimes with "and the last 60 s median is more than 5%
+   above the 60 s before it";
+3. that stretch lasts at least 60 s but has no onset, and the least-squares line through it goes
+   up, or does not go up (flat or down).
+
+When the last 60 s median is zero there is no reading, and the report says that median is zero;
+the last window can still have served requests.
+
+A comparison of medians says nothing about the last window: a pass that climbed and whose last
+window then fell to half can read "the last 60 s median is more than 5% above the 60 s before it",
+because the falling window leaves the stretch empty and the medians are still in that order.
+
+What the reading does not detect, by construction (each case is pinned in `steady.test.mjs`):
+
+1. Oscillation or drift inside those bounds reads as within tolerance. 920, 1000, 1080, 1000
+   repeated five times in 15 s windows reads within tolerance from the window ending at 30 s, and a
+   steady climb from 1000 to 1076 over 20 windows from the window ending at 105 s.
+2. A shift of under 10% in the last window can go undetected: nineteen windows at 1000 then one at
+   1090 reads within tolerance from the window ending at 15 s, because the tail median is unchanged.
+3. A pass that started faster is not within tolerance even if it then held: four windows at 1100
+   then sixteen at 1000 reads "the median of the first 60 s is more than 5% above the last 60 s
+   median".
+4. The onset is resolved to one window and given as that window's end, so a 15 s window never reads
+   under 15 s; readings at different window lengths are not comparable.
+
+5% and 10% are stated choices, not derived from measured noise; revisit them once saved passes show
+the window-to-window spread on the measurement host. A cell with any failed request, in a window or
+in k6's aggregate count (which includes answers completed during the graceful stop), or whose app
+stopped, restarted, was replaced (another container ID or StartedAt) or was OOM-killed, or whose
+event stream could not be read or did not show the marker's starts around its load (`unconfirmed`, below), gets no reading: the cell is saved with only its failure code, and a complete pass with such cells stays
+reportable, each of them reading "no reading" with its code's text. A saved cell that has a reading
+but records a failed request is refused. k6's engine clock is checked as a timed
+phase's is (`validateLoadExecution`). A saved pass is refused if it finished at another commit,
+if its cleanup failed or is not confirmed complete, if a cell that did not fail records no request
+at all (capture refuses such a load as "load sent no requests", and replay applies the same rule
+in `reconcileCell`; a convergence cell with requests earlier in the pass and none in its last 60 s
+is valid and reads "no reading"), if its window totals do not add up to k6's
+request count, if k6's requests less its completed iterations are more than the load's VUs (a
+convergence pass's users, a soak's 1,000; each VU has at most one unfinished iteration, which a
+captured cell's `vus_max` already bounds), if a window's p95 or p99 is above k6's aggregate latency maximum, if k6's aggregate
+failures are fewer than its windows' or more than its windows' plus the requests outside them (the
+graceful-stop tail and unrecorded requests), or if it has no adapters, sources or targets.
+
+What a pass saves is an allowlist (`savedText` and `passEvidence` in
+[steady-contract.mjs](steady-contract.mjs)): every field in `summary.json` is fixed by the
+checkout (the options, the rule, the scope, a failure or startup code), a validated number, or a
+value from Docker, the host or k6 that matched a strict pattern: 64-hex image IDs and hashes, a k6
+version `N.N.N`, a kernel release, an online CPU set and a Docker server version. The host's CPU
+model is saved only as the SHA-256 of its text (`cpuModelSha256`, from `cpuModelDigest`: whitespace
+normalized, at most 256 characters, otherwise null); the text stays in `host.txt`, a timed round's
+model is compared with it by the same digest, and neither `steady-report.mjs` nor
+`report.mjs --convergence` prints either text (`report.mjs` without `--convergence` still prints
+the round's model as it always has). A
+convergence pass is saved as `marketplace-convergence/v8` and a soak as `marketplace-soak/v10`
+(below). Both save what each reading rests on as fixed text, `measurement.containerChecks`, with the
+event stream's limit stated, and both reports print it for the cells with a reading (none when no
+cell has one). The text names that scope itself (what each cell with a reading rests on; a failed
+cell has no reading), so a save whose every cell failed does not say, read alone, that their
+settings matched. v8 and v10 are new with this text, which changed within them before either
+reached main; a v7 convergence pass saved no such text
+and, like a v9 soak, was described as showing that its settings held through the load, more than
+its event stream can show. A v6 convergence pass checked its containers' settings only at its inspects and read no
+event stream, so a change made during its load and undone before the inspect after it went
+unseen, a v5 one did not check its containers' settings or recheck its app just before the load
+(both below), a v4 one saved the model's text, and none of v4 to v7 is read. A value that does not
+match is saved as null (not recorded), or, where the pass depends on it (an image ID, the k6
+version), fails that step. Adapter names (the pass's adapters and those it selected for
+admission) must be ones this checkout's adapter inventory has, and a group one of its groups; the
+readers refuse any other name without quoting it. A failure is saved only as a code (`failureCodes`), and how a pass
+started each app as a code (`startups`); the readers refuse any other field, value or code, with a
+fixed message that never quotes the file, and print a code only as its text. Docker's, the host's
+and k6's own output, and each failure's message, stay in the raw files beside the summary
+(`host.txt`, `docker-version.txt`, `k6.json`, `images.json`, the container receipts,
+`events.log`, `errors.log`, `run.log`), outside Git with the rest of the results. The timed
+report's like-for-like list names each differing or missing input and quotes neither side's value.
+
+Some checks are made only while a pass runs, because the saved summary does not keep what they
+read: k6's raw engine clock against the load container's own run (`validateLoadExecution`, from
+the raw `load-clock.json` and container receipts), the app container's before and after inspect
+(each must record a 64-hex container ID, a StartedAt timestamp that is a real start, a
+RestartCount and its running and OOM states, and the app must be running and not OOM-killed
+before the load, `appInstance` and `appBefore`; a missing counter or malformed timestamp on
+either side fails the cell rather than comparing equal. The app before the load must also be the
+instance that served the cold probe: the container ID, StartedAt and RestartCount Docker reported
+once the probe had its first 200 must all be unchanged (`servedCold`), or the cell fails
+`instance-changed` before its marker or load container is created. The app is inspected once more
+after the load container is created and checked, the last Docker answer before the load starts
+(`atLaunch`, kept as `app-container-launch.json`): another ID, StartedAt or RestartCount, or an app
+not running or OOM-killed, there fails the cell `instance-changed` and no load starts, so a restart
+before the load is never read as one during it. A cell of either kind also fails `instance-changed`
+when its event stream (below) shows a start, restart, die, kill or OOM of the app stamped before the
+load container's StartedAt (after that last inspect, before the load), and a saved soak event is
+never before the load. It fails it too when the app's own inspect after the load shows a StartedAt
+other than the one at that last inspect and stamped before the load container's StartedAt
+(`startedBeforeLoad`, in nanoseconds), which needs no event stream. Inspects alone cannot show how
+many starts there were after the launch check, or when: a second start overwrites the first's
+StartedAt, so a restart before the load followed by another during it leaves only the later time.
+An app whose inspect after the load shows another container ID, StartedAt or RestartCount than at
+the launch check is placed by the event stream; with the stream unavailable the cell fails
+`unconfirmed` and has no reading, never a restart accepted as the load's. The settings the summary records are checked on Docker's inspect before any reading from a
+container is kept (`appliedSettings`): the upstream's CPU quota (Docker's NanoCpus from `--cpus`,
+with no CpuQuota of its own), CPU pinning (`CpusetCpus`) and memory limit before any cell; for each
+cell the app's image ID, quota, pinning, memory limit and source (with the group's profile and
+connection limit), and the load's image ID, quota, pinning, memory limit and every setting
+`window-load.js` reads (`BASE`, `TARGET`, `LOCALE`, `MODE`, `WINDOWS`, `WINDOW_SECONDS`, and
+`VUS` or `RATE`, each exactly once with the requested value, and the other absent), before the load
+starts and again after it ran, so the VUs and rate `validateLoadExecution` reads are the ones
+requested. Since `docker update` changes a running container's CPU quota, pinning and memory
+without a restart, the app's settings are checked again at that last inspect before the load and
+after the load, and an API cell's upstream's before the cell, at that last inspect and after its load
+(`upstream-container-before.json`, `upstream-container-launch.json`, `upstream-container-after.json`).
+A container that differs fails the cell `settings` (the upstream before any cell, the pass) with a
+fixed message naming the role and setting, never Docker's value; `load-container.json` also keeps
+the window settings, as the pass requested them (`windowEnv.requested`) and every value Docker's
+inspect reported for each (`windowEnv.observed`, none, one or more), so a refused cell's receipt
+shows what Docker had. An inspect shows the settings only at its own moment: a change made after one
+check and undone before the next passes both. So every cell, of either kind, reads a live Docker
+event stream of its app, its load, its marker and an API cell's upstream (below), listening from
+before the launch check to after the inspect after the load. An `update` of the app, the load or an
+API cell's upstream (not the marker) the stream delivers fails the cell `settings`, even when every
+inspect agreed, and a start, restart,
+die, kill or OOM of the upstream fails it `instance-changed`. The stream detects such an event; it
+cannot show there was none. Docker's events publisher (Moby's `daemon/events` and its pubsub
+publisher) gives up on an event for a subscriber that is slow to take it and goes on with the
+stream, so an update and its reversal can both be lost while both marker starts, the fence and the
+client's exit still arrive, and no subscriber can show that every event was delivered. A cell whose
+stream is unavailable fails `unconfirmed` and has no reading, since it then had no event-stream
+check at all; no load starts until the stream has shown the marker's first start, counted only from
+a row the reader would accept (a container ID, an action and a nanosecond time). A cell's reading
+therefore rests on what was checked: its settings matched at every inspect (the app after its cold
+start, at the launch check and after the load; the load before it started and after it ran; an API
+cell's upstream before the cell, at the launch check and after the load), and Docker's event stream
+delivered no update of those containers, no start, restart, die, kill or OOM of the upstream and,
+for a convergence cell, no qualifying start, restart, die, kill or OOM of the app (one delivered
+before the marker's second start or stamped at or before the load finished; a later one is
+teardown, below, is not read and stays in `events.log`); the stream can drop events for a slow subscriber. Each pass saves that text (`containerChecks`), which names
+that scope itself, and both reports print it beside the readings, with how many cells have one: a failed cell did not pass
+those checks, a convergence cell whose tolerance reading gave none (too few windows, or a zero
+last 60 s median) has no reading for them to back, and a pass with no reading prints none. The load's inspect before it starts is kept as
+`load-container-before.json` before its settings are checked, so a load refused there keeps what
+Docker had too; an inspect without a container receipt's shape (an `Env` that is not a list of
+strings, no `HostConfig`) keeps a fixed note, the load's ID and the window settings instead, never
+its malformed values, and still fails the cell `settings` with no load started. Then, for a
+convergence cell: the same ID
+and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
+evidence and the exit, signal and OOM observations it saves), the cold-start clock and result, the k6 export's metric names and every
+row of a cell's live Docker event stream, with whether it showed the marker's two starts. A saved
+summary records their outcome (a cell that failed one has no reading) but cannot be re-verified
+from summary.json alone; the raw files beside it (`app-container.json` and
+`app-container-after.json`, which keep RestartCount, `load-container.json`, `load-clock.json`,
+`load.json`, `events.log`, and `events.json`, which keeps whether the stream was read, its updates by
+role, the upstream's events and the app's, and which of the app's container ID, StartedAt and
+RestartCount differed from the launch check at the end) are what they read.
+
+For each cell with a reading, a soak reports memory at the start and the end (the median sample in
+the first and last memory interval), p99 per latency interval, failed requests (the Markdown prints
+k6's aggregate count; each interval's count is only in summary.json, as the cell's
+`windows[].failed`), whether it observed evidence that the app restarted, and, separately, the app's
+observed exit, signal and OOM events that qualify for the cell (below). Memory and p99 are reported figures: no criterion
+says whether they held. Only the fixed rate (below) is reported as held or not. Restart events
+come from the cell's live `docker events` stream, filtered to the app, the load, an API cell's
+upstream and a small marker container, started before the load. A retrospective `docker events --since/--until` query replays only what the
+daemon still buffers (its last 256 events), so an empty answer to one would not show that nothing
+happened; the pass does not use one. Instead it starts the marker once the stream runs, before the
+load, and again after the app's last inspect: the stream delivers events in the order the daemon
+publishes them, so a stream that shows both marker starts was listening before the load began and
+was still running after it ended. It does not show that every app event between them was
+delivered: the daemon can drop an event for a slow subscriber and go on (above), so an event of
+the app the stream did not deliver is not observed. The client hands rows over in chunks,
+so the runner does not stop it at the second start's row: it reads on until the fence, the
+marker's next row after that start, which must be that start's own exit (its `die`) stamped
+strictly later than the start, and so after the load's FinishedAt. A stream without the fence is
+unavailable, and so is one whose next marker row there is anything else (a copy of the second
+start, or a `die` stamped after the load finished but at or before that start): the runner does not
+stop at such a row, and the reader does not take it for the fence. An app event the client delivers after the second start and before the fence is
+read like any other. A marker row is a start, or the fence's `die`, only when its action is exactly
+that word with no detail after it (`markerIs`), in the runner and the reader alike, so a
+`start: detail` row counts as a start in neither. This still relies on the client delivering rows in the daemon's order up to
+the fence. Two start rows alone do not show that (two
+copies of the first would read as both), so the first two marker starts are witnesses that must
+bracket the load on the daemon's clock: the first at or before the load container's StartedAt, the
+second strictly later than the first and strictly after the load container's FinishedAt (the
+latest daemon time before the app's last inspect, which has none of its own). These comparisons
+use the full nanoseconds of the load container's StartedAt and FinishedAt and of each event, so a
+marker start earlier in the same millisecond as FinishedAt is not after it. An app event is the
+load's whenever it is stamped at or before FinishedAt, even if the stream delivered it after the
+second marker start (an OOM kill stamped 15 s into the load is seen, never `none-seen`); only
+an app event both after the second marker start and stamped after FinishedAt is teardown. A stream is
+unavailable when it failed, did not show both marker starts and the fence within its bound, showed
+another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row
+that was not the app's, the load's, an API cell's upstream's or the marker's ID, an action and a
+nanosecond time, or was an app or upstream row naming a start, restart, die, kill or OOM, or any
+row naming an `update`, with anything after that word, or ended with a row that has no newline, or
+had a blank row; none of its rows is then used, and the cell fails `unconfirmed` with no reading.
+A read stream is saved as `none-seen` (no qualifying start, restart, die, kill or OOM event of the
+app was observed: none delivered before the second marker start or stamped at or before FinishedAt,
+so a teardown event, which `events.log` still keeps, does not count; this does not show there was none) or `seen` (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
+another container ID or StartedAt at the end, a `restart` event, or a `start` of the app stamped
+strictly after a `die` of it (events are paired by their daemon times, never by the order the
+stream delivered them). It is no when none was observed: a soak with a reading always had its stream
+read with the marker's starts around the load (`none-seen` or `seen`), and Docker's inspect after
+the load compares the app's container ID, StartedAt and RestartCount with those before it whatever
+the stream delivered; an exit, signal or OOM event the stream dropped is not listed. A `kill` is a signal,
+which need not stop the app (SIGCONT, for one), a `die` with no start after it is an exit, and an
+`oom` event or an app not running or OOM-killed at the end is what it says: the report lists these
+in their own column, as observations, never as a restart. A soak is saved as
+`marketplace-soak/v10`; a v9 soak saved an app with no event in its stream as `clean`, saying more
+than the stream shows, a v8 soak read no update of its containers or upstream event and, with its
+stream unavailable, saved its restart claim as not established, a v7 soak did not check its containers' settings, recheck its app just before
+the load or refuse an unterminated or blank event row, a v6 soak paired a start with a die by
+delivery order and saved the CPU model's text, and a v5 soak counted those observations as
+restarts; none of them is read. The container states and the memory
+samples are read independently of the stream. What the `docker stats` and `docker events` clients write is bounded (`clientLimits` in
+[steady-run.mjs](steady-run.mjs): bytes read, bytes in one row, rows read, all counted on what the
+client wrote, blank rows and escape sequences included): past a limit that observation is
+unavailable at once, no wait on the event stream succeeds any more (not even for a marker row read
+before the limit was passed), its client is stopped through its own bounded stop, and the pass goes
+on to its teardown as usual. Any stderr from either client, up to the moment its pipes close or are
+released after its stop, makes that observation unavailable (for the event stream, the cell then fails `unconfirmed`);
+stderr past its limit is not kept. Latency intervals start at the k6 engine's start; memory
+samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
+in intervals of their own of the same length, which lead the latency intervals by the load
+container's startup; restart events use the Docker daemon's clock. The report states both clocks.
+The fixed rate is reconciled against its schedule: k6's constant-arrival-rate starts one request
+per tick of floor(1e9 / rate) ns from slot 0, at most floor(duration / tick) + 1 over the soak.
+`window-load.js` also counts each iteration in the interval k6's engine started it in
+(`window_N_arrivals`), and the soak saves those counts with each interval's share of the
+schedule. The report says "held" only when the rate matched the schedule within tolerance in every recorded
+interval: k6 dropped no
+iteration, its recorded requests fall short of the schedule by at most one second of arrivals plus
+the boundary slot (the allowance for an iteration the engine's stop cut off), and every interval's
+arrivals are within that same allowance of its share of the schedule. A soak whose 270,000
+requests all arrived in its first minute did not hold the rate, even though its totals match.
+Arrivals and completions are on the same engine clock, and a request completes after its iteration
+starts, so a soak whose intervals show more requests completed by an interval boundary than
+iterations started by it (270,000 completed in the first minute when 9,001 had started) is refused,
+whatever its totals, both when it is captured and when a saved one is read. Nor can the backlog
+run the other way: each iteration makes one synchronous request on its own VU, so at every
+boundary, the last included, the iterations started but not yet counted as completed are at most
+the load's 1,000 VUs (`maxVUs` in `window-load.js`, which `window-load.test.mjs` holds equal to
+`fixedRateLoad`). Requests the graceful stop answered or left unrecorded add no room: they were in
+flight when the last interval ended, so they are among that boundary's outstanding iterations, and
+work lost at the stop cannot explain a backlog in an earlier interval. A soak with every arrival on
+schedule and no request completed in any interval (all of them in the graceful-stop tail, or all
+unrecorded) is refused at the first boundary; a saved one with all of them unrecorded is refused
+already on its totals, since more of its iterations are unfinished than the load has VUs. The same
+holds for every iteration the soak started, not only those whose request k6 counted: an iteration
+that started but never reached k6's request counter still held its VU, so a soak whose arrivals less
+k6's completed iterations are more than 1,000 (270,001 started, 270,000 requests, 269,000 completed)
+is refused, both when it is captured and when a saved one is read.
+Otherwise it reports the shortfall, names each interval that did not hold with its arrivals and
+schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
+interval's claim from the saved arrivals, so a saved soak can claim an interval held, or the rate
+held, only when its saved counters support it; a claim they do not support is refused. The counts it prints are k6's own, never the schedule's. Memory is
+reported as unavailable, with the reason, when sampling failed, a sample had no positive size or
+the first or last interval had none; the restart, exit, signal and OOM observations are reported either
+way. A saved soak whose rate, memory, p99, restart or state claims contradict its counters is
+refused.
+
+No report concludes that a timed warmup is long enough. A timed warmup is set only by a separate
+reviewed change to the droplet contract, made from a saved pass that is like-for-like with the
+rounds it will time. `steady-report.mjs` prints each cell's reading and that the pass sets no
+warmup, and, for a pass with the API source, that an API-source cell's reading is not compared with
+a timed round (below). `report.mjs <summary.json> --convergence <pass>/summary.json` first states which of the round's
+measured adapter, source and target cells the pass has a reading for, which failed, which the
+tolerance reading itself gave none for (a zero last-60 s median: listed with that explanation, not
+counted as coverage), which are API-source cells it does not compare and which it lacks, then
+compares inputs only for the cells with a reading. An API-source cell's reading is listed but never
+counted as coverage or compared: a timed round's replay requires the upstream's own answer counts
+to cover the successful API requests (`validate.mjs`), while a pass records no upstream counter,
+so nothing shows that the cell's requests went through the upstream. Every round's cells include
+its API source, so no pass is like-for-like with a round as a whole: one with some readings is at
+most like-for-like for those cells alone (and compares page locales only if one of them is a page), and one with none is compared on
+no input. It prints each cell's reading and lists every input that differs or that either side
+does not record: the commit and group, the image ID of every measured
+adapter, the fixture hash, the upstream and k6 image IDs, the CPU quota and pinning for each role
+(an unpinned side counts as missing), the host CPU model (by digest), kernel release and online CPU set, the
+startup timeout, the app and upstream memory limits, the response encoding, the timed warmup's 32
+users, the cold start before the load, a page warmup that rotated locales (results schema v6), and
+a timed warmup with no failed request (a round whose warmup had failures is not comparable). The
+timed warmups checked are those of the profiles compared, the source and target of each cell with
+a reading: a failure only in another profile's warmup (an API-source one, or a page one for a
+JSON-only reading) does not change the verdict for those cells.
+With `--convergence` nothing read from either file reaches the output unless it validated: the
+round's CPU model is not printed (its header line says so, and the pass's model is compared with
+it only by digest); each adapter is named by
+this checkout's label, not the round's saved one (an adapter the checkout does not name gets a
+fixed text); the round's two saved limits (upstream and CPU window) print only when they are this
+checkout's text, otherwise a fixed sentence says they are not printed; and a round that is not
+JSON or does not validate is refused with a fixed message (the report without `--convergence`
+prints the reason). `--vus` other than 32 is for exploration. Without `--convergence` the
+report gains one line, saying no convergence pass was provided to it (it was run without one,
+which does not say whether one exists); its other output is unchanged. No convergence pass has been saved for any round, so nothing here says
+whether any adapter is warm after 10 seconds.
 
 ### Splitting a round across droplets
 
@@ -268,6 +671,7 @@ npm run check:marketplace
 node bench/marketplace/run.mjs w1 --group production --build --check-only
 # From a clean, committed checkout, after reviewing conformance:
 node bench/marketplace/run.mjs w2 --group production --build --passes 3
+# From a checkout of the measured commit (this one, while it is still at that commit):
 node bench/marketplace/validate.mjs bench/marketplace/results/w2 w2 <measured-full-commit>
 node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 ```
@@ -294,9 +698,15 @@ app's and profile's results; the report marks each stage that lost a pass
 than three passes only there; of two passes each number is the lower of its column's two
 values, not a median. The stop is the app's only when the container stopped after the phase
 began, the CPU counter sidecar and, for the HTTP source, the upstream are the same running
-containers, Docker recorded no kill, stop or restart of the app, and nothing failed that the
-stop does not explain (only docker stats errors stamped after the app finished); otherwise the
-run fails.
+containers, Docker recorded no kill, stop or restart of the app, and no phase step failed.
+An ordinary app exit does not require samples after the exit. When sampling was active, the
+client must return the expected shutdown status; a matching signal cannot establish who sent
+it before the client was reaped. A client exit observed before the stop request, any client
+stderr, an incomplete record, or a sampler deadline fails the phase. Replay refuses
+recorded faults and rechecks the Docker CPU and memory display format, finite values after unit
+conversion, and the matching sample summary even when the app stopped. A well-formed terminal
+zero (such as `0.00%` and `0B / 0B`) is allowed for a stopped phase. Only phases that did not
+start a sampler (warmup) need neither file.
 Still failures: a phase with no k6 summary or in which no request succeeded, a 200 of the wrong
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer
@@ -311,6 +721,12 @@ The local `wN` commands do not create a droplet, collect c1, update nightly stat
 
 ### Saved raw evidence
 
+Marketplace uses Catalog's bounded runner for its Git, Docker and check
+commands. If one of those commands is stopped and a descendant holds its output
+pipes open, the runner releases the pipes after the stop grace and reports a
+failed command. Existing command deadlines, load settings and owned-container
+cleanup still apply. The separate Docker stats sampler does not use this runner.
+
 The browser gate observes native enhanced form transports without replacing them.
 Livewire alert updates must identify the same-origin marketplace alert component,
 item, locale, save call and submitted values. The complete rendered-page and
@@ -322,14 +738,53 @@ the same session when polling. A POST acknowledgement or changed message alone
 does not prove that save completed. Its continuing polls are not navigation:
 the correlated save and rendered message precede the full-page assertions, without
 requiring global network idle. Transport failures retain bounded diagnostics.
+A JavaScript-disabled page runs no animation-frame or timer callbacks, so the gate's alert
+message wait keeps its predicate (the first `.marketplace__message` has non-whitespace
+`textContent`) but has Playwright re-evaluate it from outside the page, through a `:root`
+locator, rather than an in-page poll that never ran again once it had seen the POST document
+before its message. That stall matches r19's symptom in [#1251](https://github.com/corten-run/corten/issues/1251),
+though r19's cause is not established.
+`alert-probe-run.mjs IMAGE [ITERATIONS] [RESULTS_DIR] [--budget SECONDS] [--deadline SECONDS]` repeats the three
+English phone alert cases without JavaScript against an image in both sources, laid out like
+the gate. It uses the gate's own submission wait, then requires one document POST answered
+200 without a redirect, that POST to be the last main-frame document request (a refresh or
+redirect to a GET at the same URL fails), the full expected page and the exact message, and
+keeps a bounded diagnostic (case, POST chain, document requests, ready state, message and
+document tail) for each failure. Its containers and network carry the run's owner label and
+are removed by the IDs their creation returned after confirming that label; a removal that
+fails or an owner that cannot be confirmed fails the run, and `cleanup.json` records the
+outcome. Catalog Contract uploads that record even when the run fails, so it names an ID only once
+the run has it from its own create or has confirmed its owner label on it: an ID a listing
+returned that is not confirmed as the run's is never named, a failure on it is recorded as a fixed
+message, what survived teardown is counted rather than listed, and a listing that fails is recorded
+by its kind and exit status alone, never with its client's diagnostic, which can echo the filter. The app and upstream join the network by its ID. Extra `--label` keys may not be the
+owner key `run.corten.marketplace.alert-probe` or a key in its dot-delimited namespace
+(`run.corten.marketplace.alert-probe.*`); other keys, even with the same literal prefix, are
+ordinary. A create that returns no ID, whatever its error (a daemon error can follow a create
+the daemon already made), is looked for by a label of its own for up to 10 seconds at teardown,
+each lookup cut to the time left; if nothing appears, its cleanup is reported unconfirmed and
+the run fails, since Docker may still make it. A failed lookup is reported and does not stop
+the sweep by the owner label, and a failed owner-label listing is reported and does not stop an
+ID such a lookup found from being removed, or confirmed absent, by that ID. Before removing a container or network the runner looks it up by
+its own ID: only an empty answer counts as already gone, and any other answer (another full ID)
+leaves its removal unconfirmed and fails the teardown, as `bench/fullstack/idle-close.mjs` does.
+`--deadline` bounds the whole run: work stops starting two minutes before it, leaving that
+time for the app logs, removal and `cleanup.json`. Catalog Contract runs it for React Router
+at 10 iterations per source, including after a failed marketplace gate that built the image,
+with a 240-second probe budget and an 840-second deadline inside the step's 15 minutes. It is
+a functional check, not a measurement.
 
 New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the
 `marketplace-results/v6` summary format. `validateSaved({ folder, round, commit })` from
 `validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
-above exits nonzero for invalid evidence. A split round validates each native `dN` folder;
+above exits nonzero for invalid evidence. Run it from a checkout of the measured commit, such as
+`git worktree add --detach <dir> <measured-full-commit>`: it checks the retained image references
+against the pins of the checkout it loads, so a round measured before a pin moved fails from a
+newer checkout, with a message naming the pin it expected and the measured commit. A split round validates each native `dN` folder;
 the merged summary alone is not a producer folder. The historical summary reporter remains
-available, but its success is not raw-evidence validation. Old folders without the new
-receipts fail closed; do not backfill them with inferred observations.
+available, but its success is not raw-evidence validation. Newer validators may require
+receipt fields that an older producer did not write. Replay older folders from the producer's
+measured checkout, not the latest checkout; do not backfill receipts with inferred observations.
 Raw replay checks the profile, settings, app image label and qualification receipts under the
 same contract. V1 replay is offline only and still requires the original raw receipts.
 The v3 receipts also retain the selected immutable k6 manifest, platform and actual

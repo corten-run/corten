@@ -17,7 +17,7 @@ import { checkCell, combine, emptyCapture, expectedOutcome, oracle, sha256, upst
 import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.mjs";
 import { resourceCoveragePolicy, mergeResourceSamples } from "./resources.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
-import { buildInputPaths, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
+import { buildInputPaths, sourceAuditIdentity, verifySourceAudit, nativeDeployment, validateDeploymentOption, verifyImageDeployment } from "./source-audit.mjs";
 import { replayResponseEvidence } from "./response-evidence.mjs";
 import { replayExecutionInputs } from "./execution-inputs.mjs";
 import { producerEvidenceFiles, qualificationProbeKeys, qualificationScope, replayQualificationEvidence } from "./qualification-evidence.mjs";
@@ -631,7 +631,8 @@ export async function validateSaved({ folder, round, commit } = {}) {
     const options = summary.options;
     measureRequested = options.measure;
     checkpoint = "configuration";
-    keys(options, ["round", "apps", "images", "readbacks", "nativeAudits", "build", "buildRef", "seed", "clients", "repetitions", "measure", "profile", "passes", "duration", "warmup", "calibration", "tailSeconds", "maxCycles", "requestTimeoutMs", "completeDelayMs", "slowDelayMs", "cancelAfterMs", "cleanupMs", "startupTimeoutMs"]);
+    keys(options, ["round", "apps", "images", "readbacks", "nativeAudits", "build", "buildRef", "seed", "clients", "repetitions", "measure", "profile", "passes", "duration", "warmup", "calibration", "tailSeconds", "maxCycles", "requestTimeoutMs", "completeDelayMs", "slowDelayMs", "cancelAfterMs", "cleanupMs", "startupTimeoutMs",
+      ...["djangoDeployment", "springDeployment"].filter((key) => Object.hasOwn(options, key))]);
     equal(options.round, round); assert.ok(["matched", "defaults"].includes(options.profile));
     assert.ok(typeof options.build === "boolean" && typeof options.measure === "boolean");
     assert.match(summary.runId, new RegExp(`^mixed-${round}-[a-f0-9]{8}$`));
@@ -641,6 +642,7 @@ export async function validateSaved({ folder, round, commit } = {}) {
     assert.ok(Number.isSafeInteger(options.clients) && options.clients >= 1 && options.clients <= 32);
     assert.ok(Number.isSafeInteger(options.repetitions) && options.repetitions >= 1 && options.repetitions <= 10);
     assert.ok(Array.isArray(options.apps) && new Set(options.apps).size === options.apps.length && options.apps.every((a) => inventory.includes(a)));
+    validateDeploymentOption(options);
     for (const [key, max] of [["passes", 5], ["duration", 300], ["warmup", 120], ["calibration", 120], ["maxCycles", 128], ["tailSeconds", 120]])
       assert.ok(Number.isSafeInteger(options[key]) && options[key] >= 1 && options[key] <= max);
     checkpoint = "fixture-plan";
@@ -745,6 +747,7 @@ export async function validateSaved({ folder, round, commit } = {}) {
         equal(entry.buildInputs, sourceFiles);
         const image = entry.image; assert.match(image.id, /^sha256:[a-f0-9]{64}$/);
         equal([image.buildCommit, image.buildDirty, image.profile], [commit, "false", options.profile]);
+        verifyImageDeployment(image, nativeDeployment(options, app));
         if (options.build) {
           const hash = fs.digest(`${app}-build-context.tar`);
           equal([entry.contextArchiveSha256, image.contextArchiveSha256, fs.digest(`${app}-build-context.tar`)], [hash, hash, hash]);

@@ -1,0 +1,264 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer, get } from "node:http";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import test from "node:test";
+import { records, writeFixture } from "../../../marketplace/fixtures.mjs";
+import { marketplaceServer } from "../../../marketplace/upstream.mjs";
+import { runQualificationWorker } from "../../../mixed-production/qualify-worker.mjs";
+import { parseArgs } from "../../../mixed-production/run.mjs";
+
+const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", timeout: 30000 }).trim();
+const bounded = (promise, ms = 3000) => {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("HTTP control did not settle")), ms);
+  })]).finally(() => clearTimeout(timer));
+};
+
+const cleanupMs = parseArgs(["w1"]).cleanupMs;
+const listen = (server) => new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "0.0.0.0", resolve); });
+const close = (server) => !server.listening ? null : new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
+
+async function requireCancelledAfter(closed, abortedAt) {
+  const { outcome, at } = await bounded(closed, cleanupMs);
+  assert.equal(outcome, "cancelled");
+  assert.ok(at >= abortedAt, "upstream closed before the client abort");
+  assert.ok(at <= abortedAt + cleanupMs, "upstream drained after the Mixed cleanup bound");
+}
+
+function requireLiveUpstream(response, socket) {
+  assert.ok(!response.destroyed && !response.writableEnded && !socket.destroyed,
+    "upstream was already closing before the client abort");
+}
+
+test("cancellation proof refuses a pre-abort upstream close", async () => {
+  const closed = Promise.resolve({ outcome: "cancelled", at: 1 });
+  await closed;
+  await assert.rejects(requireCancelledAfter(closed, 2), /closed before the client abort/);
+});
+
+test("cancellation proof refuses an upstream socket destroyed before the close callback", { timeout: 10000 }, async () => {
+  const incoming = Promise.withResolvers();
+  const server = createServer((req, response) => incoming.resolve({ response, socket: req.socket }));
+  await listen(server);
+  const caller = get(`http://127.0.0.1:${server.address().port}`, { agent: false });
+  caller.on("error", () => {});
+  try {
+    const { response, socket } = await bounded(incoming.promise);
+    const closed = Promise.withResolvers();
+    let observed = false;
+    response.once("close", () => { observed = true; closed.resolve(); });
+    requireLiveUpstream(response, socket);
+    socket.destroy();
+    assert.equal(observed, false, "close callback must not have run yet");
+    assert.throws(() => requireLiveUpstream(response, socket), /already closing/);
+    await bounded(closed.promise);
+  } finally { caller.destroy(); await close(server); }
+});
+
+async function withCandidate(args, run, { image = process.env.SPRING_MIXED_IMAGE, command = docker } = {}) {
+  assert.match(image ?? "", /^sha256:[a-f0-9]{64}$/, "set SPRING_MIXED_IMAGE to the local candidate image ID");
+  const owner = "spring-mixed-http-" + randomBytes(8).toString("hex");
+  let id;
+  try {
+    id = command("create", "--pull=never", "--name", owner, "--label", "agent.owner=codex", "--label", "agent.task=" + owner,
+      ...(process.platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : []),
+      "-p", "127.0.0.1::8080", "-e", "PROFILE=matched", "-e", `HOSTS=${owner},localhost,127.0.0.1`, ...args, image);
+    assert.match(id, /^[a-f0-9]{64}$/);
+    assert.equal(command("inspect", "--type", "container", "--format", "{{.Image}}", id), image, "created container image differs from the supplied image ID");
+    command("start", id);
+    const port = JSON.parse(command("inspect", "--format", "{{json .NetworkSettings.Ports}}", id))["8080/tcp"][0].HostPort;
+    const base = "http://127.0.0.1:" + port;
+    const deadline = performance.now() + 30000;
+    for (;;) {
+      try {
+        const result = await fetch(base + "/api/marketplace/item_1", { signal: AbortSignal.timeout(1500) });
+        await result.arrayBuffer();
+        if (result.ok) break;
+      } catch { /* The candidate server is still starting. */ }
+      assert.ok(performance.now() < deadline, "Spring Mixed image never became ready");
+      await delay(100);
+    }
+    await run(base, image);
+  } finally {
+    if (/^[a-f0-9]{64}$/.test(id ?? "")) {
+      assert.equal(command("inspect", "--format", '{{index .Config.Labels "agent.task"}}', id), owner);
+      command("rm", "-f", "-v", id);
+    }
+  }
+}
+
+test("Spring Mixed refuses a missing full image ID without pulling or starting", async () => {
+  const image = `sha256:${"a".repeat(64)}`, missing = new Error("No such local image");
+  const calls = [];
+  const command = (...args) => {
+    calls.push(args[0]);
+    assert.equal(args[0], "create");
+    assert.equal(args[1], "--pull=never");
+    assert.equal(args.at(-1), image);
+    throw missing;
+  };
+  await assert.rejects(withCandidate([], () => assert.fail("unexpected candidate"), { image, command }), (error) => error === missing);
+  assert.deepEqual(calls, ["create"]);
+});
+
+test("Spring Mixed refuses and removes an owned container for a different image before starting", async () => {
+  const image = `sha256:${"a".repeat(64)}`, id = "b".repeat(64), calls = [];
+  let owner;
+  const command = (...args) => {
+    calls.push(args[0]);
+    if (args[0] === "create") { owner = args[args.indexOf("--name") + 1]; return id; }
+    if (args[0] === "inspect" && args.at(-2) === "{{.Image}}") {
+      assert.equal(args.at(-1), id);
+      return `sha256:${"c".repeat(64)}`;
+    }
+    if (args[0] === "inspect") {
+      assert.deepEqual(args, ["inspect", "--format", '{{index .Config.Labels "agent.task"}}', id]);
+      return owner;
+    }
+    assert.deepEqual(args, ["rm", "-f", "-v", id]);
+  };
+  await assert.rejects(withCandidate([], () => assert.fail("unexpected candidate"), { image, command }), /created container image differs/);
+  assert.deepEqual(calls, ["create", "inspect", "inspect", "rm"]);
+});
+
+test("Spring Mixed image passes the existing bounded production precheck", { timeout: 120000 }, async (t) => {
+  const fixture = records(), temp = mkdtempSync(join(tmpdir(), "spring-mixed-http-"));
+  const server = marketplaceServer(fixture);
+  try {
+    await listen(server);
+    const port = server.address().port, upstream = "http://127.0.0.1:" + port;
+    writeFixture(join(temp, "marketplace.json"), JSON.stringify(fixture));
+    for (const source of ["fixture", "api"]) await t.test(source, () =>
+      withCandidate(["--mount", `type=bind,source=${temp},target=/fixtures,readonly`, "-e",
+        `MARKETPLACE_SOURCE=${source}`, "-e", "API_BASE=http://host.docker.internal:" + port], async (base, imageId) => {
+        const folder = join(temp, source); mkdirSync(folder);
+        const q = await runQualificationWorker({ app: "spring", source, imageId, nativeProfile: "matched", base, upstream,
+          output: join(folder, "qualification.json") });
+        assert.equal(q.failure, null);
+        assert.equal(q.eligible, true, "Missing required features: " + q.missing.join(", "));
+      }));
+  } finally {
+    try { await close(server); }
+    finally {
+      const rel = relative(tmpdir(), temp); assert.ok(rel && !isAbsolute(rel) && !rel.startsWith(".."));
+      rmSync(temp, { recursive: true });
+    }
+  }
+});
+
+test("Spring Mixed form POST isolates two sessions and refuses only the foreign Origin", { timeout: 60000 }, async () => {
+  const server = marketplaceServer(records());
+  try {
+    await listen(server);
+    await withCandidate(["-e", "MARKETPLACE_SOURCE=api", "-e", "API_BASE=http://host.docker.internal:" + server.address().port], async (base) => {
+      const send = (path, opts) => fetch(base + path, { redirect: "error", signal: AbortSignal.timeout(10000), ...opts });
+      const form = (email) => new URLSearchParams({ email, target_price: "12.50" });
+      const post = (headers, email) => send("/marketplace/en-US/item_1", { method: "POST", headers, body: form(email) });
+      const readback = async (headers) => {
+        const res = await send("/api/alerts", { headers });
+        assert.equal(res.status, 200);
+        return res.json();
+      };
+      const openSession = async (email) => {
+        const accepted = await post({ origin: base }, email);
+        assert.equal(accepted.status, 200);
+        assert.match(accepted.headers.get("content-type") ?? "", /^text\/html\b/);
+        await accepted.arrayBuffer();
+        const cookies = accepted.headers.getSetCookie().filter((value) => /^SESSION=[^;]+/.test(value));
+        assert.equal(cookies.length, 1, "expected one session cookie");
+        return { cookie: cookies[0].split(";", 1)[0] };
+      };
+      const firstEmail = "first@example.test", secondEmail = "second@example.test", followup = "followup@example.test";
+      const first = await openSession(firstEmail), second = await openSession(secondEmail);
+      assert.ok(first.cookie !== second.cookie, "expected distinct sessions");
+      const alert = (email) => ({ item_id: "item_1", email, target_minor: 1250 });
+      assert.deepEqual(await readback(first), [alert(firstEmail)]);
+      assert.deepEqual(await readback(second), [alert(secondEmail)]);
+      assert.deepEqual(await readback({}), [], "anonymous readback must not see the alert");
+
+      const foreign = new URL(base);
+      foreign.hostname = "foreign.example.test";
+      const refused = await post({ ...first, origin: foreign.origin }, followup);
+      assert.equal(refused.status, 403);
+      await refused.arrayBuffer();
+      assert.deepEqual(await readback(first), [alert(firstEmail)]);
+      const allowed = await post({ ...first, origin: base }, followup);
+      assert.equal(allowed.status, 200);
+      await allowed.arrayBuffer();
+      assert.deepEqual(await readback(first), [alert(firstEmail), alert(followup)]);
+      assert.deepEqual(await readback(second), [alert(secondEmail)]);
+    });
+  } finally { await close(server); }
+});
+
+test("Spring Mixed image cancels real marketplace reads at headers and during the body", { timeout: 120000 }, async (t) => {
+  const { item_1 } = records(), body = Buffer.from(JSON.stringify(item_1));
+  const trace = "00-11111111111111111111111111111111-2222222222222222-00";
+  let hold;
+  const server = createServer((req, res) => {
+    if (req.method !== "GET" || req.url !== "/marketplace/records/item_1") { res.writeHead(404).end(); return; }
+    const headers = { "content-type": "application/json", "content-length": body.length };
+    if (!hold) { res.writeHead(200, headers).end(body); return; }
+    const active = hold; active.requests++;
+    const split = active.partial ? 32 : 0;
+    const socket = req.socket;
+    res.once("close", () => {
+      active.close = { outcome: res.writableFinished ? "finished" : "cancelled", at: performance.now() };
+      active.closed.resolve(active.close);
+    });
+    if (active.partial) res.writeHead(200, headers).write(body.subarray(0, split));
+    active.entered.resolve({ trace: req.headers.traceparent, requireLive: () => requireLiveUpstream(res, socket), finish() {
+      if (!active.partial) res.writeHead(200, headers);
+      res.end(body.subarray(split));
+    } });
+  });
+  try {
+    await listen(server);
+    await withCandidate(["-e", "MARKETPLACE_SOURCE=api", "-e", "API_BASE=http://host.docker.internal:" + server.address().port], async (base) => {
+      for (const locale of ["en-US", "fr-FR", "de-DE"]) for (const partial of [false, true]) {
+        for (const abort of [false, true]) await t.test(`${locale} ${partial ? "body" : "headers"} ${abort ? "disconnect" : "connected"}`, async () => {
+          const active = { partial, requests: 0, entered: Promise.withResolvers(), closed: Promise.withResolvers() };
+          hold = active;
+          let responded = false;
+          const result = Promise.withResolvers();
+          const caller = get(base + "/marketplace/" + locale + "/item_1", { headers: { traceparent: trace }, agent: false }, async (res) => {
+            responded = true;
+            try {
+              const chunks = [];
+              for await (const chunk of res) chunks.push(chunk);
+              result.resolve({ status: res.statusCode, html: Buffer.concat(chunks).toString() });
+            } catch { result.resolve(null); }
+          });
+          caller.once("error", () => result.resolve(null));
+          try {
+            const upstream = await bounded(active.entered.promise);
+            assert.equal(upstream.trace, trace);
+            await delay(abort ? 100 : cleanupMs + 150);
+            assert.equal(responded, false, "rendering must still wait for the upstream");
+            assert.ok(!active.close, "upstream closed while the client was still connected");
+            upstream.requireLive();
+            if (abort) {
+              assert.ok(!caller.destroyed && caller.socket && !caller.socket.destroyed, "caller was already closed before the client abort");
+              const abortedAt = performance.now();
+              caller.destroy();
+              await requireCancelledAfter(active.closed.promise, abortedAt);
+            } else {
+              upstream.finish();
+              const page = await bounded(result.promise);
+              assert.equal(page?.status, 200);
+              assert.ok(page.html.includes(`lang="${locale}"`) && page.html.includes("<h1>"));
+              assert.equal((await bounded(active.closed.promise)).outcome, "finished");
+            }
+            assert.equal(active.requests, 1);
+          } finally { caller.destroy(); hold = undefined; }
+        });
+      }
+    });
+  } finally { await close(server); }
+});

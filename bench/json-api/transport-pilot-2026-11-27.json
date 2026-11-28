@@ -1,0 +1,129 @@
+{
+  "workload": "marketplace-v2 fixture, HTTP/1.1, identity/gzip/reconnect-10",
+  "appSource": "a8ddd78d33ec4af768d83f6253c68b67d3032567",
+  "kind": "local transport pilot; aggregated per-pass observations, not a group round",
+  "appCpus": "1",
+  "memoryBytes": 1073741824,
+  "generatorCpus": "8,9",
+  "generatorNode": "26.13.1",
+  "lanes": 4,
+  "requestsPerLaneAtRate": {"10": 30, "30": 60},
+  "warmupRequestsPerLane": 30,
+  "columns": ["pass","arm","status","warmupStatus","generatorLimitedIncludingWarmup","successes","failures","dropped","opened","closed","bodyBytesPerSuccess","appCpuUsecPerSuccess","p99Ms","successfulRps","maxStartLagP99MsIncludingWarmup","maxEventLoopUtilizationPctIncludingWarmup"],
+  "attempts": [
+    {
+      "app": "corten",
+      "rate": 30,
+      "image": "sha256:82955a13fcf11f7b7bccfc0669ecda9cb0389d0a958a162c5271cdb59851e5be",
+      "driverRevision": "a8ddd78d33ec4af768d83f6253c68b67d3032567",
+      "outputSha256": "828a72fec5aeb34919bff0a67459cb9b4d8acf23f3e7d7f0569b3da164a2de7a",
+      "eligible": ["gzip","reconnect-10"],
+      "rows": [
+        [1,"identity","incomplete","observed",true,232,0,8,4,4,5947.8,486.38,36.65,29.1094,126.5,28],
+        [1,"gzip","observed","observed",false,240,0,0,4,4,1361,589.07,80.89,30.0888,20.68,14.06],
+        [1,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,739.68,28.62,30.1221,23.08,8.77],
+        [2,"gzip","observed","observed",false,240,0,0,4,4,1361,893.51,22.78,30.1183,12.32,7.27],
+        [2,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,976.8,47.98,30.1205,25.32,6.82],
+        [2,"identity","observed","observed",false,240,0,0,4,4,5947.67,615.22,24.33,30.0931,25.7,4.85],
+        [3,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,554.45,24.06,30.1223,13.23,5.1],
+        [3,"identity","observed","observed",false,240,0,0,4,4,5947.67,600.64,32.06,30.111,15.19,4.25],
+        [3,"gzip","observed","observed",false,240,0,0,4,4,1361,677.24,30.75,30.1156,16.67,7.05]
+      ]
+    },
+    {
+      "app": "axum",
+      "rate": 30,
+      "image": "sha256:663ac270251e5237c68d1bdac2c25257a50b28ab05761e97b91ad54d2e7c747a",
+      "driverRevision": "a8ddd78d33ec4af768d83f6253c68b67d3032567",
+      "outputSha256": "2f5a9c9cb4d463ed1761022e08dc12790a292dd5efb0e3f790e64a69967190c0",
+      "eligible": ["identity","reconnect-10"],
+      "rows": [
+        [1,"identity","observed","observed",false,240,0,0,4,4,5947.67,532.64,17.35,30.1097,14.5,11.03],
+        [1,"gzip","unsupported","unsupported",false,0,240,0,4,4,null,null,null,0,6.61,6.28],
+        [1,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,431.17,27.7,30.1197,13.54,5.33],
+        [2,"gzip","unsupported","unsupported",false,0,240,0,4,4,null,null,null,0,9.82,5.88],
+        [2,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,589.5,21.54,30.1188,10.28,5.31],
+        [2,"identity","observed","observed",false,240,0,0,4,4,5947.67,316.48,31.99,30.1179,8.89,4.83],
+        [3,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,462.47,22.33,30.1236,9.13,4.75],
+        [3,"identity","observed","observed",false,240,0,0,4,4,5947.67,451.84,43.97,30.1205,7.95,4.06],
+        [3,"gzip","unsupported","unsupported",false,0,240,0,4,4,null,null,null,0,50.13,4.5]
+      ]
+    },
+    {
+      "app": "ntex",
+      "rate": 30,
+      "image": "sha256:e860e0348fc70ec06b00cf8d377319b1565cd332d256abd324ea3bcf7af428ca",
+      "driverRevision": "a8ddd78d33ec4af768d83f6253c68b67d3032567",
+      "outputSha256": "881cabf3fa1e3a359d2df2e27379a786a3f8a58cd357b7972fa41e10752362d5",
+      "eligible": ["gzip","reconnect-10"],
+      "rows": [
+        [1,"identity","incomplete","observed",true,237,0,3,4,4,5947.67,504.25,21.55,29.7407,72.99,13.05],
+        [1,"gzip","observed","observed",false,240,0,0,4,4,1541.67,466.8,15.24,30.1137,17.85,7.29],
+        [1,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,408.71,7.83,30.1244,6.73,4.31],
+        [2,"gzip","observed","observed",false,240,0,0,4,4,1541.67,527.6,16.64,30.1188,23.51,5.88],
+        [2,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,393.46,10.54,30.1199,4.84,4.05],
+        [2,"identity","observed","observed",false,240,0,0,4,4,5947.67,489.74,22.05,30.1028,13.63,4.4],
+        [3,"reconnect-10","observed","observed",false,240,0,0,24,24,5947.67,536,44.02,30.1214,40.36,7.24],
+        [3,"identity","observed","observed",false,240,0,0,4,4,5947.67,654.06,31.45,30.1143,29.08,7.2],
+        [3,"gzip","observed","observed",false,240,0,0,4,4,1541.67,715.49,25.02,30.0663,15.32,7.58]
+      ]
+    },
+    {
+      "app": "corten",
+      "rate": 10,
+      "image": "sha256:82955a13fcf11f7b7bccfc0669ecda9cb0389d0a958a162c5271cdb59851e5be",
+      "driverRevision": "f8709c01086b48fb7953eb64fc5e4ef38bbce5f0",
+      "outputSha256": "ade7f279c45112b48f5a0e84611e9a33aa8b750a6cb0762d4d1db7b5e64da5b2",
+      "eligible": ["identity","gzip","reconnect-10"],
+      "rows": [
+        [1,"identity","observed","observed",false,120,0,0,4,4,5947.67,446.22,89.98,10.0814,52.04,7.24],
+        [1,"gzip","observed","observed",false,120,0,0,4,4,1361,527.8,139.57,10.0603,82.63,5.19],
+        [1,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,417.52,28.8,10.0827,14.51,5.19],
+        [2,"gzip","observed","observed",false,120,0,0,4,4,1361,512.02,20.78,10.0774,35.7,3.94],
+        [2,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,646.09,22.61,10.0816,15.94,1.88],
+        [2,"identity","observed","observed",false,120,0,0,4,4,5947.67,529.7,22.7,10.0825,15.42,2.07],
+        [3,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,482.71,24.97,10.0703,5.99,1.54],
+        [3,"identity","observed","observed",false,120,0,0,4,4,5947.67,552.23,252.12,10.0702,44.59,2.38],
+        [3,"gzip","observed","observed",false,120,0,0,4,4,1361,436.09,298.4,10.0672,75.66,2.64]
+      ]
+    },
+    {
+      "app": "axum",
+      "rate": 10,
+      "image": "sha256:663ac270251e5237c68d1bdac2c25257a50b28ab05761e97b91ad54d2e7c747a",
+      "driverRevision": "f8709c01086b48fb7953eb64fc5e4ef38bbce5f0",
+      "outputSha256": "fff510b2af96bd0f7a9e14f43bd23550adbed38c41191fd19cef9eff3deb9342",
+      "eligible": ["identity","reconnect-10"],
+      "rows": [
+        [1,"identity","observed","observed",false,120,0,0,4,4,5947.67,446.43,164.63,10.0407,59.94,8.32],
+        [1,"gzip","unsupported","unsupported",false,0,120,0,4,4,null,null,null,0,84.7,5.03],
+        [1,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,551.7,66.84,10.0821,51.07,3.32],
+        [2,"gzip","unsupported","unsupported",false,0,120,0,4,4,null,null,null,0,22.08,2.92],
+        [2,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,691.22,55.29,10.0805,13.72,2.23],
+        [2,"identity","observed","observed",false,120,0,0,4,4,5947.67,516.23,41.57,10.0824,25.25,2.17],
+        [3,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,576.15,44.51,10.0759,34.07,3],
+        [3,"identity","observed","observed",false,120,0,0,4,4,5947.67,665.12,25.41,10.0771,16.22,2.43],
+        [3,"gzip","unsupported","unsupported",false,0,120,0,4,4,null,null,null,0,24.1,2.68]
+      ]
+    },
+    {
+      "app": "ntex",
+      "rate": 10,
+      "image": "sha256:e860e0348fc70ec06b00cf8d377319b1565cd332d256abd324ea3bcf7af428ca",
+      "driverRevision": "f8709c01086b48fb7953eb64fc5e4ef38bbce5f0",
+      "outputSha256": "28f7b1bbf463bb5fe004bd17941ea6541efad6575a8b8232926266db49b8120a",
+      "eligible": ["identity","gzip","reconnect-10"],
+      "rows": [
+        [1,"identity","observed","observed",false,120,0,0,4,4,5947.67,827.07,44.88,10.0815,28.37,5.57],
+        [1,"gzip","observed","observed",false,120,0,0,4,4,1541.67,864.26,65.73,10.0822,164.11,4.16],
+        [1,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,1221.67,19.05,10.0831,33.25,3.8],
+        [2,"gzip","observed","observed",false,120,0,0,4,4,1541.67,691.86,17.87,10.0469,12.7,1.97],
+        [2,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,849.78,29.9,10.0807,17.8,2.13],
+        [2,"identity","observed","observed",false,120,0,0,4,4,5947.67,1021.13,21.54,10.0771,30.72,2.53],
+        [3,"reconnect-10","observed","observed",false,120,0,0,12,12,5947.67,800.43,20.59,10.0761,12.06,3.69],
+        [3,"identity","observed","observed",false,120,0,0,4,4,5947.67,645.16,23.38,10.0706,13.34,2.3],
+        [3,"gzip","observed","observed",false,120,0,0,4,4,1541.67,854.67,20.14,10.0754,11.51,2.36]
+      ]
+    }
+  ]
+}

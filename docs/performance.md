@@ -16,6 +16,12 @@ its own baseline; historical evidence remains under its original workload and co
 Corten formatted values per request while some others used stored strings or non-localized formatting. Those
 tables describe historical implementations, not valid general framework speed rankings.
 
+For a lean server-rendered page, the [catalog-page group](../bench/catalog/README.md) includes
+Proa. For typed record serialization, the [JSON API group](../bench/json-api/README.md)
+includes ntex alongside axum/Maud. Neither addition changes a historical ranking. The
+[optional transport comparison](../bench/json-api/README.md#optional-transport-comparison)
+isolates gzip and connection reuse without adding cases to the default group.
+
 | Question | Evidence to read |
 |---|---|
 | How fast does it feel? | Phone interactivity, navigation and form-update latency, transferred bytes |
@@ -58,6 +64,31 @@ ETag and downstream-readiness exceptions are disclosed in the group contract.
 
 Report these as short-window medians and ranges, with errors, utilization and headroom limits;
 they do not guarantee a finish by 7 am or establish small differences without repeatability.
+These results do not establish whether each adapter, the JIT runtimes in particular, had stopped
+changing by the end of the 10-second warmup, or whether any app's memory and tail latency hold
+over longer runs. The [convergence and soak passes](../bench/marketplace/README.md#convergence-and-soak-passes)
+take screening readings toward those questions outside the nightly; they do not establish
+either. A convergence pass gives a cell a screening reading of throughput, not a certificate
+of steady state: within a stated tolerance from a named window
+to the end (every window within 10% of the tail median, three-window medians within 5%, trend
+within 5%, the onset window's own throughput within 5%, and medians of the first 60 s and of the
+60 s before the tail no more than 5% above the tail median, comparisons between medians, not of
+each window), or not within it at the end. A cell that failed (a failed request, an app that
+stopped, restarted, was replaced or was OOM-killed, or an event stream that could not confirm the
+load) and a cell whose final 60-second median is zero get no reading. Oscillation or drift inside those bounds reads as within
+tolerance, a last-window shift under 10% can go undetected, the onset is resolved to one window, and
+readings at different window lengths are not comparable. k6's raw engine clock and the app
+container's before-and-after inspect are checked only while a pass runs; its saved summary records
+the outcome but cannot re-verify them. A soak reports memory at the start and end and p99 per
+interval as figures, with no criterion for whether they held; only its fixed rate is reported as
+held (sustained in every interval) or not. No report concludes from a pass that a
+timed warmup is long enough: the timed warmup is set only by a separate reviewed change from a
+saved pass that is like-for-like with the rounds it will time (the same commit, adapter images,
+fixture, upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, startup timeout,
+memory limits, encoding, the warmup's 32 users and the same cold start). An adapter change or
+rebuild (a new commit or image of any measured adapter) needs a new pass, as does a runtime or
+framework version change. None has been saved yet, so these results make no claim either way
+about warmth.
 Build times, instructions, bytes and interactive timing are not measured by this suite yet.
 The older measurements below remain historical evidence for their own workloads, not v2
 results. The nonlocalized [catalog](../bench/catalog/README.md) remains an optional, separate
@@ -129,6 +160,8 @@ Feature contract: marketplace-production/v1. Popular and performance-oriented ca
 | leptos | excluded, not timed | fixture: crossSite; fixture: json404; fixture: json405; fixture: host; fixture: bigHead; fixture: live; fixture: unfinishedHead; fixture: connectionCap; api: crossSite; api: json404; api: json405; api: json500; api: host; api: bigHead; api: live; api: unfinishedHead; api: connectionCap |
 
 Warning: Short 15s phase windows (10s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.
+
+Convergence evidence: none provided to this report (it was run without --convergence), which does not say whether a pass exists. This report does not establish whether this round's 10s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.
 
 ### en-US
 
@@ -492,7 +525,7 @@ compresses its page and Corten does not tag it (SvelteKit and Rails tag every pa
 A browser's request costs Corten more than the page. Measured in process on the item page,
 hashing its `ETag` adds 27,700 user instructions to the 86,489 of the request the rounds send,
 compressing it with zstd a further 230,000, and brotli 1, which a client without zstd was sent
-until a page of that size went to it as gzip ([design Choice 73](design.md#choice-request-gzip):
+until a page of that size went to it as gzip ([design Choice 78](design.md#choice-request-gzip):
 431,000 fewer instructions on another item page), about 690,000 in place of zstd's
 ([details](../bench/fullstack/README.md#what-a-browsers-request-costs-corten-callgrind-2026-11-06)).
 

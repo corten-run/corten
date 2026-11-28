@@ -6,8 +6,9 @@ import { createRequire } from "node:module";
 import { chromium } from "@playwright/test";
 import { records } from "./fixtures.mjs";
 import { expectedPage, labels } from "./records.mjs";
-import { alertReady, alertResponse, alignNumberSpaces, comparePage, compareStyles, liveViewAlertEvent, liveViewAlertReply, liveViewPollEvent, liveViewPollReply, liveViewPollSession, navigationFinished, numericFields, numericText, observeAlertTransport, snapshotPage, styleSnapshot, submitAlert, verifyNumberSpaces } from "./check.mjs";
+import { alertCases, alertReady, alertResponse, alignNumberSpaces, comparePage, compareStyles, liveViewAlertEvent, liveViewAlertReply, liveViewPollEvent, liveViewPollReply, liveViewPollSession, navigationFinished, numericFields, numericText, observeAlertTransport, snapshotPage, styleSnapshot, submitAlert, verifyNumberSpaces } from "./check.mjs";
 import { referenceHtml } from "./reference.mjs";
+import { probeAlertCase, profile as probeProfile } from "./alert-probe.mjs";
 
 test("LiveView form frames require the native root, origin, V2 types and exact unique fields", () => {
   const action = "https://localhost/marketplace/fr-FR/item_1", socket = "wss://localhost/live/websocket?vsn=2.0.0";
@@ -321,6 +322,99 @@ test("script-free alert POST checks the new document at the same URL", async () 
   } finally { await browser.close(); }
 });
 
+// #1251: a page without JavaScript runs no animation-frame or timer callbacks, so an in-page poll that
+// first ran before the parser reached the message never ran again, and timed out with a correct document
+// as r19 did. These controls hold the POST document's message until the readiness wait has evaluated its
+// predicate on that document and missed, so a late first evaluation cannot make the old wait pass.
+// Playwright's evaluations run without page JavaScript, so a main-world hook on querySelector, installed
+// once the POST document commits, reports each miss with a request the server waits for.
+const missPath = "/__observed-miss";
+function reportMisses(page) {
+  let armed = false;
+  page.on("request", (request) => { if (request.method() === "POST" && request.isNavigationRequest()) armed = true; });
+  page.on("framenavigated", (frame) => {
+    if (!armed || frame !== page.mainFrame()) return;
+    frame.evaluate((path) => {
+      const original = Document.prototype.querySelector;
+      Document.prototype.querySelector = function (selector) {
+        const found = original.call(this, selector);
+        if (selector === ".marketplace__message" && !found?.textContent.trim()) fetch(path).catch(() => {});
+        return found;
+      };
+    }, missPath).catch(() => {});
+  });
+}
+// A server whose POST document stops before its message until a miss is reported.
+async function heldMessageServer(t, { head, rest }) {
+  let missed;
+  const miss = new Promise((resolve) => { missed = resolve; });
+  const server = createServer(async (req, res) => {
+    if (req.url === missPath) { missed(); res.writeHead(204); return res.end(); }
+    res.writeHead(200, { "content-type": "text/html" });
+    if (req.method !== "POST") return res.end(head("") + rest(""));
+    for await (const _ of req);
+    res.write(head("message") + "<!--" + " ".repeat(4096) + "-->");
+    await miss;
+    res.end(rest("message"));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  return { base: `http://127.0.0.1:${server.address().port}`, miss };
+}
+const simpleForm = { head: () => '<form method="post"><input name="email" value="invalid"><button type="submit">Send</button></form>',
+  rest: (message) => `<p class="marketplace__message">${message ? "Enter a valid email address." : ""}</p>` };
+async function scriptFreePage(t, base, timeout) {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  context.setDefaultTimeout(timeout);
+  const page = await context.newPage();
+  reportMisses(page);
+  await page.goto(`${base}/marketplace/en-US/item_1`);
+  return page;
+}
+
+test("script-free alert POST waits for a message the parser reaches after its wait first missed (#1251)", { timeout: 20000 }, async (t) => {
+  const { base, miss } = await heldMessageServer(t, simpleForm);
+  const page = await scriptFreePage(t, base, 5000);
+  await submitAlert(page, page.locator("form"), false);
+  await miss;
+  assert.equal(await page.locator(".marketplace__message").textContent(), "Enter a valid email address.");
+});
+
+test("script-free alert readiness keeps the old predicate's DOM textContent semantics", { timeout: 30000 }, async (t) => {
+  // Where Playwright's text engine and textContent differ, readiness follows textContent, as the old
+  // in-page predicate did: an input's value is not text, and unexecuted script text is.
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const submit = async (message, timeout) => {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    t.after(() => context.close());
+    context.setDefaultTimeout(timeout);
+    const page = await context.newPage();
+    await page.route("http://localhost/**", (route) => route.fulfill({ contentType: "text/html",
+      body: `<form method="post"><button type="submit">Send</button></form><p class="marketplace__message">${route.request().method() === "POST" ? message : ""}</p>` }));
+    await page.goto("http://localhost/marketplace/en-US/item_1");
+    return submitAlert(page, page.locator("form"), false);
+  };
+  await assert.rejects(submit('<input type="button" value="result">', 1000), (error) => /Timeout 1000ms exceeded/.test(error.cause.message));
+  await assert.rejects(submit(" \n\t ", 1000), (error) => /Timeout 1000ms exceeded/.test(error.cause.message));
+  await submit("<script>result</script>", 5000);
+});
+
+test("the old in-page poll misses the same held message (#1251 negative control)", { timeout: 20000 }, async (t) => {
+  // The control for the test above: the same server, with page.waitForFunction's old predicate.
+  const { base, miss } = await heldMessageServer(t, simpleForm);
+  const page = await scriptFreePage(t, base, 5000);
+  await Promise.all([page.waitForResponse((r) => r.request().method() === "POST"), page.locator('[type="submit"]').click()]);
+  await assert.rejects(page.waitForFunction(() => document.querySelector(".marketplace__message")?.textContent.trim().length > 0, null, { timeout: 2000 }),
+    /Timeout 2000ms exceeded/);
+  await miss;
+  // The message it missed was released after its first evaluation and is in the document.
+  await page.waitForLoadState("load");
+  assert.equal(await page.locator(".marketplace__message").textContent(), "Enter a valid email address.");
+});
+
 test("alert failure retains the exact form case, response and original timeout", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -450,4 +544,99 @@ test("geometry permits only verified numeric spaces, not different content, mark
       } finally { await context.close(); }
     }
   } finally { await browser.close(); }
+});
+
+// The #1251 probe: the gate's script-free phone alert cases with independent POST, redirect, document and message checks.
+// A real local server, so redirects and unfinished bodies behave as they would from an app.
+async function probeCase(t, respond, { timeout = 15000, which = 2, misses = false } = {}) {
+  const r = records().item_1;
+  const [email, price, message] = alertCases("en-US", r)[which];
+  const server = createServer((req, res) => {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const page = (text) => referenceHtml(r, "en-US", { message: text }).replace('<base href="http://localhost', `<base href="${origin}`);
+    respond(req, res, { page, message, origin });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const context = await browser.newContext(probeProfile);
+  context.setDefaultTimeout(timeout);
+  const page = await context.newPage();
+  if (misses) reportMisses(page);
+  return probeAlertCase(page, { base: `http://127.0.0.1:${server.address().port}`, locale: "en-US", record: r, email, price, message });
+}
+const send = (res, body, status = 200, headers = {}) => { res.writeHead(status, { "content-type": "text/html", ...headers }); res.end(body); };
+
+test("alert probe accepts the gate's exact document POST and message", async (t) => {
+  const result = await probeCase(t, (req, res, { page, message }) => send(res, page(req.method === "POST" ? message : "")));
+  assert.ok(result.ms >= result.submitted && result.submitted >= result.loaded);
+});
+
+test("alert probe accepts a document POST whose alert section arrives after its wait first missed (#1251)", async (t) => {
+  let missed;
+  const miss = new Promise((resolve) => { missed = resolve; });
+  await probeCase(t, async (req, res, { page, message }) => {
+    if (req.url === missPath) { missed(); res.writeHead(204); return res.end(); }
+    if (req.method !== "POST") return send(res, page(""));
+    for await (const _ of req);
+    const [before, after] = page(message).split('<section class="marketplace__alert">');
+    res.writeHead(200, { "content-type": "text/html" }); res.write(before);
+    await miss;
+    res.end('<section class="marketplace__alert">' + after);
+  }, { timeout: 5000, misses: true });
+});
+
+test("alert probe rejects a redirected POST even when the redirect shows the message", async (t) => {
+  await assert.rejects(probeCase(t, (req, res, { page, message, origin }) => req.method === "POST"
+    ? send(res, "", 303, { location: `${origin}/marketplace/en-US/item_1?done=1` })
+    : send(res, page(req.url.endsWith("done=1") ? message : ""))), (error) => {
+    assert.match(error.cause.message, /the POST must not redirect/);
+    assert.equal(error.diagnostic.posts[0].status, 303);
+    assert.match(error.diagnostic.posts[0].redirectedTo, /done=1$/);
+    assert.deepEqual(error.diagnostic.documents.map((d) => [d.method, d.redirectedFrom !== null]), [["POST", false], ["GET", true]]);
+    return true;
+  });
+});
+
+test("alert probe rejects a POST answered with a refresh to a GET that shows the message", async (t) => {
+  // Same URL, different document: GET, POST, then the refresh's GET renders the right alert.
+  let posted = false;
+  await assert.rejects(probeCase(t, (req, res, { page, message }) => {
+    // An explicit URL: a bare refresh of a POST document re-posts it in Chromium.
+    if (req.method === "POST") { posted = true; return send(res, `<meta http-equiv="refresh" content="0; url=${req.url}">`); }
+    send(res, page(posted ? message : ""));
+  }), (error) => {
+    assert.match(error.cause.message, /the inspected document is the POST's response/);
+    assert.deepEqual(error.diagnostic.documents.map((d) => d.method), ["POST", "GET"]);
+    assert.equal(error.diagnostic.documents[1].redirectedFrom, null);
+    assert.equal(error.diagnostic.posts[0].status, 200);
+    return true;
+  });
+});
+
+test("alert probe rejects a different message and keeps the exact case", async (t) => {
+  await assert.rejects(probeCase(t, (req, res, { page }) => send(res, page(req.method === "POST" ? "Alert set." : ""))), (error) => {
+    assert.match(error.cause.message, /exact alert message/);
+    assert.deepEqual(error.diagnostic.case, { locale: "en-US", id: "item_1", email: "todd@example.test", price: "1234.50" });
+    assert.equal(error.diagnostic.message, "Alert set.");
+    assert.equal(error.diagnostic.posts[0].status, 200);
+    return true;
+  });
+});
+
+test("alert probe bounds its diagnostics when the POST document stalls after its headers", { timeout: 20000 }, async (t) => {
+  const started = Date.now();
+  await assert.rejects(probeCase(t, (req, res, { page }) => {
+    // Headers and the page up to its alert section, then nothing more: the response is never finished.
+    if (req.method === "POST") { res.writeHead(200, { "content-type": "text/html" }); res.write(page("").split('<section class="marketplace__alert">')[0]); }
+    else send(res, page(""));
+  }, { timeout: 1000, which: 0 }), (error) => {
+    assert.match(error.cause.message, /Alert POST 200 .*JS=false; fields=.*invalid/);
+    assert.equal(error.diagnostic.posts.length, 1);
+    assert.equal(error.diagnostic.posts[0].navigation, true);
+    for (const key of ["document", "error"]) assert.ok(error.diagnostic[key].length <= 2048, key);
+    return true;
+  });
+  assert.ok(Date.now() - started < 10000, "diagnostics must not wait for the unfinished document");
 });

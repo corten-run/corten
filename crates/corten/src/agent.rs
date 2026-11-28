@@ -266,9 +266,16 @@ impl From<serde_json::Error> for ToolError {
     }
 }
 
-type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, ToolError>> + Send>>;
+type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, Ran>> + Send>>;
 /// A tool, given who [`Tools::auth`] says is calling: its output as JSON text.
 type Handler<A> = Arc<dyn Fn(A, Value) -> BoxFuture<String> + Send + Sync>;
+
+/// Why a tool's call ended without its output: what the tool answered, or Corten's reading of its
+/// input or writing of its output, which is no tool's own answer.
+enum Ran {
+    Tool(ToolError),
+    Corten(ToolError),
+}
 type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 
 /// Where an MCP client gets a token for the endpoint: its OAuth 2.0 protected-resource metadata
@@ -524,6 +531,8 @@ pub struct Tools<A = ()> {
     name: String,
     version: String,
     auth: Auth<A>,
+    /// [`Tools::auth`] was set: a tool's answer is for the caller it found, never shared.
+    checked: bool,
     tools: Arc<BTreeMap<String, Tool<A>>>,
     authorization: Option<Arc<Authorization>>,
     challenge: Arc<OnceLock<Protected>>,
@@ -537,6 +546,7 @@ impl<A> Clone for Tools<A> {
             name: self.name.clone(),
             version: self.version.clone(),
             auth: self.auth.clone(),
+            checked: self.checked,
             tools: self.tools.clone(),
             authorization: self.authorization.clone(),
             challenge: self.challenge.clone(),
@@ -554,6 +564,7 @@ impl Tools<()> {
             name: name.into(),
             version: version.into(),
             auth: Arc::new(|_| Ok(())),
+            checked: false,
             tools: Arc::default(),
             authorization: None,
             challenge: Arc::default(),
@@ -562,7 +573,10 @@ impl Tools<()> {
 
     /// Checks every tool call before it runs (with an [`Authorization`], every request to the
     /// endpoint): `Err(ToolError::Unauthorized)` answers 401, and `Ok(caller)` is passed to the
-    /// tool. It runs once per request. Set it before adding tools.
+    /// tool. It runs once per request. Set it before adding tools. A tool's answer is then that
+    /// caller's, as an answer that reads a [`crate::Caller`] is: never shared, whatever a middleware
+    /// writes on it; with an [`Authorization`], so is every answer the check lets through (the
+    /// list of tools, `initialize`).
     pub fn auth<A, F>(self, auth: F) -> Tools<A>
     where
         F: Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync + 'static,
@@ -572,6 +586,7 @@ impl Tools<()> {
             name: self.name,
             version: self.version,
             auth: Arc::new(auth),
+            checked: true,
             tools: Arc::default(),
             authorization: self.authorization,
             challenge: self.challenge,
@@ -665,13 +680,13 @@ impl<A: Send + 'static> Tools<A> {
         let handler: Handler<A> = Arc::new(move |caller, args| {
             let handler = handler.clone();
             Box::pin(async move {
-                let input: I = serde_json::from_value(args)?;
-                let output = handler(caller, input).await?;
+                let input: I = serde_json::from_value(args).map_err(|error| Ran::Corten(error.into()))?;
+                let output = handler(caller, input).await.map_err(Ran::Tool)?;
                 // A value in the output that its `ToJson` cannot write (a field whose own
                 // `Serialize` fails) panics there; the call answers it as the tool's internal
                 // error, a JSON-RPC result the agent reads, as it did when serde wrote outputs.
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| output.to_json()))
-                    .map_err(|panic| ToolError::internal(crate::task::panic_message(&*panic).to_owned()))
+                    .map_err(|panic| Ran::Corten(ToolError::internal(crate::task::panic_message(&*panic).to_owned())))
             })
         });
         let tools = Arc::get_mut(&mut self.tools).expect("add tools before serving");
@@ -723,12 +738,10 @@ impl<A: Send + 'static> Tools<A> {
         // 400 (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header"), so a message
         // that cannot be read is one too, with the same JSON-RPC error as without the header.
         let speaks = speaks(&headers);
+        // The protocol's `200` with a JSON-RPC error, or that `400`.
         let malformed = |code, message: &str| {
-            let mut res = reply(Value::Null, Err((code, message.into())));
-            if !speaks {
-                *res.status_mut() = StatusCode::BAD_REQUEST;
-            }
-            res
+            let status = if speaks { StatusCode::OK } else { StatusCode::BAD_REQUEST };
+            rpc_error(Value::Null, status, code, message.into())
         };
         let message: Value = match serde_json::from_slice(body) {
             Ok(value) => value,
@@ -758,65 +771,75 @@ impl<A: Send + 'static> Tools<A> {
             }
         }
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+        // Behind the endpoint-wide check (an `Authorization` with `Tools::auth`), every answer it
+        // let through is the caller's, the list of tools and `initialize` included: a shared copy
+        // would answer a request the check would have turned away.
+        let gated = self.checked && caller.is_some();
+        let answer = |res: Response| if gated { crate::cache::personal(res) } else { res };
         let Some(id) = id else {
             // A notification (`notifications/initialized`) or a response: nothing to answer.
-            return StatusCode::ACCEPTED.into_response();
+            return answer(StatusCode::ACCEPTED.into_response());
         };
         if message.get("jsonrpc") != Some(&json!("2.0")) || method.is_empty() {
-            return reply(id, Err((-32600, "invalid request".into())));
+            return rpc_error(id, StatusCode::OK, -32600, "invalid request".into());
         }
         let params = message.get("params").cloned().unwrap_or(Value::Null);
+        // A tool's answer to a caller `Tools::auth` found is that caller's: never shared, though it
+        // goes out untyped and the request's `Authorization` alone does not make it private. A
+        // shared copy would also answer a request the check would have turned away.
+        let for_caller = self.checked;
         let result = match method {
             "tools/call" => match self.call(&headers, caller, params).await {
                 Err(CallError::Refused(error)) => return self.refused(id, error, &headers),
-                Err(CallError::Rpc(code, message)) => Err((code, message)),
+                Err(CallError::Rpc(code, message)) => return rpc_error(id, StatusCode::OK, code, message),
+                // A result the endpoint made in the tool's place: Corten's, as its errors are.
+                Err(CallError::Failed(result)) => return crate::cache::unshared(reply_raw(&id, &result)),
+                Ok(result) if for_caller => return crate::cache::personal(reply_raw(&id, &result)),
                 Ok(result) => return reply_raw(&id, &result),
             },
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
                 let version = PROTOCOL_VERSIONS.iter().find(|v| **v == asked).unwrap_or(&PROTOCOL_VERSIONS[0]);
-                Ok(json!({
+                json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": { "name": self.name, "version": self.version },
-                }))
+                })
             }
-            "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": self.list() })),
-            _ => Err((-32601, format!("method not found: {method}"))),
+            "ping" => json!({}),
+            "tools/list" => json!({ "tools": self.list() }),
+            _ => return rpc_error(id, StatusCode::OK, -32601, format!("method not found: {method}")),
         };
-        reply(id, result)
+        answer(reply(id, Ok(result)))
     }
 
     /// A request [`Tools::auth`] turned away, before any tool ran: 401 or 403 with the challenge
     /// for a token the check did not take, 403 for a caller it knows and refuses, 503 when it
-    /// could not check (its provider is down), 500 (logged) for anything else. Never the answer.
+    /// could not check (its provider is down), 500 (logged) for anything else. Never the answer,
+    /// and never shared ([`crate::cache::Unshared`]): each is about who is asking.
     fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
-        let (status, message) = match error {
-            ToolError::Unauthorized => return self.unauthorized(id, sent_bearer(headers)),
-            ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
+        match error {
+            ToolError::Unauthorized => self.unauthorized(id, sent_bearer(headers)),
+            ToolError::InsufficientScope(scope) => self.forbidden(id, &scope),
             // A malformed request (RFC 6750 3.1), told so in the challenge.
             ToolError::Invalid(message) => {
-                let mut res = reply(id, Err((-32600, format!("invalid request: {message}"))));
-                *res.status_mut() = StatusCode::BAD_REQUEST;
+                let mut res = rpc_error(id, StatusCode::BAD_REQUEST, -32600, format!("invalid request: {message}"));
                 let challenge = crate::Challenge::scheme("Bearer").param("error", "invalid_request");
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
-                return res;
+                res
             }
             ToolError::Forbidden(message) | ToolError::Refused(message) => {
-                (StatusCode::FORBIDDEN, format!("not allowed: {message}"))
+                rpc_error(id, StatusCode::FORBIDDEN, -32001, format!("not allowed: {message}"))
             }
-            ToolError::Upstream(message) => (StatusCode::SERVICE_UNAVAILABLE, format!("cannot check the token now: {message}")),
+            ToolError::Upstream(message) => {
+                rpc_error(id, StatusCode::SERVICE_UNAVAILABLE, -32603, format!("cannot check the token now: {message}"))
+            }
             ToolError::Internal(error) => {
                 let error: &(dyn std::error::Error + 'static) = &*error;
                 tracing::error!(error, "corten: the MCP endpoint's auth check failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
+                rpc_error(id, StatusCode::INTERNAL_SERVER_ERROR, -32603, "internal error".into())
             }
-        };
-        let code = if status == StatusCode::FORBIDDEN { -32001 } else { -32603 };
-        let mut res = reply(id, Err((code, message)));
-        *res.status_mut() = status;
-        res
+        }
     }
 
     /// The 401: the challenge, and `error="invalid_token"` when the request sent one (RFC 6750
@@ -825,8 +848,7 @@ impl<A: Send + 'static> Tools<A> {
     /// the name is empty or not printable ASCII, since RFC 6750 (3) has `Bearer` followed by a
     /// parameter.
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
-        let mut res = reply(id, Err((-32001, "unauthorized".into())));
-        *res.status_mut() = StatusCode::UNAUTHORIZED;
+        let mut res = rpc_error(id, StatusCode::UNAUTHORIZED, -32001, "unauthorized".into());
         let mut challenge = match self.challenge.get() {
             Some(protected) => protected.unauthorized.clone(),
             None => self.named.clone(),
@@ -840,8 +862,7 @@ impl<A: Send + 'static> Tools<A> {
 
     /// The 403 for a token without a scope the request needs.
     fn forbidden(&self, id: Value, scope: &str) -> Response {
-        let mut res = reply(id, Err((-32001, "insufficient scope".into())));
-        *res.status_mut() = StatusCode::FORBIDDEN;
+        let mut res = rpc_error(id, StatusCode::FORBIDDEN, -32001, "insufficient scope".into());
         res.headers_mut().insert(header::WWW_AUTHENTICATE, self.insufficient_scope(scope));
         res
     }
@@ -893,8 +914,9 @@ impl<A: Send + 'static> Tools<A> {
                 Err(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_))) => {
                     return Err(CallError::Refused(error))
                 }
-                // Other refusals are the tool's result, as they were before a check per request.
-                Err(error) => return Ok(self.failed(name, error)),
+                // Other refusals are a result with isError, as they were before a check per
+                // request, but the check's, made before any tool ran: Corten's.
+                Err(error) => return Err(CallError::Failed(self.failed(name, error))),
             },
         };
         match (tool.handler)(caller, args).await {
@@ -909,7 +931,7 @@ impl<A: Send + 'static> Tools<A> {
                     if cfg!(debug_assertions) {
                         panic!("corten: tool {name}'s output {rule}");
                     }
-                    return Ok(self.failed(name, ToolError::internal(format!("its output {rule}"))));
+                    return Err(CallError::Failed(self.failed(name, ToolError::internal(format!("its output {rule}")))));
                 }
                 // The output as written, and once more as a JSON string for the text block, into
                 // one string sized for both: a large result is not copied as it grows.
@@ -923,8 +945,10 @@ impl<A: Send + 'static> Tools<A> {
                 ]
                 .concat())
             }
-            Err(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_))) => Err(CallError::Refused(error)),
-            Err(error) => Ok(self.failed(name, error)),
+            Err(Ran::Tool(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_)))) => Err(CallError::Refused(error)),
+            Err(Ran::Tool(error)) => Ok(self.failed(name, error)),
+            // Arguments that do not fit the input, or an output that could not be written.
+            Err(Ran::Corten(error)) => Err(CallError::Failed(self.failed(name, error))),
         }
     }
 
@@ -992,7 +1016,7 @@ fn unsupported_version(headers: &HeaderMap) -> Response {
     let message = format!("unsupported MCP-Protocol-Version; this server speaks {}", PROTOCOL_VERSIONS.join(", "));
     let data = json!({ "supported": PROTOCOL_VERSIONS, "requested": requested });
     let error = json!({ "code": -32600, "message": message, "data": data });
-    let mut res = json_response(json!({ "jsonrpc": "2.0", "error": error }).to_string());
+    let mut res = crate::cache::unshared(json_response(json!({ "jsonrpc": "2.0", "error": error }).to_string()));
     *res.status_mut() = StatusCode::BAD_REQUEST;
     res
 }
@@ -1014,7 +1038,21 @@ fn sent_bearer(headers: &HeaderMap) -> bool {
 enum CallError {
     /// The check turned the call away (`Unauthorized`, `InsufficientScope`): a 401 or 403.
     Refused(ToolError),
+    /// A call the endpoint cannot make (no tool, an unknown one, arguments that are not an
+    /// object) or whose output it cannot write: a JSON-RPC error, answered by [`rpc_error`] alone.
     Rpc(i64, String),
+    /// A result with `isError` that the endpoint made, not the tool: the check turned the caller
+    /// away before any tool ran, the arguments did not fit the tool's input, or its output was not
+    /// one JSON object.
+    Failed(String),
+}
+
+/// A JSON-RPC error the endpoint makes itself, at `status` (the protocol's `200` for an error in a
+/// message it read): Corten's, not a tool's answer, so never shared ([`crate::cache::Unshared`]).
+fn rpc_error(id: Value, status: StatusCode, code: i64, message: String) -> Response {
+    let mut res = crate::cache::unshared(reply(id, Err((code, message))));
+    *res.status_mut() = status;
+    res
 }
 
 fn reply(id: Value, result: Result<Value, (i64, String)>) -> Response {
@@ -1106,6 +1144,53 @@ mod tests {
         let status = res.status();
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         (status, if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() })
+    }
+
+    /// Each of the endpoint's refusals is Corten's, not a handler's: marked so as it is made, so no
+    /// shared cache keeps it wherever it is answered ([`crate::cache::Unshared`]).
+    #[tokio::test]
+    async fn every_refusal_is_marked_as_corten_s() {
+        // With an [`Authorization`], so every failure of the check is answered as a refusal.
+        let tools = Tools::new("test", "1.0")
+            .authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"))
+            .auth(|headers| match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+                Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
+                Some("Bearer narrow") => Err(ToolError::InsufficientScope("inventory:write".into())),
+                Some("Bearer idp-down") => Err(ToolError::Upstream("the identity provider timed out".into())),
+                Some("Bearer broken") => Err(ToolError::internal("bad key")),
+                Some("Bearer two words") => Err(ToolError::Invalid("one token".into())),
+                Some(_) => Ok(Agent("writer".into())),
+                None => Err(ToolError::Unauthorized),
+            })
+            .tool("inventory.adjust", "Adjust quantity", |_: Agent, input: Adjust| async move {
+                Ok(Adjusted { id: input.id, quantity: input.delta })
+            });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let listed = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        // A request in a revision the endpoint does not speak is refused with a 400; without the
+        // header it is 2025-03-26's, whose malformed message is a 200 with a JSON-RPC error.
+        let unspoken = Some("1999-01-01");
+        for (item, body, token, version, status) in [
+            ("not JSON", "{", Some("good"), unspoken, StatusCode::BAD_REQUEST),
+            ("a revision it does not speak", &listed[..], Some("good"), unspoken, StatusCode::BAD_REQUEST),
+            ("no token", &listed[..], None, None, StatusCode::UNAUTHORIZED),
+            ("not allowed", &listed[..], Some("banned"), None, StatusCode::FORBIDDEN),
+            ("a scope it lacks", &listed[..], Some("narrow"), None, StatusCode::FORBIDDEN),
+            ("the check cannot run", &listed[..], Some("idp-down"), None, StatusCode::SERVICE_UNAVAILABLE),
+            ("the check failed", &listed[..], Some("broken"), None, StatusCode::INTERNAL_SERVER_ERROR),
+            ("a malformed token", &listed[..], Some("two words"), None, StatusCode::BAD_REQUEST),
+        ] {
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            if let Some(version) = version {
+                req = req.header(PROTOCOL_VERSION_HEADER, version);
+            }
+            if let Some(token) = token {
+                req = req.header("authorization", format!("Bearer {token}"));
+            }
+            let res = app.clone().oneshot(req.body(Body::from(body.to_owned())).unwrap()).await.unwrap();
+            assert_eq!(res.status(), status, "{item}");
+            assert!(res.extensions().get::<crate::cache::Unshared>().is_some(), "{item}: not marked");
+        }
     }
 
     #[tokio::test]

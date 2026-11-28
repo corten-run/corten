@@ -6,12 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { cited, unresolved } from "./design-refs.mjs";
+import { fixtureGitEnv } from "./fixture-git.mjs";
 
+/** Git's environment for the fixture: the caller's GIT_DIR and the like would choose another repository. */
+const env = fixtureGitEnv();
 const git = (/** @type {string} */ cwd, /** @type {string[]} */ args) =>
   execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    env,
   }).trim();
 /** A commit on the tree of HEAD, its parent, made by no branch. @param {string} repo @param {string} message */
 const loose = (repo, message) => git(repo, ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", message]);
@@ -75,7 +79,7 @@ test("a cited commit on HEAD's history or kept by an evidence tag passes, by any
     { at: "docs/a.md:2", sha: first },
     { at: "docs/a.md:3", sha: kept.slice(0, 7) },
   ];
-  assert.deepEqual(unresolved(repo, found), []);
+  assert.deepEqual(unresolved(repo, found, env), []);
 });
 
 test("a cited commit not on HEAD's history or an evidence tag fails, though the clone may have it", () => {
@@ -84,7 +88,7 @@ test("a cited commit not on HEAD's history or an evidence tag fails, though the 
     { at: "docs/design.md:1013", sha: lacking.slice(0, 8) },
     { at: "docs/a.md:5", sha: side.slice(0, 8) },
     { at: "README.md:7", sha: blob.slice(0, 10) },
-  ]);
+  ], env);
   assert.deepEqual(found.slice(0, 3), [
     "docs/design.md:1013: `7cea4970` is not a commit on HEAD's history or under refs/tags/evidence/",
     `docs/a.md:5: \`${side.slice(0, 8)}\` is not a commit on HEAD's history or under refs/tags/evidence/`,
@@ -97,7 +101,7 @@ test("a cited commit not on HEAD's history or an evidence tag fails, though the 
 });
 
 test("Corten's own commit written as a repository's fails, saying to write it alone", () => {
-  assert.deepEqual(unresolved(repo, [{ at: "docs/a.md:2", sha: first.slice(0, 8), as: "corten-run/corten" }]), [
+  assert.deepEqual(unresolved(repo, [{ at: "docs/a.md:2", sha: first.slice(0, 8), as: "corten-run/corten" }], env), [
     `docs/a.md:2: \`corten-run/corten@${first.slice(0, 8)}\` names Corten's own commit; write it as \`${first.slice(0, 8)}\`, so it is checked`,
   ]);
 });
@@ -113,7 +117,7 @@ test("digits that start more than one reachable commit's name fail, asking for m
     if (firsts.has(sha[0] ?? "")) shared = sha[0] ?? "";
     firsts.add(sha[0] ?? "");
   }
-  assert.deepEqual(unresolved(repo, [{ at: "docs/a.md:9", sha: shared }]).map((p) => p.replace(/\d+ commits/, "N commits")), [
+  assert.deepEqual(unresolved(repo, [{ at: "docs/a.md:9", sha: shared }], env).map((p) => p.replace(/\d+ commits/, "N commits")), [
     `docs/a.md:9: \`${shared}\` starts the names of N commits; cite more of its digits`,
   ]);
 });
@@ -124,7 +128,7 @@ test("a shallow clone fails once, saying to fetch the whole history and the evid
   const found = unresolved(shallow, [
     { at: "docs/a.md:1", sha: first.slice(0, 8) },
     { at: "docs/a.md:2", sha: lacking.slice(0, 8) },
-  ]);
+  ], env);
   assert.equal(found.length, 1);
   assert.match(found[0], /cannot show the 2 citations of 2 commits/);
   assert.match(found[0], /shallow.*git fetch --unshallow https:\/\/github\.com\/corten-run\/corten\.git "\+refs\/tags\/evidence\/\*:refs\/tags\/evidence\/\*"/);

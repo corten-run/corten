@@ -23,16 +23,43 @@ views share evidence; they do not launch a second campaign.
 
 ## Public Source Permissions
 
-Fresh hosts and the CI tools image install stable upstream Git from the same
-Ubuntu Git maintainers' PPA. They fetch its public key over bounded HTTPS, require
-the exact primary fingerprint `F911AB184317630C59970973E363C90F8F1B6217`, and scope
-APT trust to that source with `signed-by`. This avoids the Launchpad metadata API
-whose truncated responses stopped image preparation before tests. A failed
-download, key parse or fingerprint check stops setup; distribution Git is not a
-fallback. The existing immutable-source Git capability check still runs.
-`git-ppa.test.mjs` executes both setup forms with local command fixtures, including
-wrong, extra and missing primary keys and failed downloads/parsing. This is not
-native framework or official-run qualification.
+New reservations save `gitSource: true`. Their guests build Git 2.56.1 from the
+signed upstream release before checkout, without the unavailable Launchpad PPA
+([#1993 Fresh benchmark guests depend on the unavailable Git PPA before checkout](https://github.com/corten-run/corten/issues/1993)).
+The generated job embeds the exact [CI verifier](../../scripts/benchmark-evidence-git.sh):
+it checks the pinned kernel.org archive SHA-256, then requires a valid detached
+signature with the pinned signing subkey and primary fingerprint. Extraction
+and the two-job, no-Rust build follow verification; package install, download
+verification, extraction, build and capability checks all have deadlines.
+The installed `/usr/local/bin/git` must have its HTTPS helper, the exact version,
+and demonstrate both no lazy fetch of an absent blob and no replacement of an
+original object. The host record keeps the version, release URL, SHA-256 and
+signer fingerprints. The CI tools image itself is not used on measured hosts.
+
+A failed step stops at `git-install`, with no fallback to distribution Git,
+checkout, native entry or bootstrap-ready marker. The job removes its private
+build tree on normal failure and uses the existing pre-entry exit archive;
+the exact-host cleanup requirements do not change. The `git-source.test.mjs`
+Linux fixture executes the generated stage and failure packer with local
+commands, not an upstream download or guest qualification.
+Reservations without the marker regenerate their original PPA job bytes.
+That preserves ordinary collection from the measured checkout. It does not
+make a new controller source-compatible with [grouped pre-plan retirement](#failed-native-custody-and-retirement).
+Keep the marked recipe fixed too; a future Git pin needs a distinct saved recipe.
+
+New reservations also save `trixieUpstream: true`. Their job pulls the Debian 13 native
+upstream image, `node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067`,
+which the native browser runner uses from the commit that moved bench to Debian 13
+([#1704 bench's Node images and the Gin item-page app still run on Debian 12 after the template and examples moved to Debian 13](https://github.com/corten-run/corten/issues/1704)).
+A reservation without the marker regenerates its original job, which pulls
+`node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
+A new reservation's measured commit must therefore include that move; merged main does.
+
+New dedicated Catalog, Marketplace, Mixed Production and Hardening reservations use
+their runners' Playwright containers. JSON API does not launch a browser. These
+reservations save `skipHostChromium: true` and omit only the host Chromium install.
+Fullstack Browser, Client Heavy, Live Delivery and Recoverable Live still install
+host Chromium. Unmarked reservations keep their original job, packer and unit bytes.
 
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
@@ -99,6 +126,91 @@ collection still needs the original measured checkout; the existing
 merged-controller recovery actions still have their exact eligibility and
 approval requirements. Do not rewrite a saved reservation or reuse its approval.
 Do not compare timings across placements.
+
+### JSON API c-16 Placement (Opt-In)
+
+[#2057 JSON API r67 has insufficient apparatus headroom during fast adapters' warmups](https://github.com/corten-run/corten/issues/2057)
+found that on a `c-8` the uncapped warmup drives k6 (quota 4, CPUs 4-7) to its
+headroom bound while one fast app core is not saturated.
+`bench/json-api/placement.mjs` defines an opt-in layout for a `c-16` host that
+gives only the load generator more CPUs. It reuses the pins of catalog's
+`c16-generator-v1` under JSON API's own name:
+
+| CPUs | Role | Budget |
+| --- | --- | --- |
+| 0 | host: driver, control apparatus | unpinned host work, as today |
+| 1 | app | quota 1, unchanged |
+| 2-3 | upstream (one Node process) | quota 2, unchanged |
+| 4-15 | k6 and the load resource sampler, which accounts for all twelve | quota 12 (default: 4 on CPUs 4-7) |
+| 4-7 | the untimed cold probe, a subset of the k6 CPUs as today | quota 4, unchanged |
+
+The selector is `JSON_API_LOAD_LAYOUT=json-c16-generator-v1` together with exactly
+`JSON_API_APP_CPUS=1`, `JSON_API_API_CPUS=2-3` and `JSON_API_LOAD_CPUS=4-15`.
+Any other value, an empty value or another pin refuses, and the runner side refuses
+a host with fewer than 16 logical CPUs before any container starts. Without the
+selector the CPU settings are exactly the default contract's. Catalog's
+`--load-layout c16-generator-v1` stays catalog-only.
+
+A result records its placement explicitly: `measurement.cpus` keeps each
+role's quota and cpuset as it does today, and an opt-in result adds
+`measurement.loadLayout: "json-c16-generator-v1"` and
+`measurement.generatorPlacement`, with the cold probe at
+`{ "quota": 4, "cpuset": "4-7" }` and the load sampler at
+`{ "quota": 12, "cpuset": "4-15" }`. `recordedPlacement` accepts a quota-12 load only
+with the marker and both exact records, and refuses either with any other CPUs.
+Default results carry neither, so their saved bytes and replay do not change.
+
+No fence changes. The load headroom bound is already 80% of the k6 quota (320% on
+the default, 960% on `c-16`); the upstream bounds stay below 80% of one core, both
+sampled and counted. The Corten API warmups that failed on the upstream's sampled
+peak are a separate, open constraint: more k6 cores do not address it.
+
+To select it, add `--load-layout json-c16-generator-v1` to the single-group
+`--prepare` command with `--group json-api`; it is refused on any other group, on
+detach or without a continuation root. It may be combined with `--offline-handoff`.
+The prepared fleet saves the marker as `single.loadLayout`, and its one job carries
+`host: c-16/sfo2` and `loadLayout`, so the approvals, the reservation, the
+census, the create mode and the job (`nproc` at least 16 and
+`campaign-entry.mjs ... --group json-api --load-layout json-c16-generator-v1`) all
+follow from the saved fleet. Placement selection then requires `c-16/sfo2` to be
+advertised. The campaign binding requests the four `c16Env` variables and expects
+the c-16 CPUs. A fleet, reservation or job without the marker, including every
+saved one, keeps its exact bytes.
+
+`bench/json-api/run.mjs` reads the four variables the binding requests, records the
+layout, runs k6 at quota 12 on 4-15 and keeps the cold probe and CPU counter reader
+on 4-7. The isolated JSON evidence check (`isolated/evidence.mjs`) and JSON staging
+(`isolated/json-staging.mjs`) each require the recorded `measurement.loadLayout` to
+equal the layout the binding requested, so a default result cannot satisfy a c-16
+binding and a c-16 result cannot satisfy a default one. `bench/json-api/report.mjs`
+has no binding to compare with. It checks the summary against itself: a quota-12 load
+is accepted only with the marker, and the recorded CPUs and `generatorPlacement` must
+equal that layout's exact values. Native campaign replay captures
+`bench/json-api/placement.mjs` as a named member of the measured source closure. A
+measured commit that predates it replays under its own closure list, which never
+names the file.
+
+This is apparatus placement for future runs, not a measured speedup and not a fix for
+the upstream constraint above. Do not compare JSON API timings across
+placements, and do not rerun saved groups only to adopt it.
+
+### JSON API c-32 Placement (Opt-In)
+
+For a future JSON API calibration, use `--load-layout json-c32-generator-v1` at
+the same single-group `--prepare` step, not on detach. The saved fleet job
+selects only `c-32/sfo2`. Prepare, approval preview, detach and the locked
+pre-create check require that pair to be offered in both directions of the
+provider catalog; there is no fallback. The job requires `nproc` of at least 32.
+
+Only k6 widens: quota 20 on CPUs 4-23, with the load resource sampler accounting
+for all 20. CPU 0 stays for host work, the app and upstream remain on 1 and 2-3,
+the untimed cold probe and counter reader stay on 4-7, and CPUs 24-31 are not
+assigned to benchmark containers. The same load fence is below 1600%; upstream
+fences are unchanged. The binding and replay require the saved layout and its
+exact placement, not merely the host size. A default or c-16 reservation
+continues to regenerate its original bytes. See the
+[JSON API runner guide](../json-api/README.md#opt-in-c-32-load-placement) for the
+r93 calibration evidence and its limits.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
@@ -350,6 +462,20 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
+`create-request` records a finite local transport reason when available, such as
+`request-error`, `response-aborted`, `invalid-json` or `deadline`. A broken response
+or a missing response is still an uncertain POST: the controller does not infer
+that it was unsent, release custody or submit it again. Older receipts that lack
+a detail do not establish any of those reasons.
+
+`account-capacity` is a code-only launch refusal: the complete census for the
+verified account reached or exceeded its valid droplet limit. The direct CLI and
+grouped receipt expose neither the limit nor the inventory. This guard stops
+before create intent, POST or bootstrap; it does not free capacity, permit a
+retry or change reservation custody. A malformed limit or a separate refusal
+to cover the reserved fleet does not carry this code. The code does not identify
+the failing guard of an older launch whose receipt lacks it.
+
 Create-link refusals distinguish three consumed-field predicates:
 `create-link-shape` (actions is not an array), `create-link-count` (not exactly one
 entry) and `create-link-id` (missing or invalid positive safe-integer ID).
@@ -365,6 +491,20 @@ code: `source-plan`, `exact-approval`, `remote-main-advertisement`,
 `remote-main-fetch`, `remote-main-ancestry`, `source-recheck`,
 `controller-construction`, `controller-launch`, `controller-collect`,
 `controller-audit`, `controller-checkpoint` or `provider-settlement`.
+A collect refusal with a supported operator route keeps its own stage through that
+wrapper instead: `setup-watcher-proof-missing`, `setup-host-proof-refused`,
+`offline-never-started`, `create-errored-contradicted` or
+`create-contradiction-unpublished`.
+After the archive is extracted, collect marks which native replay check stopped:
+`collect-native-evidence-refused` (checks of the extracted directory and its
+saved exit marker, or post-replay integrity), `collect-native-replay-start`,
+`collect-native-replay-deadline`, `collect-native-replay-interrupted`,
+`collect-native-replay-refused` (worker rejected), or
+`collect-native-report-refused` (replay prerequisites or the report did not
+bind to the reservation and terminal check). These stages do not authorize
+retirement or change the replay deadline.
+Initial archive scanning and extraction, and the grouped path's first exit
+marker read, still report `controller-collect`.
 The stage identifies the failing operation, not its cause or whether a host exists.
 Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
@@ -374,6 +514,27 @@ The direct CLI renders that same closed controller stage and the provider's
 allowlisted code-specific detail or HTTP status. It never prints a native error's
 message, stack, response or accessor. These labels identify the stopped operation,
 not its cause or successful cleanup; the retained state still governs recovery.
+For the common-bootstrap marker read, `controller-launch` can also report
+`Bootstrap marker: LOCAL-LABEL` (the same closed detail in the fleet receipt's
+`providerDiagnostic` field, under code `bootstrap-marker`):
+
+- `local-control-uncertain`: the local SSH invocation did not provide a valid
+  process result. Its process tree is not proved gone.
+- `remote-completion-unconfirmed`: the local process result did not prove the
+  registered remote command's completion. This does not say whether it ran.
+- `acknowledged-exit-refused`: an acknowledged exit other than ready (0) or
+  not yet ready (3).
+- `marker-invalid`: an acknowledged ready read did not pass marker validation.
+
+The first two retain custody and never poll again. Only an acknowledged exit 3
+uses the existing bounded poll. These labels do not attest to monitor
+registration, establish a cause for r64, or grant a recovery action.
+
+For `offline-never-started` and `create-errored-contradicted` it adds fixed text
+naming the pinned route, `--collect --unused-bootstrap-known-hosts`; for
+`create-contradiction-unpublished` it names the custody step and the
+`provider-create-reappeared` witness. That text is fixed per stage, never derived
+from the error.
 
 Historical href diagnostics could classify a refused representation as
 `non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,
@@ -482,16 +643,104 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+**Starting a new campaign after external cleanup.** A failed upload may leave
+the old continuation locked even after an operator has proved its droplet was
+destroyed. Do not unlock it, change its native state, or count deletion as a
+result. Ordinarily continue in the same root. A reviewed, one-time operator
+handoff to a fresh root is possible only when the old campaign is over:
+
+1. Stop dispatch to the old root. Account for every slot, launch intent and
+   owner, including scheduled dispatches. No owner may still be able to send a
+   create or upload. A manifest alone is not a launch. An ambiguous create
+   with no bound provider ID must be reconciled, not skipped.
+2. In the original provider account, check all bound IDs, including renamed
+   hosts. Retain native deletion receipts or separately reviewed external
+   deletion evidence (exact-ID 404 and absence from the complete account
+   list). A lookup error, an outstanding job or an unknown owner stops the
+   handoff. Preserve the old root, its locks, failure artifacts and issue
+   history unchanged.
+3. Inventory every old standalone slot read-only: check its state, receipts,
+   archives and extracted evidence, including slots reported busy or awaiting
+   cleanup. A 404 proves nothing about saved results. If a slot contains a
+   verified or potentially recoverable result, or its evidence cannot be
+   classified, stop. The unchanged index cannot carry standalone results.
+4. Copy the index into an empty root. If an indexed checkout cannot replay
+   (including missing or mismatched dependencies at the right commit),
+   provide a separate clean worktree at the measured commit with its pinned
+   installs at `NEW_ROOT-checkouts/MEASURED_SHA`; leave old worktrees intact.
+   Run the read-only continuation report there. Require native replay of the
+   full roster: the same verified groups, measured commits and archive hashes
+   and exactly the expected missing groups, with no blocked or ambiguous row.
+   Exit 1 is expected with missing groups; it does not prove those conditions.
+   Keep old failed and never-launched attempts in the handoff inventory, not
+   as results in the new root.
+5. Record both roots, the last round used, the inventory and the evidence in
+   the operator handoff. Switch the single dispatch target only after review.
+   Use new round numbers above the old campaign and the normal reviewed
+   preparation and pre-create census. Never resume or collect an old attempt
+   through the new root. The failed rounds remain failures; the verified
+   groups keep their original measured commits.
+
 If a standalone group failed before native entry and its collector recorded the
 archive but not deletion, an unrelated group can use that same census. Its
 launch approval includes the stopped host's original ID: even a renamed or
 retagged host still present in the account prevents creation. An active cleanup
 blocks admission. This does not retire or retry the failed group, or publish a result.
 
+A monitored attempt that reached native setup but then failed can remain locked
+after audited external deletion. Do not clear its locks or mark it collected.
+After independent review of the original failed archive, the evidence that the
+local controller tree stopped, and an exact-ID 404 plus a complete same-account
+inventory, the operator may add `receipts/external-failed-host.json` to that
+attempt's own fleet slot. The record has `schema: "benchmark-external-failed-host/v1"`,
+`binding` from `externalFailedHostBinding(readFleet(slot, round, { priorSelection: true }))`,
+and `operatorProofSha256`, the SHA-256 of the reviewed operator record binding
+that evidence. Keep the operator record and raw archive outside Git. Do not
+record a failure when results might still be recoverable. The controller requires
+the original stopped locks and invalid, locally closed monitor, with a complete
+journal and no terminal or audit frame. It rechecks the
+receipt and custody before a successor can allocate, using the complete account
+census to refuse the old ID, original name, or run tag. The receipt authorizes
+no SSH, delete, or publication; a retry needs a higher round and a new commit.
+
+If the workstation died after a supervised JSON API or Mixed Production audit
+delivery, it may have left the monitor `live` without writing close markers.
+Use `benchmark-external-failed-host/v2` only after independent review confirms
+the original archive ended in failure without a recoverable result, the local
+controller tree stopped, and the externally retired host is absent by exact-ID
+404 and a complete same-account inventory. Keep the reviewed evidence outside
+Git. Use the same receipt fields with `archiveSha256` for the original failed
+archive and get `binding` with `externalFailedHostBinding(fleet, { orphaned: true })`.
+The original locks stay in place. The controller requires a complete local
+journal with an expired peer lease, the matching audit delivery and no terminal
+or close record, collection evidence or recovery lock. It rechecks those bytes
+and the same census before create. This records the failed attempt without
+trying to recover or qualify it.
+
+The same receipt can record external cleanup of a monitored attempt that stopped
+after an accepted create but before binding the droplet. The original reservation
+must have the posted droplet and action IDs, the exact uncertain create-action
+request refusal, and no setup files, guest control, or collection evidence. For
+this case review the saved launch and stopped process tree, the exact completed
+create action and prior ownership of that ID, and the subsequent exact-ID 404 and
+complete same-account inventory. Bind that review in `operatorProofSha256`.
+Do not alter the saved reservation, its child locks or the fleet lock. If the
+outer continuation lock is still held, stop dispatch to that root and separately
+verify and archive that lock and its original owner's closed process tree before
+releasing only the outer lock. Keep dispatch stopped until the receipt is in place.
+The next launch still checks the old ID, name and tag in its pre-create census.
+
 When retrying a group on a new host, a proved Windows PID reuse on a destroyed
 host does not make its old monitor active again. Preparation reads the original
 retirement evidence and rechecks the unchanged locks; it never removes them or
 authorizes collection or deletion on the old host.
+
+For an existing monitored external failure receipt for a bound droplet, replay
+can also recognize a Windows process whose start time is strictly later than the
+saved receipt and all three original locks. Ambiguous identity still refuses.
+The checks for issuing a new receipt or replaying an unbound posted create are
+unchanged. Replay neither changes old custody records nor replaces the
+same-account absence check before a new allocation.
 
 When the launcher checkout advances or a measured checkout moves, use the
 optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
@@ -527,10 +776,20 @@ The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
 If prepare or detach refuses before writing intent, `fleet-operation-failed`
-can name the failing stage: `continuation-admission` (including custody and
-eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
-or `final-pre-intent-recheck`. These labels identify the check, not its cause or
-whether locks were released. Placement keeps its separate
+can name the failing stage: `continuation-admission`, `prepare-reservation`,
+`initial-plan` or `locked-plan` (including exact approval checks), or
+`final-pre-intent-recheck`. Admission adds a fixed label: `lock-busy` means the
+continuation lock exists (not that its owner is live); `lock-check` means some
+other lock operation failed. `batch-owner` means the indexed fleet's batch
+owner could not be shown to have stopped. `custody-replay` means the selected
+group's archived result or retirement proof did not replay; `custody-read`
+is the fallback for other errors reading saved evidence. `posted-custody` means
+an earlier provider-errored attempt with a posted droplet, in any group and retired
+or not, still has a launch, operation or recheck lock beside it. `custody-unresolved`
+means custody scanning found a blocker. `custody-account` and `custody-recheck`
+name the subsequent custody checks.
+`group-selection` covers reservation or eligibility checks. These labels name
+checks, not root causes or whether locks were released. Placement keeps its separate
 `fleet-placement-preflight-failed: STAGE` diagnostic. Inspect saved intent and custody
 before deciding what to do next; an unlabeled failure does not establish that
 intent was never written.
@@ -547,6 +806,117 @@ and free account capacity still have to pass. An unknown or unconfirmed
 benchmark host, a lost lease or changed peer refuses dispatch, not cleanup.
 An earlier controller that did not record peer leases cannot be treated as a
 running peer. Never clear a lock or recreate a group to force overlap.
+
+New monitored and offline-handoff timing phases for official groups use the
+same post-terminal host-boundary proof. A first-after census containing only
+new sleeping workers of the same baseline `systemd-udevd` can trigger one
+five-second settle observation. Each worker needs matching cgroup, parent
+identity and executable provenance, and a start strictly after the sealed
+terminal clock of the verified empty command lifetime. Both clocks must
+support the wait, the workers must be gone, and the final boundary must pass
+the ordinary cleanup checks. In-window workers, missing proof, survivors and
+foreign processes still block advancement. The untimed JSON preparation
+keeps its existing pre-phase cutoff. The offline timing phase's zero-SYN
+qualification fence stays open through the settle wait and second census.
+A denied SYN after native command exit can still disqualify the phase; keep
+probes stopped throughout the fenced phase, not just during measurement.
+This does not change the measured workload window or qualify older evidence:
+replay uses the measured checkout, and r68 does not contain the terminal and
+executable proof needed for a settle.
+
+### Offline handoff
+
+For a **new single-group continuation attempt**, add `--offline-handoff` to
+the `--prepare` command above. Follow with the ordinary detach preview and
+exact approval; the prepared manifest binds the mode in both approvals. It
+cannot be added on detach, applied to an existing reservation, or used alongside
+a live peer. The attempt remains unresolved for further admission until terminal
+custody. The default path still uses the monitored lease.
+
+Wait for detach to return 3 with the child's `handoff: "acknowledged"`. This
+means the launcher pinned the host key and boot, and durably recorded the
+successful bootstrap seal. Native entry still waits for the sealed SSH/SFTP
+epoch to drain. At this point the systemd guest can proceed without the
+workstation; this receipt is not a native start, timed result, publication
+qualification, or cleanup proof. Do not repeat an unacknowledged launch.
+
+During every native phase an additional boot-local nftables rule on the guest
+blocks even the allowed peer's SSH packets. The existing owner ingress policy
+still drops other peers. A valid phase retains unchanged rule readbacks and a
+closed guardian window. Fresh TCP SYNs dropped before `sshd` within the guest's
+8-packet burst and 8/minute rate are recorded by phase as packet and byte
+counts. They do not disqualify untimed preparation. Official timing requires
+zero new hits, even when the fence denied them all: their effect on target
+hardware has not been bounded. Such a timing archive is retained as
+unqualified, not as a missing handoff or a native workload failure. Excess
+probes, other SSH packets at the fence, a changed rule, or an actual unexpected
+login/guardian intrusion still refuse the phase. The fence reopens at phase end;
+the service's stop hook removes it on an interrupted phase.
+
+The campaign passes the rule set to `nft` as one argument: a single atomic
+batch that refuses an existing table, followed by the same readback and policy
+check. It never feeds rules on standard input: Node gives a spawned child a
+socket there, and Noble's nftables 1.0.9 refuses `nft -f -` on a socket
+(`Not a regular file: "/dev/stdin"`, exit 1) while accepting the same rules
+from a shell pipe. The hosted SSH ingress check
+(`scripts/benchmark-ssh-ingress-ci.sh`, run as root on Ubuntu 24.04) keeps that
+socket-stdin install as a negative that must fail with nft's socket refusal and
+leave no fence (only on nftables 1.0.9; 1.0.6 and 1.1.3 accept a socket), then
+installs through the production call. The same refusal was reproduced in an
+Ubuntu 24.04.5 root filesystem with nftables 1.0.9 and Node 26.13.1, where
+r62's measured `beginOfflineWindow` refuses on its first call with the same
+message. That shows r62's measured module cannot install the fence on Noble's
+nftables 1.0.9, consistent with r62's pre-timing halt in
+[#2033 Marketplace r62 halts before timing with native SSH fence unavailable after offline handoff](https://github.com/corten-run/corten/issues/2033);
+it was not reproduced on a benchmark host. It is separate from the
+post-terminal failure in
+[#2051 Marketplace r65 completes timing but the post-terminal drain probe refuses](https://github.com/corten-run/corten/issues/2051).
+r62 remains an invalid attempt.
+
+A fence refusal names only a fixed step and class, never host text: an `nft`
+call failure names its operation (`install`, `install readback`,
+`close readback` or `remove`) and outcome (`error=`, `signal=` or `exit=`),
+and a readback that does not parse or verify is `install readback invalid`,
+`install readback policy mismatch`, or the same for `close readback`. A
+refusal after the install leaves the fence for the unit's stop hook.
+
+For first qualification, arrange the independent audit rendezvous before
+timing. For JSON's untimed preparation or mixed's pre-build audit wait, use
+the existing [read-only owned-host observation](#independent-native-audits)
+(steps 2 and 3) before any audit delivery is authorized. Use
+`ConnectionAttempts=1` and `ConnectTimeout=3`, at most one observation every
+two minutes, and serialize each observation with delivery and collection.
+Connection refusal/timeout is no observation; do not attempt a transfer.
+Confirm the exact unit and the latest journal event for the matching audit wait.
+Stop all active probes before authorizing delivery, or before handoff for a group
+without an audit wait. During timing, observe only passively or from the provider
+side. There is no status listener or trustworthy out-of-band native completion
+signal in this apparatus: provider instance state alone is not native terminal
+proof. If there is no independently known terminal signal, wait for the planned
+hard runtime bound before attempting collection rather than guessing when timing ends.
+
+JSON still stops after preparation, and mixed still stops before its build,
+for [the independent native audit](#independent-native-audits). Use the existing
+fixed read-only export only at that group's audit wait, drain/close the export
+sessions, and separately approve delivery. The guest waits for the delivered
+audit epoch to drain, replays the exact receipt set and subject, then decides
+whether timing is eligible. A disconnection can delay delivery or collection;
+it cannot open either audit gate. If the sealed review wait expires after
+24 hours and no audit control or delivery began, the guest writes a failed
+terminal collection manifest and exits 2. This archive contains no qualified
+timing. The separately approved collector can retire that exact quiescent host
+only after replay proves the expiry and the original launch/boot/ownership
+binding; a missing archive or uncertain delivery is not that proof.
+
+Once timing cannot still be running, reconnect and preview then approve the **separate
+child** collection command below with the measured checkout. A live or
+unreachable unit is not terminal. Collection requires the pinned host/boot,
+unchanged unit and archive, current quiescence, native replay and a fresh
+pre-delete proof. Missing terminal evidence, an uncertain final bootstrap
+acknowledgement, or an incomplete archive can require operator custody; none is
+permission to delete or relaunch. The unit's 48-hour runtime limit bounds guest
+work, not billing: the guest holds no provider credential, does not destroy
+itself, and there is no independent provider-side billing watchdog.
 
 For collection or audit delivery use the ordinary per-host commands at the
 measured checkout. For the first attempt use state root
@@ -599,6 +969,319 @@ durable create intent. Even if identity is found, provisioning cannot begin with
 the exact completed create-action proof. A timed-out or unsettled mutation remains
 uncertain, retains locks and cannot take this recovery shortcut.
 
+### Isolate an unacknowledged create
+
+A single group whose only create has an unacknowledged response and no saved
+droplet or action ID may be isolated in its existing continuation root. This
+does not settle the POST, record deletion, release the child or fleet locks, or
+allow the original reservation to issue another POST. Its row stays
+`quarantined-create`, not verified or retryable. Other groups can continue only
+in the same provider account, and their approved create uses one fresh,
+account-bracketed provider response for
+both the quarantine and historical ID checks and the ordinary pre-create
+census. Only a complete inventory with unique, checkable rows proves absence;
+there is no second read, page or retake. Nonempty pagination links, an inconsistent
+count, or an uncheckable row cannot prove absence. The worker matches the bound
+name and tag digests inside the bounded reply and returns only the sighting when
+it finds one. This works beyond the count limits for absence and when another
+field is malformed. If there is no match, only a complete, bounded projection
+can pass ordinary creation checks. In that complete inventory any earlier
+historical ID blocks the create even if renamed and untagged. This is not proof
+the original POST never succeeded. A validated
+name or tag match writes an exclusive `receipts/create-quarantine-witness.json` with the
+numeric droplet ID and the matching quarantine digest, without changing the
+original reservation. The witness blocks all subsequent creates in this root
+even if the droplet changes name or tags. Reconcile it before another create;
+there is no automatic clearance. A failed witness write retains operation
+custody. Read-only continuation reports show a valid witness as a blocked
+`quarantined-create-witnessed` attempt and still replay unrelated result
+evidence. Neither a sighting nor a quarantine report authorizes binding or
+cleanup.
+
+A failed group may instead prepare a distinct, higher round in the same root
+and provider account with `--replace-quarantined-create <quarantine-file-sha256>`.
+Use this only after independently checking the original custody proof and
+reviewing the risk that the unacknowledged allocation could still appear. The
+prepared fleet binds exactly one earlier, same-group quarantine. It has its own
+ownership, launch intent and approval. It takes the same account-bracketed
+census as another group: any sighting in the census is witnessed and refuses
+before the new create intent. After the intent, a final local admission check
+before hand-off to the provider worker refuses on changed custody. This
+proven-unsent refusal withdraws only the replacement's create intent, leaving
+the custody records as found. The only controller path that publishes a witness
+is the pre-create census under the shared continuation lock; another launch
+cannot publish one while that lock is held. The local check does not see
+out-of-band writes during worker hand-off. This does not prove that an earlier
+create cannot surface at the provider later.
+A replacement does not settle or edit the original
+attempt, and another replacement requires the preceding attempt to be settled
+or superseded under the ordinary rules for a never-launched reservation.
+
+The operator must stop dispatch to the root and positively account for the
+original local controller, worker and their descendants. A stale PID, a missing
+droplet or a fleet failure receipt alone is not that proof. Keep that evidence
+and the unchanged outer lock outside all the state roots. Use
+`unacknowledgedCreateBinding(readFleet(attemptRoot, round, { priorSelection: true }))`
+from `fleet-verify.mjs` to get a read-only binding of the existing state, intent,
+diagnostic and three retained operation locks. Have a separate reviewer check
+the operator evidence, the binding and the provider observation. Save
+`receipts/create-quarantine.json` exclusively in that attempt with exactly
+`{ schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256 }`,
+where the digest names the retained proof. Only then archive and release the
+original outer continuation lock under the custody procedure below. Never clear
+the child locks through this route or copy the attempt to a fresh root. The
+binding and census do not replace the operator's process-tree proof.
+
+### Provider-errored create
+
+A create the provider accepts and then fails has its own terminal outcome
+([#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)).
+The launch records it only when four proofs hold. Two stages bound them. Within the
+create command's 10-minute deadline, which covers the POST and its action polling,
+the polled action has the POST's action ID, `create` type, `droplet` resource type
+and the POST's droplet ID (`create-action-errored`), and its status is `errored`.
+After that command returns, the absence proof runs as separate provider commands,
+each with its own deadline (60 seconds per command), so it can finish after the
+create deadline: the exact-ID GET returns 404, and a single-response census lists no
+droplet with that ID, name or run tag. The saved account is read before and after
+each logical provider command (the create, the GET and the census), not around each
+HTTP request inside one; the worker reads within a command on its pinned credential.
+The single-response census is one provider response holding the whole inventory:
+every row must have a positive unique ID, a name and a list of tags, the response
+must report no further page and its count must match its rows. More than one page
+(over 200 droplets), a count mismatch or any row that cannot be checked refuses, and
+the census is never retaken, so a matching row seen once is never discarded. Offset
+pages are not treated as one snapshot of the inventory. As soon as the worker
+returns a valid errored identity, before any absence read, the controller saves the
+POST's IDs as `createPending`. From then on only that droplet ID can be bound to
+the reservation. When absence is proved it writes
+`provider-create-errored.json` (action identity, account, absence, one create, no
+replacement create, no DELETE, no guest, zero measurements), saves its hash as
+`createErrored` on the still-unbound `creating` reservation and stops with
+`create-errored-absent`. Its launch and operation locks are released, fleet
+receipts report `create-errored`, a later round in the same root is not blocked, and
+`--collect` only rechecks the receipt and absence before returning 1. That later
+round's pre-create census fences each earlier failure's posted droplet by ID alone: a
+listed droplet with that ID, whatever its name or tags, refuses with `posted droplet
+is listed` before create intent, and an earlier failure recorded on another provider
+account refuses the launch, since this account's census cannot see it. The fence
+includes a contradicted create (below) after its pinned retirement: retirement deleted
+the droplet it bound, it did not settle what the provider showed under that ID. After
+the census, immediately before create intent, the launch rereads each earlier round in
+the root: one whose state bytes changed, that took a lock or whose receipt has been
+contradicted since refuses with `changed before this create`, with no intent or POST. It never
+retries the create or relaunches the round. A later successful attempt is separate
+evidence and does not qualify this one. The locks are released only after the
+provider worker's teardown settles. If that teardown fails, both locks stay with the
+recorded failure and every later path refuses it until the operator's custody step
+(below) releases them; `--collect` then only rechecks.
+
+Any missing or contradicting proof leaves the existing path unchanged: an unbound
+or non-`errored` action stays `create-action-response`, a GET that is not 404, an
+inventory row with the ID, name or tag, an account change or a transport failure
+preserves the `creating` reservation for inspection. Such a reservation still blocks
+later launches in its root. With a valid errored identity the saved
+`createPending` stays: if the exact GET of the posted ID returns that droplet under
+its own name, tags and placement with one public IPv4, the launch binds exactly that
+allocation. Nothing else binds: not a census row after a 404 (even with the posted ID),
+not a census after a GET that failed, and not an allocation with any other ID, even one
+carrying this create's name and tags; each refuses `without binding`. That contradiction stays unresolved, and a later `--collect` rechecks
+the saved action and absence as below.
+
+The provider can report `errored` long after the create's deadline: in r21 the
+action errored about 22 minutes after the accepted POST. A create action still
+pending at the deadline stays uncertain with its locks, and the launch also saves
+the POST's droplet and action IDs as `createPending` on the unbound `creating`
+reservation (a lost POST response saves none). The launch's own launch and
+operation locks stay too. A lock record whose PID is gone does not prove that the
+original controller, provider worker and their descendants are gone, so no
+controller treats it as settled. While either lock remains, group `--collect`
+refuses before any provider read with `original launch custody retained` (both locks)
+or `partial launch custody` (one), and changes nothing. The route on is the
+operator's custody step for retained locks below: account for that launch's process
+tree, keep the lock bytes and that proof outside the state roots, release the
+group's `.groups-launch.lock` and `operation.lock`, then collect again.
+
+That `--collect`, from the measured checkout, settles the create read-only under
+the ordinary operation lock. It reads that exact action with `doctl compute action get`
+on the saved account. An action still `in-progress` returns 3 and changes nothing.
+Only the same action ID, `create` type, `droplet` resource bound to the posted
+droplet ID and status `errored`, followed by the same exact-404 and single-response census
+absence proof, writes the same `provider-create-errored.json` receipt and
+`createErrored` and returns 1. Guest or monitor artifacts, an unbound or differently
+bound action, a failed or uncertain read, a GET that is not 404, a census that is not
+one clean response, an inventory match or an account change keeps the reservation
+and its IDs and stops. An uncertain read or a failed provider teardown keeps that
+collect's operation lock, which every later path refuses until the same custody
+step. This errored path never creates or deletes. Fleet `--collect`
+still reports a child holding its operation lock as busy and does not run this
+recheck. No controller writes a `create-recheck.lock`; a stray one is refused as
+custody wherever it appears.
+
+One errored answer is not a failure: if the exact GET still returns the posted
+droplet ID, the errored action left a real allocation. When that one row is
+positively owned (the saved name, run tags, size and region, one public address)
+and no unpublished receipt claims its absence, the collect binds exactly that
+posted droplet, as the in-deadline launch does, and returns 3; the completed-action
+route below then applies. Another ID, missing ownership, a census match after a 404
+or an uncertain read refuses with nothing bound or deleted. An unpublished receipt
+beside that exact GET, or beside a census row with the posted ID, the saved name or
+the run tag after a 404, is contradicted: the collect writes the witness
+`provider-create-reappeared` first, so a later 404 and empty census never adopt that
+receipt, and takes the contradiction route below. A census row alone binds nothing.
+
+Run tags count only as exact members of a tag array of non-empty strings. A tag
+field that is a string (even one containing the tags) or an array with any other
+entry is not ownership, for a bind and for the fresh ownership read before every
+DELETE.
+
+A stop between writing the receipt and publishing `createErrored` leaves the receipt
+beside a state that still has `createPending`, and from a launch its locks (refused
+as above until the custody step). The next collect repeats the fresh action read and
+absence proof, then adopts the existing receipt only if its bytes are exactly the
+canonical record for that saved state (its own census size and time); any other
+bytes refuse and are left unchanged. `createErrored` is published through its own
+fresh exclusive staging file (`state.json.create-errored-<random>.tmp`), as the
+monitor-ending publications are. A fixed-name `state.json.tmp` left by a stop during
+an ordinary save is not verified, so it is never read, promoted, removed or allowed
+to block this publication. It stays for the operator to archive. A stray random-named
+staging file is likewise left alone. An ordinary save on that reservation, such as
+the bind below, still refuses on the fixed-name file until the operator archives it.
+A stop after writing that create-errored stage and before its rename leaves it beside
+the receipt. If the posted droplet then reappears, the contradicted bind below checks
+the stage without reading it as state: its bytes must be exactly this reservation's
+publication of the receipt beside it (the saved state with `createErrored` naming
+the posted IDs and that receipt's hash), or a prefix of those bytes left by a write
+cut short. Such a stage is recorded with its hash, like a reappearance stage, so the
+pinned retirement can admit it. Any other bytes bind nothing: the witness is still
+written, and the collect refuses with `not this reservation's publication`. That
+file was not written by this reservation's publication, so account for its origin by
+the custody step, keep its bytes and that account outside the state roots, remove
+it, and collect again; the bind and the pinned retirement then proceed as below.
+
+A `completed` action bound to the posted droplet is a real allocation, not a
+provider-errored create. (Beside an unpublished receipt it contradicts that receipt,
+and takes the contradiction route below.) After the custody step above, group `--collect`
+reads the exact GET of the posted droplet ID, never a census. If that one row is the
+posted ID and positively owned (the saved name, run tags, size and region and one
+public IPv4) it binds that exact allocation and returns 3; a 404, a failed read or a
+row without that ownership refuses with `nothing bound`, whatever the census lists,
+and the next collect reads again. It never provisions. The binding is its own
+checkpoint: that collection's provider worker closes when it returns, and a fresh
+collection then retires it only through the pinned unused-bootstrap preview and
+approval below, with the fresh unused-host proof and the existing deletion fences.
+A monitored reservation takes the pending-monitor case of that route. An
+`--offline-handoff` reservation has no monitor and its handoff never started, so
+regular `--collect` keeps refusing it at the offline handoff gate, with stage
+`offline-never-started`, whose CLI text names `--collect --unused-bootstrap-known-hosts`. The pinned route admits it only as an offline never-started
+bound posted create (policy `offline-never-started-posted-create-unused-only-no-qualification`):
+the saved host ID equals the posted droplet ID, prelogin policy, no monitor, an
+empty ledger and seal list, no launch-pinned host key and no failure record, and,
+in a continuation, neither the attempt's `.fleet-operation.lock` nor the outer
+`.continuation-operation.lock` remains. It never manufactures a handoff, starts the
+guest or relaxes a deletion proof.
+
+A recorded failure is contradicted for good if a later collect sees its posted
+droplet again, by the exact GET returning that ID or by a census row with its ID,
+name or tag. That collect first writes the witness file `provider-create-reappeared`
+beside the reservation, then saves `createErrored.reappeared` (time, which read and
+the droplet ID) through its own fresh stage (`state.json.create-reappeared-<random>.tmp`),
+and leaves the receipt bytes alone. The witness, a left reappearance stage or the
+saved record each contradict the receipt: no later collect, launch in that root,
+fleet verification or continuation accepts it again, and no approval or child recheck
+made before the record admits the attempt.
+
+If the witness or the state publication fails, that collect stops with stage
+`create-contradiction-unpublished` and keeps its operation lock; `state.json` is
+unchanged. Every later path refuses on that lock until the custody step below: account
+for that collect's process tree, keep the lock bytes outside the state roots, and if
+`provider-create-reappeared` is absent (the witness write itself failed), create it
+(any content) before removing `operation.lock`. The next collect then sees the
+contradiction even if the droplet has gone again. A reappearance stage the failed
+publication left stays in place: it is never read as state or removed, and the bind
+below records it.
+
+A contradicted receipt, published or unpublished, has one route. Collect reads only
+the exact GET of the posted droplet ID (never a census). If that one row is the
+posted ID and positively owned (the saved name, run tags, size and region, and
+exactly one public IPv4), it writes the witness if it is absent, keeps the receipt and
+witness as evidence, replaces `createErrored` with `createContradicted` and binds
+exactly that droplet and returns 3. It never provisions. `createContradicted` holds
+the posted IDs, the receipt hash, `receiptVerified`, the bind's own exact read
+(`reappeared`, always the posted ID), the witness hash (the witness keeps the first
+observation, which can be a census row with another ID and the saved name or tag)
+and, as `stages`, the name and hash of each reappearance stage and each checked
+create-errored publication stage (above) left beside it.
+`receiptVerified` is true for a published receipt with its saved hash or an
+unpublished one whose bytes are exactly the canonical record for the saved state;
+other bytes (a partial write, say) are kept as an unverified artifact, not evidence
+that the create failed, and do not stop the bind of a positively owned droplet. A
+fresh collection then retires it only through the pinned unused-bootstrap preview and
+approval below (policy `contradicted-create-posted-droplet-unused-only-no-qualification`),
+which admits exactly the receipt, the witness and each recorded stage, each with its
+saved hash, beside the usual files (an unrecorded or changed one refuses), and keeps
+the never-started unit proof and the fresh-deletion fences. Regular
+`--collect` refuses it as an unused bootstrap needing that approval; an offline
+handoff refuses with stage `offline-never-started`. Until retired, the reservation
+blocks later rounds in its root. Any other answer, the posted ID absent, renamed,
+untagged, in another region or size, without exactly one public IPv4, or another ID,
+binds and deletes nothing and refuses with stage `create-errored-contradicted`. Its
+CLI text names `--collect --unused-bootstrap-known-hosts`; until the exact droplet
+shows its saved ownership, account for that droplet with the provider. No route
+deletes a droplet that is not positively owned.
+
+Fleet verification reports a group whose saved `createErrored` receipt rebuilds
+from its state, with no launch, operation or recheck lock left, as
+`create-errored`; it never qualifies the fleet. A continuation treats that attempt
+like a retired one: the group may be prepared again in a new slot. The receipt and
+the same lock-free custody are rechecked again at the final pre-intent recheck, so
+a lock that appears after the scan refuses. The successor's child checks it once
+more, after the account read that opens its create and immediately before it records
+create intent and sends the POST, under the child's own locks: the attempt's
+manifest and state bytes, its receipt and no launch, operation or recheck lock. An
+old attempt that has taken custody again by then refuses the create. A collect of
+that attempt that starts after this check never creates, provisions or deletes: it
+runs the read-only receipt and absence recheck, or records a reappearance and binds
+only the exact owned posted droplet (the contradiction route above). The approval
+subject lists each such attempt's account and posted droplet
+ID (`createFailures`, bound to its manifest, state and receipt for the selected
+group's retry), and separately every earlier provider-errored attempt's account and
+posted droplet ID in any group of the continuation (`postedCreates`, settled or
+contradicted, including a contradicted attempt after its pinned retirement). The
+successor's fresh pre-create census refuses any droplet with one of those IDs on that
+account, whatever its name or tags, before it records create intent, whichever group
+is selected. Each `postedCreates` row also snapshots its attempt (root, round, group,
+manifest and state hashes, custody outcome and whether it was contradicted). The
+child's final gate, after the account read that opens its create and after the
+selected group's own recheck, rereads every one of them, separately from that retry's
+eligibility: a changed manifest or state, a launch, operation or recheck lock beside the
+attempt (the same custody check as the selected group's own attempt), a witness or
+reappearance stage written since the snapshot, or a contradicted attempt not yet retired
+refuses the create before intent or POST (`changed, took custody or was contradicted before
+this create`). A contradicted attempt retired by the pinned route does not block; its ID
+stays in the census fence. No local recheck is atomic with the provider: a
+contradiction recorded after this gate is caught by the next launch, not this one.
+
+Admission applies the gate's custody check first. When `--prepare`, `--print-approval`
+or the approval reads the continuation, every earlier posted attempt, retired or not,
+must have no launch, operation or recheck lock beside it; otherwise it refuses before any
+reservation, approval prompt, intent or POST, with `continuation-admission; posted-custody`.
+Nothing clears the lock. Account for its owner by the custody step for that attempt's
+locks (verify the lock against the attempt's original launch or collect and that its
+process tree is gone, keep its unchanged bytes outside the state roots, then release it),
+and run admission again. If ownership is uncertain, leave the lock; the continuation
+stays closed.
+
+The group recheck settles only the child. A launch that stopped uncertain at its
+create deadline also keeps its attempt's `.fleet-operation.lock` and, in a
+single-group continuation, the outer `.continuation-operation.lock`; no controller
+releases either. The dead batch lock does not block a new slot, but the outer lock
+refuses every later `--prepare` and approval in that continuation root. Continuation
+resumes only through the operator custody step described under retained locks below:
+verify the outer lock's group, owner and process tree against the original launch,
+keep its unchanged bytes and that proof outside the state roots, then release it and
+prepare the group in a new slot. If ownership is uncertain, leave it.
+
 Ordinary `--collect` supports a separate unused-host retirement path only from
 the pre-start `preparing` state. A bounded read-only host probe must confirm exact
 metadata ID, an inactive never-started unit without a restart policy or pending
@@ -626,8 +1309,11 @@ receipt and intent. It never overwrites unknown evidence, treats an old observat
 as current permission or repeats a saved deletion intent.
 
 Use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`
-for a bound `preparing` host with a pending unregistered monitor and no seal. Preview and approve
-the exact pinned collection action with the same flag and absolute state root.
+for a bound `preparing` host with no seal and a pending unregistered monitor, the exact
+interrupted first upload below in an offline-handoff reservation with prelogin policy and
+no monitor, or an offline-handoff reservation bound to its late posted create that never
+started (above). Preview and approve the exact pinned collection action with the same flag
+and absolute state root.
 
 ```sh
 node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --print-approval
@@ -637,7 +1323,7 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
 - Before provisioning, the ledger must be empty (including after readiness exhaustion) or
   contain only the unacknowledged sequence-zero, 30-second bootstrap SSH `true` request
   ([#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618)).
-- After an interrupted upload, this path applies only to reservations launched from a commit
+- After a locally acknowledged upload, this path applies only to reservations launched from a commit
   that includes this recovery. Use that exact measured checkout and the original state
   directory; a different checkout refuses before provider access, even if it is newer.
   Only the successful, locally terminal prefix of the fixed no-op, directory setup and
@@ -648,6 +1334,17 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
   and an empty log, and every original registered session and watcher drained with no foreign
   actor. It binds the matching receipt digests to the unused retirement record
   ([#1744 Benchmark r21: an unused catalog host with six settled bootstrap entries is outside ordinary retirement](https://github.com/corten-run/corten/issues/1744)).
+- If only the very first `job.sh` upload lacks a reply, the measured checkout can retire a host
+  with a launch-pinned key **only if the upload never wrote the file**. The probe must find
+  only the empty log, the two preceding terminal session receipts, and the exact upload
+  request whose watcher failed before registration. Its deadline must have passed; neither
+  original PID, connection, transfer server, watcher job, trigger, nor occupied control
+  cgroup may remain. A partial file, later request, or missing proof preserves the host.
+  An unknown **final bootstrap seal** is not a first-upload failure. The same refusal
+  applies to ordinary unmonitored reservations and to offline reservations at any other
+  bootstrap step. This records an unused retirement receipt, not a native archive,
+  successful transfer, benchmark result, or reconciliation of an already externally deleted host
+  ([#1977 JSON r61 loses acknowledgement of the first bootstrap upload and cannot retire the unused host through ordinary collection](https://github.com/corten-run/corten/issues/1977)).
 
 Ordinary `--collect` refuses these pending-bootstrap cases before sending SSH. The pinned probe
 never adds, acknowledges or retries a ledger request or starts a unit. A settled SSH refusal
@@ -658,8 +1355,17 @@ The original local controller, provider worker, SSH and their descendants must b
 affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
 alone proves that. Preserve original locks and intents; the controller never clears
 or takes over an old lock. Only after that local proof may the operator archive and
-release the exclusive child and fleet locks under the existing custody policy. Keep
-the proof and original lock bytes outside the fleet and child state roots. Separately verify the SSH
+release the exclusive child and fleet locks under the existing custody policy.
+For an interrupted first upload in a single-group continuation, also account for
+the owner of the outer `.continuation-operation.lock`. It serializes all groups:
+stop dispatch to that root and verify the lock's group, owner and process tree
+against the original launch. Keep the unchanged lock bytes and proof outside
+all three state roots before releasing any identified lock for in-place recovery.
+If ownership is uncertain or any process can still act, leave the locks and host
+alone. This is not the fresh-root handoff described above: after external
+deletion the old locks stay in place and no collection is attempted.
+
+Separately verify the SSH
 host key against the exact provider/metadata identity and supply a local OpenSSH
 `known_hosts` file for that key; the controller passes a private snapshot of the
 approved bytes to SSH and never falls back to global host keys. The unused retirement
@@ -706,8 +1412,361 @@ observations or a running unit preserves the host. Fleet output reports
 without another DELETE. Native-started jobs use the separate collection and
 custody paths above. No retirement path can delete a running benchmark.
 
-For failure before monitor registration, `setup-watcher-proof-missing` means
-the preserved archive already records a watcher failure. `setup-host-proof-refused`
+For failure before monitor registration, an archived
+`control/watch-failure-<id>.json` is never a receipt. Only the exact record the
+guardian's watcher writes when its loop reaches the session's drainage deadline
+can select a drain proof, and only when it names exactly one settled bootstrap
+control in the saved ledger and the archive holds no receipt for it. Any other
+watcher failure (an unowned scope participant, a changed listener or observer, a
+sample or row cap, a launcher or observation timing failure) keeps refusing. The
+terminal host query then also runs a separate fixed drain proof
+(`cloud-setup-drain-source.mjs`) after the guardian, in its namespace. For each
+failed watcher it requires, on the same boot: the live failure record
+byte-identical to the archived one; that control's result exiting with the
+ledger's code; its watcher unit failed or unloaded, with no main or control PID,
+no queued job, an absent or empty cgroup and its observer gone; the session scope
+from its registration absent or empty, with no process of the query's own inventory
+inside it; and no process with an identity from that
+session's chain or a parent among its PIDs. A process can leave both the scope
+and its parent (for example `systemd-run --scope`, then reparenting to PID 1),
+so every process outside the live query's own set must also have started before
+the earliest failed session's first process. That set is the live session's
+chain, its watcher, the query, its timeout and the SSH listener. The listener
+must be the same process (PID and start time) that served every failed session,
+so a listener restarted during or after a session, or a different one, refuses.
+Outside that set only kernel threads are exempt: the kernel-thread flag, kthreadd
+(PID 2) as parent and the root cgroup, all three.
+Every check of the ordinary query still applies, including
+the exact custody inventory, so a stream or unknown control file still refuses.
+The host and the verifier also bind each of the failed control's request, start,
+launcher, registration, result and failure records to the copied custody, which
+retirement compares with the archive. Its receipt is
+`benchmark-failed-setup-retirement/v3` (host observation
+`benchmark-failed-setup-host/v3`, control proof
+`benchmark-control-setup-query/v2` with exact top-level fields). A query with no
+archived failure keeps its previous bytes and schemas, so the droplet path replays
+saved receipts unchanged. Fleet verification and group continuation replay a v1,
+v2 or v3 retirement receipt with the same verifier, which selects the drain proof
+from the archived watcher failures, not from the receipt, so a group retired this
+way can be continued. The proof adds no write: the failure, archive and exit
+stay as they were, and it never qualifies the group.
+
+The drain proof observes host state that can change, so its DELETE carries the
+same deadline as the pinned unused proof: 60 seconds from the local start of the
+host query, checked after the retirement's exact host read, before and after the
+receipt is written, again after the intent's evidence verification immediately
+before the intent is saved, after the DELETE's account preflight and in the
+provider request. A drain proof's intent
+is saved only after that preflight and the deadline check that follows it, as the
+exit-one retirement's is, so a proof that expires during the preflight (or a
+preflight that fails) leaves its receipt and recorded digest with no intent, and
+the next collect recovers them on a fresh proof as below; so does a drain proof
+that expires during the intent's evidence verification. The pinned unused and
+v1 and v2 setup retirements save their intent before the DELETE's preflight, as
+before (a pinned unused proof that expires during that verification likewise
+saves no intent); a v1 or v2 setup retirement keeps its existing check of 60 seconds from
+the proof's end, made before the intent. Expiry before the intent does not
+consume the intent; expiry after the intent forbids another DELETE whenever that
+DELETE may have been sent, so a later collect only verifies the saved receipt and
+checks exact absence. For a drain proof, the only window after the intent is the
+interval before the request (the dispatch guards, the production checkpoint and
+worker IPC, and the provider's own deadline check), which has no provider read. A
+drain proof's DELETE is sent with `allowFail`, so a refusal in that interval that
+positively reports the request unsent (the production checkpoint cancelled before
+the action reached the provider, or the provider engine's own deadline check
+before its request, which the worker carries back over IPC) withdraws the intent:
+the controller restores the state it saved just before it (the receipt's recorded
+digest, with no intent or retirement) under the same custody check as the intent.
+Before publishing that state, it writes an exclusive proof stage
+(`state.json.delete-unsent-<intent-sha256>.tmp`) with the hash of the exact saved
+intent and the state to restore. It then stages and publishes that restored state
+separately and normally removes the unchanged proof after publication. The collect
+refuses with `DELETE was not dispatched; the next collect retires on a fresh proof`.
+The not-dispatched answer does not say whether expiry or cancellation refused, so
+the message names neither. The next collect keeps that
+receipt as an interrupted one (below) and retires on a fresh drain proof of the
+same session.
+The restore only records how the DELETE ended, so it runs even after
+cancellation; a custody mismatch at the restore refuses and keeps the intent.
+An interrupted withdrawal is reconciled only under the checks below. Any
+other outcome after the intent keeps the intent, with recovery by exact absence
+alone: a request that started (an HTTP error, a timeout or a lost
+acknowledgement), an unacknowledged worker result, or a refusal by the
+controller's own dispatch guard. The pinned unused and v1 and v2 setup
+retirements send their DELETE without `allowFail`, as before, so for them any
+expiry after the intent keeps the intent.
+
+Expiry after the receipt is written but before the intent leaves a receipt with no
+intent. The next collect runs a fresh status check and host query, which appends
+controls, so the old receipt is no longer for the final control. Collection
+verifies it against the ledger prefix it names, which must still bind those exact
+rows, and keeps it under its content hash for archival only. Only the fresh
+receipt, which must be for the final control, authorizes the intent and the DELETE
+under its own deadline. A history copy kept by an earlier interrupted recovery is
+read back at the receipt's own bound (8 MiB for a v2 or v3 receipt), not 4 KiB.
+
+That prefix check takes the receipt's own timestamps, so it cannot tell an edited
+receipt from the one written. Before a v2 or v3 receipt is published, the state
+therefore records its digest as `pendingRetirement` (`kind` `setup-failed` and
+`evidenceSha256`); the retirement state that carries the intent removes it, and
+each new receipt replaces it first. An interrupted v2 or v3 receipt is recovered
+only when its bytes match that digest. A mismatch refuses with `interrupted
+retirement receipt differs from its recorded digest; preserve host`, and a state
+with such a receipt but no recorded digest (left by a controller from before this
+check) refuses with `interrupted retirement receipt has no recorded digest;
+preserve host`. Either refusal keeps no history copy, writes no intent and sends
+no DELETE; the host is then handled by the operator cleanup below. Without the
+prefix rule such a receipt could never be recovered anyway, because the retry's
+appended controls make it fail the full-ledger check. A v1 setup receipt and the
+unused and pinned unused receipts record no digest and keep their recovery by full
+verification against the current state; the pinned unused reservation is locked
+by its digest, so it cannot carry one. `controllerState` accepts
+`pendingRetirement` only on a bound `starting` or `running` host with its
+archive, evidence hash and extracted evidence preserved, and with no
+`retirement`, `deletionIntentAt` or `destroyedAt`.
+
+The digest is saved before the receipt is published, so a published v2 or v3
+receipt always has one, and a collect stopped between the two saves only the
+digest: the next collect finds no receipt and retires on a fresh proof. The
+digest is saved through its own fresh exclusive staging file
+(`state.json.pending-retirement-<random>.tmp`), as `createErrored` is, so a
+save torn there leaves that stage and no digest, and the next collect retires
+on a fresh proof. The stage is never read or removed; it stays for the operator
+to archive.
+
+Every deletion intent and `destroyedAt` the controller saves goes through its
+own fresh exclusive stage the same way (`state.json.deletion-intent-<random>.tmp`
+and `state.json.destroyed-<random>.tmp`), and so does publication of every withdrawal
+of a positively unsent DELETE's intent. An interrupted publication can leave a
+stage beside the previous `state.json`, never the fixed-name `state.json.tmp`.
+What the next collect does with it depends on the retirement kind:
+
+1. The unused, failed-setup (v1, v2 and v3) and failed-native (without a handoff)
+   retirements, and an ordinary deletion, recover. A torn intent leaves the state
+   before it, which the next collect recovers as an intent that was never saved
+   (for a v2 or v3 receipt, through its recorded digest: the receipt is kept and a
+   fresh proof retires). A torn `destroyedAt` leaves the intent after the one
+   DELETE, so the next collect only checks exact absence and records
+   `destroyedAt`, with no second DELETE.
+2. If a drain withdrawal could not publish the restored state but left a complete
+   proof stage, the next collect under its operation lock verifies the existing
+   v3 receipt and compares the stage byte for byte with the proof reconstructed
+   from the exact saved intent. Only a positive exact-ID read allows the collect
+   to finish the withdrawal and retire on a fresh drain proof. The interrupted
+   receipt is then kept for archival only. If operator cleanup already removed
+   the host, even a complete stage leaves the intent in place: collect confirms
+   exact absence and records `destroyedAt` without sending a DELETE. A failed or
+   inconclusive read also leaves the intent in place, without recording absence.
+   A partial or mismatched stage, an older unbound stage
+   (`state.json.delete-unsent-<random>.tmp`), and a missing or uncertain dispatch
+   acknowledgement do not authorize a withdrawal. An ordinary collect's torn
+   withdrawal also remains absence-only. Without a usable withdrawal proof, if
+   the droplet remains present, collect refuses with `deletion not confirmed;
+   outcome uncertain` and sends no DELETE. The operator cleanup below removes
+   that exact host and leaves the intent as saved for the next collect to confirm
+   absence.
+   A torn restore can leave `state.json.delete-unsent-restore-<random>.tmp`, and a
+   stop after the restore's rename but before unlink can leave the proof stage
+   beside a state with no deletion intent. These leftovers do not affect ordinary
+   drain recovery: it does not read the restore stage or use a proof that does not
+   match the current intent. They can remain on disk for the operator to archive.
+3. The handoff and exit-one retirements refuse. Their state save rechecks handoff
+   custody and keeps the operation lock when it fails, and their publication check
+   refuses every `state.json.*.tmp` name as an unsettled publication.
+4. The pinned unused retirement refuses. Its custody check admits only a closed
+   list of names in the state root, so a leftover stage refuses with
+   `unexpected local bootstrap custody; preserve host`.
+
+The refusals in items 3 and 4 fail closed with no DELETE, as before, until the
+operator archives the stage (operator cleanup below). Other ordinary saves keep
+the fixed-name `state.json.tmp` stage, and one left by a torn ordinary save
+still refuses the next ordinary save with `EEXIST` until the operator archives
+it: fleet verification's external-failure check treats that exact name as an
+unsettled publication, and the handoff publication check treats every
+`state.json.*.tmp` name that way, so it is not bypassed.
+
+A torn save in items 1, 2 and 4 fails with an error, after which the collect
+releases the lock it holds: `operation.lock`, or `stream-recovery.lock` for an
+invalid-monitor recovery collect, which leaves any original `operation.lock` as
+it found it (below). The handoff and exit-one saves in item 3 keep the operation
+lock when they fail. A controller killed during any of these saves (or anywhere
+else under a lock) leaves the lock it held. A later collect that needs that lock
+refuses on it until the operator accounts for that process tree and releases it
+by the custody step for retained locks (above).
+
+A v2 or
+v3 receipt and its history copy are published whole: each is written and synced
+as `<name>.stage` in the same directory, then hard-linked to its final name,
+which fails rather than replace an existing file, and the directory is synced
+(except on Windows, where the controller does not sync directories at all, so a
+power loss there can still lose a link the collect reported). Publication
+requires hard links in the state root; on a filesystem without them the link
+fails, the collect refuses with the stage left in place and no receipt, and
+nothing falls back to a direct write.
+Between writing and syncing the stage and the link, each runs the retirement's
+custody check below; a refusal there publishes nothing, so a saved digest changed
+or a drain proof expired while the stage was written leaves no receipt or history
+copy. The stage's name alone is not trusted: the write holds the file it created
+open by its own descriptor until the link or the refusal, so a replacement cannot
+reuse its inode, and keeps the digest of the bytes it wrote. Immediately before
+the link the name must still be that file (device and inode) holding those bytes,
+and after the link both names must be that file before the stage name is removed. A stage replaced or rewritten there
+refuses with `publication stage replaced before its link; nothing published, the
+replacement is kept` and is left as found. A custody refusal removes the stage
+only while it is still the file this write created; a replaced stage is kept and
+the refusal says `the publication stage was replaced and is kept`.
+A write interrupted before publication therefore leaves only that stage, never a
+partial receipt or history copy. A stage is never read: the next collect removes
+a stage with exactly that name before it reads the receipt or the history copy,
+including one left beside a published file whose stage link was not yet removed.
+The v1, unused and pinned unused receipts keep their exclusive direct writes.
+
+The bytes this process wrote, not the file, are the authority for the DELETE.
+From publication until the DELETE is sent, the receipt is part of the custody
+check below and must match that digest each time it runs.
+
+Every write a retirement makes, and its DELETE, rests on one custody check. In
+order: once the intent's verification has run, the evidence it pinned (below), the
+slowest part; once published, the receipt this process wrote; the lock this
+operation holds (the file this process created, by identity and bytes); the saved
+reservation (`state.json`, byte for byte) as this process last loaded or saved
+it; and, until the intent, a pinned unused or drain proof's deadline. The fast
+checks always follow the slow ones, so a change made while the evidence is walked
+is still seen. Once the DELETE has been sent, only the lock and the reservation
+remain. That lock is
+`operation.lock` for an ordinary collect and `stream-recovery.lock` for an
+invalid-monitor recovery collect, which never takes the original
+`operation.lock` it finds; a retirement under any other lock refuses. The
+reservation bytes are read before the retirement's first await and must hold
+exactly the state this process has loaded or saved; they are replaced only by the
+retirement's own saves (a v2 or v3 receipt's digest, then the intent), so a
+change made by anything else is refused and kept as made, never overwritten. The check runs after every await
+or slow step and immediately before every write: after the exact host read (a
+provider read), before a stale publication stage is removed, after an
+interrupted receipt is verified (which hashes the archive and its extraction) and
+before each of its stage removal, history copy and unlink, before the digest,
+before and after the receipt is written, at the start of the intent (for a drain
+proof, after the DELETE's account preflight), again after the intent's own
+verification immediately before it is saved, and after the absence read before
+`destroyedAt`. Each state save (the digest, the intent and `destroyedAt`)
+checks it once more after writing and syncing its stage, immediately before the
+rename that replaces `state.json`, and so does each receipt and history
+publication before its link (above); a refusal there removes that complete stage,
+which this write created, so it blocks no later save (a torn write's stage still
+stays, as above). For the intent save that check includes the receipt and the
+pinned evidence, so a receipt edited while the intent's stage is written refuses
+with no intent and leaves the receipt and its recorded digest. Before the intent a mismatch refuses with `saved reservation
+changed before the deletion intent; preserve host`, `retirement proof expired
+before deletion`, `operation.lock changed; preserve custody` or
+`stream-recovery.lock changed; preserve custody`, writes nothing after it and
+sends no DELETE: changed during the host read, no digest, receipt or intent is
+saved; changed during the account preflight or the intent's verification, the
+receipt and its digest stay with no intent. A drain proof that expires during
+that verification likewise leaves the receipt and its digest, which the next
+collect recovers on a fresh proof. The retirement is verified, and its archive
+and extraction pinned (below), before the intent is saved, so evidence that
+changed by then refuses with no intent and leaves the receipt and its digest for
+the next collect, which recovers them on a fresh proof once the evidence matches
+again. After the intent the deadline goes with the DELETE itself rather than with
+this check, so the absence read that follows a DELETE sent in time is not refused
+for it.
+
+After the intent, every retirement kind
+(unused, pinned unused and failed-setup v1, v2 and v3) checks through that same
+custody check, as this process left them, the
+receipt, the saved reservation (`state.json`, byte for byte, so including its
+retirement digest), for a v2 or v3 receipt the archived control custody its proof
+was built from (the inventory and bytes of the evidence's `control/` folder,
+including every watcher failure), for every failed-setup receipt the other inputs
+its replay verifier hashes, and the lock this operation holds. The control custody
+and those other inputs are checked first, then the receipt, the lock and the
+reservation, so the last step before dispatch follows the slower evidence checks
+and a receipt edited while the archive's identity is read is still refused. Those other inputs are `results.tgz` and the
+whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
+and `control/`). They are pinned without rereading them: the verification just
+before the intent hashes each, recording `results.tgz`'s file identity (device,
+inode, size, mode, link count, birth, modification and change times) around its hash and
+every tree entry's identity in the same walk, and the dispatch check compares only
+those identities. The archive's identity is compared on both sides of the tree walk,
+the slow part, so `results.tgz` changed while the tree is walked still refuses. Nothing else in the state root is pinned; the replay verifier
+reads nothing else. The check runs after the DELETE's account
+preflight, before the controller hands the DELETE to its transport, and again in
+the dispatch guard the transport calls after its last local await before the
+request: the production transport's cancellation checkpoint, and, for an
+in-process provider engine, the engine's own checkpoint before its REST request.
+There it runs before a pinned retirement's own guard and refuses by throwing,
+never by reporting the request unsent. The production provider worker is a
+separate process and a function cannot cross its IPC, so in production the last
+fence is the controller's, immediately before the action is sent to the worker; the
+worker's own checkpoint and the IPC transit are not covered, and nothing covers
+the interval between the request leaving and the provider acting on it; a change
+made only in that uncovered interval is not detected. A mismatch found by one of
+these checks refuses with `saved retirement reservation changed; preserve host`,
+`archived control custody changed; preserve host`, `setup archive changed;
+preserve host`, `setup evidence changed; preserve host`, `operation.lock changed;
+preserve custody` or `stream-recovery.lock changed; preserve custody` and sends no
+DELETE. A receipt edited before the intent (for a drain proof, including during
+the DELETE's account preflight) refuses with
+`published retirement receipt differs from the bytes written; preserve host`,
+saving no intent; its recorded digest stays, so a later collect refuses it as an
+interrupted receipt that differs from its recorded digest. Edited after the
+intent, it refuses with the same message before the DELETE is sent, and a later
+collect refuses with `retirement evidence changed`. Neither sends a DELETE; the
+host is handled by the operator cleanup below.
+
+The exact absence read after the DELETE is a provider read too, so `destroyedAt`
+is saved only after the lock this operation holds and the saved reservation (the
+intent state it wrote) are checked again. A lock missing or replaced during that
+read refuses with `operation.lock changed; preserve custody` and keeps the
+replacement; a changed reservation refuses with `saved retirement reservation
+changed; preserve host`. Either leaves the intent without `destroyedAt`, and a
+later collect under its own lock verifies the receipt, checks exact absence and
+sends no second DELETE.
+
+The drain proof is narrow. It can settle only a setup job whose host shows no
+Docker socket or daemon at query time (in practice one that failed before
+`docker-install`), with the guardian's exact deadline record archived, and that
+left no process running that started during or after the failed session.
+`bootstrap_stage=docker-install` starts `dockerd` and `containerd`, and the
+controller keeps polling for the bootstrap marker (about every 30 seconds) while
+the job runs, so a poll whose watcher fails after that point would find both
+daemons older than its fence, which alone would accept them. In drain mode only,
+the host query and the verifier therefore both refuse with
+`Docker or containerd present` when `/run/docker.sock` or
+`/run/containerd/containerd.sock` exists or is a symlink (even a dangling one), or
+when any process's kernel command name is `dockerd` or `containerd` or starts with
+`containerd-` (a shim). The query records the two socket observations in the proof
+as `dockerSockets`. A `dockerd` or `containerd` started after the fence never
+reaches this check: the start-time check runs first on both sides and refuses it
+with `process started during or after a failed session`. The
+command name is what a process reports, not an identity: this is a conservative
+refusal, not a proof that no daemon held session work, and it also refuses a host
+running Docker for any other reason. A failure before Docker started that leaves
+any process behind refuses too. A
+timer or other short-lived service that happens to run at query time (for example
+`apt-daily` or `fwupd-refresh`, before the job disables them) refuses too. A
+refusal is not retried: the query's refusal is recorded in the ledger, every later
+collect stops with `setup-host-proof-refused` before another query, and the host
+is then handled as it was before this proof existed, by the operator cleanup
+below. The proof covers processes that were started. It cannot see work the
+session handed to a process that already existed (such as `dockerd` or a D-Bus
+service) or a thread added to an existing process. Nor does it see work handed to
+systemd or D-Bus that has not started a process yet, such as a transient timer
+that has not fired; that is acceptable only because control sessions run the
+controller's fixed scripts.
+
+`setup-watcher-proof-missing` means an
+archived failure is not that deadline record, there is no control ledger, the
+failure does not name exactly one bootstrap row in the ledger, that row is not
+settled (no local terminal) or its code is not an integer, or the failure sits
+beside its own receipt; collection stops before any query. A
+custody read failure (for example a non-physical control folder or a record that is
+not a regular file) is not reported with that stage: it keeps its own error, which
+the production wrapper reports as `controller-collect`, and also stops before any
+query. After
+monitor registration the drain proof is never used: an archived watcher failure
+refuses with the same stage before any query, because stream state may exist on
+the host. `setup-host-proof-refused`
 means the registered terminal host query had an acknowledged nonzero exit, or
 exited zero but returned unusable proof. In the latter case the ledger retains
 code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
@@ -751,6 +1810,14 @@ still needs a later sample with no remaining session member to prove drainage.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
+Fleet verification and retry admission replay the saved failed-setup receipt
+against its archive and extracted evidence. For a controlled receipt they also
+verify the final setup query and the original control files in the extraction.
+Verified setup retirement permits a retry; it does not qualify a result.
+The retry approval binds the prior retirement, and the child rechecks it and
+its custody before recording the create intent and again before provider dispatch.
+A local refusal before contacting the provider keeps the new reservation unused;
+a missing provider reply does not count as a local refusal.
 
 ### Failed Native Custody And Retirement
 
@@ -770,7 +1837,28 @@ wrapper archive; it cannot produce a benchmark result. Use a separate
 `--retire-failed-native --print-approval` from a clean, merged descendant. The
 preview must bind the consumed launch intent, reservation, launch key, registered
 boot, original archive and extraction, and the output roots for the measured
-group. The measured registry and remote-job definitions must still match.
+group. This is a narrow exception to ordinary collection at the measured SHA.
+Use a clean checkout of a **strict descendant** of the measured commit that
+implements grouped pre-plan retirement and is in the fetched `origin/main` history.
+The controller compares the complete committed contents of three files, not just
+the group roster or the generated job. To check a candidate using full commit IDs:
+
+```sh
+test "$measured" != "$candidate" &&
+  git merge-base --is-ancestor "$measured" "$candidate" &&
+  git merge-base --is-ancestor "$candidate" origin/main &&
+  git diff --quiet --no-ext-diff --no-textconv "$measured" "$candidate" -- \
+    bench/workloads/registry.mjs bench/workloads/cloud-contract.mjs bench/workloads/cloud-remote.mjs
+```
+
+For example, measured `52b25c556499a9c4f537577aa3fcb6df175dd073` and merged
+candidate `14126d2a8a12bccd173ec29032c1818d42904213` pass that source check.
+A controller with the changed Git-install contract does not pass it for that
+measured commit, even though it regenerates identical unmarked job bytes.
+If no compatible merged descendant is verified, stop; do not substitute the
+latest checkout or edit a reservation. Source compatibility is not evidence
+of native entry, permission to delete, or a reason to reopen a closed slot.
+An unacknowledged upload before checkout is not a pre-plan native failure.
 
 This path requires a revoked monitor with a settled local owner, wrapper exit
 2, an empty archived campaign directory, and the final failure line from the
@@ -780,6 +1868,115 @@ controller checks the unit is idle, saves the campaign and native output roots
 (including evidence of absence), verifies the local copies, and checks the
 host and roots again. A changed or live host is retained. Neither the wrapper
 archive nor the later capture qualifies the group or supplies timing results.
+
+### Retire An Already Captured Handoff Failure
+
+Ordinary collection still keeps a host when the native outcome is
+`native-validated` but the wrapper exits 2. For a closed, settled single-group
+monitor with the original measured-controller capture already saved, use the
+same `--retire-failed-native` action from a clean, reviewed, merged descendant
+that passes the source comparison above. Preview from that checkout:
+
+```sh
+node bench/workloads/droplet.mjs "$round" --state-dir "$state_dir" \
+  --retire-failed-native --print-approval
+```
+
+Require recovery policy `grouped-handoff-failure-existing-custody-only`. Compare
+its measured and capture controller commits, host and account, launch and
+monitor identities, reservation and capture digests, and both archive digests
+against the already collected attempt. Run the same command with
+`--approve-reviewed-merged-ready <approvalSha256>` instead of `--print-approval`.
+The controller checks that exact approval again under the operation lock,
+reproduces the original capture script hash, and verifies both retained archives
+and extracted trees before contacting the host. Revoked or unsettled monitor
+custody, competing or retained locks, and unexplained prior retirement traces
+are refusals, not grounds to take over, recapture or repack.
+
+The action uses the existing fresh full rehash, final quiescence and ownership
+fences, and bounded DELETE. Before intent and dispatch it rechecks the held
+lock, verified custody file identities, both extraction inventories, and the
+approved capture and retirement receipt. These checks read metadata and small
+records, not archive or extraction payloads, inside the same proof deadline.
+The handoff controller checks the approved reservation bytes and file identity
+before every state write, including SSH requests and acknowledgements, and only
+advances that expectation after publishing its own verified replacement.
+Unexpected state is not repaired or overwritten; the operation lock is retained.
+It records the merged repair commit separately from the unchanged original
+capture. If DELETE was uncertain and the operation lock was released cleanly,
+take a new preview at the same repair commit. With a recorded deletion intent,
+the action can only verify exact authenticated absence. It rechecks local
+custody under the held lock after that observation, before recording completion,
+whether DELETE was acknowledged or this is an absence-only retry. It cannot
+repeat DELETE, qualify the group, promote the wrapper exit, or publish the
+native output.
+
+### Retire The Sealed Client Heavy Exit 1
+
+For [#2082 Benchmark r78 Client Heavy: ordinary collection keeps a paid terminal host after binding its failed archive](https://github.com/corten-run/corten/issues/2082),
+use the same separate `--retire-failed-native --print-approval` command, not another
+`--collect`. This policy is limited to monitored, dedicated, staged single-group
+Client Heavy r78 measured at `7c13920f87b6baa6c7f967027d2eff9358201e4c`. Use a
+clean, independently reviewed, merged descendant that passes the committed
+source comparison above. The measured checkout, archive and extraction remain
+unchanged.
+
+Require policy `r78-client-heavy-sealed-exit-one-retirement-only` and operation
+`observe-terminal-and-retire`. Check the preview against this attempt's consumed
+launch intent, exact reservation, account and allocation, launch key, registered
+boot, sealed campaign and original archive and extraction hashes. Use the exact
+new approval hash with `--approve-reviewed-merged-ready`. The locked controller
+requires a source-bound raw exit 1, a finished failed group (not a native-validated
+group), an intact collection manifest and stream seal/drain, and the complete
+r78 journal from authorization and bootstrap admission through the observed
+command exit, phase seal and campaign finish. The sealed host observation must
+name the same campaign, invocation, leader PID and start ticks, registered boot
+and delegated cgroup. Its samples must show that leader in that group between
+empty boundary samples, with each recorded process in only one cgroup per
+sample. No pending native roots, validation, deletion intent or competing
+custody may remain. This checks the command lifecycle, not renderer or native
+qualification. It compares the original tar members to the bound extraction
+before contacting the host. The verified extraction walk also computes the
+existing campaign, control and native subtree hashes from the same bytes.
+The collection manifest is still replayed separately, and the recheck after
+that replay requires unchanged extraction metadata.
+
+Both host observations use the launch-pinned key and the current same-account
+allocation. The read-only probe requires the original boot and job controls, an
+idle terminal unit with exit 1, no active benchmark work and no unaccounted
+Client Heavy work roots. It checks the still-original wrapper archive and live
+campaign/control/output roots against the held bytes. The final fence keeps
+the same root inventory and rehashes the original archive within the existing
+60-second DELETE proof window; it never repacks, downloads or runs native
+validation. A mismatch or incomplete observation preserves custody.
+
+The account preflight must finish within the proof window before the controller
+writes the retirement files and durable deletion intent. Only an explicit
+local pre-dispatch refusal or a positive not-dispatched acknowledgement from
+the private worker can return to fresh approval and two new host observations.
+The already acknowledged control ledger stays intact, and any tentative
+retirement files are retained as unsent history, not as proof of deletion. These
+checks permit at most one dispatched DELETE; only an authenticated exact-ID 404
+on the saved account records completion. If DELETE dispatch or acknowledgement
+is uncertain but the operation lock settled, preview again at the same repair
+commit. Require operation `reconcile-absence-only` and approve that new hash;
+it may only check absence, with no SSH or repeat DELETE. The same local custody
+check runs after the provider worker closes, before publishing absence or
+releasing the operation lock. If custody drifts, keep the lock and leave new
+absence unrecorded, even if the provider read itself throws. An unexplained prior
+receipt without its intent, interrupted publication or retained lock requires
+operator inspection, never automatic takeover. Fleet and continuation treat
+the attempt as unqualified and do not admit a successor before confirmed
+absence. A successor approval binds the retired attempt's exact state, launch
+intent and retirement receipt. The receipt binds a local metadata fingerprint
+of the verified archive and extraction. The child rechecks these bindings and
+the absence of retained custody before create intent and again before dispatch,
+without rereading archive or extraction payloads. Keep the original files in
+place; replaced or moved evidence may not match that fingerprint. The saved
+ID must also still be absent from the same-account census. No timings or result
+are accepted by this route.
+
+### Earlier Failed Native Migrations
 
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at
@@ -900,6 +2097,15 @@ read-only standard bare Git object view of the exact committed source, with
 against the sealed checkout first. This is metadata for real Git, not a Git stub,
 commit override in controller state, or permission to substitute a different
 source tree. No native qualification or production action is run by the harness.
+
+`cloud-cancellation-controls.test.mjs` checks the original control bytes on every run; its two
+Python 3 cases run only when asked. `CORTEN_SYNTHETIC_CONTROL_BOUNDARY=1` runs the exact emitted
+cancellation and custody programs through `test-fixtures/mixed-controls-boundary.py` on Linux, which
+needs fresh private `/bench`, `/etc/systemd/system` and `/var/lib/cloud` directories, such as a
+disposable container's tmpfs mounts. That setting, or `CORTEN_REQUIRE_PYTHON=1` where Python 3 is
+guaranteed (CI sets it for `npm run check:workloads`), also checks that the boundary makes its Git
+repository without touching a caller named by `GIT_DIR` and `GIT_WORK_TREE`. With either set, a
+missing Python fails that check rather than skipping it.
 
 ### Terminal Custody Fences
 
@@ -1148,7 +2354,24 @@ function name. `folder` is the extracted `campaign/` root containing
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
-Each local inspection has a fixed 15-minute deadline including snapshot setup.
+Local inspection has a 15-minute deadline including snapshot setup. With a saved
+DELETE intent, no recorded destruction and a previously verified, monitored
+result, a fresh collect may use up to 25 minutes for replay only after a
+same-account exact 404. It checks absence again and rechecks the archive,
+extracted evidence and terminal campaign and seal before recording cleanup.
+It never sends another DELETE. Other replay deadlines are unchanged.
+If ordinary collection at the measured commit cannot finish that replay, a
+reviewed merged successor can reconcile an already verified, successfully
+collected child with closed monitoring and a saved DELETE intent. Run the child
+`cloud-production.mjs --collect --absent-measured-checkout PATH` preview from
+the successor, with `PATH` the clean original measured checkout. Its approval must
+name `collect-verified-absent-host-only` and the original measured commit. The
+ancestor must supply the successor's complete replay source list. Replay reads
+the measured commit's blobs and verifies the same evidence again. Only the exact
+account and host may be read; a present host, changed reservation, or different
+replay result refuses. This route records only `destroyedAt`; it cannot connect
+to the guest or send another DELETE. Other collection paths keep their source
+requirements.
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider
@@ -1208,7 +2431,13 @@ grouped attempts. `groups-rN/` is the exclusive durable reservation; even failed
 preflight consumes it. An unresolved reservation blocks another round in that root.
 The root launch lock and round operation lock are exclusive files with process
 identity, synced before work. No PID liveness guess, stale-lock removal or takeover
-is automatic. A killed process may leave both locks. Inspect the exact process and
+is automatic. The round's `operation.lock` and its `stream-recovery.lock`, the
+child locks the controller takes around a round operation, are removed only while
+that path is still the file the controller created, with its bytes: if one was replaced during the
+operation, teardown keeps the replacement and refuses with `<lock> was replaced
+during this operation; the replacement is kept; preserve custody`, with any
+earlier refusal as its cause. The root launch lock is still removed by path at
+the end of a launch. A killed process may leave both locks. Inspect the exact process and
 all state/evidence before any operator recovery; never relaunch the reserved round.
 
 State writes use exclusive temporary files, file fsync, atomic rename and directory
@@ -1349,7 +2578,10 @@ metadata a valid URI or use it as a fallback destination.
 Polling constructs `/v2/actions/ID` from the numeric ID, never fetches `href`, and
 requires the authoritative response to prove the action ID, create type, droplet
 resource type, exact POST droplet ID and completed status. Only the validated
-droplet ID is returned across provider IPC. The controller requires that ID to
+droplet ID is returned across provider IPC. The same exact action with status
+`errored` is a permitted create failure, `create-action-errored`, whose output is
+only that droplet ID and action ID; IPC rejects the code on any other command or
+with any other output, and it is not absence proof. The controller requires that ID to
 equal the fresh owned-host ID before any provisioning SSH. Numeric linked-action
 lookup also exists in
 [godo's ID-based linked-action lookup](https://github.com/digitalocean/godo/blob/147424adb9525690e45ac36401d993b8c71e6ebc/links.go).
@@ -1386,21 +2618,42 @@ Only a privately identified failed account read can produce the exact-key
 `cloud-provider-account-failed/v2` reply: `nonce`, `sequence`,
 `disposition: resources-closed`, and its closed `diagnostic`. Success and other
 failures retain their existing result grammar. The parent requires the pending
-exact account command, its matching nonce/sequence, timely terminal proof and an
-observed exit0 without a signal before cached settlement may resolve. Terminal
-proof precedes expected disconnect/exit; an exit without proof, malformed or
-duplicate reply, forced close or cancellation stays uncertain.
+exact account command, its matching nonce/sequence, timely terminal proof,
+observed exit 0 without a signal and confirmed IPC drain before cached settlement
+may resolve. The owned child's exit and disconnect can arrive in either order
+after proof. An exit or disconnect without proof, any later message before drain,
+forced close or cancellation stays uncertain.
 If the account command still fails, its terminal protocol does not accept an
 identity even with `allowFail`; this worker cannot service another request.
 An HTTP refusal and a worker lifetime failure are different outcomes, not different
-authorities. Only this proved orderly failed read can release normal lifecycle
+authorities. A proved orderly failed account read can release normal lifecycle
 locks; a later explicitly approved collect must independently re-prove ownership
 and unusedness. No POST/DELETE or failed enclosing operation is retried, and an
 existing deletion intent still permits only fresh absence reconciliation. Other
-commands, including a create's action GET, cannot use this terminal disposition.
+commands, including a create's action GET, cannot use the account terminal reply.
+
+In the grouped launch worker, the fixed placement catalog GETs use the same private closure evidence for
+`request-error`, `response-error` and `response-aborted`. The failure must occur
+inside the original catalog deadline, all native requests, assigned sockets and
+any responses in that worker must have been observed closed, and the worker must
+not have attempted a mutation. This never retries a catalog page or accepts a
+partial listing. The separate exact-key `cloud-provider-catalog-failed/v1` reply
+uses the same nonce, sequence and `resources-closed` disposition. The parent
+requires the exact pending catalog command (with failure allowed), a closed
+`catalog-request` diagnostic, observed exit 0 without a signal and IPC drain, all before
+expiry or cancellation. Read-only fleet previews do not take this terminal path.
+It is still a launch failure, not placement or ownership
+evidence. In a locked child this check is before create intent: the reserved
+state stays unchanged, normal locks release on verified settlement, and the
+existing independent continuation can report `not-created`. A successor still
+needs a new, explicitly approved launch. In-flight or unobserved closure,
+deadline, bad or missing proof, an unproved worker exit or prior mutation
+attempt retain custody; nothing here recovers a reservation with create intent
+or clears a historical lock.
+
 Provider failures may append a bounded phase code to the generic CLI error. The
 closed vocabulary in `cloud-options.mjs` distinguishes credential consumption,
-account/list/create/delete requests, create response/link validation, action
+account/list/catalog/create/delete requests, create response/link validation, action
 request/response validation, pending-action deadline, and output filtering.
 Unexpected HTTP responses use a `-http` code and optionally a numeric status from
 that module's closed status table; unlisted statuses are omitted, not accepted or
@@ -1418,10 +2671,12 @@ does not prove `ECONNRESET`, and `connect` does not prove DNS/TLS failure or tha
 a connection was established. Details survive the
 existing private-worker IPC and cached finalizer diagnostic; the direct CLI renders
 only the closed stage, detail and allowed HTTP status. Unknown, extra or accessor diagnostic fields
-are not forwarded. Other phases and unclassified failures retain their coarse
-codes. No detail changes retry, credential, acceptance, settlement or lock rules,
-and the original r21 account-request cause remains unknown. A final
-`provider-settlement` stage alone does not identify the original failing call.
+are not forwarded. Catalog-request details use the same labels except
+`invalid-json`: complete malformed catalog JSON still goes through catalog
+validation. Other phases and unclassified failures retain their coarse codes.
+A label alone does not prove settlement. The original r21 account-request and
+r63 catalog-request causes remain unknown. A final `provider-settlement` stage
+alone does not identify the original failing call.
 The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
 SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).
@@ -1745,10 +3000,14 @@ access, not a new approval mechanism or permission to launch/deliver/delete.
    forwarding or multiplexing, and the same controlled environment as the existing
    transport. Do not export credentials, process environments or raw image `Env`.
    Missing host-key/ownership evidence stops this procedure, not a first-contact
-   accept or a switch to another host.
+   accept or a switch to another host. For offline handoff, require the launch
+   key file to match the saved `launchHostKeySha256`.
 3. Through that bounded read-only SSH session, save `systemctl show` for the exact
    saved unit with `Id`, `LoadState`, `FragmentPath`, `ActiveState`, `Restart`,
-   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. Require the expected
+   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. For offline status
+   discovery, also read `SubState`, `Job` and `ControlPID`; use the same
+   `cloud-sealed-collection.mjs::sealedUnit` predicate as collection. A terminal
+   observation ends discovery, not the collection checks. For audit export require the expected
    loaded unit/path, `Restart=no`, active state and nonzero MainPID. Read
    `/bench/bootstrap-ready.json` and `/bench/campaign/.host-attempt.json` to obtain
    the exact campaign ID. In that campaign directory identify the **latest**
@@ -2141,7 +3400,14 @@ audit_node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROO
 
 Delivery still rechecks live ownership, waiting group/inbox, nonce-bound state and
 exact canonical subject, records its single durable attempt and cannot overwrite
-an inbox. The live process, not the exported JSON, accepts the full native receipt
+an inbox. The local publisher records the approved SHA-256 before exposing the
+queued delivery. The live sender checks that digest and consumes the one-shot
+marker before sending the checked bytes, leaving the same files for replay of
+a sealed audit. This catches a missing marker or a mismatch between the marker
+and the queue. It does not authenticate either file against someone who can
+rewrite both in the private same-user state directory. On a mismatch, preserve
+the queue and monitor records instead of recreating the marker by hand. The
+live process, not the exported JSON, accepts the full native receipt
 and advances. A delivery result of 3 is not qualification; a failed/uncertain
 attempt is not automatic retry authority. Observe normally, then use the existing
 separately approved `--collect` only after the exact unit is terminal. Terminal

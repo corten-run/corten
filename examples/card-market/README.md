@@ -26,7 +26,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 
 | Variable | What it does | Without it |
 |---|---|---|
-| `API_BASE` | the item API the pages read | the demo catalog built in (`fixtures/demo.json`) |
+| `API_BASE` | the item API the pages read; a pooled connection to it idle for 4 s is not reused (`UPSTREAM_IDLE` in [`src/source.rs`](src/source.rs)), chosen for the benchmark's item API, which closes one idle for 5 s: for another API, set it under the idle time that API keeps a connection open | the demo catalog built in (`fixtures/demo.json`) |
 | `ITEM_SOURCE=fixture`, `FIXTURE_PATH` | items from a JSON file of API responses, loaded at startup (benchmarks): mount one, such as `fixtures/smoke.json` (`-e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -v "$PWD/examples/card-market/fixtures:/fixtures:ro"`) | `fixtures/items.json` in the working directory |
 | `API_KEYS` | partners that may set alerts through `/api/alerts`, sending the key as a bearer token (`Authorization: Bearer <key>`): `name=key,name=key` | no partner may |
 | `AGENT_TOKENS` | tokens for the MCP endpoint `/mcp`, sent as `Authorization: Bearer <token>`, comma separated | no agent may |
@@ -36,7 +36,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | `MAX_CONNECTIONS` | the most connections held open at once; past it, new ones wait until one closes | no limit |
 | `PROXIES` | the load balancers whose `X-Forwarded-For` is trusted: addresses or CIDRs, comma separated | the connection's address |
 | `HTTPS` | present (any value) when served over HTTPS: browsers are told to keep using it (HSTS) | not sent |
-| `HOSTS` | the host names the app answers, comma separated (`*` for any); a request for any other gets a 421 | `localhost` and names under it, IP addresses, and requests with no `Host` |
+| `HOSTS` | the host names the app answers, comma separated (`*` for any); a request for any other gets a 421 | `localhost` and names under it, IP addresses, and HTTP/1.0 requests with no `Host` |
 | `HOST`, `PORT` | the address it listens on | both loopback addresses, port 3000 (the image sets `0.0.0.0:8080`) |
 
 ## Where things are

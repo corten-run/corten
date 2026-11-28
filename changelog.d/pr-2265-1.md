@@ -1,0 +1,1 @@
+- Benchmark collection can finish an interrupted drain-proof withdrawal when its saved stage proves the exact DELETE was never sent, then retire on a fresh proof. [#2231 A torn drain-proof withdrawal strands its unsent DELETE intent until an operator clears it](https://github.com/corten-run/corten/issues/2231)

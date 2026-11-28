@@ -707,6 +707,76 @@ async fn an_allowed_origin_may_call_the_api_from_the_browser_but_not_post_the_pa
     assert_eq!(res.headers()["content-type"], "application/problem+json");
 }
 
+/// `Api::allow_origin` keeps an origin as a browser writes it in `Origin`, so one written with
+/// its default port still lets that site's writes and preflights through.
+#[tokio::test]
+async fn an_allowed_origin_written_with_its_default_port_matches_the_browsers_origin() {
+    let router = api_app(|api| api.allow_origin("https://partner.example:443"));
+    let res = router
+        .clone()
+        .oneshot(
+            Request::post("/api/post")
+                .header("origin", "https://partner.example")
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["access-control-allow-origin"], "https://partner.example");
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/post")
+        .header("origin", "https://partner.example")
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(preflight).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.headers()["access-control-allow-origin"], "https://partner.example");
+}
+
+/// An app's webview sends its own scheme in `Origin` (Capacitor on iOS: `capacitor://localhost`);
+/// allowed, its token-authenticated writes and preflights go through like a site's, and another
+/// app's scheme does not.
+#[tokio::test]
+async fn an_allowed_origin_may_be_an_apps_webview() {
+    let router = api_app(|api| api.allow_origin("capacitor://localhost"));
+    let write = |origin: &str, site: Option<&str>| {
+        let mut req = Request::post("/api/post").header("origin", origin);
+        if let Some(site) = site {
+            req = req.header("sec-fetch-site", site);
+        }
+        req.body(Body::empty()).unwrap()
+    };
+    for site in [Some("cross-site"), None] {
+        let res = router.clone().oneshot(write("capacitor://localhost", site)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{site:?}");
+        assert_eq!(res.headers()["access-control-allow-origin"], "capacitor://localhost");
+    }
+    let res = router.clone().oneshot(write("tauri://localhost", Some("cross-site"))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(!res.headers().contains_key("access-control-allow-origin"));
+
+    let preflight = |origin: &str| {
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/api/post")
+            .header("origin", origin)
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "authorization")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let res = router.clone().oneshot(preflight("capacitor://localhost")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.headers()["access-control-allow-origin"], "capacitor://localhost");
+    assert_eq!(res.headers()["access-control-allow-methods"], "POST");
+    let res = router.oneshot(preflight("tauri://localhost")).await.unwrap();
+    assert!(!res.headers().contains_key("access-control-allow-origin"), "another app's preflight fails");
+}
+
 #[tokio::test]
 async fn an_api_at_the_root_makes_the_whole_app_json() {
     let router =
@@ -716,6 +786,41 @@ async fn an_api_at_the_root_makes_the_whole_app_json() {
     assert_eq!(body, r#"{"title":"Not Found","status":404}"#);
     let (status, _, body) = call_with(router, "GET", "/health/ready", None, None).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "ok"), "Corten's own routes keep their behavior");
+}
+
+/// A request under an API is answered the same whatever mode its `corten` and `Accept` headers
+/// name: the stages do not look the two up there (`RequestPage::read`), and the handler's `Req`
+/// still reads them.
+#[tokio::test]
+async fn an_api_answers_the_same_whatever_mode_the_request_names() {
+    let router = App::new(Routes::new())
+        .api::<Root>(|api| api.route::<Items>(crate::Methods::reads(get(|req: Req| async move { format!("{:?}", req.mode) }))))
+        .router();
+    let said = |headers: &http::HeaderMap| {
+        ["content-type", "cache-control", "vary"].map(|name| headers.get(name).map(|value| value.to_str().unwrap().to_owned()))
+    };
+    let asked = [
+        (None, None, "Document"),
+        (Some("nav"), Some("application/json"), "Navigation"),
+        (Some("action"), Some("text/html"), "Action"),
+        (Some("page"), None, "Document"),
+        (None, Some("application/json"), "Data"),
+        (None, Some("text/html,application/xhtml+xml,*/*;q=0.8"), "Document"),
+    ];
+    let mut answers = Vec::new();
+    for (mode, accept, read) in asked {
+        let (status, headers, body) = call_with(router.clone(), "GET", "/items", mode, accept).await;
+        assert_eq!((status, &body[..]), (StatusCode::OK, read), "the handler's Req reads the two headers: {mode:?} {accept:?}");
+        let (missing, missing_headers, problem) = call_with(router.clone(), "GET", "/nope", mode, accept).await;
+        assert_eq!(
+            (missing, &problem[..]),
+            (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#),
+            "{mode:?} {accept:?}"
+        );
+        answers.push((said(&headers), said(&missing_headers)));
+    }
+    assert_eq!(answers[0].1[0].as_deref(), Some("application/problem+json"));
+    assert!(answers.iter().all(|answer| *answer == answers[0]), "one set of headers whatever the request names: {answers:?}");
 }
 
 /// An API's routes in a module of their own, sharing the module's state; its prefix route names

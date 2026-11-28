@@ -640,7 +640,7 @@ mod tests {
         let app = client(&Desk::new(10));
         let res = app.get(&url::Statement).await;
         assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(res.headers()["cache-control"], "no-store");
+        assert_eq!(res.headers()["cache-control"], "private, no-store");
         let html = res.text();
         assert!(
             html.contains(r#"Hollow Crown</th><td class="table__numeric">3</td><td class="table__numeric">$"#),

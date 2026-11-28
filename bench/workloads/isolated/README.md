@@ -95,7 +95,7 @@ It does not replace any native admission gate or default profile.
 | Group | Round and fixed preparation | Native defaults and retained evidence |
 |---|---|---|
 | Catalog page | `cN`, excluding historical `c1`; catalog fixtures; `--build --group catalog-page` | Three passes, 60 s phases, 30 s warmup, rate 150. Both-source page and JSON/browser gates precede page-only timing. Entire `bench/catalog/results/<round>` and strict commit-bound report. |
-| JSON API | `jN`; both fixtures; `--build --group json-api` | Same 60/30/150 defaults. All 36 functional cells plus independent exact-image native-source audits. Receipt staging is blocked here, not invented or waived. Entire results tree and strict commit-bound report. |
+| JSON API | `jN`; both fixtures; `--build --group json-api` | Same 60/30/150 defaults. Every app's four functional cells plus independent exact-image native-source audits. Receipt staging is blocked here, not invented or waived. Entire results tree and strict commit-bound report. |
 | Localized marketplace | `wN` or native official `rN` starting at r17; marketplace fixtures; `--build --group localized-marketplace` | Native defaults are 60/30/150, not the separate short-window cloud profile. Exact-image production/browser gates; preserve excluded/stopped outcomes. Native report has no strict-completeness flag; collection must separately check complete selected coverage. |
 | Mixed production | `wN --build`; runner generates fixture | Default functional-only profile, seed 42, two clients, one repetition. Measurement defaults remain three passes, 120 s windows, 15 s warmup, 30 s calibration, 120 s tail, 16 cycles. Raw captures, readbacks, faults and measurement tree stay separate. No standalone validator yet. |
 | Full-stack browser | `wN --build --out bench/fullstack-browser/work/<round> --isolated` | All ten apps and 240 profiles, native desktop/mobile settings. Requires host Chromium, a delegated command cpuset, the local Node tool image and free SvelteKit loopback port 8080. Isolation evidence does not replace the native workload gates. |
@@ -107,7 +107,11 @@ It does not replace any native admission gate or default profile.
 Named override recipes include `marketplace-short-window` (three passes,
 15 s phases/10 s warmup/rate 150), `mixed-measure` (adds measurement without changing the
 default native profile/settings), `mixed-production-measure` (the separately reviewed
-production procedure adds measurement and the native matched profile), `native-feed-measure` for either live group
+production procedure adds measurement and the native matched profile), `mixed-production-django-asgi`
+(the earlier dedicated recipe selects Django ASGI), and `mixed-production-asgi-webflux`
+(the current dedicated recipe retains Django ASGI and selects Spring WebFlux with
+the same timing, resources, and gates),
+`native-feed-measure` for either live group
 (native-feed for every candidate, 1,044 events, queue 1,024/history 1,025, then the native
 1/2/4-browser measurement levels), and [`client-heavy-comparison-v1`](../../client-heavy/README.md#dedicated-comparison-recipe)
 for dedicated client-heavy campaigns. No arbitrary numeric tuning, caller-selected profile,
@@ -129,11 +133,16 @@ sfo2. A non-catalog group can use c-8 in sfo2 (`dedicated-sfo2`), lon1
 placement. Native replay reports the alternate mode so the collector can check
 it against the child's reservation. These c-8 placements use the same workload
 and resource budgets.
-The fleet binds only catalog-page to c-16 in sfo2 with
+The fleet binds Catalog to c-16 in sfo2 with
 [`c16-generator-v1`](CAMPAIGN.md#parent-interface), which widens the load generator
-without changing the app, upstream or probes. Allocation and isolation remain
-unobserved by an offline binding. Other timed HTTP roles retain native 1/2/4 CPU quotas and explicitly
-record intended app/upstream/load pinning `1`/`2-3`/`4-7` using each native environment prefix.
+without changing the app, upstream or probes. An independent JSON API fleet can
+opt into [`json-c16-generator-v1`](../CLOUD.md#json-api-c-16-placement-opt-in) or
+[`json-c32-generator-v1`](../CLOUD.md#json-api-c-32-placement-opt-in), also in sfo2.
+The wider layout then changes only the generator quota and pinning; the cold
+probe and counter sidecar stay on `4-7`. Allocation and isolation remain
+unobserved by an offline binding. The default timed HTTP roles retain native
+1/2/4 CPU quotas and explicitly record intended app/upstream/load pinning
+`1`/`2-3`/`4-7` using each native environment prefix.
 Those settings are expectations, not observed environment or native defaults. Mixed
 functional capture has separate 1/2/2 CPU app/upstream/capture budgets; only its explicit
 measurement recipe requests the measured CPU placement. Its qualification worker has 1 GiB;

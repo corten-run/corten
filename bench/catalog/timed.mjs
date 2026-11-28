@@ -4,8 +4,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { memoryMiB, summarizeSamples } from "./stats.mjs";
-import { leanApps, leanProfile } from "./contract.mjs";
+import { parseStatsSample, summarizeSamples } from "./stats.mjs";
+import { leanApps, leanProfile, recordedLeanApps } from "./contract.mjs";
 import { workerAware, workerPhaseSchema, workerCommand, verifyWorkers, workerHeadroom } from "./apparatus.mjs";
 import { observeLoadLimits, verifyLoadLimits } from "./cgroup.mjs";
 
@@ -31,6 +31,32 @@ export function timedContainerEvidence(info) {
     mounts: info.Mounts.map(({ Type, Source, Destination, RW }) => ({ Type, Source, Destination, RW })).sort((a, b) => a.Destination.localeCompare(b.Destination)) };
 }
 
+// The producer's failure classes (load-outcome.js, which a replay does not load). Only a failed
+// request adds to its class's `catalog_failed_<class>` series, so a run without failures has none,
+// and neither does a summary from the producer before the split: absence alone is not a count.
+// When any series is present, the four HTTP classes must account for every HTTP error and
+// `transport` and `other` for every invalid response, exactly, each present series with at least
+// one request. Without any, the split is unknown (null), never zero. The `catalog_failed_` prefix
+// is reserved for these classes: a series under it with any other suffix is refused, alone or
+// beside known ones, so a misspelled class can neither pass for a summary without the split nor
+// hide beside a counted one.
+export const timedFailureClasses = Object.freeze(["http_429", "http_502", "http_503", "http_5xx", "transport", "other"]);
+const httpClasses = ["http_429", "http_502", "http_503", "http_5xx"];
+const failurePrefix = "catalog_failed_";
+
+export function readFailureClasses(summary, { http_errors: httpErrors, invalid_responses: invalid }) {
+  const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
+  assert.ok(!Object.keys(summary?.metrics ?? {}).some((key) => key.startsWith(failurePrefix)
+    && !timedFailureClasses.includes(key.slice(failurePrefix.length))), "unknown timed failure class series");
+  const present = timedFailureClasses.filter((name) => metric(`catalog_failed_${name}`) !== undefined);
+  if (!present.length) return null;
+  const classes = Object.fromEntries(timedFailureClasses.map((name) => [name, present.includes(name) ? metric(`catalog_failed_${name}`)?.count : 0]));
+  assert.ok(present.every((name) => count(classes[name]) && classes[name] > 0), "timed failure class count missing");
+  assert.equal(httpClasses.reduce((sum, name) => sum + classes[name], 0), httpErrors, "timed failure classes differ from HTTP errors");
+  assert.equal(classes.transport + classes.other, invalid, "timed failure classes differ from invalid responses");
+  return classes;
+}
+
 export function readTimedLoad(summary) {
   const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
   const requests = metric("http_reqs"), duration = metric("http_req_duration"), failed = metric("http_req_failed"), checks = metric("checks");
@@ -39,6 +65,8 @@ export function readTimedLoad(summary) {
   assert.ok(duration.avg <= duration.max && duration["p(50)"] <= duration["p(95)"] && duration["p(95)"] <= duration["p(99)"] && duration["p(99)"] <= duration.max, "timed latency order differs");
   const counts = Object.fromEntries(["successes", "timeouts", "http_errors", "invalid_responses"].map((name) => [name, metric(`catalog_${name}`)?.count]));
   assert.ok(Object.values(counts).every(count), "timed request classification missing");
+  const classes = readFailureClasses(summary, counts);
+  assert.equal(classes?.transport ?? 0, 0, "timed request ended in a k6 transport error without an app response");
   assert.equal(counts.invalid_responses, 0, "unclassified or corrupt response");
   const errors = counts.timeouts + counts.http_errors;
   assert.equal(counts.successes + errors, requests.count, "request classifications do not cover requests");
@@ -110,7 +138,7 @@ export function verifyTimedPhase(summary, subject, { readJson, readText }, previ
     healthy(runtime, summary, appName, summary.apps[app].imageId, "app", 2 ** 30, "running");
     execution(runtime, summary.apps[app].imageExecution);
     const profile = summary.measurement.leanProfile;
-    if (profile !== undefined) same(profile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
+    if (profile !== undefined) same(profile, { name: leanProfile, apps: recordedLeanApps(summary) }, "catalog lean configuration differs");
     same(runtime.env, [`CATALOG_SOURCE=${source}`, "CATALOG_FIXTURE_PATH=/fixtures/catalog.json", `API_BASE=http://${upstreamName}:8080`,
       ...(profile !== undefined && leanApps.includes(app) ? [`PROFILE=${leanProfile}`] : [])].sort(), "timed source environment differs");
     same(runtime.mounts, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures")], "timed app mounts differ");
@@ -155,10 +183,10 @@ export function verifyTimedPhase(summary, subject, { readJson, readText }, previ
   same(Object.keys(stats.samples).sort(), [...sampled].sort(), "timed sample inventory differs");
   const raw = readText(`${phase}-stats.log`), parsed = Object.fromEntries(sampled.map((name) => [name, []]));
   assert.ok(raw.endsWith("\n"), "timed stats framing incomplete");
-  for (const line of raw.split("\n").filter((s) => s.trim())) {
-    const row = JSON.parse(line); assert.ok(typeof row.Name === "string" && Object.hasOwn(parsed, row.Name), "unknown timed sample");
-    assert.match(row.CPUPerc, /^\d+(?:\.\d+)?%$/, "malformed timed CPU percentage");
-    parsed[row.Name].push({ cpu: parseFloat(row.CPUPerc), mem: memoryMiB(row.MemUsage.split("/")[0]) });
+  for (const line of raw.split("\n").map((s) => s.trim()).filter(Boolean)) {
+    const { name, cpu, mem } = parseStatsSample(line);
+    assert.ok(Object.hasOwn(parsed, name), "unknown timed sample");
+    parsed[name].push({ cpu, mem });
   }
   const derived = {};
   for (const name of sampled) {

@@ -18,6 +18,10 @@ One handler answers every surface. It branches on `req.mode` only to choose the 
 never to change what the action does. A new surface therefore adds a renderer, not a second
 backend.
 
+A desktop app has no column of its own. In a browser, an installed PWA or a desktop shell it is
+the Web column; a native desktop screen is the Native screen column, except that a UI written in
+Rust links `Replica` directly rather than through UniFFI ([Desktop apps](#desktop-apps)).
+
 ## What exists now
 
 1. `Mode::Data` and `Req::screen` (feature `json`): the same URL is HTML for browsers and JSON
@@ -63,6 +67,70 @@ backend.
 3. Design tokens come from one source and generate CSS, Swift and Kotlin. Only the components
    native screens use are mirrored.
 
+## Desktop apps
+
+A phone has one toolkit its vendor tunes the platform for. A desktop has none: Windows has Win32,
+WPF and WinUI, macOS has AppKit and SwiftUI, Linux has GTK and Qt. The one UI platform every
+desktop offers apps is a browser engine: WebView2 (Chromium), which Windows 11 includes and
+Microsoft has installed on eligible Windows 10 devices; WKWebView, part of macOS's WebKit
+framework; and WebKitGTK, which Linux distributions package. Corten's runtime and `corten-ui` are
+tested in Playwright's builds of Chromium, Firefox and WebKit
+([design Limit 10](design.md#limit-tested-browsers)), not in those system web views themselves.
+
+Fastest at the user's end is four numbers on a desktop, and they do not agree:
+
+1. Time to first use. A URL wins: no installed app beats not installing one.
+2. Latency inside a loaded screen. Corten's browser numbers are of one client, the browser. On
+   the desktop profile the item page reaches the mark its own code sets when ready 59 ms after a
+   cold navigation starts ([In the browser](performance.md#in-the-browser), historical round
+   r16). In round browser-4 ([Client-heavy screens](performance.md#client-heavy-screens)) views
+   take over 1,000 server-rendered rows in 10.2 ms, from the parser finishing to ready less the
+   rendering of any long frame (50 ms or more) recorded in between, and the first click on a
+   taken-over row updates the DOM in 1.4 ms. Nothing compares input to paint across the four
+   desktop clients (a browser tab, an installed PWA, a web view shell and a native screen). The
+   estimate is that a native toolkit would not answer faster by an amount a person can feel.
+3. Cold start of an installed app, and memory. A native app wins here. Estimated, not measured: a
+   web view shell costs a few hundred milliseconds and 100 to 300 MB, a native app tens of each.
+4. What the browser an app's users run cannot reach: an OS integration (a tray icon, global
+   shortcuts, file access without a prompt) or a device (a label printer, a scale, a scanner).
+   This differs by browser and device: Web Serial and camera capture, where a browser has them,
+   reach some devices.
+
+The estimates in 2 and 3 wait on the desktop benchmark (open decision 4, below). Until it reports,
+a desktop app on Corten is one of these, the first by default:
+
+1. The browser and the installed PWA (built). The same pages any browser gets, installable with
+   an offline fallback page by `corten::pwa` (What exists now, item 5). Nothing in them is
+   specific to a desktop.
+2. A desktop shell (not built): an installed window around a web view showing the
+   server-rendered pages, the desktop twin of the mobile shell (Native apps, item 1). An app wants
+   it when the browsers its users run cannot reach a device or an OS integration it needs (item 4
+   above). The preferred direction for the prototype is the system web view rather than a bundled
+   Chromium (Electron), which costs download size and memory to remove differences between
+   engines the runtime is already tested across; the prototype settles it. A shell's web view is
+   a browser, so it holds live streams as [design Limit 14](design.md#limit-http1) says. What the
+   framework owns in it, and how a page reaches a device, are open decision 5 (below).
+3. A native desktop screen (not built): it reads `req.screen` JSON, posts the same actions and
+   follows feeds with `Replica`, through the same planned `corten-native` core as a phone's native
+   screen (Native apps, item 2). A UI written in Rust links that core directly, without UniFFI.
+   The toolkit is the app's choice; Corten owns the contract, the JSON Schema
+   (`Types::json_schema`) and the design tokens. The app writes one only for a screen where the
+   desktop benchmark shows the web view losing by the margin open decision 4 is to set.
+
+Corten does not compile `html!` components to a native toolkit
+([design Choice 73](design.md#choice-no-native-components)). A component is HTML, a scoped
+stylesheet and plain functions over the DOM, and drawing that without a browser means
+reproducing what a browser engine does, and keeping a second component model in step with the
+first. A screen that needs a native toolkit is written in it, from the same screen JSON.
+
+Each of these still reaches the server across the network. A desktop app that carries its Corten
+server in its own process would remove that round trip. It would keep working with no connection
+only if the app also had its data and everything else it depends on locally, and the README
+sends an offline-first app whose data lives on the device elsewhere
+([When to use it](../README.md#when-to-use-it)).
+It is open decision 6, not a plan. A shell or a native desktop screen, when one is built, ships
+with a test that drives an example through it (surface rule 6, below).
+
 ## Agents
 
 1. Reading: an agent fetches any screen as JSON. Because rule 7 keeps every displayed value in
@@ -88,18 +156,67 @@ backend.
    marked TODO. Corten offers nothing for it yet: building on a draft means rewriting with each
    revision (Values 2).
 
-   An app can offer a tool today from a function its component's markup calls, in the
-   `#[component(js)]` script, with `document.modelContext.registerTool(.., { signal })`, so the
-   tool goes away with the component. Nothing in Corten needs to change for that.
+   It was reviewed again on 2026-11-23 (Corten `14126d2a8`), when one of the conditions set for
+   that came true: a major agent calls it. ChatGPT's desktop app finds and calls a page's tools
+   in its built-in browser, those a script registers and those written as attributes on a form
+   ([Site tools](https://learn.chatgpt.com/docs/webmcp)). The draft of that day is still a
+   Community Group report that is not on the Standards Track, and the form attributes are not in
+   it at all: `tooldescription`, `toolautosubmit`, `toolparamdescription` and the submit event's
+   `agentInvoked` and `respondWith()` occur nowhere in its text. They are proposed in the group's
+   explainer
+   ([declarative-api-explainer.md](https://github.com/webmachinelearning/webmcp/blob/main/declarative-api-explainer.md)),
+   which leaves how a form's controls become a schema as a TODO ("Chromium is implementing a
+   loose version of this") and says that what a form answers the agent with is under debate. It
+   is still one engine, Chromium: the group lists origin trials in Chrome (from 149) and Edge
+   (from 150)
+   ([implementation-status.md](https://github.com/webmachinelearning/webmcp/blob/main/implementation-status.md)),
+   and Chromium has it off without a flag (159). Mozilla's position is neutral
+   ([mozilla/standards-positions#1412 WebMCP](https://github.com/mozilla/standards-positions/issues/1412))
+   and WebKit's is to oppose it
+   ([WebKit/standards-positions#670 WebMCP](https://github.com/WebKit/standards-positions/issues/670)).
+   So Corten still offers nothing of its own.
 
-   The part Corten would own is the declarative form, where an annotated `<form>` is the tool:
-   `html!` could write the tool's name and field descriptions from the form's
-   `#[derive(Fields)]` struct, with no script, and the agent would use the form's own path
-   (session cookie, same-origin check, `SubmitKey`, `req.invalid`). To settle then: whether the
-   agent gets the patch or the data-mode JSON back; the styling hooks the draft proposes for a
-   form an agent is filling (`:tool-form-active`, `:tool-submit-active`); and a smoke check in
-   a browser that has it. Revisit when the declarative section is written and a second engine
-   ships it, or a major agent calls it
+   What an app can do today was tried that day in Chromium 159 (Playwright 1.65.1's build,
+   started with `--enable-features=WebMCP`), on plain pages and on ui-gallery's forms. Each call
+   was made from the page's own script with `document.modelContext.executeTool`, so a result
+   below is what that returned: no agent was run, and what ChatGPT's browser hands its model
+   was not seen.
+
+   1. A tool from script: a function its component's markup calls, in the `#[component(js)]`
+      script, calls `document.modelContext.registerTool(tool, { signal })`, so the tool goes
+      away with the component. On a plain page the tool was listed after the call, answered a
+      call with what its `execute` returned, and was gone once the signal aborted. Nothing in
+      Corten needs to change for that. TypeScript 7.0.2's DOM types have no `modelContext`, so
+      the script declares it or casts `document`.
+   2. A form as a tool: a `<form>` with `toolname` and `tooldescription`, which are plain
+      attributes to `html!`, is listed as a tool with no script. The browser writes the tool's
+      input schema from the form's own controls: each one's name and type, `required`, a
+      number's `min`, `max` and `step`, the choices of a select, of radios and of checkboxes of
+      one name with their labels, and each control's label as its description. A call fills the
+      controls and, when the form has `toolautosubmit`, sends it; without that the person
+      presses its button. A form that posts with no `data-patch` is sent by the browser as an
+      ordinary same-origin post, the page it answers with is loaded, and the call's result is
+      `null`. The form goes as its first submit button sends it, and the schema has no member
+      for a button: of two `formaction` buttons the first one's write was sent, so a form that
+      is a tool has one write. A form that `get`s was not tried.
+   3. Do not make a `data-patch` form a tool yet. The runtime takes its submit and sends the
+      request, and the browser then fails the call ("Tool execution failed."; Chromium 156 gave
+      the reason, "it called preventDefault() on the 'submit' event, without also calling
+      respondWith() with the tool result"). The write is made and the caller is told it failed,
+      with `toolautosubmit` and, once the person presses the button, without it.
+
+   The part Corten would own is smaller than first written: the browser reads each field's name,
+   type, limits, choices and label from the form Corten already draws, which `html!` was to
+   write from its `#[derive(Fields)]` struct. The tool's name and description are still the
+   app's to write. What is left: the runtime answering an agent's submit of a form it sends
+   (`event.respondWith(..)` when `event.agentInvoked`), with what the agent gets back still to
+   settle (the patch, the data-mode JSON, a refusal's field errors); the tool attributes as
+   typed names, so a typo does not compile; the styling hooks Chrome has for a form an agent is
+   filling (`:tool-form-active`, `:tool-submit-active`); and a smoke check in a browser that has
+   it. All of that would be written against one engine's build, which changed the error it gives
+   for the same failure between 156 and 159. Revisit when the draft specifies the form
+   attributes and the submit event's answer, or a second engine ships them, or an app needs a
+   `data-patch` form as a tool
    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/corten-run/corten/issues/695);
    related:
    [#692 An MCP tool is a second handler next to its route, with its own auth closure instead of Identify, so each action is written once per surface and drifts](https://github.com/corten-run/corten/issues/692)).
@@ -191,14 +308,14 @@ revisit it ([design](design.md#choices)). Measured against a production marketpl
 | Need | Owner | Why |
 |---|---|---|
 | Pages, patches, handlers, feeds across instances, CSP and CSRF, assets, head tags, PWA, catalog, sitemap, health, shutdown, agent tools | Framework | Built and tested earlier. |
-| Layout data on client navigation | Framework: page key (from the `Caller` a handler read), `data-nav` and `data-nav-group` | Client navigation swaps only `<main>`, so only the framework can know the layout went stale. It reloads when the caller or deploy changes and keeps `aria-current` right. |
+| Layout data on client navigation | Framework: page key (from the `Caller` a handler read), `data-nav`, `data-nav-group` and `data-nav-also` | Client navigation swaps only `<main>`, so only the framework can know the layout went stale. It reloads when the caller or deploy changes and keeps `aria-current` right. |
 | Layout data on a full load | Framework: `LayoutRead`, `App::layout_read`, `later::<T>()` | Markup renders synchronously inside the handler, so otherwise every handler that draws the layout awaits and passes the value ([design Choice 20](design.md#choice-layout-reads)). The framework starts the read beside the handler and draws it into the finished page. |
 | Which nav items show for which roles | App | Roles and permissions are the app's model; the layout component decides. |
 | Which routes need sign-in or a permission | Framework: `Caller<T>` and `Identify`, `caller = T` on a routes module; the decision is the app's | The answer has to come out right in each request mode (a redirect, `corten-location`, a JSON 401, the error page) and before the handler reads the body, and a route that forgets it should not compile, which only the framework can check. Who passes is the app's model, in its `Identify`. |
 | Return addresses (`?next=`) | Framework: `Local`, `Req::serves` | A check that a path stays on the site has to know how browsers read `//`, `/\` and dot segments, and whether the app has a page there has to match the route the router picks, which only the framework holds. Where to send a user without one is the app's. |
 | Field errors | Framework: `Errors`, `req.invalid`, focus on first invalid field | The 422 has to come out right in each request mode (patch, page, JSON) and as an agent error; that is transport the framework owns. |
 | Routes with no screen (webhooks, public APIs) | Framework: `JsonResult<T>`, `App::api` | The framework's error pages and nonce assume a browser asking for a page; only the framework can switch them off for a prefix and answer every failure as JSON instead. |
-| HTTP caching of pages and JSON | Framework: `Public<..>`, `private, no-cache` by default | Only the framework sees everything that makes a response personal (a caller read, the request's credentials, the mode, the nonce, a form's submit key drawn for the request, a cookie set), so only it can refuse to mark such a response shareable. A route that says `unstaged` has a handler that cannot read the headers that carry credentials, so it needs no cache rule: its answer goes out with the caching headers its handler set, except that one that sets a cookie is `private, no-cache` (`no-store` when it says one), whatever caching it says, with no CDN caching header. The same sight lets it keep an answer that is the same for everyone: a `Public` page, and a `Public` JSON or text answer or file of 1,024 bytes or more, is kept by the app for its shared lifetime and given again in the handler's place (`App::kept_answers`, [design Choice 70](design.md#choice-kept-pages)). What else to cache on the server (data, queries, a page for one visitor) is the app's, since only the app knows when its data changes. |
+| HTTP caching of pages and JSON | Framework: `Public<..>`, `private, no-cache` by default | Only the framework sees everything that makes a response personal (a caller read, the request's credentials, the mode, the nonce, a form's submit key drawn for the request, a cookie set), so only it can refuse to mark such a response shareable. A route that says `unstaged` has a handler that cannot read the headers that carry credentials, so it needs no cache rule: its answer goes out with the caching headers its handler set, except that one that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-store`), whatever caching it says, with no CDN caching header, as a `NoStore` one is `private, no-store`. The same sight lets it keep an answer that is the same for everyone: a `Public` page, and a `Public` JSON or text answer or file of 1,024 bytes or more, is kept by the app for its shared lifetime and given again in the handler's place (`App::kept_answers`, [design Choice 70](design.md#choice-kept-pages)). What else to cache on the server (data, queries, a page for one visitor) is the app's, since only the app knows when its data changes. |
 | Which host names the app answers to | Framework: `Policy::host`, `HOSTS` | The framework chooses the loopback bind and is the only layer in front of every route (the app's, the API's, `/health`, `/corten`), so it is the one place a DNS-rebound request can be turned away before any of them runs, a route that says `unstaged` included. Which names are the app's is the deploy's, in `HOSTS`. |
 | The client's address behind a proxy | Framework: `ClientIp`, `Policy::proxy`, `PROXIES` | Only the framework holds the connection, so only it can give a handler the peer, and which hop of `X-Forwarded-For` to believe is one rule that every handler reading it has to get right (a header anyone can write). Which proxies are in front is the deploy's, in `PROXIES`. |
 | Cross-origin calls to those routes (CORS) | Framework: `Api::allow_origin` | The framework's same-origin check refuses cross-site writes (a route that says `unstaged`, which no such check covers, answers reads only and sends no allowed origin), so it is the only layer that can let one site's calls through for some routes while the pages keep refusing them. Anything beyond one allowed site and its preflight is `tower-http`'s CORS layer around the app (`App::layer`). |
@@ -233,3 +350,24 @@ revisit it ([design](design.md#choices)). Measured against a production marketpl
    (above), which need no `h2`, TLS stack or trust roots on the device and on iOS keep VPN On
    Demand and background sessions, which a client on its own sockets loses (Happy Eyeballs it must
    bring itself, as hyper-util's connector does), but leave OkHttp's cap for the app to raise.
+4. The desktop benchmark: cold start, input to paint and resident memory for one screen in a
+   browser tab, an installed PWA, a web view shell and a native screen, on Windows and macOS, so
+   the estimates in [Desktop apps](#desktop-apps) become numbers. Before it runs it sets the
+   margin, on which number, by which a native screen must win before that win can justify an app
+   writing one for a kind of screen.
+   It comes first, since 5, 6 and native desktop screens are judged by it
+   ([#1934 No benchmark measures a desktop client: cold start, input to paint and memory for a browser tab, an installed PWA, a web view shell and a native screen are all estimates](https://github.com/corten-run/corten/issues/1934)).
+5. The desktop shell: whether it is the system web view (the preferred direction) or a bundled
+   engine; what the framework owns in it (how client navigation maps to windows and to back and
+   forward, which links leave the shell, deep links from the OS into a typed route); how a page
+   reaches a device, where the preferred direction is the web standard API (Web Serial, WebHID,
+   WebUSB, File System Access), and the prototype settles which of them each system web view has,
+   who supplies one it lacks, and whether a bridge of Corten's own could meet
+   [design Rule 10](design.md#rule-standard-formats); where each web view keeps the session
+   cookie; and whether these are the mobile shell's answers too
+   ([#1935 Desktop shell: prototype the system web view (WebView2, WKWebView, WebKitGTK) around server-rendered pages, and settle what the framework owns in it](https://github.com/corten-run/corten/issues/1935)).
+6. The server in the app's process: whether a desktop app may run its Corten app in process, with
+   the web view reaching it over loopback or the web view's own scheme handler, live streams with
+   no HTTP/2 proxy in front ([design Limit 14](design.md#limit-http1)), and data that stays on the
+   device or syncs. A yes would reopen the README's offline-first limit, which stands until then
+   ([#1936 A desktop app with the Corten server in its own process is the only design that removes the network round trip: unprototyped, and it would reopen the offline-first limit](https://github.com/corten-run/corten/issues/1936)).

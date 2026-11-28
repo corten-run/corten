@@ -13,6 +13,11 @@
 //     Progress goes to results-<round>.progress: started again after a restart (a lockup panics
 //     the kernel, which reboots), the round skips the step that was running and goes on from the
 //     next; in the build step it skips the app that was building and goes on with the next app.
+//     In the count step it goes on only where it started in another boot, by the boot's ID on the
+//     step's start line: a start again in the same boot, which cannot tell its perf is gone, ends
+//     the round (round.mjs, countRestartError), as does a progress file whose last line was cut
+//     short, checked before the start writes anything; a cut file is left as it is, so every start
+//     refuses on it again. Each line is written whole and synced before its step starts (appendLine).
 //     A skipped step is written to the log and to results/<round>/skipped.txt
 //     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
 //     summarize.mjs copies into summary.json. Before that, the kernel's log of the boot that
@@ -24,14 +29,14 @@
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
-import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps, stepsUntil } from "./round.mjs";
+import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -49,13 +54,18 @@ const now = () => new Date().toISOString();
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8", timeout: 5 * minute });
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 const progressFile = join(here, `results-${round}.progress`);
-// Synced to disk (the file and, when it is new, its directory), so a line written just before a
-// kernel panic is still there after the reboot.
+/** This boot's ID, or null where it cannot be read. */
+const bootId = () => { try { return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null; } catch { return null; } };
+// Written whole or not at all (appendLine throws, and the step is not started), then synced to disk
+// (the file and, when it is new, its directory), so a line written just before a kernel panic is
+// still there after the reboot. The count step's start names the boot it started in, so a start
+// again in that boot does not go on past it (countRestartError).
 const progress = (/** @type {string} */ what) => {
   if (!unattended) return;
   const created = !existsSync(progressFile);
-  const fd = openSync(progressFile, "a");
-  try { writeSync(fd, `${now()} ${what}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+  const fd = openSync(progressFile, "a+");
+  const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd() : what;
+  try { appendLine(fd, `${now()} ${line}`); fsyncSync(fd); } finally { closeSync(fd); }
   if (created) { const dir = openSync(here, "r"); try { fsyncSync(dir); } finally { closeSync(dir); } }
 };
 const skippedFile = join(here, "results", round, "skipped.txt");
@@ -68,31 +78,22 @@ const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
 
 // Runs one call and resolves to its exit code and, unattended, why it was stopped: past its
 // limit or quiet for too long, it is stopped with everything it started (its process group: perf,
-// the docker clients; the containers they started go in reset()).
-const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** @type {Promise<{ stopped: string | null, code: number | null }>} */ (new Promise((done) => {
+// the docker clients; the containers they started go in reset()), and an output something it
+// started holds open after it exits is released (round.mjs, superviseCall).
+const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
   console.log(now(), "node", args.join(" "));
   // Unattended, its output passes through here so a quiet call can be told from a busy one.
   const child = spawn("node", args, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
-  const started = Date.now();
-  let heard = started;
-  /** @type {string | null} */
-  let stopped = null;
-  for (const stream of [child.stdout, child.stderr]) stream?.on("data", (chunk) => { heard = Date.now(); process.stdout.write(chunk); });
-  const kill = (/** @type {NodeJS.Signals} */ signal) => { try { process.kill(-(child.pid ?? 0), signal); } catch {} };
-  const watch = unattended ? setInterval(() => {
-    if (stopped) return;
-    if (Date.now() - started > limit * minute) stopped = `${args[0]} ran longer than ${limit} minutes, so it was stopped`;
-    else if (Date.now() - heard > idleMinutes * minute) stopped = `${args[0]} printed nothing for ${idleMinutes} minutes, so it was stopped`;
-    else return;
-    kill("SIGTERM");
-    setTimeout(() => kill("SIGKILL"), 30_000).unref();
-  }, 15_000) : null;
-  child.on("close", (code) => {
-    if (watch) clearInterval(watch);
-    if (!stopped && code !== 0) console.log(`step failed with ${code}`);
-    done({ stopped, code });
+  const result = await superviseCall(child, {
+    label: args[0],
+    limitMs: unattended ? limit * minute : Infinity,
+    idleMs: unattended ? idleMinutes * minute : Infinity,
+    signalGroup: (pid, signal) => process.kill(-pid, signal),
+    write: (chunk) => process.stdout.write(chunk),
   });
-}));
+  if (!result.stopped && result.code !== 0) console.log(`step failed with ${result.code}`);
+  return result;
+};
 
 // Unattended only: a clean slate after a stopped call, a build that exited with an error, or a
 // restart. The benchmark's containers go
@@ -121,7 +122,7 @@ const reset = () => {
   }
   if (apiContainer !== "item-api") return;
   const r = docker("run", "-d", "--name", "item-api", "--network", network, "--cpuset-cpus", "2-3", "-v", `${here}:/b:ro`,
-    "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
+    "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
   if (r.status !== 0) throw new Error(`could not start the item API: ${r.stderr || r.error?.message}`);
 };
 
@@ -189,14 +190,28 @@ function keepKernelLog(start) {
   }
 }
 
+/** Whether a failed round may record "failed" in its progress file: not when that would end a line cut short (below). */
+let recordFailure = true;
 try {
   /** @type {string | null} */
   let first = from;
   /** The apps whose builds have started, before a restart or in this start: none is built again. @type {string[]} */
   let built = [];
   if (unattended) {
-    const state = resumeAt(existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "", from);
+    const text = existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "";
+    const state = resumeAt(text, from);
     if (state.ended) process.exit(0);
+    // Before anything is written or cleaned: a count step whose perf may still run ends the round,
+    // as a halt does. A progress file whose last line was cut short is left as it is: appending
+    // ends that line first, and a start stopped part way through the append would leave the next
+    // one no cut line to read, so every start refuses on it again instead. Otherwise the refusal
+    // is recorded as the round's failure, which no later start goes on past.
+    const halted = countRestartError(text, bootId());
+    if (halted) {
+      if (text.length && !text.endsWith("\n")) recordFailure = false;
+      skip("count", halted);
+      throw new Error(halted);
+    }
     // Written before anything else, so every start counts, even one cut short in reset().
     progress("boot");
     if (state.boots) {
@@ -217,35 +232,25 @@ try {
   // The browser step reaches each app as the round's load phases do: the matched tier's through the edge.
   const urls = Object.values(pageApps).map((a) => (viaEdge ? edgeBase(a, "outside") : `http://localhost:${a.port}`));
   const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES), pageOnly);
-  for (const step of first ? stepsUntil(first, until).steps : []) {
-    if (step === "count" && process.platform !== "linux") continue;
-    progress(`start ${step}`);
-    // The matched tier's browser timing reaches the apps through the edge: without it, only
-    // browser.mjs is skipped (parity, look and bytes reach the apps directly).
-    const edgeFailed = step === "browser" ? await startEveryApp() : null;
-    if (edgeFailed) skip(step, `browser.mjs: ${edgeFailed}`);
-    const stepStarted = Date.now();
+  // A count call that exits 4 or is stopped (round.mjs, countHalt), or any call left running after
+  // its stop or whose output was released after its exit, ends the round there: no later step,
+  // call, clean slate or summary, and the round is recorded failed.
+  await runSteps(first ? stepsUntil(first, until).steps : [], all, {
+    call,
+    progress,
+    skip,
+    reset: () => { if (unattended) reset(); },
     // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
-    if (step === "build") await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call, progress, skip, reset: () => { if (unattended) reset(); } });
-    else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
-      const { stopped } = await call(limit, args);
-      if (stopped) {
-        skip(step, stopped);
-        if (unattended) reset();
-        break;
-      }
-    }
-    if (step === "browser") stopEveryApp();
-    progress(`end ${step}`);
-  }
-  progress("start summary");
-  // A round whose summary failed has not finished.
-  const summary = await call(10, ["summarize.mjs", round]);
-  if (summary.stopped || summary.code !== 0) throw new Error(summary.stopped ?? `summarize.mjs exited with ${summary.code}`);
-  console.log(now(), "all done");
-  progress("finished");
+    build: async (stepStarted) => { await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call, progress, skip, reset: () => { if (unattended) reset(); } }); },
+    open: async (step) => (step === "browser" ? startEveryApp() : null),
+    close: (step) => { if (step === "browser") stopEveryApp(); },
+    linux: process.platform === "linux",
+    clock: () => Date.now(),
+    summary: ["summarize.mjs", round],
+    done: () => console.log(now(), "all done"),
+  });
 } catch (e) {
   console.log(now(), `round failed: ${e instanceof Error ? e.message : e}`);
-  progress("failed");
+  if (recordFailure) progress("failed");
   process.exit(1);
 }

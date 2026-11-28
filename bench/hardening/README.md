@@ -34,10 +34,31 @@ A passed row is not evidence that those protections exist.
 Connection-flood resistance: not measured.
 
 Use the [grouped benchmark procedure](../workloads/CLOUD.md) for an official round.
+For a deployed-edge case, nginx accepts the public `localhost:8080` authority
+and forwards the original `Host` and `Origin`. The app receives the exact
+`MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080` configuration; native direct
+preflight still reaches the app at `http://127.0.0.1:8080`. The proxy strips
+client-supplied forwarding metadata about the public authority and scheme. It
+does not translate `Origin` or provide the application's CSRF protection. This deployment
+differs from r96, where nginx forwarded its internal upstream name as `Host`.
+The Corten marketplace adapter also requires the exact configured origin on
+alert writes to the public authority; its direct listener retains the native check.
+
+Before a full rerun after a deployment change, a dedicated test host can exercise
+one fixture case per app against the real TLS edge with the same qualification gates:
+
+```sh
+node bench/hardening/run.mjs w1 --build --out /tmp/hardening-edge-check --review edge-deployment-check --verify-case deployed-edge --verify-source fixture --verify-phase request-limit
+```
+
+This filtered run is diagnostic, not an official group result.
+
 Before the first cell, the runner prepares its Node upstream, Playwright checker,
 nginx edge and OpenSSL certificate images. It reuses successful local lookups
 and otherwise makes one bounded pull of the same reference. The Playwright
-reference follows the pinned browser-driver version. The runner records and
+reference follows the pinned browser-driver version. That container supplies
+Chromium and its libraries; new dedicated Hardening cloud runs do not install
+a second Chromium on the host. The runner records and
 uses the inspected image IDs; failure here is an apparatus failure, not a
 framework result. This setup does not warm any measured endpoint or alter the
 request schedule.
@@ -48,6 +69,20 @@ containers and native probe at the two boundaries of the probe's work, including
 the effective sets of occupied child cgroups. Setup and terminal helpers are
 checked against their Docker launch receipts, not sampled as timed participants.
 This is boundary evidence, not continuous monitoring of every process.
+When replay compares inherited execution defaults, an omitted or null image
+`Config.Entrypoint` or `Config.Cmd` must match an explicit null in the container
+receipt. Explicit image values, including empty arrays, and commands supplied by
+the runner must match exactly.
+
+The Hardening binding includes every tracked input to each application's source
+digest, even files under an app's `results/` directory if they are in its build
+context. This does not change the archive recipe or which files it selects. The
+Corten root archive still binds the full measured checkout, including its harness.
+Other groups keep the ordinary source inventory. An all-group plan keeps a shared
+source digest and records the full Hardening closure on its own binding; a dedicated
+Hardening plan records it in both places. Existing reservations replay with their
+pinned measured checkout.
+
 Offline replay checks the saved native evidence; it does not run a new measurement:
 
 ```sh

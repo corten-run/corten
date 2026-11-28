@@ -1,14 +1,14 @@
 // Independent catalog-v1 baseline. Never invokes fullstack runners, trend, nightly, or cleanup.
 // node bench/catalog/run.mjs c1 [--apps corten,nextjs] [--build] [--check-only] [--passes 3]
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { catalogPeers } from "../fullstack/inventory.mjs";
 import { sampleStats } from "./stats.mjs";
-import { commandOutput } from "./output.mjs";
+import { commandRunner, failureReceipt, ownedContainer } from "./output.mjs";
 import { readFailedCheck } from "./check-result.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
 import { collectTimedPhase, verifyTimedPhase } from "./timed.mjs";
@@ -29,15 +29,17 @@ try {
   contract = await import("./contract.mjs");
   grouping = await import("./group.mjs");
   inventory = (await import("../fullstack/apps.mjs")).pageApps;
+  if (process.argv.includes("--group")) inventory = { ...inventory, ...catalogPeers };
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, probeCpu, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
+const { aggregate, cpuSettings, imageBuildTimeoutMs, probeCpu, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
   validateCatalog, verifyDocumentHeaderChecks, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
 const group = options.group === undefined ? null : groupDescriptor(options.group);
+const effectiveLeanApps = contract.recordedLeanApps({ group });
 const plan = timingPlan(options, sources, targets);
 const loadLayout = process.env.CATALOG_LOAD_LAYOUT;
 if (loadLayout !== undefined) assert.equal(options.group, "catalog-page", "generator qualification requires the catalog-page group");
@@ -55,12 +57,12 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
   measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec",
-    leanProfile: { name: leanProfile, apps: leanApps } } };
+    leanProfile: { name: leanProfile, apps: effectiveLeanApps } } };
 summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
 if (loadLayout !== undefined) summary.measurement.loadLayout = loadLayout;
 // Ungrouped runs header-check only the lean contenders (check.mjs); record that scope so
 // reports never present the mixed run as a feature-parity comparison.
-if (!group) summary.measurement.documentHeaders = { contract: groupDescriptor("catalog-page").documentHeaders, apps: [...leanApps] };
+if (!group) summary.measurement.documentHeaders = { contract: groupDescriptor("catalog-page").documentHeaders, apps: [...effectiveLeanApps] };
 if (group) Object.assign(summary, { schema: groupResultSchema, group,
   scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
 if (group) Object.assign(summary.measurement, { apparatus,
@@ -69,49 +71,9 @@ const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.string
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
 const active = new Set();
 let interrupted = false;
-const children = new Set();
-// This stops command clients, not browser descendants. Browsers run ONLY in
-// owned containers, which finally removes even when their docker client exited.
-function killCommand(child) {
-  if (process.platform === "win32" && child.pid) {
-    // Node's Windows kill terminates only the child; the check's browser would survive.
-    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", cwd: repo });
-    killer.on("error", () => child.kill("SIGKILL"));
-  } else if (child.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-  }
-  const force = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
-    else child.kill("SIGKILL");
-  }, 2000);
-  force.unref();
-}
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; for (const child of children) killCommand(child); });
-async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false } = {}) {
-  if (interrupted && !cleanup) throw new Error("catalog run interrupted");
-  const output = commandOutput({ file, capture });
-  const child = spawn(binary, args, { cwd: repo, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  children.add(child);
-  let killed = false;
-  let ioError;
-  const keep = (chunk, stderr) => {
-    try { (stderr ? output.stderr : output.stdout)(chunk); }
-    catch (e) { ioError ??= e; killCommand(child); }
-  };
-  child.stdout.on("data", (c) => keep(c, false));
-  child.stderr.on("data", (c) => keep(c, true));
-  const timer = setTimeout(() => { killed = true; killCommand(child); }, timeout);
-  try {
-    const { code, signal } = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", (code, signal) => resolve({ code, signal })); });
-    if (ioError) throw ioError;
-    if (code !== 0 || killed || (interrupted && !cleanup)) {
-      const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
-      failure.exit = { code, signal, expired: killed, interrupted: interrupted && !cleanup }; throw failure;
-    }
-    return output.result();
-  } finally { clearTimeout(timer); children.delete(child); output.close(); }
-}
+const runner = commandRunner({ cwd: repo, interrupted: () => interrupted });
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; runner.interrupt(); });
+const command = runner.command;
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
 const fail = (app, source, stage, error) => {
@@ -126,6 +88,39 @@ const owned = async (args, name, opts) => {
   await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)], opts);
   return name;
 };
+const ownedByRun = (labels) => labels?.[label] === runId;
+// A failed bounded command saves its receipt BEFORE owned cleanup removes the container.
+// `verified` is the one ownership check that command relied on; the receipt never re-resolves the name.
+// Saving and reporting it are best effort: they never replace or clear the failure itself.
+async function saveReceipt(path, stage, name, error, verified, fresh = false) {
+  try {
+    if (typeof verified === "function") verified = await verified();
+    writeFileSync(path, JSON.stringify(await failureReceipt(docker, { stage, container: name, error, verified, owned: ownedByRun, fresh }), null, 2));
+    log(`${stage} failure receipt: ${path}`);
+  } catch (e) { try { log(`${stage} failure receipt not saved: ${e?.message ?? e}`); } catch {} }
+}
+// Receipts cover these detached parity and preflight starts and the log collections below,
+// not the measured cold-start create and start.
+async function startApp(args, name, receipt) {
+  try { return await owned(["run", "-d", ...args], name, { receipt: true }); }
+  catch (e) {
+    // Nothing checked this container before its start failed, so the receipt's check is the only
+    // one, and its inspect snapshot is the receipt's state (`fresh`): nothing is inspected twice.
+    await saveReceipt(receipt, "app start", name, e, () => ownedContainer((args) => docker(args, { cleanup: true, timeout: 10000 }), name, ownedByRun), true);
+    throw e;
+  }
+}
+// Logs come only from the container this run owns, by its immutable ID, never by a name
+// another container could hold. Its one ownership check also binds the failure receipt, and a
+// missing or foreign container gets a receipt with the refusal.
+async function collectLogs(name, file, stage, opts = {}) {
+  let found = { refusal: "not inspected" };
+  try {
+    found = await ownedContainer((args) => docker(args, { cleanup: opts.cleanup }), name, ownedByRun);
+    if (!found.id) throw new Error(`refusing ${stage} from ${name}: ${found.refusal}${found.problem ? ` (${found.problem})` : ""}`);
+    await docker(["logs", found.id], { file, capture: false, receipt: true, ...opts });
+  } catch (e) { await saveReceipt(`${file}.failure.json`, stage, name, e, found); throw e; }
+}
 async function remove(name) {
   // A failed create might not have created anything. A collision is never ours to stop.
   const list = await docker(["ps", "-a", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"], { cleanup: true });
@@ -136,12 +131,16 @@ async function remove(name) {
   }
   active.delete(name);
 }
+// One startup log per failed start, so each receipt's bytes and hash describe its own file.
+const startupAttempts = new Map();
 async function portOf(name) {
   const info = await inspect(name);
   const port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
   if (!info.State.Running || !port) {
-    const file = join(folder, `${name}-startup.log`);
-    await docker(["logs", name], { file, capture: false });
+    const attempt = (startupAttempts.get(name) ?? 0) + 1;
+    startupAttempts.set(name, attempt);
+    const file = join(folder, `${name}-startup-${attempt}.log`);
+    await collectLogs(name, file, "startup logs");
     throw new Error(`${name}: native startup failed; state=${JSON.stringify(info.State)}\n${readFileSync(file, "utf8")}`);
   }
   return `http://127.0.0.1:${port}`;
@@ -295,7 +294,7 @@ try {
         log(`building ${app}`);
         const context = app === "corten" ? repo : join(repo, "bench/fullstack/apps", app);
         const dockerfile = app === "corten" ? join(here, "corten/Dockerfile") : join(context, "Dockerfile");
-        await docker(["build", "-t", entry.image, "-f", dockerfile, ...(app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []), context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
+        await docker(["build", "-t", entry.image, "-f", dockerfile, ...(app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []), context], { timeout: imageBuildTimeoutMs, file: join(folder, `build-${app}.log`) });
       }
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       entry.imageId = image.Id;
@@ -347,7 +346,7 @@ try {
       mkdirSync(out, { recursive: true });
       try {
         log(`checking ${app} ${source}`);
-        await owned(["run", "-d", ...appArgs(name, source, entry.imageId)], name);
+        await startApp(appArgs(name, source, entry.imageId), name, join(out, "app-start.failure.json"));
         const base = await portOf(name);
         await ready(base);
         // Chromium starts a separate process group. A host Node/group kill cannot
@@ -389,7 +388,7 @@ try {
       } catch (e) { fail(app, source, "checks", e); }
       finally {
         if (active.has(checkContainer)) await remove(checkContainer);
-        try { await docker(["logs", name], { file: join(out, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
+        try { await collectLogs(name, join(out, "app.log"), "app logs"); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       save();
@@ -412,7 +411,7 @@ try {
           const name = `${runId}-corten`, raw = join(folder, "preflight", subject.source);
           mkdirSync(raw, { recursive: true });
           try {
-            await owned(["run", "-d", ...appArgs(name, subject.source, summary.apps.corten.imageId)], name);
+            await startApp(appArgs(name, subject.source, summary.apps.corten.imageId), name, join(raw, "app-start.failure.json"));
             await ready(await portOf(name));
             const instance = containerEvidence(await inspect(name));
             writeFileSync(join(raw, "container.json"), JSON.stringify(instance, null, 2));
@@ -460,7 +459,7 @@ try {
         if (group) run.outcome = phases.some((phase) => run.phases[phase].outcome === "failed") ? "failed" : "passed";
       } catch (e) { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
       finally {
-        try { await docker(["logs", name], { file: join(raw, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
+        try { await collectLogs(name, join(raw, "app.log"), "app logs"); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       for (const phase of phases) {
@@ -476,10 +475,8 @@ try {
 } catch (e) { fail(null, null, suiteStage, e); }
 finally {
   if (group && summary.tools?.upstream) {
-    try {
-      assert.equal((await inspect(upstreamName, true)).Config.Labels?.[label], runId, "refusing unowned upstream log collection");
-      await docker(["logs", upstreamName], { file: join(folder, "upstream.log"), capture: false, cleanup: true });
-    } catch (e) { fail(null, null, "upstream logs", e); summary.complete = false; summary.attemptComplete = false; }
+    try { await collectLogs(upstreamName, join(folder, "upstream.log"), "upstream logs", { cleanup: true }); }
+    catch (e) { fail(null, null, "upstream logs", e); summary.complete = false; summary.attemptComplete = false; }
   }
   for (const name of [...active].reverse()) {
     try { await remove(name); } catch (e) { summary.cleanupFailures.push({ resource: name, error: e.message }); }

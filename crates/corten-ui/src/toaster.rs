@@ -61,7 +61,14 @@ pub fn Toast<M: Render>(message: Option<M>, failed: bool) -> impl Patch {
 /// network failed, the connection closed, a proxy's 5xx page: `corten:error`), so a write that
 /// did not go through is never silent ("That did not go through, and may not have been saved.
 /// Check and try again."). One text serves every cause: the write may or may not have reached the
-/// server, and the form keeps what the user typed, so it asks them to check and send it again. It
+/// server, so it asks them to check and send it again. The form that sent it keeps what the user
+/// typed; when a read drew over that form, the event goes to the form drawn in its place or to the
+/// document, and a failure from page A can be said on page B after a navigation to B draws. That
+/// holds for a navigation the user started after the failure came, too: the toaster closes its
+/// toast as that navigation starts, before the failure, held until the page is drawn, is shown, so
+/// the failure is said on the new page rather than lost. A
+/// script that sends again from the form drawn in its place sends a new submission, with a new
+/// key, which the server may apply as well as the one that failed. It
 /// stays until closed, the next submit (not a dialog's own `method="dialog"` form) or another
 /// page; the page changing only its own address (a tab, a link to a place on it, reading itself
 /// again) keeps it. A screen that says it its own way (beside the form, retried by its script, or

@@ -135,6 +135,67 @@ test("normal threshold log is not a waiver for output/marshal/write faults", () 
   assert.throws(() => verifyPrototypeLogs(log("thresholds on metrics 'checks' have been crossed"), 0));
 });
 
+const k6Log = (record) => JSON.stringify(record) + "\n";
+const timeoutWarning = (error, fields = {}) => k6Log({ level: "warning", msg: "Request Failed", error, ...fields });
+const wrappedTimeout = 'Get "http://127.0.0.1:8080/api/catalog/record_1": request timeout';
+
+test("Go-wrapped timeout warnings replay against five counted timeouts, no drops and exit 99", async (t) => {
+  const { file } = files(t), f = fixedFixture({ responses: Array(5).fill("timeout") });
+  const warnings = timeoutWarning(wrappedTimeout).repeat(5);
+  const threshold = k6Log({ level: "error", msg: "thresholds on metrics 'checks, http_req_failed' have been crossed" });
+  f.logs = warnings + threshold;
+  const report = await replay(file, f);
+  assert.equal(f.command.exit.code, 99); assert.equal(report.dropped, 0);
+  assert.equal(report.counts.timeout, 5); assert.equal(report.loadOutcome, "threshold-failed");
+  assert.equal(report.status, "unqualified");
+
+  const stream = await readFixedStream(file);
+  assert.throws(() => joinFixedPrototype({ ...f, logs: timeoutWarning(wrappedTimeout) + f.logs }, stream),
+    { message: "timeout warnings exceed observed timeout responses" });
+  assert.throws(() => joinFixedPrototype({ ...f, command: { ...f.command, exit: { ...f.command.exit, code: 0 } } }, stream),
+    { message: /^threshold\/normal exit mismatch\b/ });
+  assert.throws(() => joinFixedPrototype(f, { ...stream, httpStatusCounts: {} }), { message: "native HTTP/classified status inventory differs" });
+  const summary = structuredClone(f.summary);
+  summary.metrics.http_req_failed.thresholds["rate==0"] = false;
+  assert.throws(() => joinFixedPrototype({ ...f, summary }, stream), { message: "threshold evidence differs" });
+});
+
+test("bare and wrapped request timeouts share the same upper bound", () => {
+  const logs = timeoutWarning("request timeout") + timeoutWarning('Get "https://[::1]:8080/api/marketplace/item_7": request timeout');
+  verifyPrototypeLogs(logs, 99, { timeouts: 2 });
+  verifyPrototypeLogs(logs, 99, { timeouts: 3 });
+  assert.throws(() => verifyPrototypeLogs(logs, 99, { timeouts: 1, dropped: 5 }),
+    { message: "timeout warnings exceed observed timeout responses" });
+});
+
+test("wrapped timeouts reject unexpected errors and malformed warnings without echoing targets", () => {
+  const url = "http://private-target.invalid/path";
+  for (const error of [
+    'Post "' + url + '": request timeout',
+    'Get "' + url + '": dial tcp: request timeout',
+    'Get "' + url + '": request timeout while connecting',
+    'Get "' + url + '": request timeout\n',
+    "Get " + url + ": request timeout",
+    'Get "' + url + '":  request timeout',
+    'Get "' + url + '/with space": request timeout',
+    'Get "' + url + '/%ZZ": request timeout',
+    'Get "' + url + '/"extra": request timeout',
+    'Get "http:///private-target.invalid/path": request timeout',
+    'Get "http://private-target.invalid:99999/path": request timeout',
+    'Get "ftp://private-target.invalid/path": request timeout',
+    'Get "private-target.invalid/path": request timeout',
+    'Get "": request timeout',
+    { message: 'Get "' + url + '": request timeout' },
+    null, undefined, 1050,
+  ]) assert.throws(() => verifyPrototypeLogs(timeoutWarning(error), 99, { timeouts: 1, dropped: 1 }),
+    { message: "unclassified k6 warning" });
+  assert.throws(() => verifyPrototypeLogs(timeoutWarning(wrappedTimeout, { msg: "Other warning" }), 99, { timeouts: 1 }),
+    { message: "unclassified k6 warning" });
+  assert.throws(() => verifyPrototypeLogs(timeoutWarning(wrappedTimeout, { level: "error" }), 99, { timeouts: 1 }),
+    { message: "k6 output/marshal/write/runtime error" });
+  assert.throws(() => verifyPrototypeLogs(url + "\n", 99), { message: "malformed k6 log record" });
+});
+
 test("portable replay requires full raw plus exact independent summary/clock/log hashes", async (t) => {
   assert.throws(() => inspectJson({ schema: prototypeSchema }, { load: () => {} }), /not a json-api result schema/);
   const { file, folder } = files(t), f = fixedFixture(); writeFileSync(file, f.bytes());

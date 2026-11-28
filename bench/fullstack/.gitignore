@@ -1,0 +1,5 @@
+# A round's raw output, packed by pack.mjs. A maintainer publishes it outside the tree and the
+# round's raw.txt records where it can be fetched and its SHA-256 (CONTRIBUTING.md, Benchmark
+# results). Only the packed archive is ignored, not a round's loose raw files before packing. The
+# archives committed before this stay tracked.
+/results/*/raw.tar.xz

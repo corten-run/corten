@@ -1,18 +1,23 @@
 // Hosted native Linux fixture: no apps, load, network, or extra image pull.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { commands } from "../bench/json-api/process.mjs";
 import { extractNativeSource } from "../bench/mixed-production/build-context.mjs";
 import { createAttachedParticipant, createExecutionEvidence } from "../bench/mixed-production/execution-evidence.mjs";
 import { executionMountArgs } from "../bench/mixed-production/execution-inputs.mjs";
+import { fixtureGitCommands, fixtureGitEnv } from "./fixture-git.mjs";
 
 const [image, runId, work] = process.argv.slice(2);
 assert.match(image, /@sha256:[a-f0-9]{64}$/);
 assert.match(runId, /^corten-evidence-kernel-[a-f0-9]{16}-mixed-mount$/);
 const repo = join(work, "mixed-mount-repo"), folder = join(work, "mixed-mount-output");
 mkdirSync(repo); mkdirSync(folder);
-const io = commands(repo), docker = (args, options) => io.command("docker", args, options);
+// extractNativeSource archives the fixture with Git through `io`; Docker goes through unchanged.
+const io = fixtureGitCommands(commands(repo)), docker = (args, options) => io.command("docker", args, options);
+const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", timeout: 30000,
+  stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
 const worker = `${runId}-corten-fixture-capture`;
 let execution;
 try {
@@ -25,11 +30,11 @@ assert.equal(marker, "dependency");
 assert.equal(readFileSync("/out/input.txt", "utf8"), "output mount");
 console.log(${JSON.stringify(result)});
 `);
-  await io.command("git", ["init", "--quiet"]);
-  await io.command("git", ["add", "--", "worker.mjs"]);
-  await io.command("git", ["-c", "user.name=Mount Smoke", "-c", "user.email=smoke@example.test",
-    "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fresh source fixture"]);
-  const commit = await io.command("git", ["rev-parse", "HEAD"]);
+  git("init", "--quiet");
+  git("add", "--", "worker.mjs");
+  git("-c", "user.name=Mount Smoke", "-c", "user.email=smoke@example.test",
+    "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fresh source fixture");
+  const commit = git("rev-parse", "HEAD");
   const { root } = await extractNativeSource(io, folder, commit);
   // Fail even on a Docker version that can synthesize the missing nested destination.
   assert.deepEqual(readdirSync(join(root, "node_modules")), []);

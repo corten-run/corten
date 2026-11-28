@@ -37,7 +37,8 @@ export function k6Summary(count, seconds) {
     http_req_failed: { values: { rate: 0 } }, checks: { values: { passes: count * 2, fails: 0 } }, dropped_iterations: { values: { count: 0 } } } };
 }
 export function runtimeInfo(expected, context, role = "app") {
-  const p = payloads[expected.payload], budget = expected.cpus[role === "app" ? "app" : role === "upstream" ? "api" : "load"];
+  const p = payloads[expected.payload], budget = role === "probe" && context.coldProbe ? context.coldProbe
+    : expected.cpus[role === "app" ? "app" : role === "upstream" ? "api" : "load"];
   const execution = role === "app" ? context.appExecutions[expected.app] : context.toolExecutions[role === "load" ? "k6" : "node"];
   const command = role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`] : role === "load" ? context.timed ? timedLoadCommand(context.load) : ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"]
     : role === "probe" ? ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)] : execution.Cmd;
@@ -60,14 +61,15 @@ export function runtimeInfo(expected, context, role = "app") {
 }
 export const runtime = (expected, context) => runtimeReceipt(runtimeInfo(expected, context), expected, context);
 const participants = (expected, context, roles) => Object.fromEntries(roles.map((role) => [role, participantReceipt(runtimeInfo(expected, context, role), expected, context, role)]));
-export function result(args = [], { artifacts = new Map() } = {}) {
+// `placement` is a placement.mjs runnerPlacement() result, saved the way run.mjs saves it.
+export function result(args = [], { artifacts = new Map(), commit = "a".repeat(40), placement = { cpus: cpuSettings({}) } } = {}) {
   const group = descriptor(), options = parseArgs(["j1", "--group", "json-api", "--passes", "1", ...args]);
   let serial = 0;
   const put = (value) => { const path = `test-${serial++}.json`, bytes = JSON.stringify(value); artifacts.set(path, bytes); return { path, sha256: sha256(bytes) }; };
   const load = (ref) => { if (!ref || !artifacts.has(ref.path)) throw new Error("raw artifact missing"); const bytes = artifacts.get(ref.path); if (sha256(bytes) !== ref.sha256) throw new Error("raw digest differs"); return JSON.parse(bytes); };
-  const s = { schema, group, options, timingPlan: timingPlan(options), round: "j1", commit: "a".repeat(40), commitAfter: "a".repeat(40), dirty: false, dirtyAfter: false,
+  const s = { schema, group, options, timingPlan: timingPlan(options), round: "j1", commit, commitAfter: commit, dirty: false, dirtyAfter: false,
     complete: true, checksPassed: true, failures: [], cleanupFailures: [], startedAt: "2026-11-12T10:00:00Z", finishedAt: "2026-11-12T11:00:00Z",
-    measurement: { cpus: cpuSettings({}), encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
+    measurement: { cpus: placement.cpus, ...(placement.loadLayout === undefined ? {} : { loadLayout: placement.loadLayout, generatorPlacement: placement.generatorPlacement }), encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...phases] },
     runId: "json-api-j1-0123456789", host: { checkout: "/synthetic/checkout" },
     toolExecutions: { node: { Entrypoint: ["docker-entrypoint.sh"], Cmd: ["node"] }, k6: { Entrypoint: ["k6"], Cmd: null } },

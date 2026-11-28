@@ -10,6 +10,7 @@ use http::{
     Extensions, StatusCode,
 };
 
+use crate::answer::sealed::MayShare;
 use crate::body::{Body, BoxError};
 
 /// A response as a middleware or a handler answers it: the `http` crate's, over Corten's [`Body`].
@@ -23,7 +24,107 @@ const _: () = assert!(std::mem::size_of::<Response>() <= 128, "a Response<Body> 
 /// A value that answers a request: text (`text/plain`), bytes (`application/octet-stream`), a
 /// `StatusCode`, a [`Response`], a refusal, and a tuple of a status and headers before any of them
 /// (`(StatusCode::CREATED, [(header::LOCATION, url)], "made")`).
+///
+/// An answer can be erased behind a box, as `dyn IntoResponse` or a trait of the app's own over
+/// this one, which answers through a method that takes the box. Corten does not see what such a
+/// box holds, so the handler of a route that answers one is watched for a form's new submit key,
+/// as that of any answer type of the app's own is:
+///
+/// ```
+/// use corten::http::{IntoResponse, Response};
+///
+/// trait Boxed: IntoResponse + Send {
+///     fn respond(self: Box<Self>) -> Response;
+/// }
+///
+/// impl<T: IntoResponse + Send> Boxed for T {
+///     fn respond(self: Box<Self>) -> Response {
+///         (*self).into_response()
+///     }
+/// }
+///
+/// let erased: Box<dyn IntoResponse + Send> = Box::new("made");
+/// let boxed: Box<dyn Boxed> = Box::new("made");
+/// assert_eq!(boxed.respond().status(), 200);
+/// # drop(erased);
+/// ```
 pub trait IntoResponse {
+    /// Whether the response may say that a shared cache keeps it for everyone in a way the type
+    /// does not show: [`crate::Public`] says so, a type of Corten's that is never `Public` does
+    /// not, and one that holds another (`Result`, [`crate::NoStore`], a tuple of parts before it)
+    /// says what that one does, and a tuple what each part's refusal does too, since a refusal is
+    /// the whole answer. A page's and a JSON answer's ([`crate::HtmlResponse`],
+    /// `JsonResponse`) say so too, and with them what holds one (`HtmlResult`, `PageOr`,
+    /// `JsonError`): their `DerefMut` lets a handler put any response in their place, a `Public`
+    /// one it converted among them. A type of the app's own always does, since Corten cannot see what its
+    /// `into_response` makes (a `Public` answer on one branch): its route's handler is watched
+    /// for a form's new submit key, as a `Public` one's is, and an answer whose handler drew one is
+    /// sent to no shared cache. A raw `Response`, a `[(name, value)]` of headers and a
+    /// [`crate::Relay`] say no: what caching their headers say is the app's or the upstream's, and
+    /// the stages settle it as any answer's ([`crate::cache`]). Not a public API: its type is one
+    /// an app cannot name, so an app's own type cannot say no, nor say what one of Corten's does.
+    ///
+    /// A function of the type, not a constant: an associated constant would make the trait one no
+    /// `dyn IntoResponse` can be made of, and `Self: Sized` leaves this out of a trait object.
+    /// Each body is a literal or the bodies of the types it holds, so a release build folds it
+    /// where it is read, and a route whose answer says no has no watch.
+    ///
+    /// ```compile_fail,E0053
+    /// use corten::http::{IntoResponse, Response};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn may_share() -> bool {
+    ///         false
+    ///     }
+    ///
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0053
+    /// use corten::http::{IntoResponse, Response};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn may_share() -> impl Sized {
+    ///         <&'static str as IntoResponse>::may_share()
+    ///     }
+    ///
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0603
+    /// use corten::http::{IntoResponse, Response};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn may_share() -> corten::answer::sealed::MayShare {
+    ///         <&'static str as IntoResponse>::may_share()
+    ///     }
+    ///
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    /// ```
+    #[doc(hidden)]
+    #[inline]
+    fn may_share() -> MayShare
+    where
+        Self: Sized,
+    {
+        MayShare(true)
+    }
+
     /// The response.
     fn into_response(self) -> Response;
 }
@@ -73,18 +174,33 @@ where
     B::Error: Into<BoxError>,
 {
     #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
+    #[inline]
     fn into_response(self) -> Response {
         self.map(Body::new)
     }
 }
 
 impl IntoResponse for http::response::Parts {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         Response::from_parts(self, Body::empty())
     }
 }
 
 impl IntoResponse for Body {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     #[inline]
     fn into_response(self) -> Response {
         Response::new(self)
@@ -93,18 +209,33 @@ impl IntoResponse for Body {
 
 impl IntoResponse for () {
     #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
+    #[inline]
     fn into_response(self) -> Response {
         Response::new(Body::empty())
     }
 }
 
 impl IntoResponse for Infallible {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         match self {}
     }
 }
 
 impl IntoResponse for StatusCode {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     #[inline]
     fn into_response(self) -> Response {
         let mut res = Response::new(Body::empty());
@@ -114,6 +245,11 @@ impl IntoResponse for StatusCode {
 }
 
 impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::either(T::may_share(), E::may_share())
+    }
+
     #[inline]
     fn into_response(self) -> Response {
         match self {
@@ -150,6 +286,11 @@ macro_rules! bodies {
     ($content_type:expr => $($ty:ty),*) => {$(
         impl IntoResponse for $ty {
             #[inline]
+            fn may_share() -> MayShare {
+                MayShare::NO
+            }
+
+            #[inline]
             fn into_response(self) -> Response {
                 typed(Body::from(self), $content_type)
             }
@@ -160,24 +301,44 @@ bodies!(TEXT => &'static str, String, Box<str>, Cow<'static, str>);
 bodies!(OCTETS => Bytes, Vec<u8>, &'static [u8], Box<[u8]>, Cow<'static, [u8]>);
 
 impl IntoResponse for BytesMut {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         self.freeze().into_response()
     }
 }
 
 impl<const N: usize> IntoResponse for [u8; N] {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         self.to_vec().into_response()
     }
 }
 
 impl<const N: usize> IntoResponse for &'static [u8; N] {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         self.as_slice().into_response()
     }
 }
 
 impl IntoResponse for HeaderMap {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         let mut res = Response::new(Body::empty());
         *res.headers_mut() = self;
@@ -186,6 +347,11 @@ impl IntoResponse for HeaderMap {
 }
 
 impl IntoResponse for Extensions {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         let mut res = Response::new(Body::empty());
         *res.extensions_mut() = self;
@@ -200,12 +366,22 @@ where
     V: TryInto<HeaderValue>,
     V::Error: std::fmt::Display,
 {
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         (self, ()).into_response()
     }
 }
 
 impl<R: IntoResponse> IntoResponse for (StatusCode, R) {
+    #[inline]
+    fn may_share() -> MayShare {
+        R::may_share()
+    }
+
     #[inline]
     fn into_response(self) -> Response {
         let mut res = self.1.into_response();
@@ -246,17 +422,20 @@ where
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Response> {
         for (name, value) in self {
-            let name = name.try_into().map_err(|e| invalid_header(e.to_string()))?;
-            let value = value.try_into().map_err(|e| invalid_header(e.to_string()))?;
+            let name = name.try_into().map_err(|e| invalid_header(res.extensions(), e.to_string()))?;
+            let value = value.try_into().map_err(|e| invalid_header(res.extensions(), e.to_string()))?;
             res.headers_mut().insert(name, value);
         }
         Ok(res)
     }
 }
 
+/// The `500` in place of the answer whose extensions are `answer`, given a header that is not one:
+/// Corten's failure, not the answer the handler meant, and `NoStore` where that answer was
+/// ([`crate::cache::unshared_in_place_of`]).
 #[cold]
-fn invalid_header(error: String) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, error).into_response()
+fn invalid_header(answer: &Extensions, error: String) -> Response {
+    crate::cache::unshared_in_place_of(answer, (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())
 }
 
 impl<T: IntoResponseParts> IntoResponseParts for Option<T> {
@@ -270,42 +449,81 @@ impl<T: IntoResponseParts> IntoResponseParts for Option<T> {
     }
 }
 
+/// Sets each part on the answer in turn. Once one fails, its refusal answers instead, and each part
+/// after it is still read for the policy it would have set: a [`crate::cache::Cache::no_store`]
+/// after a header that is not one keeps the refusal `NoStore` ([`after_a_failed_part`]), as one
+/// before it does, so the guarantee does not depend on the order of the parts.
 macro_rules! tuples {
     ($($ty:ident),+) => {
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for ($($ty,)+ R) {
+            // A part's refusal answers in the body's place.
+            #[inline]
+            fn may_share() -> MayShare {
+                let may = R::may_share();
+                $(let may = MayShare::either(may, <$ty::Error as IntoResponse>::may_share());)+
+                may
+            }
+
             fn into_response(self) -> Response {
                 let ($($ty,)+ body) = self;
-                let parts = ResponseParts { res: body.into_response() };
+                let parts: Result<ResponseParts, Response> = Ok(ResponseParts { res: body.into_response() });
                 $(
-                    let parts = match $ty.into_response_parts(parts) {
-                        Ok(parts) => parts,
-                        Err(error) => return error.into_response(),
+                    let parts = match parts {
+                        Ok(parts) => $ty.into_response_parts(parts).map_err(IntoResponse::into_response),
+                        Err(failed) => Err(after_a_failed_part($ty, failed)),
                     };
                 )+
-                parts.res
+                match parts {
+                    Ok(parts) => parts.res,
+                    Err(failed) => failed,
+                }
             }
         }
 
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for (StatusCode, $($ty,)+ R) {
+            #[inline]
+            fn may_share() -> MayShare {
+                <($($ty,)+ R) as IntoResponse>::may_share()
+            }
+
             fn into_response(self) -> Response {
                 let (status, $($ty,)+ body) = self;
-                let parts = ResponseParts { res: body.into_response() };
+                let parts: Result<ResponseParts, Response> = Ok(ResponseParts { res: body.into_response() });
                 $(
-                    let parts = match $ty.into_response_parts(parts) {
-                        Ok(parts) => parts,
-                        // A part's own refusal keeps its status: a header that is not one is a
-                        // `500`, not the status the handler meant for a good answer.
-                        Err(error) => return error.into_response(),
+                    let parts = match parts {
+                        Ok(parts) => $ty.into_response_parts(parts).map_err(IntoResponse::into_response),
+                        Err(failed) => Err(after_a_failed_part($ty, failed)),
                     };
                 )+
-                let mut res = parts.res;
-                *res.status_mut() = status;
-                res
+                match parts {
+                    Ok(parts) => {
+                        let mut res = parts.res;
+                        *res.status_mut() = status;
+                        res
+                    }
+                    // A part's own refusal keeps its status: a header that is not one is a
+                    // `500`, not the status the handler meant for a good answer.
+                    Err(failed) => failed,
+                }
             }
         }
     };
+}
+
+/// `failed`, the refusal of a part before `part` in a tuple, with the `NoStore` policy `part`
+/// would have set on the answer ([`crate::cache::Marks`]): `part` is set on an empty answer of its
+/// own, read for that policy and dropped, so `(status, bad_headers, Cache::no_store(), body)` keeps
+/// its refusal out of every cache as `(status, Cache::no_store(), bad_headers, body)` does. Nothing
+/// else of `part` is kept, and a refusal of its own is not read.
+#[cold]
+fn after_a_failed_part<P: IntoResponseParts>(part: P, mut failed: Response) -> Response {
+    if let Ok(read) = part.into_response_parts(ResponseParts { res: Response::new(crate::body::Body::empty()) }) {
+        let marks = crate::cache::Marks::of(read.extensions());
+        crate::cache::Marks { unshared: false, ..marks }.put(&mut failed);
+    }
+    failed
 }
 tuples!(T1);
 tuples!(T1, T2);

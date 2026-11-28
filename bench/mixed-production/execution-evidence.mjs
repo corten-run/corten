@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { mountSourceHash } from "./execution-inputs.mjs";
+import { nativeDeployment } from "./source-audit.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const digest = (value) => hash(JSON.stringify(value));
@@ -93,11 +94,15 @@ function expectation(context, summary) {
 
 // Only public, bounded contract configuration is serialized. No command text,
 // arbitrary environment, Docker errors, cookies or control tokens are retained.
-export function executionParticipant(info, image) {
+export function executionParticipant(info, image, deployment = null) {
   const env = [];
   for (const entry of info.Config?.Env ?? []) {
     const at = entry.indexOf("="); assert.ok(at > 0);
     const key = entry.slice(0, at), value = entry.slice(at + 1);
+    if (deployment?.settings && key === "DJANGO_SETTINGS_MODULE") {
+      env.push([key, value === deployment.settings ? value : { sha256: hash(value) }]);
+      continue;
+    }
     if (!new Set(["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"]).has(key)) continue;
     const allowed = key === "MARKETPLACE_SOURCE" ? sources.includes(value) : key === "PROFILE" ? ["", "matched"].includes(value) : value === "/ms-playwright";
     env.push([key, allowed ? value : { sha256: hash(value) }]);
@@ -165,7 +170,8 @@ export function createExecutionEvidence({ folder, summary, docker }) {
       if (phase === "created" || !observed.has(name)) same(actualName, name);
       const images = JSON.parse(await docker(["image", "inspect", info.Image], { cleanup: true }));
       assert.ok(Array.isArray(images) && images.length === 1); same(images[0].Id, info.Image);
-      const value = executionParticipant(info, images[0]);
+      const context = summary.options.djangoDeployment ? executionContext(name, summary) : null;
+      const value = executionParticipant(info, images[0], context?.role === "app" ? nativeDeployment(summary.options, context.app) : null);
       const attached = value.mounts.filter((m) => m.type === "volume").map((m) => m.volume);
       assert.ok(attached.every((v) => typeof v === "string" && safeName.test(v)));
       append(`participant-${phase}`, name, start, value);
@@ -353,6 +359,12 @@ export function replayExecution({ manifest, read, summary }) {
       if (expected.shmSize !== null && expected.shmSize !== undefined) fact(p.limits.ShmSize, expected.shmSize);
       fact(p.entrypointSha256, p.image.entrypointSha256);
       if (expected.cmd === null) fact(p.commandSha256, p.image.commandSha256); else fact(p.cmdSha256, digest(expected.cmd));
+      const deployment = context.role === "app" ? nativeDeployment(summary.options, context.app) : null;
+      if (deployment) {
+        fact(p.cmdSha256, digest(deployment.command));
+        fact(p.entrypointSha256, digest(deployment.entrypoint));
+        fact(p.commandSha256, digest({ entrypoint: deployment.entrypoint, cmd: deployment.command }));
+      }
       for (const value of [p.commandSha256, p.cmdSha256, p.entrypointSha256, p.image.commandSha256, p.image.entrypointSha256])
         if (value !== null) assert.match(value, /^[a-f0-9]{64}$/);
       if (p.restartCount === null) { resourceMissing = true; block("native-participant-inspection-incomplete"); }
@@ -368,9 +380,11 @@ export function replayExecution({ manifest, read, summary }) {
       }
       for (const key of ["StartedAt", "FinishedAt"]) assert.ok(typeof p.state[key] === "string" && Number.isFinite(Date.parse(p.state[key])));
       assert.ok(Array.isArray(p.env) && p.env.every((entry) => Array.isArray(entry) && entry.length === 2
-        && ["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"].includes(entry[0])) && new Set(p.env.map(([key]) => key)).size === p.env.length);
+        && (["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"].includes(entry[0]) || deployment?.settings && entry[0] === "DJANGO_SETTINGS_MODULE"))
+        && new Set(p.env.map(([key]) => key)).size === p.env.length);
       if (context.role === "app") {
         const env = new Map(p.env); same(env.get("MARKETPLACE_SOURCE"), context.source); same(env.get("PROFILE"), summary.options.profile === "matched" ? "matched" : "");
+        if (deployment?.settings) same(env.get("DJANGO_SETTINGS_MODULE"), deployment.settings);
       }
       assert.ok(Array.isArray(p.mounts));
       for (const mount of p.mounts) {

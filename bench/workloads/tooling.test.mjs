@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -20,15 +20,55 @@ test("browser CI keeps its pinned Playwright base and prepares immutable-source 
   assert.ok(step.run.indexOf(select) < step.run.indexOf("PLAYWRIGHT=$run $image"));
   assert.ok(step.run.includes('PLAYWRIGHT_SOURCE=$run --user $(id -u):$(id -g) -e HOME=/tmp $image'));
   const sourceChecks = workflow.jobs.smoke.steps.find((entry) => entry.run?.includes("MIXED_BROWSER_TESTS=1 npm run check:groups:browser"));
-  assert.equal(sourceChecks.run, "$PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser");
+  const [command, ...rest] = sourceChecks.run.trimEnd().split("\n");
+  assert.equal(command, "$PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser");
+  assert.deepEqual(rest, ['echo group-apparatus >> "$RUNNER_TEMP/ran"']);
+  // The group whose step replays sources is the one that builds the test-tools image.
+  assert.equal(sourceChecks.if, "contains(env.PARTS, ' group-apparatus ')");
+  assert.ok(step.run.includes('if [[ "$PARTS" == *" group-apparatus "* ]]; then'));
   assert.doesNotMatch(step.run, /safe\.directory/);
   const dockerfile = readFileSync(new URL("test-tools.Dockerfile", import.meta.url), "utf8");
-  assert.match(dockerfile, /^ARG PLAYWRIGHT_IMAGE\r?\nFROM \$\{PLAYWRIGHT_IMAGE\}$/m);
-  assert.match(dockerfile, /signed-by=\/etc\/apt\/keyrings\/corten-git-ppa.asc/);
-  assert.match(dockerfile, /https:\/\/ppa.launchpadcontent.net\/git-core\/ppa\/ubuntu noble main/);
-  assert.match(dockerfile, /test .* = F911AB184317630C59970973E363C90F8F1B6217/);
-  assert.doesNotMatch(dockerfile, /&& add-apt-repository/);
-  assert.match(dockerfile, /git --no-replace-objects --no-lazy-fetch --version/);
+  assert.match(dockerfile, /^ARG PLAYWRIGHT_IMAGE\r?\nFROM \$\{PLAYWRIGHT_IMAGE\} AS playwright\r?\nFROM playwright AS build/m);
+  assert.doesNotMatch(dockerfile, /launchpad|add-apt-repository/);
+  assert.match(dockerfile, /RUN sh \/tmp\/verify-git\.sh\r?\nRUN --network=none tar -xf git\.tar/);
+  assert.match(dockerfile, /FROM playwright\r?\nCOPY --from=build \/out\/ \/\r?\nRUN --network=none/);
+  assert.match(dockerfile, /if git --no-replace-objects --no-lazy-fetch [^\n]+then exit 1/);
+});
+
+test("a substituted CI Git archive fails before extraction or another download", { skip: process.platform !== "linux" }, t => {
+  const cwd = mkdtempSync(join(tmpdir(), "ci-git-release-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  writeFileSync(join(cwd, "curl"), '#!/bin/sh\nset -eu\nwhile test "$1" != -o; do shift; done\necho "$2" >> calls\nprintf substitute > "$2"\n', { mode: 0o700 });
+  symlinkSync("/usr/bin/sha256sum", join(cwd, "sha256sum"));
+  const script = fileURLToPath(new URL("../../scripts/benchmark-evidence-git.sh", import.meta.url));
+  const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: cwd, HOME: cwd }, encoding: "utf8", timeout: 5000 });
+  assert.ifError(r.error); assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stdout, /git.tar.xz: FAILED/);
+  assert.equal(readFileSync(join(cwd, "calls"), "utf8"), "git.tar.xz\n");
+  assert.equal(existsSync(join(cwd, "git.tar")), false);
+});
+
+test("CI requires gpgv success and the pinned Git signing subkey and primary", { skip: process.platform !== "linux" }, t => {
+  const root = mkdtempSync(join(tmpdir(), "ci-git-signer-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // The preceding test exercises the actual archive hash. Here drive the verifier's
+  // status interface without a live keyserver or the release signer's private key.
+  const signing = "E1F036B1FEE7221FC778ECEFB0B5E88696AFE6CB", primary = "96E07AF25771955980DAD10020D04E5A713660A7";
+  for (const [command, body] of Object.entries({
+    curl: 'while test "$1" != -o; do shift; done; touch "$2"', sha256sum: "cat >/dev/null", gpg: "exit 0", xz: "exit 0",
+    gpgv: 'test "$1 $2 $3 $4 $5 $6" = "--status-fd 1 --keyring $PWD/release-key.gpg git.tar.sign git.tar" || exit 8\necho "[GNUPG:] VALIDSIG $SIGNING ... $PRIMARY"\nexit "$CODE"',
+  })) writeFileSync(join(root, command), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+  for (const command of ["awk", "cat", "mkdir", "touch"]) symlinkSync("/usr/bin/" + command, join(root, command));
+  for (const [label, key, signer, code, expected] of [
+    ["approved", signing, primary, 0, 0], ["bad signature", signing, primary, 1, 1],
+    ["foreign primary", signing, "OTHER", 0, 1], ["foreign subkey", "OTHER", primary, 0, 1],
+  ]) {
+    const cwd = join(root, label); mkdirSync(cwd);
+    const script = fileURLToPath(new URL("../../scripts/benchmark-evidence-git.sh", import.meta.url));
+    const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: root, HOME: cwd,
+      SIGNING: key, PRIMARY: signer, CODE: String(code) }, timeout: 5000, encoding: "utf8" });
+    assert.ifError(r.error); assert.equal(r.status, expected, label + ": " + r.stderr);
+  }
 });
 
 test("benchmark evidence supplies the installed, locked Playwright base explicitly", () => {

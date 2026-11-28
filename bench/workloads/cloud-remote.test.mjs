@@ -8,6 +8,7 @@ import { fleetPlan, remoteFiles as originalFiles, reservation } from "./cloud-co
 import { bootstrapMarker, bootstrapReadScript, remoteFiles, sourceUrl } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, expandedLimit, fileHash } from "./cloud-local.mjs";
 import { groupNames } from "./registry.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 const commit = "a".repeat(40);
 const sourceSetup = (job) => {
@@ -171,7 +172,7 @@ test("official Git checkout is nonroot-readable under a private job umask withou
   const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-source-permissions-")));
   t.after(() => { assert.equal(dirname(root), realpathSync(tmpdir())); rmSync(root, { recursive: true }); });
   const source = join(root, "source"); mkdirSync(source);
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_ALLOW_PROTOCOL: "file" };
+  const env = fixtureGitEnv({ GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_ALLOW_PROTOCOL: "file" });
   const run = (command, args, options = {}) => spawnSync(command, args,
     { encoding: "utf8", windowsHide: true, timeout: 15000, env, ...options });
   const git = (...args) => {

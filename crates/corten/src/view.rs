@@ -1877,6 +1877,11 @@ impl Rendered {
     pub fn into_string(self) -> String {
         self.html
     }
+
+    /// Whether its render drew a form's new submit key.
+    pub(crate) fn drew_key(&self) -> bool {
+        self.drew_key
+    }
 }
 
 impl Render for Rendered {
@@ -1935,6 +1940,19 @@ fn escape_each(text: &str, out: &mut String) {
         start = i + 1;
     }
     out.push_str(&text[start..]);
+}
+
+/// Appends `out[range]` to `out`, escaped as [`escape_into`] writes it, copying from within
+/// `out` rather than through a string of its own.
+pub(crate) fn escape_from_within(out: &mut String, range: std::ops::Range<usize>) {
+    let mut start = range.start;
+    while let Some(i) = next_escaped(&out.as_bytes()[..range.end], start) {
+        let entity = ENTITIES[ESCAPES[out.as_bytes()[i] as usize] as usize - 1];
+        out.extend_from_within(start..i);
+        out.push_str(entity);
+        start = i + 1;
+    }
+    out.extend_from_within(start..range.end);
 }
 
 /// The index of the first byte from `from` on that `escape_into` replaces. Most text has none, so
@@ -2081,13 +2099,26 @@ macro_rules! tuples {
 }
 tuples!((A, B), (A, B, C), (A, B, C, D));
 
+/// The decimal digits of `n`, for the `Render` of each integer type of up to 64 bits and for such
+/// an integer as a message's argument (`u128` and `i128` are written through `Display`).
+///
+/// Always inlined: as a call, at the two `u32` render sites of the page `bench/request-cost`
+/// counts, each integer cost six registers saved and restored, and loads after it of the string's
+/// length and capacity and of the markup written next. Other callers' cost was not counted.
+#[inline(always)]
 pub(crate) fn push_u64(mut n: u64, out: &mut String) {
-    // One or two digits, most of a page's counts and quantities: pushed with no buffer.
-    if n < 100 {
-        if n >= 10 {
-            out.push(char::from(b'0' + (n / 10) as u8));
+    // Up to three digits, most of a page's counts and quantities: written with no buffer, a digit
+    // and a pair at most.
+    if n < 1_000 {
+        let n = n as u16;
+        if n >= 100 {
+            out.push(char::from(b'0' + (n / 100) as u8));
+            out.push_str(crate::ascii::pair((n % 100) as u8));
+        } else if n >= 10 {
+            out.push_str(crate::ascii::pair(n as u8));
+        } else {
+            out.push(char::from(b'0' + n as u8));
         }
-        out.push(char::from(b'0' + (n % 10) as u8));
         return;
     }
     // Two digits per division, lowest first, then written highest first as two-digit text: one
@@ -2328,8 +2359,8 @@ impl<T: Attrs> Attrs for Option<T> {
 /// The attributes a spread of pairs skips, compared as whole names in any case: the script
 /// wiring, `data-ref`, `data-ref-value`, `data-key`, `data-on` and `data-scope`, which only `ref=`,
 /// `key=`, `on:` and a component's root write, and `data-vars`, which only `style={..}` writes.
-/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group` and
-/// `data-corten-page` still pass through a spread.
+/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group`,
+/// `data-nav-also` and `data-corten-page` still pass through a spread.
 const PRINTED_BY_CORTEN: [&str; 6] = ["data-vars", "data-ref", "data-ref-value", "data-key", "data-on", "data-scope"];
 
 /// `[("data-id", id), ("title", title)]`: each pair as an attribute. Names come from the app's

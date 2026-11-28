@@ -50,3 +50,13 @@ test("v5 replay requires same-stream audit admission and a final stream seal wit
     const wrong = structuredClone(seal); change(wrong); assert.throws(() => replayJournal(empty, id, [...prefix, wrong, { kind: "finished" }], finished));
   }
 });
+
+test("v6 requires a drained bootstrap and separate audit epoch, never a stream receipt", () => {
+  const bootstrap = admitted("bootstrap"), stage = { kind: "mixed-audit-staged" };
+  const prefix = [authorized, bootstrap, started, { kind: "mixed-review-needed", subjectSha256: "d".repeat(64) }];
+  const audit = admitted("audit-mixed-production");
+  assert.throws(() => replayJournal(plan, id, [authorized, started, halted], status(6)), /bootstrap control seal missing/);
+  assert.throws(() => replayJournal(plan, id, [...prefix, stage, halted], status(6)), /mixed control seal missing/);
+  assert.throws(() => replayJournal(plan, id, [...prefix, { ...audit, channel: "stream" }, stage, halted], status(6)));
+  assert.equal(replayJournal(plan, id, [...prefix, audit, stage, halted], status(6)).controlAdmissions.size, 2);
+});

@@ -317,6 +317,169 @@ async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_br
     server.await.unwrap().unwrap();
 }
 
+/// Over a socket, what a handler is told of its request's body, for each way an HTTP/1.1 request
+/// says it has none or may have one (#2172). A request with no body (no length, a length of zero,
+/// one with `Expect: 100-continue`, one that asks to switch protocols) has ended when the handler
+/// has it: its length is zero, reading it gives nothing, a limit of no bytes holds it, and no
+/// `100 Continue` is sent for it. One sent chunked has not ended and has no length until it is
+/// read, with data, with none, or with trailers alone, which the handler still reads. None is a
+/// body held whole, and each prints as any body that is not empty does. What differs is what was
+/// kept for it: the body of a request without one holds nothing, so the box it is kept in was not
+/// allocated, and any other holds its stream. HTTP/1.0 is the same by its length, and so are a
+/// request with a length that asks to switch protocols and a `CONNECT`.
+#[tokio::test]
+async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunked_one_has_not() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn told(request: Request<Body>) -> String {
+        use http_body::Body as _;
+        use http_body_util::BodyExt as _;
+        let switches = request.extensions().get::<hyper::upgrade::OnUpgrade>().is_some();
+        let mut body = request.into_body();
+        let (ended, length, whole) = (body.is_end_stream(), body.size_hint().exact(), body.is_whole());
+        // A box of a value with no size is not allocated.
+        let keeps = if body.boxed_size() == 0 { "nothing" } else { "a stream" };
+        let said = format!("ended {ended}, length {length:?}, whole {whole}, {body:?}, keeps {keeps}, switches {switches}");
+        let (mut data, mut trailers) = (0, Vec::new());
+        while let Some(frame) = body.frame().await {
+            match frame.expect("a body that arrived").into_data() {
+                Ok(bytes) => data += bytes.len(),
+                Err(frame) => trailers.extend(frame.trailers_ref().expect("trailers").keys().map(|name| name.to_string())),
+            }
+        }
+        format!("{said}; read {data} and {trailers:?}")
+    }
+    // A `2xx` to a `CONNECT` has no body to say it in, so this one is refused.
+    async fn refused(request: Request<Body>) -> (StatusCode, String) {
+        (StatusCode::FORBIDDEN, told(request).await)
+    }
+    async fn within_none(request: Request<Body>) -> Result<String, Error> {
+        Ok(format!("{:?}", crate::extract::bytes_up_to(request.into_body(), 0).await?.map(|bytes| bytes.len())))
+    }
+    let routes = Table::new()
+        .route("/told", crate::router::any(told))
+        .route("/none", crate::router::any(within_none))
+        .route("/refused", crate::router::any(refused))
+        .route("/text", crate::router::post(|text: String| async move { format!("{text:?}") }));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    // Everything the server sends for what `sent` asks, until it closes the connection.
+    let answer = |sent: String| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(sent.as_bytes()).await.unwrap();
+        let mut read = Vec::new();
+        stream.read_to_end(&mut read).await.expect("the answer, not a reset connection");
+        String::from_utf8_lossy(&read).into_owned()
+    };
+    let ask = |method: &'static str, path: &'static str, lines: &'static str, body: &'static str| {
+        answer(format!("{method} {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n{lines}\r\n{body}"))
+    };
+
+    const ENDED: &str = "ended true, length Some(0), whole false, Body(..), keeps nothing, switches false; read 0 and []";
+    for (method, lines) in [
+        ("GET", ""),
+        ("POST", "content-length: 0\r\n"),
+        ("POST", "content-length: 0\r\nexpect: 100-continue\r\n"),
+        ("DELETE", ""),
+    ] {
+        let got = ask(method, "/told", lines, "").await;
+        assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(ENDED), "{method} with {lines:?}: {got}");
+        let got = ask(method, "/none", lines, "").await;
+        assert!(got.starts_with("HTTP/1.1 200") && got.ends_with("Some(0)"), "{method} with {lines:?}, no byte allowed: {got}");
+    }
+    let got = ask("POST", "/text", "content-type: text/plain\r\ncontent-length: 0\r\n", "").await;
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with("\"\""), "read whole by an extractor: {got}");
+    // A request that asks to switch protocols has no body either, and still brings what switches.
+    let got =
+        answer("GET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close, Upgrade\r\nupgrade: websocket\r\n\r\n".into()).await;
+    let switching = ENDED.replace("switches false", "switches true");
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&switching), "{got}");
+    // So does a `CONNECT`.
+    let got = ask("CONNECT", "/refused", "", "").await;
+    assert!(got.starts_with("HTTP/1.1 403") && got.ends_with(&switching), "{got}");
+    // HTTP/1.0 has no chunks, and a request of it with no length has no body.
+    let got = answer("GET /told HTTP/1.0\r\nhost: localhost\r\n\r\n".into()).await;
+    assert!(got.starts_with("HTTP/1.0 200") && got.ends_with(ENDED), "{got}");
+    // The connection goes on to its next request.
+    let got = answer(
+        "GET /told HTTP/1.1\r\nhost: localhost\r\n\r\nGET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n".into(),
+    )
+    .await;
+    assert_eq!(got.matches("HTTP/1.1 200").count(), 2, "{got}");
+    assert_eq!(got.matches(ENDED).count(), 2, "{got}");
+
+    // Chunked, the end of the body is in the body: nothing is known of it until it is read.
+    const OPEN: &str = "ended false, length None, whole false, Body(..), keeps a stream, switches false; read";
+    for (body, read) in [
+        ("0\r\n\r\n", "0 and []"),
+        ("0\r\nx-sum: 1\r\n\r\n", "0 and [\"x-sum\"]"),
+        ("2\r\nhi\r\n0\r\n\r\n", "2 and []"),
+        ("2\r\nhi\r\n0\r\nx-sum: 1\r\n\r\n", "2 and [\"x-sum\"]"),
+    ] {
+        let got = ask("POST", "/told", "transfer-encoding: chunked\r\n", body).await;
+        assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&format!("{OPEN} {read}")), "{body:?}: {got}");
+    }
+    let got = ask("POST", "/none", "transfer-encoding: chunked\r\n", "0\r\n\r\n").await;
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with("Some(0)"), "chunked with no data, no byte allowed: {got}");
+    // With a length that is not zero, the body is still to come.
+    let got = ask("POST", "/told", "content-length: 2\r\n", "hi").await;
+    let sized = "ended false, length Some(2), whole false, Body(..), keeps a stream, switches false; read 2 and []";
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(sized), "{got}");
+    let got = ask("POST", "/told", "content-length: 2\r\nexpect: 100-continue\r\n", "hi").await;
+    assert!(got.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200") && got.ends_with(sized), "{got}");
+    let got = answer("POST /told HTTP/1.0\r\nhost: localhost\r\ncontent-length: 2\r\n\r\nhi".into()).await;
+    assert!(got.starts_with("HTTP/1.0 200") && got.ends_with(sized), "{got}");
+    // A length on a request that asks to switch protocols is a body to read, like any other.
+    let got = ask("POST", "/told", "connection: Upgrade\r\nupgrade: websocket\r\ncontent-length: 2\r\n", "hi").await;
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&sized.replace("switches false", "switches true")), "{got}");
+
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// At a route's deadline, over a socket, a request with no body is the server's 503 though its
+/// handler read the body, which had ended and so had nothing to wait for; a chunked request whose
+/// client sent its head and no more is the client's 408, since its handler waits for the body
+/// (#1061, #2172).
+#[tokio::test(start_paused = true)]
+async fn the_deadline_of_a_request_without_a_body_is_the_servers_and_of_a_chunked_one_not_yet_sent_the_clients() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn reads_then_waits(request: Request<Body>) -> Result<&'static str, Error> {
+        crate::extract::bytes_up_to(request.into_body(), 1024).await?;
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        Ok("late")
+    }
+    let routes = Table::new().route("/slow", crate::router::any(reads_then_waits));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    for (method, lines, body, status) in [
+        ("GET", "", "", "503"),
+        ("POST", "content-length: 0\r\n", "", "503"),
+        ("POST", "transfer-encoding: chunked\r\n", "0\r\n\r\n", "503"),
+        ("POST", "transfer-encoding: chunked\r\n", "", "408"),
+        ("POST", "content-length: 2\r\n", "h", "408"),
+    ] {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let sent = format!("{method} /slow HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n{lines}\r\n{body}");
+        let began = tokio::time::Instant::now();
+        stream.write_all(sent.as_bytes()).await.unwrap();
+        let mut read = Vec::new();
+        stream.read_to_end(&mut read).await.expect("the answer, then the connection closed, not reset");
+        let got = String::from_utf8_lossy(&read);
+        assert!(got.starts_with(&format!("HTTP/1.1 {status}")), "{method} with {lines:?} and {body:?}: {got}");
+        assert_eq!(began.elapsed(), Duration::from_secs(30), "{method} with {lines:?} and {body:?}: at the default deadline");
+    }
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// What a large upload read as it arrives (`pieces_up_to`) costs the server: `UPLOAD_MIB` (1024)
 /// over a socket as fast as the client sends, each piece dropped as a store would take it. Prints
 /// the time and the process's peak resident memory before and after (`VmHWM`, Linux). In release:

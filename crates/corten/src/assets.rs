@@ -818,9 +818,11 @@ impl Assets {
                 let assets = assets.clone();
                 async move {
                     let (parts, _) = req.into_parts();
+                    // A path that is not one is no file's answer, as a missing file's is not:
+                    // the error page in its place may be about who is asking.
                     let (version, path) = match crate::route::read_path::<(String, String)>(&parts) {
                         Ok(read) => read,
-                        Err(rejection) => return rejection.into_response(),
+                        Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                     };
                     let (cache, url) = if version == assets.version {
                         (IMMUTABLE, Url::Current)
@@ -833,10 +835,12 @@ impl Assets {
         )
     }
 
-    /// The file at `path`, asked for at a URL of the kind `url`.
+    /// The file at `path`, asked for at a URL of the kind `url`. None there: a `404` no file
+    /// answered, marked as the router's own is (`crate::cache::Unshared`), since the app's error
+    /// page drawn in its place may be about who is asking.
     fn serve(&self, path: &str, method: &Method, headers: &HeaderMap, cache: HeaderValue, url: Url) -> Response {
         let Some(file) = self.files.get(path) else {
-            return StatusCode::NOT_FOUND.into_response();
+            return crate::cache::unshared(StatusCode::NOT_FOUND.into_response());
         };
         #[cfg(feature = "compress")]
         let (body, coding) = file.body.pick(headers);
@@ -964,10 +968,11 @@ fn byte_range(value: &[u8], len: usize) -> Option<Result<std::ops::Range<usize>,
 }
 
 /// The 416 for a range past the end of a body `len` bytes long, naming its length: sent as it is,
-/// not as the app's error page, which would drop `Content-Range`.
+/// not as the app's error page, which would drop `Content-Range`, and never shared, as no file's
+/// answer ([`crate::cache::Unshared`]).
 fn unsatisfiable(len: usize) -> Response {
     let whole = HeaderValue::try_from(format!("bytes */{len}")).expect("digits");
-    let mut res = (StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response();
+    let mut res = crate::cache::unshared((StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response());
     res.extensions_mut().insert(crate::page::AsIs);
     res
 }

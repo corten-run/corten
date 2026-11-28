@@ -736,6 +736,24 @@ pub(crate) mod sealed {
     /// say yes.
     pub struct Whole(pub(crate) bool);
 
+    /// What `IntoResponse::may_share` says. Only Corten can name it, so only Corten's own types
+    /// say no.
+    pub struct MayShare(pub(crate) bool);
+
+    /// What `ToJson::__into_response` gives, the response `Json` sends. Only Corten can name it,
+    /// so a `ToJson` of the app's own writes its value and no more: no whole response of its own
+    /// (a `Public` one it converted) from a `Json<T>` route, whose handler is not watched.
+    pub struct JsonBody(pub(crate) crate::response::Response);
+
+    impl MayShare {
+        /// A type of Corten's that is never [`Public`].
+        pub(crate) const NO: Self = MayShare(false);
+        /// Either of two answers may be.
+        pub(crate) const fn either(one: Self, other: Self) -> Self {
+            MayShare(one.0 || other.0)
+        }
+    }
+
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
@@ -891,6 +909,13 @@ impl<For: SetsCookies, Kind> HtmlResponse<For, Kind> {
 }
 
 impl<For, Kind> IntoResponse for HtmlResponse<For, Kind> {
+    // Its `DerefMut` lets a handler put any response in its place, a `Public` one it converted
+    // among them (`*page = Public::new(..).into_response()`): watched as that one is.
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare(true)
+    }
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1237,6 +1262,13 @@ impl From<Relay> for JsonResponse {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonResponse {
+    // Its `DerefMut` lets a handler put any response in its place, a `Public` one it converted
+    // among them (`*answer = Public::new(..).into_response()`): watched as that one is.
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare(true)
+    }
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1352,7 +1384,7 @@ impl JsonError {
             std::panic::Location::caller()
         );
         assert!(!strict, "corten: {message}");
-        JsonError::Error(Error::new(message))
+        JsonError::Error(Error::corten(message))
     }
 }
 
@@ -1372,6 +1404,12 @@ impl From<crate::Errors> for JsonError {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonError {
+    // A refusal of the app's own is a `JsonResponse` ([`JsonError::Own`]), which may hold anything.
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        <JsonResponse as IntoResponse>::may_share()
+    }
+
     fn into_response(self) -> Response {
         match self {
             JsonError::Error(error) => error.into_response(),
@@ -1505,6 +1543,11 @@ impl Relay {
 }
 
 impl IntoResponse for Relay {
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1794,6 +1837,11 @@ impl std::fmt::Display for StreamFailed {
 impl std::error::Error for StreamFailed {}
 
 impl IntoResponse for Media {
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1909,6 +1957,12 @@ impl<For> From<Relay> for PageOr<Relay, For> {
 }
 
 impl<A: FileAnswer, For> IntoResponse for PageOr<A, For> {
+    // Its page is an `HtmlResponse`, which may hold anything.
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::either(<HtmlResponse<For> as IntoResponse>::may_share(), A::may_share())
+    }
+
     fn into_response(self) -> Response {
         match self {
             PageOr::Page(page) => page.into_response(),
@@ -1961,6 +2015,11 @@ pub(crate) struct Relayed {
 pub struct LiveResponse(pub(crate) Response);
 
 impl IntoResponse for LiveResponse {
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1984,6 +2043,11 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
 
 #[cfg(feature = "feed")]
 impl<T> IntoResponse for corten_feed::FeedResponse<T> {
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         self.into_http().map(Body::new)
     }
@@ -2343,6 +2407,11 @@ const fn shared_header(name: &str) -> bool {
 }
 
 impl<A: Shareable> IntoResponse for Public<A> {
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare(true)
+    }
+
     fn into_response(self) -> Response {
         let mut res = self.answer.into_response();
         // No layout read's value is drawn in it, however the reads were started.
@@ -2369,12 +2438,14 @@ impl<A: Answer + Shareable> Answer for Public<A> {
     type Kind = <A::Kind as KindOf<A>>::InPublic;
 }
 
-/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
-/// statement, a one-time code. `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's
-/// back/forward cache may not restore the page either. It applies to a failure the handler returns
-/// too: the error page that replaces it is `no-store`. A request refused before the handler runs
-/// (a path that does not parse), a handler that panics and one past its deadline never reach it,
-/// and get the default. In a routes module the route can say it instead,
+/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: private, no-store`,
+/// `private` for a CDN that ignores a bare `no-store`): a statement, a one-time code.
+/// `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's back/forward cache may not
+/// restore the page either. It applies to a failure the handler returns too: the error page that
+/// replaces it is `private, no-store`. A request refused before the handler runs
+/// (a path that does not parse), a handler that panics and one past its deadline never reach it:
+/// their error page is never shared either, but is `private, no-cache` unless a middleware's
+/// header named `no-store`. In a routes module the route can say it instead,
 /// `#[route("/statement", get = statement, no_store)]`: the handler keeps its own result and its
 /// `?`, and a request its extractors refuse is `no-store` too; `no_store(post)` covers only the
 /// methods it names (see [`crate::routes`]).
@@ -2388,6 +2459,13 @@ impl<A> NoStore<A> {
 }
 
 impl<A: IntoResponse> IntoResponse for NoStore<A> {
+    // What it holds may be `Public` (on an unstaged route, or on one branch of a type of the
+    // app's own), with a CDN's caching header `no-store` does not replace: watched as that one is.
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        A::may_share()
+    }
+
     fn into_response(self) -> Response {
         let mut res = self.0.into_response();
         Cache::no_store().apply(&mut res);
@@ -2500,15 +2578,42 @@ pub trait Anonymous {
     ///     const KEYED: corten::answer::sealed::Keyed = corten::answer::sealed::Keyed(true);
     /// }
     /// ```
+    ///
+    /// Corten's own inputs are keyed only as Corten fills them: a `Form` of a type its extractor
+    /// cannot read, which only an extractor of the app's own could fill, is not one at all.
+    ///
+    /// ```
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// input::<corten::Form<String>>();
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// struct Raw;
+    /// input::<corten::Form<Raw>>();
+    /// ```
     #[doc(hidden)]
     const KEYED: sealed::Keyed = sealed::Keyed(false);
+
+    /// Whether it is keyed in a place before the handler's last, where Corten fills only what
+    /// reads the request's head (`FromRequestParts`): a `Form` there is the app's own.
+    #[doc(hidden)]
+    const KEYED_BEFORE_LAST: sealed::Keyed = Self::KEYED;
 }
 
-impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {
+// Each is keyed only with the bounds Corten's own extractor for it has, so a type that falls
+// outside them, which the app could fill with an extractor of its own for Corten's type, is not.
+impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R>
+where
+    R::Path: crate::route::__private::ReadPath,
+    R::Params: Send,
+{
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T> Anonymous for crate::Form<T> {
+impl<T: serde::de::DeserializeOwned> Anonymous for crate::Form<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
+    // Corten reads a form only as the last argument, from the body.
+    const KEYED_BEFORE_LAST: sealed::Keyed = sealed::Keyed(false);
 }
 impl<T> Anonymous for State<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
@@ -2525,9 +2630,9 @@ impl Anonymous for Method {
 impl Anonymous for Uri {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T: Anonymous> Anonymous for Option<T> {
-    const KEYED: sealed::Keyed = T::KEYED;
-}
+// Corten fills an `Option` only through `OptionalFromRequestParts`, which none of its keyed
+// inputs implement, so an `Option` of one is filled by the app's own code: not keyed.
+impl<T: Anonymous> Anonymous for Option<T> {}
 // What these read is not in the key (a body, where a stream stopped): a page whose handler takes
 // one is not kept.
 impl<T> Anonymous for crate::form::Upload<T> {}
@@ -2615,6 +2720,13 @@ macro_rules! holds {
     };
 }
 
+/// Each argument keyed in its place: the last as Corten fills it there, the others as it fills
+/// one before the last.
+macro_rules! keyed {
+    ($last:ident) => { $last::KEYED.0 };
+    ($first:ident, $($rest:ident),+) => { $first::KEYED_BEFORE_LAST.0 && keyed!($($rest),+) };
+}
+
 macro_rules! arities {
     ($($ty:ident),*) => {
         impl<F, Fut, M, $($ty,)*> Signature<(M, $($ty,)*)> for F
@@ -2627,7 +2739,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {
-            const KEYED: bool = true $(&& $ty::KEYED.0)*;
+            const KEYED: bool = keyed!($($ty),*);
         }
         impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
@@ -2696,7 +2808,7 @@ impl<H: Clone, O> Clone for Endpoint<H, O> {
 
 /// A JSON route's failure marked as one, which the stages leave as it is.
 #[inline]
-fn marked<O: Answer>(mut res: Response) -> Response {
+fn mark<O: Answer>(res: &mut Response) {
     // A constant: an HTML route's check compiles away.
     if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
         res.extensions_mut().insert(Answered);
@@ -2707,7 +2819,56 @@ fn marked<O: Answer>(mut res: Response) -> Response {
     if !O::PAGE && res.extensions().get::<crate::layout::Pending>().is_some() {
         res.extensions_mut().insert(crate::layout::NotAPageAnswer);
     }
-    res
+}
+
+pin_project_lite::pin_project! {
+    /// A route's answer as its handler makes it, [`mark`]ed. One that may be `Public`
+    /// (`IntoResponse::may_share`: a `Public` answer, a page or a JSON answer, whose response the
+    /// handler may replace with a `Public` one it converted, or a type of the app's own, which
+    /// may hold one; known from the answer's type, so a route of text, `Json<T>` alone, a status,
+    /// a file, a relay, a live stream or a feed does none of this) is
+    /// watched for a form's new submit key drawn in the handler's polls however it was rendered
+    /// (into JSON or text, into a file, or to a string placed in a page as markup)
+    /// ([`crate::form::KeyWatch`]): an answer whose handler drew one is the request's alone
+    /// ([`crate::cache::Unrepeatable`]), so no cache gives it to another visitor and the app does
+    /// not keep it. A page's render marks a key it drew itself; this sees the rest. The answer is
+    /// marked where it is polled to, and the watch is held beside the handler's work, so neither
+    /// is moved again. The answer alone is marked: it comes back to the stages past the route's
+    /// side of the chain (`middleware::Keyed`), which marks the signal they hold
+    /// ([`crate::Signal::mark_key_drawn`]) before any middleware sees the answer, so a middleware
+    /// that makes a new response of this one does not take the mark away.
+    pub(crate) struct Made<F, O> {
+        #[pin]
+        made: F,
+        watch: crate::form::KeyWatch,
+        answer: PhantomData<fn() -> O>,
+    }
+}
+
+impl<F: Future<Output = Response>, O: Answer> Made<F, O> {
+    /// `made` as the route's answer.
+    #[inline]
+    fn new(made: F) -> Self {
+        Made { made, watch: Default::default(), answer: PhantomData }
+    }
+}
+
+impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O> {
+    type Output = Response;
+
+    #[inline]
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
+        let this = self.project();
+        let watched = <O as IntoResponse>::may_share().0;
+        let mut polled = if watched { this.watch.poll(this.made, cx) } else { this.made.poll(cx) };
+        if let std::task::Poll::Ready(res) = &mut polled {
+            mark::<O>(res);
+            if watched && this.watch.drew() {
+                crate::cache::unrepeatable(res);
+            }
+        }
+        polled
+    }
 }
 
 impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
@@ -2720,14 +2881,23 @@ where
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
     fn keeps(&self) -> Option<crate::kept::Shape> {
-        if !(self.shared && self.keyed) {
+        self.public()?.ok()
+    }
+
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        use crate::kept::{Shape, Verdict};
+        if !self.shared {
             return None;
         }
-        if O::PAGE {
-            Some(crate::kept::Shape::Page)
+        Some(if !self.keyed {
+            Err(Verdict::Unkeyed)
+        } else if O::PAGE {
+            Ok(Shape::Page)
+        } else if O::WHOLE.0 {
+            Ok(Shape::Body)
         } else {
-            O::WHOLE.0.then_some(crate::kept::Shape::Body)
-        }
+            Err(Verdict::NotWhole)
+        })
     }
 
     #[inline]
@@ -2758,10 +2928,10 @@ where
             // Boxed, so every other request's future stays the size it was.
             futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
                 crate::layout::at_late_route(&req),
-                futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>),
+                Made::<_, O>::new(self.handler.call(req, state)),
             )) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
         } else {
-            futures_util::future::Either::Left(futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>))
+            futures_util::future::Either::Left(Made::<_, O>::new(self.handler.call(req, state)))
         }
     }
 }

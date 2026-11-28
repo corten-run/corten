@@ -12,16 +12,18 @@ import { coverage } from "../evidence.mjs";
 import { evaluateLatestStable, latestStableSources } from "../latest-stable.mjs";
 import { cpuSettings, parseArgs as catalogOptions } from "../../catalog/contract.mjs";
 import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
+import { placementCpus, placementEnv } from "../../json-api/placement.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { nightly } from "../../marketplace/droplet-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
+import { djangoAsgi, mixedDeploymentArgs, springWebflux } from "../../mixed-production/source-audit.mjs";
 import { browserContainers, browserCpus, parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
 import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
-import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { apps as hardeningApps, appSourcePath, budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
 import { clientActorCpus, hardeningActorCpus, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
-import { catalogFleetPlacement, fleetCatalogSlugs, host, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, fleetCatalogSlugs, host, jsonFleetPlacementFor, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 export const alternateCampaignPlacements = Object.freeze(fleetCatalogSlugs.regions
@@ -51,8 +53,8 @@ const exact = (value, keys, at) => {
 // below cannot silently survive a change to their actual default/CLI implementation.
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
-  // Per-adapter Chromium and cancelled-prefix retention do not change native live CLI/defaults.
-  "bench/live/parity.mjs": "18423efd99b70e10af146801759958d5df954427a9b0d4cc3c05bcc8be399a5a",
+  // The Live Delivery workload-end receipt and failed fanout teardown fence do not change native live CLI/defaults.
+  "bench/live/parity.mjs": "d66ec20570d522185cc6a64bd2af15d60b42782f04a47f4a3ff2821b521b053d",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
 export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
@@ -62,9 +64,10 @@ export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock"
 // current untracked output. Keep the ordinary result exclusion elsewhere.
 const isSource = (path) => clientSourceRoots.some((root) => path === root || path.startsWith(`${root}/`))
   || !path.split("/").some((part) => ["results", "evidence", "work", "node_modules", "target"].includes(part));
+export const sharedSourceSha256 = (files) => deploymentSha256(files.filter(({ path }) => isSource(path)));
 
 /** Hash committed Git bytes, not platform-dependent CRLF checkouts. No network or writes. */
-export function captureSources(commit) {
+export function captureSources(commit, group) {
   const selectors = ["BENCH_APPS", "BENCH_TIER", "BENCH_EDGE", "PROFILE"].filter((key) => process.env[key]);
   assert.equal(selectors.length, 0, `unset legacy selection/profile overrides before binding: ${selectors.join(", ")}`);
   assert.match(commit ?? "", /^[a-f0-9]{40}$/, "full measured commit required");
@@ -78,7 +81,7 @@ export function captureSources(commit) {
       const [mode, type, blob] = meta.split(" ");
       assert.ok(path && !/[\r\n\\:]/.test(path), "unsafe source path");
       return { mode, type, blob, path };
-    }).filter(({ path }) => isSource(path));
+    }).filter(({ path }) => isSource(path) || group === "hardening" && hardeningApps.some((app) => appSourcePath(app, path)));
   for (const entry of entries) assert.ok(["100644", "100755"].includes(entry.mode) && entry.type === "blob", "source links/submodules are not supported");
   const paths = entries.map((e) => e.path);
   assert.ok(paths.includes("bench/workloads/isolated/contract.mjs"), "isolated contract must itself be committed");
@@ -110,6 +113,8 @@ export const recipes = freeze({
   "marketplace-short-window": ["localized-marketplace"],
   "mixed-measure": ["mixed-production"],
   "mixed-production-measure": ["mixed-production"],
+  [djangoAsgi.recipe]: ["mixed-production"],
+  [springWebflux.recipe]: ["mixed-production"],
   "native-feed-measure": ["live-delivery", "recoverable-live"],
   ...(clientComparisonRecipe ? { [clientComparisonRecipe]: ["client-heavy"] } : {}),
 });
@@ -136,7 +141,8 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
 function subjectFor(r, sources, campaignMode) {
   assert.ok(campaignMode === "dedicated" || campaignMode === "legacy"
     || alternateCampaignPlacements.includes(campaignMode) && r.group !== "catalog-page"
-    || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page", "unknown campaign placement");
+    || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page"
+    || jsonFleetPlacementFor(r.group, campaignMode), "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);
     assert.equal(sources.files.find((file) => file.path === path)?.sha256, sha256(bytes), `${path}: latest-stable source differs`);
@@ -147,7 +153,7 @@ function subjectFor(r, sources, campaignMode) {
     campaignMode, host: { ...providerCreateHost(campaignMode), allocation: "not-created", isolation: "unverified" } };
 }
 export function reviewSubject(value, campaignMode = "legacy") {
-  const r = request(value), sources = captureSources(r.commit);
+  const r = request(value), sources = captureSources(r.commit, r.group);
   return deploymentSha256(subjectFor(r, sources, campaignMode));
 }
 function reviewDeclaration(review, subjectSha256) {
@@ -160,7 +166,10 @@ function reviewDeclaration(review, subjectSha256) {
   return { state: "declared-not-authenticated", declaration: clone(review) };
 }
 
-function native(group, round, recipe, reviewId) {
+const mixedMeasurement = (recipe) => ["mixed-measure", "mixed-production-measure", djangoAsgi.recipe, springWebflux.recipe].includes(recipe);
+
+// Pure native command and option derivation, not source or execution admission.
+export function nativeExecution(group, round, recipe, reviewId) {
   const available = Object.fromEntries(selectedApps(group).map((app) => [app, {}]));
   const { entry, selection: flags } = runnerFor(group);
   const base = [round, ...flags], args = [...base], changes = [];
@@ -176,12 +185,17 @@ function native(group, round, recipe, reviewId) {
     effective = parse(args, available);
   } else if (group === "mixed-production") {
     defaults = mixedOptions(base); args.push("--build");
-    if (["mixed-measure", "mixed-production-measure"].includes(recipe)) {
+    if (mixedMeasurement(recipe)) {
+      const profile = recipe === "mixed-measure" ? "defaults" : "matched";
       args.push("--measure");
-      if (recipe === "mixed-production-measure") args.push("--profile", "matched");
-      changes.push({ measure: true, profile: recipe === "mixed-production-measure" ? "matched" : "defaults" });
+      if (profile === "matched") args.push("--profile", profile);
+      args.push(...mixedDeploymentArgs(recipe));
     }
     effective = mixedOptions(args);
+    if (effective.measure) {
+      const { measure, profile, djangoDeployment, springDeployment } = effective;
+      changes.push({ measure, profile, ...(djangoDeployment && { djangoDeployment }), ...(springDeployment && { springDeployment }) });
+    }
     defaults.apps = [...selectedApps(group)]; effective.apps = [...selectedApps(group)];
   } else if (group === "fullstack-browser") {
     defaults = { targets: null, out: null, apps: selectedApps(group), cases: null, build: false };
@@ -236,17 +250,19 @@ function resources(group, recipe, campaignMode) {
     requiredEvidence: "effective command cgroup cpuset for the browser and driver; Docker and kernel CPU/memory receipts for application and upstream" };
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
-    measurement: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+    measurement: mixedMeasurement(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, qualificationWorker: 2 ** 30, load: 2 ** 31 }, loadSharedMemoryBytes: 512 * 2 ** 20 } : null,
-    requestedCpuEnv: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
+    requestedCpuEnv: mixedMeasurement(recipe) ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
     state: "unknown", requiredEvidence: "separate functional and measured participants, actual runtime limits/cpusets, calibration/headroom and quiet-host observations" };
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];
   if (prefix) {
-    const wide = campaignMode === catalogFleetPlacement.loadLayout;
+    const wide = campaignMode === catalogFleetPlacement.loadLayout, json = jsonFleetPlacementFor(group, campaignMode);
     const env = wide ? { ...catalogFleetPlacement.cpuEnv, CATALOG_LOAD_LAYOUT: campaignMode }
+      : json ? placementEnv(json)
       : Object.fromEntries(Object.entries({ APP: "1", API: "2-3", LOAD: "4-7" }).map(([role, value]) => [`${prefix}_${role}_CPUS`, value]));
     return { nativeCpuDefaults: cpuSettings({}), requestedCpuEnv: env,
-      expectedCpus: wide ? cpuSettings(env, campaignMode) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+      expectedCpus: wide ? cpuSettings(env, campaignMode)
+        : json ? placementCpus(env) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, load: 2 ** 31 },
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };
@@ -281,7 +297,7 @@ function validation(group, rootPath) {
     : ["live-delivery", "recoverable-live"].includes(group) ? ["plan.json", "coverage.json"] : ["summary.json"];
   const gates = {
     "catalog-page": ["both-source page and JSON/browser gates or replayed fail-fast record violation with no timing", "immutable-image/raw-artifact provenance; recomputed page aggregates required for comparisons"],
-    "json-api": ["all 36 functional attempts", "independent exact-image native-source/serialization audits", "cold/load/raw-runtime evidence and timing schedule after parity; no timing after a replayed functional violation"],
+    "json-api": [`all ${selectedApps("json-api").length * definition("json-api").cases.length} functional attempts`, "independent exact-image native-source/serialization audits", "cold/load/raw-runtime evidence and timing schedule after parity; no timing after a replayed functional violation"],
     "localized-marketplace": ["exact-image production qualification", "both-source complete browser/content profiles", "complete selected-candidate ledger, including unqualified/stopped outcomes"],
     "mixed-production": ["all native writes/readbacks/cancellation/deadline captures", "full-inventory production qualification", "calibration, headroom, complete equal-plan windows and raw metrics"],
     "fullstack-browser": ["all 240 native source/locale/device/JS cells", "native form/readback/architecture/lifecycle evidence", "owner fix for summary qualification aggregation; no destroyed-realm cleanup waiver"],
@@ -299,7 +315,7 @@ function validation(group, rootPath) {
 function build(r, sources, review, campaignMode) {
   const subject = subjectFor(r, sources, campaignMode), subjectSha256 = deploymentSha256(subject);
   const declaredReview = reviewDeclaration(review, subjectSha256);
-  const execution = native(r.group, r.round, r.recipe, subjectSha256);
+  const execution = nativeExecution(r.group, r.round, r.recipe, subjectSha256);
   const checks = validation(r.group, execution.operationalOptions.artifactRoot);
   if (checks.validator?.commitOption) checks.validator.argv.push(checks.validator.commitOption, r.commit);
   const body = { ...subject, subjectSha256, sources, review: declaredReview, execution,
@@ -321,13 +337,13 @@ function build(r, sources, review, campaignMode) {
 export function bindExecution(value, campaignMode = "legacy") {
   exact(value, ["group", "round", "commit", "recipe", "review"], "binding request");
   const { review, ...input } = value, r = request(input);
-  return build(r, captureSources(r.commit), review, campaignMode);
+  return build(r, captureSources(r.commit, r.group), review, campaignMode);
 }
 
 /** Recompute from live committed source; a self-consistent caller hash is not trusted. */
 export function validateBinding(binding) {
   assert.equal(binding?.schema, schema, "wrong isolated contract schema");
-  const r = request(binding.request), sources = captureSources(r.commit);
+  const r = request(binding.request), sources = captureSources(r.commit, r.group);
   const expected = build(r, sources, binding.review?.declaration, binding.campaignMode);
   assert.ok(isDeepStrictEqual(binding, expected), "binding differs from native source, selection, recipe or strict validation state");
   return freeze({ bindingSha256: expected.bindingSha256, binding: "verified-offline", ready: false, executionAuthorized: false });

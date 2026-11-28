@@ -1097,7 +1097,11 @@ browser without JavaScript, a data client) is the same submission: the app answe
 it did the first time, and the user sees that and can send the change. A `data-patch` form's
 change made while its write is out waits for the answer instead, and goes under the new key
 (below). The key is the app's to store, next to the write (Corten keeps
-no store); `corten_cluster::begin` takes it as its idempotency key. A field that is not a UUID v4
+no store); `corten_cluster::begin` takes it as its idempotency key. It answers a write sent again
+as the one before only while the store keeps the key: `corten_cluster::prune` drops keys older than
+the age it is given, and a key sent after that is a new write. Its keys are unique across the whole
+cluster store, not per feed: while it is kept, a key a write to one feed used is refused on another
+(`corten_cluster::IdempotencyKeyReused`, which the app answers with a 422), never replayed there. A field that is not a UUID v4
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
 
@@ -1126,12 +1130,24 @@ away. A page that draws a key with `SubmitKey::field` is also never shared, what
 says: a cache that gave one visitor's page to the next would have the second visitor's submit
 taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
 without the CDN caching headers a middleware wrote (`CDN-Cache-Control`, `Surrogate-Control` and
-the others [caching](app.md#caching) lists), so the browser asks again before reusing it, the
+the others [caching](app.md#caching) lists) and without a tag it was given, so the browser asks again before reusing it, the
 app does not keep it, and `corten dev` logs it; one that says `no-store` goes out `private,
 no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer it is drawn
-for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text carries no mark: a
+for: a page, a patch, the layout's reads, and a `Rendered` placed in one; one made with
+`req.rendered` marks its request's answer wherever it is placed. Text carries no mark: a
 live stream's fragment
-(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A live
+(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A `Public`
+route's handler (and an answer type of the app's own, a page or a JSON answer, whose response
+the handler may replace with a `Public` one it converted, `NoStore` or a tuple of headers around
+any of them, staged or `unstaged`) is watched for a key
+it draws as text too (in JSON, in text, in a file, or placed in a page with `raw`), and that
+answer is sent as a keyed page is. The watch sees only what the handler draws on its own thread
+before it returns: not a key a bare render (`to_html()`) draws in a task it spawned or on
+another thread, nor one drawn as a body is sent (`Media::stream`, a relay's body, a live
+stream's fragments), nor one in a feed's rows or snapshot, where a per-visitor key never goes
+([caching](app.md#caching)). A render that
+marks the answer itself (a page's, a patch's, one made with `req.rendered`) does not rely on the
+watch and is seen on whatever thread it runs. A live
 stream whose fragments may draw a key is never `Public`, says `Cache-Control: private` itself and
 carries no CDN caching header ([live data](live-data.md)). Under `corten dev`, a stream is logged
 when a fragment it gives draws a key and its settled answer has no bare `private` in
@@ -1143,7 +1159,9 @@ a retry, a malformed key is refused before the tool runs, and the tool gets a `S
 has no key field of its own, so the key is an argument, and a tool whose input requires one is
 marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
 when it stores it. Two differences from a form's key: the agent makes it, not the server,
-so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+so store it per caller and tool (an agent may reuse a key another sent), making it unique to that
+scope yourself, for example by prefixing the caller and tool to it, since a store such as
+`corten_cluster::begin`'s keeps one scope for every key; and answer a repeat
 whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
 and leave the field without a doc comment, which would replace the retry instruction in its
 description. A write that is idempotent already ("set the quantity to 5") needs no key and is
@@ -1210,13 +1228,39 @@ a redirect, not a bare `204` or `205`.
 When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
-one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its
-`failed` message, so no write fails silently; a screen that says it its own way (beside the
-form, as watchlist's watch form does with `on:corten:error={js::failed(..)}`, or by sending again
-from its script) calls `preventDefault()` in its handler (the event is cancelable), and the
-toaster says nothing. The form keeps what the user typed, so the page can say what happened and
-the user can send it again: with the same key after a 5xx or no whole answer,
-and with a new one after a whole answer below 500, as above. A script
+one or a navigation dispatches nothing. A read of the page can draw over the form while its write
+is out (a navigation started before the press, or the page reading itself again). A failure that
+comes while a navigation is on its way is said once none is left: each counts until it ends or is
+abandoned, and one that abandons another counts in its place. So the draw does not take away what
+the page says; a navigation that hangs (an answer or a stylesheet that never comes) holds it as long
+as it hangs. A form no navigation can draw over hears it at once: one outside `<main>` (in the
+layout's header, or a dialog there) and outside the layout's elements that are the page's (`page`
+in `html!`, or with an `id` one of them had, as a patch may draw one again without the mark),
+while no navigation on its way reads the whole page (one after a write). When the
+read drew over the form, the event goes to the form in its place: the one with its `id`, marked
+`data-patch`, with the same `action` and `method`, drawn with no navigation to another address
+since the press, that has sent no submit itself. A page a submit's answer draws (a `GET`
+`data-patch` form's `<main>`, a write's own page) is the page on screen, even while the address
+already shows a navigation still on its way, and these rules still pick the form. One limit follows:
+a `GET` `data-patch` form whose `action` is another path draws that path's `<main>` without counting
+as a navigation to another address, so a form there with the same `id`, `action` and `method`
+hears the failure of the page it drew over ([Choice 74](../design.md#choice-failure-in-place)). Any other form,
+one of another page with the same `id` among them, does not get it: the event goes to the
+document, where `on:document:corten:error` hears it, since an event on a form no longer in the
+page reaches no handler. corten-ui's
+`Toaster` in the layout says it with its `failed` message, so no write fails silently. A failure
+held for a navigation is said on the page that navigation draws, even one the user started after
+the write failed: the toaster closes a toast as a navigation starts, before this one is shown, so
+the failure is said on that page rather than lost. A screen
+that says it its own way (beside the form, as watchlist's watch form does with
+`on:corten:error={js::failed(..)}`, or by sending again from its script) calls
+`preventDefault()` in its handler (the event is cancelable), and the toaster says nothing. The
+form that sent it keeps what the user typed, so the page can say what happened and the user can
+send it again: with the same key after a 5xx or no whole answer, and with a new one after a whole
+answer below 500, as above. A form a read drew in its place keeps neither: it is the read's
+markup, with the values and the submit key the server drew, so sending it again is a new
+submission, which carries a new key, so the server cannot know it repeats the one that failed, and
+may apply both. A script
 that needs what the server decided on a submit that did draw (saved at version 4, refused,
 stale) gets it from the answer itself; see [Typed events](scripts.md#typed-events).
 
@@ -2337,9 +2381,10 @@ whose status line would have said it shows it through `corten:notice` alone.
 
 A browser refuses a `Secure` cookie, and so a `__Host-` one, from a plain `http://` origin other
 than loopback: a tool served on the LAN as `http://automation.lan:3001` or `http://192.168.1.5`.
-Corten sees that in the write (an `Origin` of this host over `http://`, no `Sec-Fetch-Site`) and
-sets the notice in a plain `corten-notice` cookie instead (`HttpOnly`, `SameSite=Lax`, a minute),
-with nothing for the app to do. A page reads that one only from a request without
+Corten checks that the write has no `Sec-Fetch-Site` and that its `http://` `Origin` matches the
+[requested host and port](app.md#host-names): the target's authority when present, otherwise
+`Host`. For a matching non-loopback origin it sets the notice in a plain `corten-notice` cookie
+instead (`HttpOnly`, `SameSite=Lax`, a minute), with nothing for the app to do. A page reads that one only from a request without
 `Sec-Fetch-Site`, which current browsers send to every secure origin, so on HTTPS another site on
 the domain cannot plant a notice in it there; a browser too old to send it (Safari before 16.4,
 Firefox before 90) could be shown one, as text. An app served only over HTTPS says so with

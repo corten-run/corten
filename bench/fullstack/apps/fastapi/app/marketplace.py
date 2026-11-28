@@ -12,6 +12,8 @@ from babel.numbers import format_currency, format_decimal, get_decimal_symbol, g
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from .upstream import LIMITS
+
 
 LABELS = json.loads((Path(__file__).resolve().parent / "marketplace_labels.json").read_text(encoding="utf-8"))
 LOCALES = {name: Locale.parse(name, sep="-") for name in LABELS}
@@ -104,9 +106,7 @@ class MarketplaceRecord(Record):
 class MarketplaceSource:
     def __init__(self):
         base = os.environ.get("API_BASE", "http://localhost:8080").rstrip("/")
-        # No cap on connections to the item API, as bench/fullstack/README.md's item API rule asks.
-        limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
-        self.client = httpx.AsyncClient(base_url=base, timeout=10, follow_redirects=False, limits=limits)
+        self.client = httpx.AsyncClient(base_url=base, timeout=10, follow_redirects=False, limits=LIMITS)
         self.fixture = None
         if os.environ.get("MARKETPLACE_SOURCE") == "fixture":
             with open(os.environ.get("MARKETPLACE_FIXTURE_PATH", "/fixtures/marketplace.json"), encoding="utf-8") as file:

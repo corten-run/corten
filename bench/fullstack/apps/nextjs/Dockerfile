@@ -1,4 +1,4 @@
-FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS build
+FROM node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067 AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
@@ -15,7 +15,7 @@ ARG EDGE_HOST=localhost:19411
 RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund
 
-FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
+FROM node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=8080
 ARG PROFILE=
@@ -23,7 +23,7 @@ ARG EDGE_HOST=localhost:19411
 ENV PROFILE=$PROFILE EDGE_HOST=$EDGE_HOST
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
-COPY --from=build /app/package.json /app/next.config.mjs /app/server.mjs /app/server-profile.mjs ./
+COPY --from=build /app/package.json /app/next.config.mjs /app/server.mjs /app/server-profile.mjs /app/marketplace-origin.ts ./
 COPY --from=build /app/public ./public
 EXPOSE 8080
 CMD ["node", "server.mjs"]

@@ -97,6 +97,15 @@ pub enum Abort {
 #[derive(Clone, Default)]
 pub struct Signal(Arc<Inner>);
 
+/// The signal of a request a middleware passed on to the route without one (rebuilt without the
+/// first one's extensions), made where the app's middleware ends (`middleware::handle`) and put
+/// beside the request's extensions rather than as its `Signal`, which is still missing for what
+/// reads that. Each [`crate::Req`] of the request takes it in place of a signal of its own, so a
+/// render one makes ([`crate::Req::rendered`]) marks the signal the end of the chain reads as
+/// the answer comes back.
+#[derive(Clone)]
+pub(crate) struct Detached(pub(crate) Signal);
+
 /// [`Inner::locale`]: the handler chose it.
 const CHOSEN: u16 = 0x8000;
 /// [`Inner::locale`]: the index plus one.
@@ -129,9 +138,14 @@ struct Inner {
     /// for the request, for its page and its live part's fragments alike.
     #[cfg(feature = "zones")]
     zone: Option<crate::client::ZoneName>,
-    /// The page rendered the request's notice ([`crate::Req::notice`]), so a navigation's answer
-    /// does not send it to the runtime as well.
-    notice_drawn: AtomicBool,
+    /// What the request's answer drew ([`NOTICE_DRAWN`], [`KEY_DRAWN`]): one byte for both, so
+    /// the signal stays the size it was. Without `zones` its one- and two-byte fields fill one
+    /// word exactly (eight bytes beside fields of eight), so a byte of the key's own would make
+    /// every request's signal eight bytes larger. Each is set with an `or`, as nothing orders
+    /// the two: a render sets either on whatever task renders with a clone of the request, and
+    /// the route's answer sets the key on whatever thread a middleware polled it
+    /// (`middleware::Keyed`), so a plain store of one bit could clear the other.
+    drawn: AtomicU8,
     /// The request's locale: its index in the app's locales plus one (0 until it is known), with
     /// `CHOSEN` set when the handler chose it from the URL ([`crate::Req::set_locale`]) rather
     /// than `Accept-Language`, which is then negotiated once per request.
@@ -165,6 +179,13 @@ struct Inner {
 /// In [`Signal`]'s `write`: a write that began before the app counted writes by path. No path
 /// has this count, of which there are far fewer.
 const WROTE_EARLY: usize = usize::MAX;
+
+/// [`Inner::drawn`]: the page rendered the request's notice ([`crate::Req::notice`]), so a
+/// navigation's answer does not send it to the runtime as well.
+const NOTICE_DRAWN: u8 = 1;
+/// [`Inner::drawn`]: the answer holds a form's new submit key, drawn for this request: no cache
+/// may give it to another visitor ([`Signal::mark_key_drawn`]).
+const KEY_DRAWN: u8 = 2;
 
 /// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
 /// middleware makes with `Req` carries the head it was made with.
@@ -525,11 +546,31 @@ impl Signal {
 
     /// The page drew the request's notice.
     pub(crate) fn mark_notice_drawn(&self) {
-        self.0.notice_drawn.store(true, Ordering::Relaxed);
+        self.0.drawn.fetch_or(NOTICE_DRAWN, Ordering::Relaxed);
     }
 
     pub(crate) fn notice_drawn(&self) -> bool {
-        self.0.notice_drawn.load(Ordering::Relaxed)
+        self.0.drawn.load(Ordering::Relaxed) & NOTICE_DRAWN != 0
+    }
+
+    /// The request's answer holds a form's new submit key ([`crate::cache::Unrepeatable`]): a
+    /// page's render that drew one, or the route's answer with that mark (a render's or the watch
+    /// around a handler's, `answer::Made`) as it comes back to the stages' own signal, from
+    /// whatever thread polled it (`middleware::Keyed`). Held by the request, not the response, so
+    /// the stages still see it after a middleware made a new response of the one it was given, to
+    /// a request it may have rebuilt, and send it to no shared cache.
+    pub(crate) fn mark_key_drawn(&self) {
+        self.0.drawn.fetch_or(KEY_DRAWN, Ordering::Relaxed);
+    }
+
+    /// Whether the request's answer drew a form's new submit key ([`Signal::mark_key_drawn`]).
+    pub(crate) fn key_drawn(&self) -> bool {
+        self.0.drawn.load(Ordering::Relaxed) & KEY_DRAWN != 0
+    }
+
+    /// Whether this is `other`: the same request's, not one a middleware made.
+    pub(crate) fn is(&self, other: &Signal) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     /// The handler chose the locale at `index` in the app's locales from the URL.

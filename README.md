@@ -32,7 +32,7 @@ Visit [corten.run](https://corten.run) for a page that demonstrates Corten.
   so a page works before its scripts load, and without them.
 - **Plain JavaScript where it is fastest.** Behavior is a function in a script next to its
   component, called from the markup by name. No WASM, no virtual DOM, no hydration.
-  A 16.0 KB (gzip) runtime.
+  A 16.5 KB (gzip) runtime.
 - **Partial updates from the same handler.** A form marked `data-patch` gets back only the
   elements that changed; without JavaScript the same handler answers with the whole page.
 - **Live data.** `<corten-live>` fragments and keyed feeds stream numbered patches over
@@ -343,7 +343,7 @@ In the order to read them; each README says how to run it and where each piece i
 
 ## Status
 
-Corten is 0.2: usable and tested, on Rust 1.89 or later, and built for
+Corten is 0.3: usable and tested, on Rust 1.89 or later, and built for
 [Chase Sets](https://chasesets.com). The API will change before 1.0; [CHANGELOG.md](CHANGELOG.md)
 lists what changed. A release publishes every crate at one version on crates.io and attaches a
 prebuilt `corten` for Linux, macOS and Windows to the GitHub release. The framework's package is

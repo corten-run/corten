@@ -1,0 +1,5 @@
+# parity.mjs's raw captures, the gzip files it writes in its default output (each case's and
+# fan-out's .json.gz, and source.diff.gz). Its coverage.json, plan.json and other JSON stay
+# visible. Committed evidence is a summary whose provenance records where a maintainer published
+# the captures and their SHA-256 (CONTRIBUTING.md, Benchmark results).
+/results/parity/**/*.gz

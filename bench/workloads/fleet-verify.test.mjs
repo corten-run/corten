@@ -1,6 +1,6 @@
 // Synthetic saved artifacts only. These cannot establish native readiness.
 import assert from "node:assert/strict";
-import { appendFileSync, linkSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, linkSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setImmediate as turn, setTimeout as wait } from "node:timers/promises";
 import test from "node:test";
@@ -11,7 +11,7 @@ import { groupNames } from "./registry.mjs";
 import { fleetChildOptions, fleetLockSnapshot, readFleet, recheckCollectedGroup, verifyCollectedGroup, verifyFleet, verifyFleetCli,
   windowsProcessStart } from "./fleet-verify.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { createErroredReceipt, createErroredRecord, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 import { inspectContinuation } from "./group-continuation.mjs";
 
 function fixture(t) {
@@ -245,11 +245,54 @@ test("retirement evidence is independently rebound and never qualifies a partial
     save(); const report = await p.verify();
     assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false); assert.equal(p.calls.length, 0);
     assert.equal(report.groups[0].outcome, kind === "unused" ? "unused-retired" : "setup-failed-retired");
+    if (kind === "setup-failed") {
+      p.seed(groupNames[1]);
+      const changed = await p.verify({ async inspect(input) {
+        assert.equal(p.calls.length, 0);
+        writeFileSync(proof, `${JSON.stringify(record)}\n`);
+        return p.inspect(input);
+      } });
+      assert.equal(changed.groups[0].error, "group-retirement-changed");
+      save();
+    }
     record.id = "124"; save();
     assert.equal((await p.verify()).groups[0].outcome, "error", "a self-consistent hash cannot authorize foreign retirement evidence");
   }
 });
 
+test("a provider-errored create with its receipt and no launch custody is resolved, never qualifying the fleet", async (t) => {
+  const p = fixture(t), group = groupNames[0], stateRoot = join(p.h.base, group), local = join(stateRoot, "groups-r21"), at = new Date().toISOString();
+  mkdirSync(local, { recursive: true });
+  const ids = { dropletId: "123", actionId: "456" }, statePath = join(local, "state.json"), receipt = join(local, createErroredReceipt);
+  const state = { ...reservation({ round: "r21", commit, token: p.fleet.jobs[0].token, group, fleet: p.fleet }), provider: p.fleet.provider,
+    status: "creating", createIntentAt: at, fullGroupQualified: false, createPending: ids };
+  const record = createErroredRecord(state, ids, 7, at);
+  const save = (bytes = JSON.stringify(record), hash = digest(JSON.stringify(record))) => {
+    writeFileSync(receipt, bytes); writeFileSync(statePath, JSON.stringify({ ...state, createErrored: { ...ids, evidenceSha256: hash } }));
+  };
+  save(); const report = await p.verify();
+  assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false); assert.equal(p.calls.length, 0);
+  assert.equal(report.groups[0].outcome, "create-errored");
+  // A retained launch lock is still custody; an operation lock is busy.
+  writeFileSync(join(stateRoot, ".groups-launch.lock"), "SYNTHETIC");
+  assert.equal((await p.verify()).groups[0].outcome, "error");
+  unlinkSync(join(stateRoot, ".groups-launch.lock")); writeFileSync(join(local, "operation.lock"), "SYNTHETIC");
+  assert.equal((await p.verify()).groups[0].outcome, "busy");
+  unlinkSync(join(local, "operation.lock"));
+  // A recheck that kept its own lock (for example after a failed teardown) is unresolved.
+  writeFileSync(join(local, "create-recheck.lock"), "SYNTHETIC");
+  assert.equal((await p.verify()).groups[0].outcome, "error");
+  unlinkSync(join(local, "create-recheck.lock"));
+  assert.equal((await p.verify()).groups[0].outcome, "create-errored");
+  // A receipt that no longer matches its saved hash, or a self-consistent foreign receipt, stays unresolved.
+  save(JSON.stringify({ ...record, observedAt: "2026-11-14T00:00:01.000Z" }));
+  assert.equal((await p.verify()).groups[0].outcome, "error");
+  const foreign = JSON.stringify({ ...record, action: { ...record.action, resourceId: 124 } }); save(foreign, digest(foreign));
+  assert.equal((await p.verify()).groups[0].outcome, "error");
+  // Without the record, the same unbound create is still an uncollected reservation.
+  writeFileSync(statePath, JSON.stringify(state));
+  assert.equal((await p.verify()).groups[0].outcome, "uncollected");
+});
 test("strict roster, source and all original replay/lifecycle gates cannot be supplied by receipts", async (t) => {
   for (const kind of ["manifest", "source", "schema", "selection", "lifecycle", "pending", "raw", "exit", "eligibility", "plan-source", "reservation", "archive", "tree", "duplicate-id", "duplicate-ip", "active-operation"]) {
     const p = fixture(t); p.seedAll(); const j = p.jobs.get(groupNames[0]);

@@ -3,7 +3,9 @@ import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
-import { containerReceipt, evidenceVersion, imageReceipt, producerSchema, sourceTree } from "./raw-contract.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, k6Image, nodeImage, producerSchema, sourceTree } from "./raw-contract.mjs";
+import { ImagePinRefusal } from "../load-tool.mjs";
+import { inspect } from "node:util";
 import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
@@ -110,6 +112,76 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
   assert.deepEqual(hashes(), before, "saved validation must not write evidence");
 });
 
+test("saved evidence replays from a checkout of its measured commit, never against another checkout's image pin", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.ok(validateSaved(args), "the measuring checkout replays its own evidence");
+  // The same evidence as a checkout still pinned to the Debian 12 upstream image wrote it.
+  const earlier = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+  let rewritten = 0;
+  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) if (entry.isFile() && entry.name.endsWith(".json")) {
+    const path = join(entry.parentPath, entry.name), text = readFileSync(path, "utf8");
+    if (text.includes(nodeImage)) { writeFileSync(path, text.replaceAll(nodeImage, earlier)); rewritten++; }
+  }
+  assert.ok(rewritten >= 3, "summary, upstream and CPU sidecar receipts carry the image");
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && e.message.includes(`retained image is not this checkout's pin ${nodeImage}; validate from a checkout of the measured commit ${commit}`)
+    && !e.message.includes(earlier));
+});
+
+test("a saved k6 image other than the pin is refused by the pin and hint, and a tool receipt difference by its field, never the saved text", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit }, saved = "grafana/k6:SAVED-IMAGE-CANARY";
+  writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.ok(validateSaved(args), "the measuring checkout replays its own evidence");
+  const probe = (path, edit, expected) => {
+    const file = join(folder, path), bytes = readFileSync(file), v = JSON.parse(bytes);
+    try { edit(v); writeFileSync(file, JSON.stringify(v)); assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && expected(e.cause)
+      && e.message === `invalid marketplace saved evidence: ${e.cause.message}` && !inspect(e).includes(saved)); }
+    finally { writeFileSync(file, bytes); }
+  };
+  probe("summary.json", (v) => { v.tools.k6.image = saved; }, (cause) => cause instanceof ImagePinRefusal
+    && cause.message === `retained k6 image is not this checkout's pin ${k6Image}; validate from a checkout of the measured commit ${commit}`);
+  for (const [edit, field] of [[(v) => { v.k6.repoDigests.push(saved); }, "k6.repoDigests"], [(v) => { v.k6.entrypoint = [saved]; }, "k6.entrypoint"],
+    [(v) => { v.k6.versionOutput = saved; }, "k6.versionOutput"]]) {
+    probe("tools.json", edit, (cause) => !(cause instanceof ImagePinRefusal) && cause.message.endsWith(` differs at ${field}`));
+  }
+  for (const edit of [(v) => { v.SAVEDKEYCANARY = v.k6; }, (v) => { delete v.checker; v.SAVEDKEYCANARY = {}; }]) {
+    probe("tools.json", edit, (cause) => cause.message === "tools.json has a missing or unexpected tool" && !inspect(cause).includes("SAVEDKEYCANARY"));
+  }
+  assert.ok(validateSaved(args), "restored evidence replays");
+});
+
+test("the stats sampler rejects malformed terminal displays and keeps the original rows", async (t) => {
+  const folder = temporary(t);
+  const child = () => {
+    const fake = new EventEmitter();
+    fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
+    fake.kill = (signal) => { setImmediate(() => fake.emit("close", null, signal)); return true; };
+    return fake;
+  };
+  let fake;
+  const spawn = t.mock.method(childProcess, "spawn", () => fake);
+  syncBuiltinESMExports();
+  try {
+    for (const [i, [cpu, memory, refusal, malformed]] of [
+      ["0.00%", "0B / 0B"],
+      ["0.00% invalid", "0B / 0B", /invalid Docker CPU display/],
+      ["0.00%", "0B / 0..0B", /invalid Docker memory display/],
+      [null, null, /invalid Docker stats sample JSON/, "CAPTURESTATSCANARY"],
+    ].entries()) {
+      fake = child();
+      const file = join(folder, `row-${i}.log`), sampler = sampleStats(["app"], file, 10);
+      const line = "  " + (malformed ?? JSON.stringify({ Name: "app", CPUPerc: cpu, MemUsage: memory })) + " \n";
+      fake.stdout.write(line);
+      if (refusal) {
+        await assert.rejects(sampler.stop(), (error) => refusal.test(error.message) && (!malformed || !inspect(error).includes(malformed)));
+        assert.throws(() => readFileSync(`${file}.json`), { code: "ENOENT" });
+      } else assert.deepEqual((await sampler.stop()).app, { samples: 1, cpuAvgPct: 0, cpuMaxPct: 0, memAvgMiB: 0, memMaxMiB: 0 });
+      assert.equal(readFileSync(file, "utf8"), line);
+    }
+  } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
+});
+
 test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));
@@ -125,7 +197,7 @@ test("native replay admits the producer's decimal sum overshoot, not an inconsis
   const rows = names.flatMap((Name) => fixture[Name].map((p) => ({ ...p, Name }))).sort((a, b) => a.t - b.t);
   const fake = new EventEmitter();
   fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
-  fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+  fake.kill = (signal) => { setImmediate(() => fake.emit("close", null, signal)); return true; };
   const spawn = t.mock.method(childProcess, "spawn", () => fake);
   let now = start;
   const clock = t.mock.method(Date, "now", () => now);
@@ -346,7 +418,7 @@ test("hostile saved edits fail replay, even when the summary remains internally 
   assert.equal(validateSaved(args).complete, true);
 });
 
-test("stopped profiles replay actual phase/sidecar/event evidence, never invented numeric passes", (t) => {
+test("stopped profiles replay actual phase/sidecar/event evidence, never invented numeric passes", async (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));
   const a = s.apps.corten, runs = a.runs["api-neutral-json"], run = runs[2], base = "api/corten/p3-neutral-json";
@@ -369,8 +441,177 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   for (const p of ["fixed", "sat64", "sat256"]) a.phases["api-neutral-json"][p] = stageAggregate(runs, p, 3);
   writeFileSync(path, JSON.stringify(raw)); writeFileSync(join(folder, base, "sat64-cpu.json"), "{}");
   writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
-  assert.equal(validateSaved(args).complete, true);
+  const log = join(folder, base, "sat64-stats.log"), statsPath = `${log}.json`;
+  const stats = JSON.parse(readFileSync(statsPath, "utf8"));
+  const names = Object.keys(stats.samples);
+  for (const name of names) {
+    stats.samples[name] = stats.samples[name].slice(0, 1);
+    assert.ok(stats.samples[name][0].t < Date.parse(raw.app.state.FinishedAt));
+    stats.summary[name] = summarizeSamples(stats.samples[name]);
+  }
+  const rows = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+  const cleanLog = names.map((name) => JSON.stringify(rows.find((row) => row.Name === name))).join("\n") + "\n";
+  const cleanStats = JSON.stringify(stats);
+  const canary = "SAVEDSTATSCANARY";
+  const fixedFault = (expected) => (error) => error.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && error.message === `invalid marketplace saved evidence: ${expected}`
+    && error.cause?.message === expected && !inspect(error).includes(canary);
+  writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats);
+  assert.equal(validateSaved(args).complete, true, "a stopped phase needs no samples after the app exited");
+  const terminal = { t: Date.parse(raw.app.state.FinishedAt) + 1, cpu: 0, mem: 0 };
+  const withTerminal = structuredClone(stats), appName = raw.app.name;
+  withTerminal.samples[appName].push(terminal);
+  withTerminal.summary[appName] = summarizeSamples(withTerminal.samples[appName]);
+  const terminalLog = (CPUPerc, MemUsage) => cleanLog + JSON.stringify({ Name: appName, CPUPerc, MemUsage }) + "\n";
+  const beyondDouble = "9".repeat(309), conversionOverflow = `1${"0".repeat(308)}GiB`;
+  for (const [label, role, at, cpu, mem, CPUPerc, MemUsage, message] of [
+    ["pre-exit CPU", "app", "before", 999999, 8, "999999%", "8MiB / 1GiB", "sampled CPU exceeds physical host capacity"],
+    ["pre-exit memory", "app", "before", 50, 2048, "50%", "2GiB / 1GiB", "memory sample exceeds container limit"],
+    ["pre-exit zero", "app", "before", 0, 0, "0.00%", "0B / 0B", "memory display limit differs from container"],
+    ["post-exit upstream zero", "upstream", "after", 0, 0, "0.00%", "0B / 0B", "memory display limit differs from container"],
+    ["post-exit nonzero with zero limit", "app", "after", 50, 8, "50%", "8MiB / 0B", "memory display limit differs from container"],
+  ]) await t.test(`bounds stopped samples: ${label}`, () => {
+    const name = raw[role].name, saved = structuredClone(stats);
+    Object.assign(saved.samples[name][0], { cpu, mem, ...(at === "after" && { t: terminal.t }) });
+    saved.summary[name] = summarizeSamples(saved.samples[name]);
+    const edited = cleanLog.trimEnd().split("\n").map((line) => {
+      const row = JSON.parse(line);
+      return row.Name === name ? JSON.stringify({ ...row, CPUPerc, MemUsage }) : line;
+    }).join("\n") + "\n";
+    try {
+      writeFileSync(log, edited);
+      writeFileSync(statsPath, JSON.stringify(saved));
+      assert.throws(() => validateSaved(args), fixedFault(message));
+    } finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
+  await t.test("bounds stopped samples: terminal zero at exact but not rounded-down exit", () => {
+    const finished = raw.app.state.FinishedAt, saved = structuredClone(withTerminal);
+    saved.samples[appName].at(-1).t = Date.parse(finished);
+    writeFileSync(log, terminalLog("0.00%", "0B / 0B"));
+    writeFileSync(statsPath, JSON.stringify(saved));
+    try {
+      assert.equal(validateSaved(args).complete, true);
+      raw.app.state.FinishedAt = finished.replace(/Z$/, "001Z");
+      writeFileSync(path, JSON.stringify(raw));
+      assert.throws(() => validateSaved(args), fixedFault("memory display limit differs from container"));
+    } finally {
+      raw.app.state.FinishedAt = finished;
+      writeFileSync(path, JSON.stringify(raw));
+      writeFileSync(log, cleanLog);
+      writeFileSync(statsPath, cleanStats);
+    }
+  });
+  await t.test("rejects coerced Docker participant names without exposing saved data", () => {
+    const edit = rows.find((row) => row.Name === appName);
+    try {
+      writeFileSync(log, cleanLog.replace(JSON.stringify(edit), JSON.stringify({ ...edit, Name: [appName] })));
+      assert.throws(() => validateSaved(args), fixedFault("invalid Docker stats container name"));
+    } finally { writeFileSync(log, cleanLog); }
+  });
+  for (const [message, mutate] of [
+    ["missing/extra raw participants", (saved) => { saved.summary[canary] = {}; }],
+    ["stats history differs from raw Docker samples", (saved) => { saved.samples[appName][0].cpu = canary; }],
+    ["stats aggregate differs from raw history", (saved) => { saved.summary[appName].cpuAvgPct = canary; }],
+  ]) await t.test(`saved stats rejection without a diff: ${message}`, () => {
+    const saved = structuredClone(stats); mutate(saved);
+    try {
+      writeFileSync(statsPath, JSON.stringify(saved));
+      assert.throws(() => validateSaved(args), fixedFault(message));
+    } finally { writeFileSync(statsPath, cleanStats); }
+  });
+  for (const [label, cpu, memory, expected] of [
+    ["accepts a well-formed terminal zero", "0.00%", "0B / 0B"],
+    ["rejects a non-finite displayed CPU", `${beyondDouble}%`, "0B / 0B", /non-finite Docker CPU display/],
+    ["rejects a non-finite displayed memory usage", "0.00%", `${beyondDouble}B / 0B`, /non-finite Docker memory quantity/],
+    ["rejects a non-finite displayed memory limit", "0.00%", `0B / ${beyondDouble}B`, /non-finite Docker memory quantity/],
+    ["rejects memory usage that overflows during conversion", "0.00%", `${conversionOverflow} / 0B`, /non-finite Docker memory conversion/],
+    ["rejects a memory limit that overflows during conversion", "0.00%", `0B / ${conversionOverflow}`, /non-finite Docker memory conversion/],
+    ["rejects a missing memory limit despite matching samples and aggregate", "0.00%", "0B", /memory display missing its limit/],
+    ["rejects a malformed memory limit despite matching samples and aggregate", "0.00%", "0B / 0..0B", /invalid Docker memory display/],
+    ["rejects garbled CPU text despite matching samples and aggregate", "0.00% invalid", "0B / 0B", /invalid Docker CPU display/],
+  ]) await t.test(label, () => {
+    try {
+      writeFileSync(log, terminalLog(cpu, memory));
+      writeFileSync(statsPath, JSON.stringify(withTerminal));
+      if (expected) assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && expected.test(e.cause?.message));
+      else assert.equal(validateSaved(args).complete, true);
+    } finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
+  for (const [label, expected, edit] of [
+    ["truncated tail with missing summary", /truncated stats log/, () => { writeFileSync(log, cleanLog + '{"Name":'); unlinkSync(statsPath); }],
+    ["truncated tail with intact summary", /truncated stats log/, () => writeFileSync(log, cleanLog + '{"Name":')],
+    ["missing summary despite a complete log", /ENOENT:.*sat64-stats\.log\.json/, () => unlinkSync(statsPath)],
+    ["summary disagrees with the sampled prefix", /stats aggregate differs/, () => {
+      const wrong = structuredClone(stats); wrong.summary[names[0]].samples++;
+      writeFileSync(statsPath, JSON.stringify(wrong));
+    }],
+  ]) await t.test(label, () => {
+    try {
+      edit();
+      assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID" && expected.test(e.cause?.message));
+    }
+    finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
   const original = readFileSync(path);
+  const postExitError = { step: "stats", error: "docker stats stopped early: 1", at: raw.app.state.FinishedAt };
+  await t.test("post-exit stats diagnostics never quote saved text", () => {
+    try {
+      raw.seen.errors = [{ ...postExitError, error: canary + " private stats diagnostic" }];
+      writeFileSync(path, JSON.stringify(raw));
+      assert.throws(() => validateSaved(args), fixedFault("docker stats sample failed"));
+    } finally { writeFileSync(path, original); }
+  });
+  await t.test("malformed raw stats JSON is refused without quoting it", () => {
+    const malformed = canary + "\n";
+    try {
+      writeFileSync(log, cleanLog + malformed);
+      assert.throws(() => validateSaved(args), fixedFault("invalid Docker stats sample JSON"));
+      assert.equal(readFileSync(log, "utf8"), cleanLog + malformed);
+      writeFileSync(log, cleanLog);
+      writeFileSync(statsPath, malformed);
+      assert.throws(() => validateSaved(args), fixedFault("invalid Docker stats summary JSON"));
+      assert.equal(readFileSync(statsPath, "utf8"), malformed);
+    } finally { writeFileSync(log, cleanLog); writeFileSync(statsPath, cleanStats); }
+  });
+  assert.equal(validateSaved(args).complete, true, "the same clean stopped phase still replays");
+  raw.seen.errors = [{ ...postExitError, error: "docker stats client pipes did not close within the stop grace" }];
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && /pipes did not close/.test(e.cause?.message));
+  raw.seen.errors = [{ ...postExitError, step: "sampler", error: "synthetic pipe-release fault" }];
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && e.cause?.message === "docker stats sampler infrastructure failed");
+  for (const [step, error, expected, kind] of [
+    ["stats", "kill EPERM", "docker stats client signal failed"],
+    ["sampler", "kill EINVAL", "docker stats client signal failed"],
+    ["stats", "spawn docker ENOENT", "docker stats client process failed"],
+    ["sampler", "synthetic-private-process-detail", "docker stats client signal failed", "shutdown-signal"],
+    ["stats", "synthetic-private-process-detail", "docker stats client signal failed", "shutdown-signal"],
+    ["stats", "synthetic-private-process-detail", "docker stats client process failed", "client-process"],
+  ]) {
+    raw.seen.errors = [{ ...postExitError, step, error, kind }];
+    writeFileSync(path, JSON.stringify(raw));
+    assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+      && e.cause?.message === expected && !e.message.includes("synthetic-private-process-detail"), `${step}: ${kind ?? error}`);
+  }
+  for (const [message, expected = "docker stats sample failed"] of [
+    ["docker stats client signal failed", "docker stats client signal failed"],
+    ["docker stats client process failed", "docker stats client process failed"],
+    ["unexpected EOF\n"], ["error during connect: connection refused\n"], [postExitError.error],
+  ]) {
+    await t.test(`untagged stats fault: ${message.trim()}`, () => {
+      raw.seen.errors = [{ ...postExitError, error: message }];
+      writeFileSync(path, JSON.stringify(raw));
+      assert.throws(() => validateSaved(args), fixedFault(expected));
+    });
+  }
+  raw.seen.errors = [{ ...postExitError, step: "sampler", kind: "client-stderr", error: "docker stats client wrote to stderr" }];
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+    && e.cause?.message === "docker stats client wrote to stderr");
+  raw.seen.errors = [];
+  writeFileSync(path, original);
   for (const mutate of [
     (v) => { v.load.state.OOMKilled = true; v.load.state.ExitCode = 137; },
     (v) => { v.load.state.ExitCode = 1; },
@@ -386,6 +627,16 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   raw.upstreamReads.after.answers[503] = 1; writeFileSync(path, JSON.stringify(raw)); invalid(() => validateSaved(args));
   delete raw.upstreamReads.after.answers[503]; raw.seen.events = [{ action: "kill", ms: Date.parse(raw.app.state.FinishedAt) }];
   writeFileSync(path, JSON.stringify(raw)); invalid(() => validateSaved(args));
+
+  const warmupPath = join(folder, base, "warmup-receipt.json"), warmup = JSON.parse(readFileSync(warmupPath, "utf8"));
+  const finished = new Date(Date.parse(warmup.seen.phaseStart) + 5000).toISOString();
+  warmup.app.state = { ...raw.app.state, FinishedAt: finished }; warmup.seen.app = warmup.app.state;
+  warmup.seen.sidecars = raw.seen.sidecars; warmup.seen.events = [{ action: "oom", ms: Date.parse(finished) }];
+  run.stopped.phase = "warmup";
+  delete run.warmup; delete run.phases.fixed;
+  for (const p of ["fixed", "sat64", "sat256"]) a.phases["api-neutral-json"][p] = stageAggregate(runs, p, 3);
+  writeFileSync(warmupPath, JSON.stringify(warmup)); writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
+  assert.equal(validateSaved(args).complete, true, "a stopped warmup did not start a sampler");
 });
 
 test("source lookup ignores inherited Git redirects/config and never admits an absent local object", () => {

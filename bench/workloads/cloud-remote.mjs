@@ -8,7 +8,8 @@ export function bootstrapMarker(state) {
   validateRemoteFileState(state);
   return { schema: state.control ? "benchmark-common-bootstrap/v2" : "benchmark-common-bootstrap/v1", round: state.round, commit: state.commit,
     token: state.token, group: state.group ?? "all", ...(state.control ? { controlHelperSha256: guardianSha256 } : {}),
-    ...(state.control?.monitor ? { monitorId: state.control.monitor.id } : {}) };
+    ...(state.control?.monitor ? { monitorId: state.control.monitor.id } : {}),
+    ...(state.fleet?.single?.offlineHandoff ? { offlineHandoff: true } : {}) };
 }
 export const bootstrapReadScript = `if test ! -e /bench/bootstrap-ready.json; then exit 3; fi
 test -f /bench/bootstrap-ready.json && test ! -L /bench/bootstrap-ready.json

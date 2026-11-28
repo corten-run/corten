@@ -74,8 +74,8 @@ export function alertMessage(locale: Locale, title: string, form: FormData | URL
   const replacements: Record<string, string> = { email, title, price };
   return f.labels.alert_set.replace(/\{(email|title|price)\}/g, (_, name: string) => replacements[name]);
 }
-export function sameOrigin(request: Request) {
+export function sameOrigin(request: Request, publicOrigin?: string) {
   const origin = request.headers.get("origin");
   return request.headers.get("sec-fetch-site") !== "cross-site" &&
-    (origin === null || origin === new URL(request.url).origin);
+    (publicOrigin === undefined ? (origin === null || origin === new URL(request.url).origin) : origin === publicOrigin);
 }
