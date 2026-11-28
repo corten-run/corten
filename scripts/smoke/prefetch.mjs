@@ -627,6 +627,35 @@ export async function navTies(browser, swaps) {
     );
     await page.reload();
 
+    const boundary = await page.evaluate(async () => {
+      const { patch } = await import("corten");
+      const nav = document.getElementById("nav-tie-separate")?.parentElement;
+      if (!nav) throw new Error("the reversed nav pair is missing");
+      nav.id = "nav-tie-boundary";
+      const replacement = /** @type {Element} */ (nav.cloneNode(true));
+      const [later, earlier] = replacement.querySelectorAll("a");
+      // The last one-digit ordinal wins over the first two-digit one, not the first DOM link.
+      later.setAttribute("data-nav-order", "0-");
+      earlier.setAttribute("data-nav-order", "z");
+      later.setAttribute("aria-current", "page");
+      earlier.removeAttribute("aria-current");
+      await patch(__html(replacement.outerHTML));
+      const order = Array.from(
+        document.querySelectorAll("#nav-tie-boundary a"),
+        (link) => link.getAttribute("data-nav-order"),
+      ).join(", ");
+      const marks = Array.from(
+        document.querySelectorAll('#nav-tie-boundary a[aria-current="page"]'),
+        (link) => link.getAttribute("data-nav-order") + ": " + link.textContent,
+      ).join(", ");
+      return { replaced: !nav.isConnected, order, marks };
+    });
+    check(
+      "a ranked patch prefers z over 0- despite reversed DOM order",
+      boundary.replaced && boundary.order === "0-, z" && boundary.marks === "z: Separate",
+      boundary.order + " -> " + boundary.marks,
+    );
+
     const removed = await page.evaluate(async () => {
       const { patch } = await import("corten");
       const target = document.getElementById("nav-tie-separate");
