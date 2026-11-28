@@ -185,11 +185,12 @@ The browser decides before it draws, so nothing moves as the script loads and no
 to do it. A control that also needs something the browser may lack (the clipboard) is drawn
 `hidden` and shown by its `on:connect` handler once it knows, as corten-ui's `CopyButton` is.
 Not `<noscript>`: it can only add markup when scripts are off, not leave out a control that needs
-them, and the media query does it in the component's stylesheet, as `examples/deck-builder`'s
-does. The query follows whether scripts are on, not whether this one ran: with JavaScript off for
-the site it matches `none`, but a script an extension blocks or that fails to load still matches
-`enabled`, so a script-only control is drawn and does nothing. A browser without the `scripting`
-media feature (before Chromium 120, Firefox 113, Safari 17) draws it, as it did.
+them. The media query hides the browser-only listing sort button on
+[Card Market's item page](../../examples/card-market/src/views/item_detail.css); the listings
+keep the server's order. The query follows whether scripts are on, not whether this one ran: with
+JavaScript off for the site it matches `none`, but a script an extension blocks or that fails to
+load still matches `enabled`, so a script-only control is drawn and does nothing. A browser without
+the `scripting` media feature (before Chromium 120, Firefox 113, Safari 17) draws it, as it did.
 
 A submit button or link that is the visible way to do an ordinary server action is not such a
 control, even when a handler makes the action instant: it stays drawn with scripts on.

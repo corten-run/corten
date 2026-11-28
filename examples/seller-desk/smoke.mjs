@@ -548,6 +548,20 @@ try {
   }
 
   /**
+   * Bound Playwright calls that have no timeout of their own. The caller closes the context
+   * if a step stalls, ending its outstanding browser work.
+   * @template T @param {string} name @param {Promise<T>} work @returns {Promise<T>}
+   */
+  const filterStep = (name, work) => {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    const late = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${name} timed out after 15 s`)), 15_000);
+    });
+    return Promise.race([work, late]).finally(() => clearTimeout(timer));
+  };
+
+  /**
    * Loads the grid with JavaScript on and its module never loading (every request for it, the
    * runtime's retries too, aborted), filters through the visible Filter button, and reads the
    * server's answer as sent: its rows, those it leaves unhidden and the count it says. The page must
@@ -555,15 +569,36 @@ try {
    * or mask an unfiltered answer in the browser.
    * @param {import("@playwright/test").BrowserContext} context
    * @param {"real" | "delayed" | "masked"} kind
+   * @param {string[]} errors
    */
-  const blockedFilter = async (context, kind) => {
-    const blocked = await context.newPage();
+  const blockedFilter = async (context, kind, errors) => {
+    /** @type {Set<string>} */
+    const abortedScripts = new Set();
+    context.on("page", (p) => {
+      p.on("pageerror", (e) => errors.push(`page error: ${e.message}`));
+      p.on("console", (m) => {
+        if (m.type() !== "error") return;
+        const text = m.text();
+        const expected = (abortedScripts.has(m.location().url) && text.startsWith("Failed to load resource:")) ||
+          [...abortedScripts].some((url) => {
+            const { pathname } = new URL(url);
+            const refusal = `corten: script module ${pathname} did not load (is its component in App::components?)`;
+            return text === refusal || text.startsWith(`${refusal} `);
+          });
+        if (!expected) errors.push(`console error: ${text}`);
+      });
+    });
+    const blocked = await filterStep("open the filter page", context.newPage());
     let aborted = 0;
     let heldRows = 0;
-    await blocked.route((url) => url.pathname.endsWith("/inventory_grid.js"), (route) => (aborted += 1, route.abort()));
+    await filterStep("intercept the grid module", blocked.route((url) => url.pathname.endsWith("/inventory_grid.js"), (route) => {
+      aborted += 1;
+      abortedScripts.add(route.request().url());
+      return route.abort();
+    }));
     if (kind === "delayed") {
       // Hold the already received body between the runtime's read and draw, not on the wire.
-      await blocked.addInitScript(() => {
+      await filterStep("install the delayed-draw control", blocked.addInitScript(() => {
         const release = new Promise((resolve) => addEventListener("smoke:release-filter-draw", () => resolve(undefined), { once: true }));
         const text = Response.prototype.text;
         Response.prototype.text = async function () {
@@ -575,15 +610,15 @@ try {
           }
           return body;
         };
-      });
+      }));
     }
     if (kind === "masked") {
-      await blocked.route((url) => url.searchParams.get("q") === "tidebreak", async (route) => {
+      await filterStep("intercept the masked control's response", blocked.route((url) => url.searchParams.get("q") === "tidebreak", async (route) => {
         const unfiltered = new URL(route.request().url());
         unfiltered.searchParams.delete("q");
         await route.fulfill({ response: await route.fetch({ url: unfiltered.href }) });
-      });
-      await blocked.addInitScript(() => {
+      }));
+      await filterStep("install the masked-answer control", blocked.addInitScript(() => {
         let sent = false;
         const hide = () => {
           if (!sent) return;
@@ -593,34 +628,38 @@ try {
         };
         addEventListener("submit", () => (sent = true, hide()), { capture: true });
         new MutationObserver(hide).observe(document, { childList: true, subtree: true, attributeFilter: ["hidden"] });
-      });
+      }));
     }
-    await blocked.goto(base);
+    await filterStep("load the filter page", blocked.goto(base));
     // The runtime ran (it is a module of its own), and it found no grid module to hand events to.
-    const ran = await blocked.evaluate(async () => {
+    const ran = await filterStep("wait for the runtime to be ready", blocked.evaluate(async () => {
       const { ready } = await import("corten");
       await ready;
       return document.querySelectorAll('script[type="module"][src$="/inventory_grid.js"]').length;
-    });
+    }));
     // The server hides non-matches without reordering the inventory when no sort was requested.
-    const { inventory, expected } = await blocked.$$eval("tbody tr", (rows) => ({
+    const { inventory, expected } = await filterStep("read the initial inventory", blocked.$$eval("tbody tr", (rows) => ({
       inventory: rows.map((r) => r.id),
       expected: rows.filter((r) => (/** @type {HTMLTableRowElement} */ (r)).cells[2]?.textContent === "Tidebreak").map((r) => r.id),
-    }));
+    })));
     const all = inventory.length;
     const button = "form[role=search] button";
-    await blocked.fill("input[type=search]", "tidebreak");
+    await filterStep("type the filter", blocked.fill("input[type=search]", "tidebreak"));
     // Typing filtered nothing: no grid handler ran.
-    const before = await blocked.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length);
-    if (!(await blocked.isVisible(button))) return { ok: false, detail: `aborted ${aborted}; the Filter button is not drawn` };
+    const before = await filterStep("count rows after typing", blocked.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length));
+    if (!(await filterStep("check that Filter is drawn", blocked.isVisible(button)))) return { ok: false, detail: `aborted ${aborted}; the Filter button is not drawn` };
     // The runtime still sends a GET form itself (a client navigation), so the answer may be a
     // fetch rather than a document load: either is the server's filter.
-    const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "tidebreak", { timeout: 15_000 });
-    const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=tidebreak/), blocked.click(button)]);
-    const body = await response.text();
+    const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "tidebreak", { timeout: 0 });
+    // Arm the listener before the click, but report a stalled click separately from missing headers.
+    void answered.catch(() => {}); // The page can close before we reach the response step.
+    await filterStep("click Filter", blocked.click(button));
+    const response = await filterStep("receive the filter response headers", answered);
+    const body = await filterStep("read the filter response body", response.text());
+    await filterStep("reach the filtered URL", blocked.waitForURL(/[?&]q=tidebreak/));
     // Parsed in a blank page of the same browser: the app's page allows no markup from a string.
-    const reader = await context.newPage();
-    const sent = await reader.evaluate((html) => {
+    const reader = await filterStep("open the response reader", context.newPage());
+    const sent = await filterStep("parse the filter response body", reader.evaluate((html) => {
       const doc = new DOMParser().parseFromString(html, "text/html");
       const rows = /** @type {HTMLTableRowElement[]} */ ([...doc.querySelectorAll("tbody tr")]);
       const carried = rows.filter((r) => !r.hasAttribute("hidden"));
@@ -631,13 +670,14 @@ try {
         sets: carried.map((r) => r.cells[2]?.textContent ?? ""),
         says: doc.querySelector("#item-count")?.previousElementSibling?.textContent?.trim() ?? "",
       };
-    }, body);
-    await reader.close();
+    }, body));
+    await filterStep("close the response reader", reader.close());
     // Poll through Playwright, not a string evaluated under the app's CSP. The masking control
     // must wait for the masked rows, not the unfiltered answer it deliberately hides.
     const sameIds = (/** @type {string[]} */ a, /** @type {string[]} */ b) => a.length === b.length && a.every((id, i) => id === b[i]);
-    const visibleRows = blocked.locator("main:not([aria-busy]) tbody tr:not([hidden])");
-    await expect.poll(async () => {
+    const rows = "main:not([aria-busy]) tbody tr";
+    const unhiddenRows = blocked.locator(`${rows}:not([hidden])`);
+    await filterStep("wait for the filtered rows to settle", expect.poll(async () => {
       if (kind === "delayed" && !heldRows) {
         // Start the delay only after the poll has seen the old rows with the real body held.
         const held = await blocked.evaluate(() => document.documentElement.hasAttribute("data-smoke-filter-held")
@@ -649,12 +689,15 @@ try {
         }
         return held;
       }
-      return visibleRows.evaluateAll((rows) => rows.map((r) => r.id));
+      return unhiddenRows.evaluateAll((rows) => rows.map((r) => r.id));
     }, {
       message: "the settled filter page shows the expected row ids",
       timeout: 5_000,
-    }).toEqual(kind === "masked" ? expected : sent.ids);
-    const shown = await visibleRows.evaluateAll((rows) => rows.map((r) => ({ id: r.id, set: /** @type {HTMLTableRowElement} */ (r).cells[2]?.textContent ?? "" })));
+    }).toEqual(kind === "masked" ? expected : sent.ids));
+    const shown = await filterStep("read the page's unhidden rows", unhiddenRows.evaluateAll((rows) =>
+      rows.map((r) => ({ id: r.id, set: /** @type {HTMLTableRowElement} */ (r).cells[2]?.textContent ?? "" }))));
+    const shownIds = shown.map((r) => r.id);
+    const drawn = await filterStep("read the browser's drawn row ids", blocked.locator(`${rows}:visible`).evaluateAll((rows) => rows.map((r) => r.id)));
     const n = sent.ids.length;
     const reached = aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 &&
       new URL(blocked.url()).searchParams.get("q") === "tidebreak";
@@ -663,16 +706,17 @@ try {
     const exact = sameIds(sent.ids, expected);
     const keptInventory = inventory.every(Boolean) && new Set(inventory).size === all && sameIds(sent.inventory, inventory);
     const answerOk = filtered && exact && keptInventory;
-    const matches = sameIds(shown.map((r) => r.id), sent.ids);
+    const matches = sameIds(shownIds, sent.ids) && sameIds(drawn, sent.ids);
     return {
       ok: reached && answerOk && matches,
       answerOk,
-      masked: reached && sameIds(sent.ids, inventory) && shown.length > 0 && shown.every((r) => r.set === "Tidebreak"),
+      masked: reached && sameIds(sent.ids, inventory) && expected.length > 0 && sameIds(shownIds, expected) &&
+        sameIds(drawn, expected) && shown.every((r) => r.set === "Tidebreak"),
       delayed: all > 0 && heldRows === all,
       detail: `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ` +
         `answer: ${n} of ${sent.inventory.length} rows unhidden, ${sent.inSet} in the set, unhidden ids ${exact ? "as expected" : "differ"}, ` +
         `all ids ${keptInventory ? "as expected" : "differ"}, says "${sent.says}"; ` +
-        `page: ${shown.length} rows${matches ? " as sent" : " not as sent"}; ${kind === "delayed" ? `${heldRows} rows while draw was held; ` : ""}${blocked.url()}`,
+        `page: ${shown.length} unhidden, ${drawn.length} drawn${matches ? " as sent" : " not as sent"}; ${kind === "delayed" ? `${heldRows} rows while draw was held; ` : ""}${blocked.url()}`,
     };
   };
 
@@ -688,17 +732,22 @@ try {
       ["delayed", "control: a correct answer passes with the client draw delayed by 2.5 s"],
       ["masked", "control: an unfiltered answer whose rows a script hides on the page is refused, though the page alone would pass"],
     ])) {
-      const context = await (own ?? browser).newContext();
+      const context = await filterStep("open the filter context", (own ?? browser).newContext());
       const what = `${name} ${label}`;
+      /** @type {string[]} */
+      const errors = [];
+      let pass = false;
+      let detail = "";
       try {
-        const run = await blockedFilter(context, kind);
-        const pass = kind === "masked" ? run.masked && !run.answerOk : run.ok && (kind !== "delayed" || run.delayed);
-        check(what, pass, run.detail);
+        const run = await blockedFilter(context, kind, errors);
+        pass = kind === "masked" ? run.masked && !run.answerOk : run.ok && (kind !== "delayed" || run.delayed);
+        detail = run.detail;
       } catch (error) {
-        check(what, false, String(error));
+        detail = String(error);
       } finally {
-        await context.close();
+        await filterStep("close the filter context", context.close());
       }
+      check(what, pass && errors.length === 0, [detail, ...errors].join(" | "));
     }
     const plainContext = await (own ?? browser).newContext({ javaScriptEnabled: false });
     try {
