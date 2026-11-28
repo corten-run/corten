@@ -210,7 +210,7 @@ const destroy = () => {
     for (let i = 0; i < 3 && !deleted; i += 1) {
       if (i) {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, minute);
-        if (watchedEnd && !stillEnded(watchedEnd.snapshot, "the failed deletion")) {
+        if (watchedEnd && !stillEnded(watchedEnd, "the failed deletion")) {
           mayDestroy = false;
           process.exitCode = 3;
           return;
@@ -274,15 +274,36 @@ const answers = async (/** @type {number} */ tries) => {
 const write = (/** @type {string} */ path, /** @type {string} */ text) => `echo ${Buffer.from(text).toString("base64")} | base64 -d > ${path}`;
 
 const log = `${suiteDir}/results-${round}.log`;
-const watchProgress = `${suiteDir}/results-${round}.progress`;
-const progressRead = `tail -n 1 -- ${watchProgress} 2>/dev/null | { IFS= read -r last || last=; printf 'progress %s\\n' "$last"; }\n`;
+const progressName = `results-${round}.progress`;
+const watchProgress = `${suiteDir}/${progressName}`;
+// Keep the last line's bytes (including its newline) and read status distinct. A failed tail
+// is not proof of absence, and a torn last line must not pass countFinish.
+const progressRead = [
+  `if [ ! -d ${suiteDir} ] || [ ! -x ${suiteDir} ]; then echo 'progress unreadable'`,
+  `elif [ -f ${watchProgress} ]; then`,
+  `  if last=$(set -o pipefail; tail -n 1 -- ${watchProgress} | base64 -w0) 2>/dev/null; then`,
+  `    printf 'progress present %s\\n' "$last"`,
+  `  else echo 'progress unreadable'; fi`,
+  // The file tests cannot distinguish absence from a failed stat. Require a successful directory
+  // lookup with no match, which also refuses an unreadable target or a dangling link.
+  `elif entry=$(find -H ${suiteDir} -maxdepth 1 -name ${progressName} -printf x -quit 2>/dev/null) && [ -z "$entry" ]; then`,
+  `  echo 'progress absent'`,
+  `else echo 'progress unreadable'; fi\n`,
+].join("\n");
+const progressRecord = (/** @type {string=} */ line) => line && /^progress (?:absent|present [A-Za-z0-9+/]*={0,2})$/.test(line) ? line : null;
+const progressLine = (/** @type {string | null} */ record) => {
+  const prefix = "progress present ";
+  if (!record?.startsWith(prefix)) return "";
+  const line = Buffer.from(record.slice(prefix.length), "base64").toString("utf8");
+  return line.endsWith("\n") ? line.slice(0, -1) : "";
+};
 // host.txt: the CPU model and the rest, since droplets of one size are not all the same machine.
 const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --version; npx playwright --version)";
 // No legal round name begins with a dot. A suite download never extracts over a Fullstack
 // replay directory, even if one appears after the download has started.
 const fullstackResults = ["browser", "harden"].includes(suite) ? join(here, "results", ".suites", suite) : join(here, "results");
-/** A legacy finish has no count ID. A new exact finish must not replace that observation either.
- * @type {{ id: string | null, snapshot: string } | null} */
+/** @typedef {{ snapshot: string, progress: string | null }} End */
+/** @type {End | null} */
 let watchedEnd = null;
 let lostEnd = false;
 const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, publish = false) => {
@@ -304,11 +325,12 @@ const download = async (/** @type {string} */ remoteDir, /** @type {string} */ l
     syncDirectory(here);
     console.log(`${label} archive kept at ${archive}`);
     // Never overlay an earlier replay directory, even if this archive proves a fresh count.
-    if (!publish || !watchedEnd?.id || lstatSync(result, { throwIfNoEntry: false })) return false;
+    const id = watchedEnd && countFinish(progressLine(watchedEnd.progress));
+    if (!publish || !id || lstatSync(result, { throwIfNoEntry: false })) return false;
     try {
       run("tar", ["-xzf", archive, "-C", stage], { timeout: 5 * minute });
       if (!lstatSync(extracted, { throwIfNoEntry: false })?.isDirectory()) return false;
-      const count = checkCountCollection(extracted, watchedEnd.id);
+      const count = checkCountCollection(extracted, id);
       if (!count) return false;
       // Unadmitted rows belong only in the retained archive, not beside a published summary.
       if (!count.rows) rmSync(join(extracted, COUNT_OUTPUT), { force: true, recursive: true });
@@ -339,32 +361,35 @@ const downloadAll = async (/** @type {string} */ label, publish = false) => {
   if (suite === "browser") await download("/bench/bench/browser", "browser", label);
   return published;
 };
-// The round's unit as it reads now when two snapshots of it agree and show it ended (round.mjs,
-// snapshotsEnded), or null: not ended, changing, or not read (no answer, or a query that failed).
+// The ended unit snapshot and (Fullstack only) comparable progress read, or null if either
+// could not be confirmed.
 const readEnded = () => {
-  const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || exit 1\n${watchedEnd ? progressRead : ""}after=$(snap) || exit 1\nprintf '%s\\n%s\\n' "$before" "$after"`, { quiet: true, allowFail: true });
+  const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || exit 1\n${suite === "fullstack" ? progressRead : ""}after=$(snap) || exit 1\nprintf '%s\\n%s\\n' "$before" "$after"`, { quiet: true, allowFail: true });
   if (r.status !== 0) return null;
   const lines = String(r.stdout ?? "").replaceAll("\r", "").split("\n");
-  if (watchedEnd && countFinish(lines.shift()?.slice("progress ".length) ?? "") !== watchedEnd.id) return null;
+  const progress = suite === "fullstack" ? progressRecord(lines.shift()) : null;
+  if (suite === "fullstack" && progress === null) return null;
   const [before = "", after = ""] = lines;
-  return snapshotsEnded(before, after) ? before.trim() : null;
+  return snapshotsEnded(before, after) ? { snapshot: before.trim(), progress } : null;
 };
+const sameEnd = (/** @type {End | null} */ a, /** @type {End | null} */ b) =>
+  a !== null && b !== null && a.snapshot === b.snapshot && a.progress === b.progress;
 // After watch sees a Fullstack end, every subsequent observation, including error recovery
 // and the final deletion check, must confirm that same finish and snapshot. Once lost, a
 // later matching read cannot restore the original collector's permission.
 const endedNow = () => {
   if (lostEnd) return null;
   const seen = readEnded();
-  if (watchedEnd && seen !== watchedEnd.snapshot) { lostEnd = true; return null; }
+  if (watchedEnd && !sameEnd(watchedEnd, seen)) { lostEnd = true; return null; }
   return seen;
 };
 // How to delete a droplet this run created and leaves, once its round has ended.
 const deleteHint = () => dropletId && !keep ? ` (droplet ${dropletId}: once round ${round} has ended there, collect it with node bench/fullstack/droplet.mjs ${round} --collect${suite === "fullstack" ? "" : ` --suite ${suite}`}, which deletes it, or delete it with doctl compute droplet delete ${dropletId} --force)` : "";
-// Whether the round's unit still reads as `seen`, the snapshot of it ended, after `what` was read
+// Whether the round still reads as `seen`, its original end, after `what` was read
 // from the droplet: the droplet is destroyed only then. Otherwise it is left, and this says why.
-const stillEnded = (/** @type {string | null} */ seen, /** @type {string} */ what) => {
+const stillEnded = (/** @type {End | null} */ seen, /** @type {string} */ what) => {
   const now = seen === null ? null : endedNow();
-  if (now !== null && now === seen) return true;
+  if (sameEnd(now, seen)) return true;
   console.log(`${unitName} on the droplet at ${host} could not be confirmed ended after ${what}, as it read before (inactive or failed with no job queued, in two snapshots that agree, the same as before): ${now === null ? "it is not ended now, or could not be read" : "it changed since"}, so the droplet is left as it is${deleteHint()}`);
   return false;
 };
@@ -594,7 +619,7 @@ const find = () => {
 
 // Waits for the round to end ("finished" or "stopped"), or with `once` (--collect), returns
 // "running" as soon as it knows the round is going on, or "unknown" when its unit's state or job
-// queue could not be read; with the snapshot of the unit it saw ended (null otherwise). The round
+// queue could not be read; with the end it observed (null otherwise). The round
 // has ended only when its unit reads inactive or failed with no job queued for it in two snapshots
 // that agree, each one query (round.mjs, snapshotsEnded), one taken before the log is read and one
 // after: until then nothing is collected or destroyed, whatever the log says. A state and a job
@@ -626,9 +651,10 @@ const watch = async (/** @type {boolean} */ once) => {
       while (all.length && all.at(-1) === "") all.pop();
       const [uptime = "", beforeLine = "", ...rest] = all;
       const afterLine = rest.pop() ?? "";
-      const progress = suite === "fullstack" ? rest.shift()?.replace(/^progress /, "") ?? "" : "";
-      const id = countFinish(progress);
-      const failed = /^\S+ failed$/.test(progress);
+      const progress = suite === "fullstack" ? progressRecord(rest.shift()) : null;
+      const last = progressLine(progress);
+      const id = countFinish(last);
+      const failed = /^\S+ failed$/.test(last);
       const before = beforeLine.startsWith("before ") ? beforeLine.slice(7) : "unreadable";
       const after = afterLine.startsWith("after ") ? afterLine.slice(6) : "unreadable";
       const text = rest.join("\n");
@@ -637,13 +663,14 @@ const watch = async (/** @type {boolean} */ once) => {
       shown = lines.length;
       const unreadable = !parseSnapshot(before) || !parseSnapshot(after);
       const ended = snapshotsEnded(before, after);
-      if (ended && !failed && (id || doneMarker.test(text))) return { state: "finished", snapshot: before.trim(), id };
+      const end = { snapshot: before.trim(), progress };
+      if (ended && !failed && (id || doneMarker.test(text))) return { state: "finished", end };
       // The unit has ended and the round did not finish. A full-stack round's droplet that
       // restarted less than five minutes ago may not have started the unit again yet, and the unit
       // may be between states, so this has to hold for three polls.
       stopped = ended && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
-      if (stopped >= 3 || (stopped && (failed || /round failed/.test(text)))) return { state: "stopped", snapshot: before.trim() };
-      if (once && !stopped) return { state: unreadable ? "unknown" : "running", snapshot: null };
+      if (stopped >= 3 || (stopped && (failed || /round failed/.test(text)))) return { state: "stopped", end };
+      if (once && !stopped) return { state: unreadable ? "unknown" : "running", end: null };
       if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its queued job could not be read (${before}; ${after}): round ${round} is watched until it reads as ended`);
       unreadableSaid = unreadable;
       continue;
@@ -667,7 +694,7 @@ const watch = async (/** @type {boolean} */ once) => {
     run("doctl", ["compute", "droplet-action", "power-cycle", id, "--wait"], { quiet: true, allowFail: true, timeout: 10 * minute });
     silentSince = null;
     silentPolls = 0;
-    if (once && (await answers(60))) return { state: "running", snapshot: null };
+    if (once && (await answers(60))) return { state: "running", end: null };
   }
 };
 
@@ -682,8 +709,8 @@ try {
       process.exit(0);
     }
   }
-  const { state, snapshot, id } = await watch(collect);
-  if (suite === "fullstack" && snapshot) watchedEnd = { id: id ?? null, snapshot };
+  const { state, end } = await watch(collect);
+  if (suite === "fullstack" && end) watchedEnd = end;
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
   if (state === "finished" || state === "stopped") startUnconfirmed = false;
   if (state === "running" || state === "unknown") {
@@ -732,7 +759,7 @@ try {
     }
     // The watch saw the unit ended before its log was read and after; it goes only if it still
     // reads so once the results are down.
-    if (stillEnded(snapshot, "the download")) mayDestroy = true;
+    if (stillEnded(end, "the download")) mayDestroy = true;
     else {
       leftRunning();
       process.exitCode = 3;
@@ -764,6 +791,7 @@ try {
     const seen = endedNow();
     if (seen === null) console.log(`the round could not go on (${why}), and ${unitName} on the droplet at ${host} could not be confirmed ended (inactive or failed with no job queued, in two snapshots that agree): it is not ended, or could not be read, so nothing is downloaded and the droplet is left as it is${deleteHint()}`);
     else {
+      if (suite === "fullstack") watchedEnd ??= seen;
       console.log(`the round could not go on (${why}); ${unitName} reads ended, so downloading what it has`);
       try {
         await downloadAll("partial results (the round did not finish)");

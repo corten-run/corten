@@ -1481,9 +1481,11 @@ three runs:
    A verified Fullstack archive publishes only into an absent round directory. It never overlays
    an already-populated directory, including on same-name recollection. This requires local space
    for the original archive plus the published result; it does not authorize host deletion.
-   After observing a Fullstack finish, the collector also checks its count ID (absent on legacy
-   rounds) with the original ended unit snapshot before deletion or a deletion retry. If a check
-   cannot confirm both, that collector leaves the host, even if a later read would match again.
+   Before deleting or retrying deletion, the Fullstack collector checks that the ended unit
+   snapshot and the last progress record still match the original observation, including for
+   legacy rounds without a count ID. Confirmed absence can match confirmed absence; an unreadable
+   progress file cannot. If either check fails, that collector leaves the host even if a later read
+   would match again.
    New Browser and Hardening downloads put their Fullstack-side files in
    `bench/fullstack/results/.suites/<suite>/<round>/` (`browser` or `harden`), not in a managed
    Fullstack round. Read older downloads where they were saved; no migration is required.

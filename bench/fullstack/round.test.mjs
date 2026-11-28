@@ -674,7 +674,7 @@ test("droplet.mjs uploads none of a round's progress files or logs from the work
   for (const member of ["./bench/fullstack/round.mjs", "./bench/fullstack/results-r1.progress.bak", "./bench/browser/results-r1.log", "./bench/fullstack/results/r1/run.log", "./x/bench/fullstack/results-r1.progress"]) assert.ok(!hostOnlyFile(member), member);
 });
 
-test("droplet.mjs on a reused droplet holds the round's launch from its custody check through its unit's start, clears what that round left only under it, and uploads no progress file", { skip: process.platform === "win32" && "stands in for ssh with a shell script" }, async () => {
+test("droplet.mjs on a reused droplet holds the round's launch from its custody check through its unit's start, clears what that round left only under it, and uploads no progress file", { skip: process.platform === "win32" && "stands in for ssh with a shell script" }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "relaunch-droplet-"));
   try {
     // droplet.mjs and what it imports, in a tree of their own with a fixture, so the launch
@@ -716,6 +716,8 @@ if (process.env.FAKE_PROGRESS_AFTER_PUBLISH) writeFileSync(process.env.FAKE_PROG
       // answer, as from a droplet that stopped answering; other calls go through.
       'case "$last" in */proc/uptime*) if [ -n "$FAKE_DROP_WATCH" ]; then echo "ssh: connect to host 203.0.113.9 port 22: Connection timed out" >&2; exit 255; fi ;; esac',
       'script=$(printf "%s" "$script" | sed "s#/proc/uptime#$FAKE_REMOTE/uptime#g")',
+      'if [ -f "$FAKE_REMOTE/progress-read-error" ]; then script="$(printf "%s\\n%s" \'tail() { command tail "$@"; return 1; }\' "$script")"; fi',
+      'if [ -f "$FAKE_REMOTE/progress-lookup-error" ]; then script="$(printf "%s\\n%s" \'find() { return 1; }\' "$script")"; fi',
       // FAKE_START_IN_DOWNLOAD: a download's archive step makes that file, as a start of the unit
       // that ran while the results were packed (the systemctl stand-in then reads it active).
       'case "$last" in *"tar -czf /tmp/results.tgz"*) if [ -n "$FAKE_START_IN_DOWNLOAD" ]; then : > "$FAKE_START_IN_DOWNLOAD"; fi ;; esac',
@@ -733,6 +735,7 @@ if (process.env.FAKE_PROGRESS_AFTER_PUBLISH) writeFileSync(process.env.FAKE_PROG
       'eval "src=\\${$(($# - 1))}"',
       'case "$src" in *:/tmp/results.tgz) cp "$FAKE_REMOTE/results.tgz" "$last" ;; *) cp "$src" "$FAKE_REMOTE$(printf "%s" "${last#*:}")" ;; esac',
       'if [ -n "$FAKE_PROGRESS_AFTER_COPY" ]; then printf "t finished %s\\n" "$FAKE_PROGRESS_AFTER_COPY" > "$FAKE_REMOTE/bench/bench/fullstack/results-r1.progress"; fi',
+      'if [ -n "$FAKE_COPY_HOOK" ]; then sh "$FAKE_COPY_HOOK" || exit 1; fi',
       'if [ -d "$FAKE_READY_RESULT" ]; then mkdir -p "$(dirname "$FAKE_RESULT")" && mv "$FAKE_READY_RESULT" "$FAKE_RESULT" || exit 1; fi',
       "",
     ].join("\n"), { mode: 0o755 });
@@ -745,6 +748,7 @@ if (process.env.FAKE_PROGRESS_AFTER_PUBLISH) writeFileSync(process.env.FAKE_PROG
       'printf "doctl %s\\n=====\\n" "$*" >> "$FAKE_LOG"',
       '[ -n "$FAKE_DOCTL_CREATE$FAKE_DOCTL_LIST" ] || exit 1',
       'case "$*" in "compute droplet delete"*) if [ -n "$FAKE_CHANGE_ON_DELETE" ]; then printf "t finished %s\\n" "$FAKE_CHANGE_ON_DELETE" > "$FAKE_REMOTE/bench/bench/fullstack/results-r1.progress"; exit 1; fi ;; esac',
+      'case "$*" in "compute droplet delete"*) if [ -f "$FAKE_DELETE_HOOK" ]; then sh "$FAKE_DELETE_HOOK"; rm -- "$FAKE_DELETE_HOOK"; exit 1; fi ;; esac',
       'case "$*" in "account get"*|"compute droplet-action power-cycle"*) [ -n "$FAKE_DOCTL_ACCOUNT" ] && exit 0 ;; esac',
       'case "$*" in',
       '  "compute droplet list"*) [ -z "$FAKE_DOCTL_LIST" ] || echo "$FAKE_DOCTL_LIST" ;;',
@@ -1108,6 +1112,31 @@ if (process.env.FAKE_PROGRESS_AFTER_PUBLISH) writeFileSync(process.env.FAKE_PROG
     assert.ok(finished.deleted, finished.calls.join("\n---\n").slice(0, 2000));
     assert.equal(finished.status, 1);
     assert.ok(!existsSync(join(fullstack, "results", "r1")));
+    const legacy = (/** @type {string} */ timestamp) => timestamp + " finished\n";
+    for (const [label, original, phase, change, status, deletes] of /** @type {const} */ ([
+      ["legacy finish changed before delete", legacy("t1"), "COPY", "echo 't2 finished' > \"$p\"", 3, 0],
+      ["legacy finish became failed", legacy("t1"), "COPY", "echo 't2 failed' > \"$p\"", 3, 0],
+      ["legacy finish changed after first delete failed", legacy("t1"), "DELETE", "echo 't2 finished' > \"$p\"", 3, 1],
+      ["unchanged legacy finish allows a delete retry", legacy("t1"), "DELETE", ":", 1, 2],
+      ["confirmed absent progress stays absent", null, "COPY", ":", 1, 1],
+      ["absent progress becomes unreadable", null, "COPY", "mkdir -- \"$p\"", 3, 0],
+      ["unreadable progress is not an absent baseline", "directory", "COPY", "rmdir -- \"$p\"", 3, 0],
+      ["failed progress read with matching bytes", legacy("t1"), "COPY", 'touch "$FAKE_REMOTE/progress-read-error"', 3, 0],
+      ["failed lookup does not confirm absence", null, "COPY", 'touch "$FAKE_REMOTE/progress-lookup-error"', 3, 0],
+    ])) await t.test(label, () => {
+      const { argv, options } = prepare({ log: done, progress: original === "directory" ? null : original, collect: true });
+      if (original === "directory") mkdirSync(remoteProgress);
+      const hook = join(root, "progress-hook");
+      writeFileSync(hook, "p=" + quote(remoteProgress) + "\n" + change + "\n");
+      Object.assign(options.env, { ["FAKE_" + phase + "_HOOK"]: hook });
+      if (phase === "DELETE") argv.unshift("--import", "data:text/javascript,Atomics.wait%20%3D%20()%20%3D%3E%20'timed-out'");
+      const r = spawnSync(process.execPath, argv, { ...options, timeout: 120_000 });
+      const out = r.stdout + r.stderr;
+      assert.match(out, /archive kept at/, out);
+      assert.ok(!existsSync(join(fullstack, "results", "r1")), out);
+      assert.equal(callsOf().filter((c) => c.startsWith("doctl compute droplet delete")).length, deletes, out);
+      assert.equal(r.status, status, out);
+    });
     for (const mode of ["failed", "plain finish", "torn finish", "different run", "occupied", "new start", "new finish", "archive replacement", "legacy replacement", "after publish", "after delete error", "no count", "new count", "stale summary"]) {
       const local = join(fullstack, "results", "r1");
       const remoteResult = join(dirname(remoteProgress), "results", "r1");
