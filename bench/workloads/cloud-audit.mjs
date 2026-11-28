@@ -16,6 +16,21 @@ export function auditProtocol(group = "json-api") {
 }
 
 export function auditDelivery(bytes, options) {
+  return readAuditDelivery(bytes, options);
+}
+
+// For a stopped monitor with a delivery already sealed against this subject.
+export function replayAuditDelivery(bytes, options, identities) {
+  assert.ok(Array.isArray(identities) && identities.length > 0, "sealed audit selection required");
+  const members = identities.map(({ app, key }) => {
+    assert.ok(typeof app === "string" && app && typeof key === "string" && key, "invalid sealed audit member");
+    return { app, key };
+  });
+  assert.equal(new Set(members.map((row) => JSON.stringify(row))).size, members.length, "duplicate sealed audit member");
+  return readAuditDelivery(bytes, options, members);
+}
+
+function readAuditDelivery(bytes, options, sealedMembers) {
   const protocol = auditProtocol(options.auditGroup);
   full(options.approveSubject, /[a-f0-9]{64}/, "explicit operator-approved subject required");
   assert.ok(bytes.length <= 16 * 1024 ** 2, "audit delivery limit");
@@ -30,8 +45,9 @@ export function auditDelivery(bytes, options) {
   assert.ok(Array.isArray(data.bundle?.receipts), "native audit receipts array required");
   const actual = data.bundle.receipts.map((r) => ({ app: r.identity?.app, key: r.identity?.key }));
   const sorted = (rows) => [...rows].sort((a, b) => `${a.app}/${a.key}`.localeCompare(`${b.app}/${b.key}`));
+  const members = sealedMembers ?? protocol.members;
   assert.deepEqual(protocol.group === "json-api" ? sorted(actual) : actual,
-    protocol.group === "json-api" ? sorted(protocol.members) : protocol.members, "complete native audit selection required");
+    protocol.group === "json-api" ? sorted(members) : members, "complete native audit selection required");
   return { group: protocol.group, campaign: options.campaign, subjectSha256: options.approveSubject, sha256: digest(bytes) };
 }
 export function auditProgram(state, intent, publish = false) {

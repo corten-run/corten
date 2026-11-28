@@ -90,6 +90,83 @@ async fn the_error_page_is_in_the_language_asked_for() {
     }
 }
 
+/// The `Vary` each HTML answer leaves `Req` with, before the app's own stage settles the language
+/// (which would hide a page sent with the fixed line, as a page that reads its locale is named
+/// there again): a page ends with what [`Req::vary`] says of the request, a patch and a refused
+/// form's patch with the fixed line, even in an app whose pages vary on `Accept-Language`, and
+/// each with one line.
+#[tokio::test]
+async fn a_page_varies_as_its_request_does_and_a_patch_as_every_patch_does() {
+    use crate::i18n::Messages as _;
+    use crate::page::{default_error_page, error_page_fn, Shared};
+    use std::sync::Arc;
+    crate::i18n::messages! { struct VaryMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    let req = |locales: bool, mode: Option<&'static str>| {
+        let mut shared = Shared::new(error_page_fn(default_error_page, ()), None, String::new());
+        if locales {
+            shared.locales = Some(VaryMsg::LOCALES);
+        }
+        let mut req = Request::post("/").header("accept-language", "fr");
+        if let Some(mode) = mode {
+            req = req.header("corten", mode);
+        }
+        let (mut parts, ()) = req.body(()).unwrap().into_parts();
+        parts.extensions.insert(crate::Signal::for_app(Arc::new(shared), 0));
+        async move { <Req as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await.unwrap() }
+    };
+    let vary = |res: &Response| {
+        res.headers().get_all(http::header::VARY).iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>()
+    };
+    // Reads no locale, so only `App::messages` makes it vary on the language.
+    let page = |req: &Req| {
+        let doc = html! {
+            <html>
+                <head>
+                    <title>"A"</title>
+                    <Corten />
+                </head>
+                <body><main>"a"</main></body>
+            </html>
+        };
+        req.page::<ForOne>(doc).unwrap().0
+    };
+    let language = ["corten, accept, accept-language"];
+    let fixed = ["corten, accept"];
+    for mode in [None, Some("nav")] {
+        assert_eq!(vary(&page(&req(true, mode).await)), language, "{mode:?}: with messages");
+        let chosen = req(true, mode).await;
+        chosen.set_locale(crate::i18n::Locale::of(VaryMsg::for_locale("fr")));
+        assert_eq!(vary(&page(&chosen)), fixed, "{mode:?}: a locale the URL chose");
+        assert_eq!(vary(&page(&req(false, mode).await)), fixed, "{mode:?}: nothing read");
+        let read = req(false, mode).await;
+        let _: VaryMsg = read.t();
+        assert_eq!(vary(&page(&read)), language, "{mode:?}: messages read");
+    }
+    for locales in [true, false] {
+        let action = req(locales, Some("action")).await;
+        let res = action
+            .patch_or_with::<ForOne, crate::Patches, _, _, _, _>(
+                |action| async move { action.patch(html! { <p id={MsgId}>"saved"</p> }) },
+                || async { unreachable!("an action draws its patch") },
+            )
+            .await
+            .unwrap();
+        assert_eq!(vary(&res.0), fixed, "a patch, messages {locales}");
+        let action = req(locales, Some("action")).await;
+        let mut errors = crate::Errors::new();
+        errors.refuse(crate::Refusal::Conflict, "moved on");
+        let res = action
+            .invalid_with::<ForOne, crate::Patches, _, _, _, _>(
+                &errors,
+                |form| async move { form.draw(html! { <p id={MsgId}>"refused"</p> }) },
+                || async { unreachable!("an action draws its patch") },
+            )
+            .await
+            .unwrap();
+        assert_eq!(vary(&res.0), fixed, "a refused form's patch, messages {locales}");
+    }
+}
+
 #[tokio::test]
 async fn a_bare_router_renders_the_page_s_document_without_a_policy() {
     let (status, headers, body) = call(routes(), "GET", None).await;
@@ -437,6 +514,27 @@ async fn a_page_in_another_layout_has_another_shell_key() {
     let (_, nope, _) = call_with(bare.clone(), "GET", "/nope", Some("nav"), None).await;
     let (_, page, _) = call_with(bare, "GET", "/", Some("nav"), None).await;
     assert_ne!(nope["corten-shell"], page["corten-shell"], "the default error document is another layout");
+}
+
+/// The shell key is written once and carried twice: a whole document's header and its head tag
+/// hold the same 16 lowercase hex digits, a page's and an error page's, Corten's and the app's;
+/// a navigation's header holds the same digits as the document's.
+#[tokio::test]
+async fn the_header_and_the_head_carry_the_shell_key_s_same_16_digits() {
+    let digits = |key: &str| key.len() == 16 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let routes = || Table::new().route("/", get(|req: Req| async move { req.test_page("Home", html! { <p>"home"</p> }) }));
+    for router in
+        [App::new(Routes::from(routes())).router(), App::new(Routes::from(routes())).error_page(test_error_page, ()).router()]
+    {
+        for uri in ["/", "/nope"] {
+            let (_, headers, body) = call_with(router.clone(), "GET", uri, None, Some("text/html")).await;
+            let key = headers["corten-shell"].to_str().unwrap();
+            assert!(digits(key), "{uri}: {key}");
+            assert_eq!(meta_content(&body, "corten-shell"), key, "{uri}");
+            let (_, nav, _) = call_with(router.clone(), "GET", uri, Some("nav"), None).await;
+            assert_eq!(nav["corten-shell"], key, "{uri}: a navigation");
+        }
+    }
 }
 
 #[tokio::test]

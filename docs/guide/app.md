@@ -1228,6 +1228,13 @@ boxed: a middleware that only passes the request on costs about 230 instructions
 moves the request into its future), where axum's `from_fn` boxes the rest of the stack again
 for every request (about 700).
 
+When forwarding the same request, edit its headers with `req.headers_mut()` or its body with
+`req.body_mut()`, then pass it to `next.run(req)`. If an extractor needs the parts, split
+the request with `req.into_parts()` and pass `Request::from_parts(parts, body)` to `next.run`,
+as [the auction's bid limit](../../examples/auction-room/src/app.rs) does. The original parts
+carry the request's extensions, including its cancellation signal and any caller lookup already
+made. Copying just the method, URI and headers into a new request does not carry those across.
+
 Middleware that belongs to part of the app is given to that part, an area or an API, and runs for
 every request at its prefix, never by a path the middleware compares. A request anywhere else
 never meets it:

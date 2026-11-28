@@ -6,12 +6,12 @@ import fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { controllerPaths, nativePaths, parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { benchPackagePaths, publicError } from "./droplet.mjs";
-import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
+import { captureValidation, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
@@ -22,6 +22,7 @@ import { controlRegistration, controlRequest, guardianSha256 } from "./cloud-con
 import { deploymentSha256 } from "./deployments.mjs";
 import { digest } from "./cloud-local.mjs";
 import { fleetOperationPlan } from "./fleet.mjs";
+import { fixtureGitEnv, withFixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
@@ -240,6 +241,214 @@ test("ordinary collection of a finalized result keeps the ordinary replay budget
   } }).collect(), e => e.controllerStage === "collect-native-replay-deadline");
   assert.deepEqual(readFileSync(h.statePath), before);
   assert.equal(h.deletes, 1);
+});
+
+test("approved sealed collection uses the measured replay and does not create or retire an unverified result", async (t) => {
+  const flags = { active: true, reportStatus: "verified" };
+  const p = productionHarness(t, flags), { h } = p;
+  await h.launch().launch();
+  const closePath = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(closePath));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(closePath, JSON.stringify(closed));
+  Object.assign(flags, { active: false, expired: true });
+  h.setArchive(archive([...metadata().filter(e => e.name !== "exit-code"), { name: "exit-code", body: "0\n" }, { name: "campaign/" }]));
+  await assert.rejects(h.task({ inspect: async () => { throw new Error("unavailable"); } }).collect(),
+    e => e.controllerStage === "collect-native-replay-refused");
+  const before = readFileSync(h.statePath), saved = h.saved(), head = "b".repeat(40);
+  assert.equal(saved.status, "running"); assert.ok(saved.archiveSha256 && saved.evidenceSha256);
+  const measuredRoot = join(h.temp, "measured"); mkdirSync(measuredRoot);
+  Object.assign(flags, { wrongHead: true, remoteHead: head, measuredRoot });
+  p.deps.compiler = root => root === measuredRoot;
+  const args = [...p.args(), "--sealed-measured-checkout", measuredRoot];
+  const preview = () => productionMain([...args, "--print-approval"], p.deps);
+  flags.measuredDirty = " M bench/source";
+  await assert.rejects(preview(), /clean measured checkout/); delete flags.measuredDirty;
+  h.change(s => { s.control.monitor.phase = "live"; });
+  await assert.rejects(preview(), /sealed recovery requires a saved terminal archive/);
+  writeFileSync(h.statePath, before);
+  const git = (...args) => {
+    const result = spawnSync("git", ["-C", measuredRoot, ...args], { encoding: "utf8", env: fixtureGitEnv(), timeout: 10000 });
+    assert.equal(result.status, 0);
+    return result.stdout.trim();
+  };
+  git("init", "-q");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=.git/no-hooks", "commit", "-qm", "Measured fixture without replay sources", "--allow-empty");
+  flags.measuredHead = git("rev-parse", "HEAD");
+  h.change(s => {
+    s.commit = flags.measuredHead;
+    for (const { request } of s.control.ledger) {
+      request.invocation.commit = s.commit;
+      for (const item of request.seal ?? []) {
+        const { invocation } = s.control.ledger.find(row => row.request.invocation.id === item.id).request;
+        item.sha256 = digest(JSON.stringify(invocation));
+      }
+    }
+  });
+  await withFixtureGitEnv(() => assert.rejects(preview(), /native campaign validation unavailable or invalid/));
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  writeFileSync(h.statePath, before); delete flags.measuredHead;
+  const requireMeasured = (source, { root }) => { assert.equal(source, commit); assert.equal(root, measuredRoot); };
+  p.deps.captureReplay = requireMeasured;
+  assert.equal(await preview(), 3);
+  const plan = p.stdout.at(-1);
+  assert.equal(plan.controllerCommit, head);
+  assert.equal(plan.recovery.measuredCommit, commit);
+  assert.equal(plan.recovery.archiveSha256, saved.archiveSha256);
+  assert.equal(plan.recovery.evidenceSha256, saved.evidenceSha256);
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  const approved = [...args, "--approve-reviewed-merged-ready", plan.approvalSha256];
+  const terminalPath = join(h.local, "monitor-terminal.json"), terminalBytes = readFileSync(terminalPath);
+  const terminal = JSON.parse(terminalBytes);
+  writeFileSync(terminalPath, JSON.stringify({ ...terminal, sealSha256: "e".repeat(64) }));
+  await assert.rejects(productionMain(approved, p.deps));
+  writeFileSync(terminalPath, terminalBytes);
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  const archivePath = join(h.local, "results.tgz"), archiveBytes = readFileSync(archivePath);
+  writeFileSync(archivePath, "changed");
+  await assert.rejects(productionMain(approved, p.deps), /archive changed/);
+  writeFileSync(archivePath, archiveBytes);
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  assert.deepEqual(readFileSync(h.statePath), before);
+  const now = performance.now.bind(performance); let elapsed = 0, replayed = 0;
+  t.mock.method(performance, "now", () => now() + elapsed);
+  const run = () => productionMain(approved, { ...p.deps, inspect: async input => {
+    replayed++; assert.equal(input.commit, commit); elapsed += 16 * 60_000; return h.report();
+  } });
+  flags.reportStatus = "blocked";
+  // Run the actual worker with a synthetic stand-in for the measured source.
+  // The controller checkout's default capture cannot replay this synthetic commit.
+  const installed = spawnSync("git", ["rev-parse", "HEAD"], { cwd: fileURLToPath(new URL("../..", import.meta.url)),
+    encoding: "utf8", env: fixtureGitEnv(), timeout: 10000 });
+  assert.equal(installed.status, 0);
+  const snapshot = withFixtureGitEnv(() => captureValidation(installed.stdout.trim()));
+  snapshot.root = pathToFileURL(measuredRoot + "/").href;
+  const validator = snapshot.sources.find(row => row.path === "bench/workloads/isolated/campaign-verify.mjs");
+  validator.source = `export function validateCampaign() { return ${JSON.stringify(h.report())}; }`;
+  validator.sha256 = digest(validator.source);
+  p.deps.captureReplay = (...args) => { requireMeasured(...args); return snapshot; };
+  await assert.rejects(productionMain(approved, { ...p.deps, inspect: undefined }), e => e.controllerStage === "collect-native-report-refused");
+  p.deps.captureReplay = requireMeasured;
+  assert.equal(h.deletes, 0); assert.equal(h.creates, 1); assert.equal(replayed, 0);
+  // A read-only terminal probe extends the monitor ledger, so print a new approval.
+  flags.reportStatus = "verified";
+  const markerPath = join(h.local, saved.evidence, "exit-code"), marker = readFileSync(markerPath);
+  const operationLock = join(h.local, "operation.lock");
+  const changeTerminal = () => writeFileSync(terminalPath, JSON.stringify({ ...terminal, sealSha256: "e".repeat(64) }));
+  for (const [change, refusal] of [["terminal", /approved terminal seal|native campaign validation/],
+    ["extraction", /evidence changed|extraction/], ["operation lock", /operation\.lock (?:was replaced|changed)/]]) {
+    const beforeProbe = readFileSync(h.statePath);
+    assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+    let changed = false;
+    flags.hook = (bin, args) => {
+      if (changed || bin !== "ssh" || !args.at(-1).includes("CORTEN_IDLE") || !args.at(-1).includes("\nsystemctl show")) return;
+      changed = true;
+      if (change === "extraction") writeFileSync(markerPath, "1\n");
+      else if (change === "terminal") changeTerminal();
+      else {
+        renameSync(operationLock, operationLock + ".original");
+        writeFileSync(operationLock, "replacement lock\n", { flag: "wx" });
+      }
+    };
+    await assert.rejects(run(), refusal);
+    delete flags.hook;
+    assert.ok(changed);
+    assert.equal(h.deletes, 0);
+    assert.equal(h.saved().deletionIntentAt, undefined);
+    if (change === "extraction") writeFileSync(markerPath, marker);
+    else if (change === "terminal") writeFileSync(terminalPath, terminalBytes);
+    else {
+      assert.equal(readFileSync(operationLock, "utf8"), "replacement lock\n");
+      unlinkSync(operationLock);
+      writeFileSync(h.statePath, beforeProbe); // discard this synthetic command's interrupted receipt
+    }
+  }
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const interrupted = p.deps.interrupted;
+  let changedAtDispatch = false;
+  p.deps.interrupted = () => {
+    if (!changedAtDispatch && h.saved().deletionIntentAt) {
+      changedAtDispatch = true; changeTerminal();
+    }
+    return interrupted();
+  };
+  await assert.rejects(run(), /DELETE not dispatched; fresh collection approval required/);
+  assert.ok(changedAtDispatch);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.equal(h.deletes, 0);
+  p.deps.interrupted = interrupted;
+  writeFileSync(terminalPath, terminalBytes);
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  changedAtDispatch = false;
+  let renameFailed = false;
+  const rename = fs.renameSync;
+  const fault = t.mock.method(fs, "renameSync", (from, to) => {
+    if (changedAtDispatch && to === h.statePath && !renameFailed) {
+      renameFailed = true; throw Object.assign(new Error("injected withdrawal rename failure"), { code: "EIO" });
+    }
+    return rename(from, to);
+  });
+  syncBuiltinESMExports();
+  p.deps.interrupted = () => {
+    if (!changedAtDispatch && h.saved().deletionIntentAt) {
+      changedAtDispatch = true; changeTerminal();
+    }
+    return interrupted();
+  };
+  try { await assert.rejects(run(), /injected withdrawal rename failure/); }
+  finally {
+    fault.mock.restore(); syncBuiltinESMExports(); p.deps.interrupted = interrupted;
+    writeFileSync(terminalPath, terminalBytes);
+  }
+  assert.ok(renameFailed && h.saved().deletionIntentAt);
+  assert.equal(h.deletes, 0);
+  const intentBytes = readFileSync(h.statePath);
+  const proof = join(h.local, `state.json.delete-unsent-${digest(intentBytes)}.tmp`);
+  const proofBytes = readFileSync(proof);
+  for (const bytes of [proofBytes.subarray(0, 80), Buffer.concat([proofBytes, Buffer.from(" ")])]) {
+    writeFileSync(proof, bytes);
+    assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+    await assert.rejects(run(), /deletion not confirmed; outcome uncertain/);
+    assert.deepEqual(readFileSync(h.statePath), intentBytes);
+    assert.equal(h.deletes, 0);
+  }
+  const approvedWithoutProof = approved.at(-1);
+  writeFileSync(proof, proofBytes);
+  assert.equal(await preview(), 3);
+  assert.notEqual(p.stdout.at(-1).approvalSha256, approvedWithoutProof);
+  await assert.rejects(run(), /explicit operator-approved exact action required/);
+  assert.deepEqual(readFileSync(h.statePath), intentBytes);
+  assert.equal(h.deletes, 0);
+  approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const providerRequest = p.deps.providerRequest;
+  p.deps.providerRequest = request => request.method === "GET" && /^\/v2\/droplets\/[1-9]\d*$/.test(request.path)
+    ? { status: 503, value: null } : providerRequest(request);
+  try { await assert.rejects(run(), /provider control failed; preserve state\/evidence\/host/); }
+  finally { p.deps.providerRequest = providerRequest; }
+  assert.deepEqual(readFileSync(h.statePath), intentBytes);
+  assert.deepEqual(readFileSync(proof), proofBytes);
+  assert.equal(h.deletes, 0);
+  const beforeDeleteReplays = replayed;
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const live = h.host();
+  flags.deleteLost = true;
+  await assert.rejects(run(), /provider control failed/);
+  assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
+  assert.equal(h.deletes, 1); assert.equal(replayed, beforeDeleteReplays + 2);
+  assert.equal(existsSync(proof), false);
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const retryStart = p.calls.length;
+  await assert.rejects(run(), { code: "EEXIST" });
+  assert.ok(p.calls.slice(retryStart).every(([bin]) => bin === "git"));
+  // The simulated owner has stopped; emulate the separate retained-lock custody step.
+  unlinkSync(join(h.local, "operation.lock"));
+  h.hosts([live]);
+  await assert.rejects(run(), /deletion not confirmed; outcome uncertain/);
+  assert.equal(h.deletes, 1); assert.equal(replayed, beforeDeleteReplays + 2);
+  h.hosts([]);
+  assert.equal(await run(), 0);
+  assert.equal(h.saved().validation.status, "verified"); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.deletes, 1); assert.equal(h.creates, 1); assert.equal(replayed, beforeDeleteReplays + 3);
+  assert.ok(p.calls.slice(retryStart).every(([bin]) => bin !== "ssh" && bin !== "sftp"));
 });
 
 test("contradictory saved verification does not get the extended replay budget", async (t) => {

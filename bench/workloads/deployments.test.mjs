@@ -214,7 +214,7 @@ test("live representatives use dispatched native ports and missing recovery port
 test("native live runtime descriptions match their checked-in build inputs", () => {
   const sources = [
     ["rails", "CRuby 4.0.10", "ruby:4.0.10-slim@sha256:"],
-    ["phoenix", "Elixir 1.20.5 / OTP 29.1.2 release", "elixir:1.20.5-otp-29@sha256:"],
+    ["phoenix", "Elixir 1.20.5 / OTP 29.1.3 release", "elixir:1.20.5-otp-29@sha256:"],
     ["gin", "Go 1.27.4 native", "golang:1.27.4-alpine@sha256:"],
   ];
   for (const [app, runtime, image] of sources) {
@@ -226,6 +226,18 @@ test("native live runtime descriptions match their checked-in build inputs", () 
       assert.equal(row.deployments[0].configuration.runtime, runtime, `${group}/${app}`);
       assert.equal(row.deployments[0].qualification, "pending", "runtime metadata is not qualification evidence");
     }
+  }
+});
+
+test("both Phoenix recipes pin the images for the advertised OTP patch and release OS", () => {
+  // The Elixir tag names only the OTP major; the digest distinguishes patch releases.
+  const expected = [
+    "FROM elixir:1.20.5-otp-29@sha256:028a755eef5692f4f64b06c68104b7a326e0f610646e9d8faa8d3a651f1060f3 AS tools",
+    "FROM debian:trixie-20261123-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0",
+  ];
+  for (const suite of ["fullstack", "live"]) {
+    const recipe = readFileSync(new URL(`../${suite}/apps/phoenix/Dockerfile`, import.meta.url), "utf8");
+    assert.deepEqual(recipe.split(/\r?\n/).filter((line) => /^FROM (elixir|debian):/.test(line)), expected, suite);
   }
 });
 

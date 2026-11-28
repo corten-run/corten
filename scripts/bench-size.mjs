@@ -36,10 +36,10 @@
 // GitHub's before for a push that creates a branch or tag, means the merge base with origin/main as it is when the
 // check runs: a rerun after main has moved can check a different range, and a commit already on
 // main brings no history (a push that creates main itself brings none). Such a check reads the tip
-// and what is not yet on main, not the range the push brought. CI gives the base
-// from its event (.github/workflows/ci.yml): a pull request's merge commit's first parent, and a
-// push's before, since a push to main has moved origin/main to the tip and its merge base would be
-// the tip itself. In GitHub Actions a missing base fails rather than fall back. When none resolves
+// and what is not yet on main, not the range the push brought. CI gives the base from its event:
+// a pull request's merge commit's first parent, a tag push's before, or the last successful CI
+// push to main. A manual run takes an explicit base. In GitHub Actions an unspecified base fails
+// rather than guessing. When none resolves
 // the check fails and says how to give one. A shallow clone fails, since the commits between the
 // base and the tip may be missing and would go unread. It reads the commits as committed, not the
 // working tree; untracked and ignored files are not read, and nothing is published or fetched.
@@ -184,7 +184,7 @@ export function resolveBase(root, { head, base, env = process.env }) {
   if (env.GITHUB_ACTIONS === "true") {
     throw new Error(
       `bench-size: in GitHub Actions the base must be given, not guessed: a push to main has already moved origin/main to the tip. ` +
-        `Set ${BASE_ENV} from the event, as .github/workflows/ci.yml does (a pull request's merge commit's first parent, a push's before).`,
+        `Set ${BASE_ENV} from the event, as .github/workflows/ci.yml does.`,
     );
   }
   const tip = commitOf(root, head, env);

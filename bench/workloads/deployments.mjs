@@ -46,7 +46,7 @@ const liveNative = freeze({
     refs: ["Gemfile", "Gemfile.lock", "application.rb", "assets.rb", "client.js", "config.ru", "store.rb", "wire.mjs",
       "views/index.html.erb", "views/application/_change.html.erb", "views/application/_counter.html.erb", "views/application/_row.html.erb", "views/application/_screen.html.erb"],
     middleware: "native /parity controls, ERB/Turbo keyed operations and Action Cable; not the fullstack marketplace app" },
-  phoenix: { framework: "Phoenix LiveView keyed streams native application", runtime: "Elixir 1.20.5 / OTP 29.1.2 release",
+  phoenix: { framework: "Phoenix LiveView keyed streams native application", runtime: "Elixir 1.20.5 / OTP 29.1.3 release",
     build: "MIX_ENV=prod mix compile; native_live esbuild; mix release", server: "Phoenix LiveView / native Channels and LiveSocket",
     workers: "one BEAM node; two normal schedulers and configured dirty schedulers; supervised bounded acknowledged reader state",
     command: ["/app/bin/native_live", "start"],
@@ -157,7 +157,7 @@ const native = freeze({
   sveltekit: { framework: "SvelteKit", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "adapter-node", workers: "one application process", command: ["node", "build"], refs: ["package.json", "vite.config.ts"], middleware: "SvelteKit native hooks; workload-specific Dockerfile.marketplace pins origin" },
   "react-router": { framework: "React Router + Express", runtime: "Node 26.13.1", build: "npm run build; npm prune --omit=dev", server: "Express + @react-router/express", workers: "one application process", command: ["node", "server.mjs"], refs: ["package.json", "server.mjs", "react-router.config.ts"], middleware: "compression, immutable assets, static files, React Router handler in server.mjs" },
   "tanstack-start": { framework: "TanStack Start + React", runtime: "Node 26.13.1", build: "npm run build", server: "Nitro node output", workers: "one application process", command: ["node", ".output/server/index.mjs"], refs: ["package.json", "vite.config.ts"], middleware: "TanStack Start / Nitro plugins in vite.config.ts" },
-  phoenix: { framework: "Phoenix + HEEx / LiveView", runtime: "Elixir 1.20.5 / OTP 29.1.2 release", build: "MIX_ENV=prod mix compile; assets.deploy; mix release", server: "Phoenix endpoint (configured adapter)", workers: "one BEAM node; native schedulers; no synthetic worker tuning", command: ["/app/bin/item_page", "start"], refs: ["mix.exs", "config/config.exs", "config/runtime.exs"], middleware: "Phoenix endpoint/router configuration; Channels + PubSub native live transport" },
+  phoenix: { framework: "Phoenix + HEEx / LiveView", runtime: "Elixir 1.20.5 / OTP 29.1.3 release", build: "MIX_ENV=prod mix compile; assets.deploy; mix release", server: "Phoenix endpoint (configured adapter)", workers: "one BEAM node; native schedulers; no synthetic worker tuning", command: ["/app/bin/item_page", "start"], refs: ["mix.exs", "config/config.exs", "config/runtime.exs"], middleware: "Phoenix endpoint/router configuration; Channels + PubSub native live transport" },
 });
 
 export const optionSources = freeze({

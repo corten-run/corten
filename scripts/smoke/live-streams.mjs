@@ -1,12 +1,234 @@
+import { fileURLToPath } from "node:url";
 import { engine, check } from "./helpers.mjs";
+import { liveRegion } from "./live-region.mjs";
 
-export async function liveFragments(page) {
+export async function liveRegionControls(browser, report = check) {
+  const page = await browser.newPage();
+  try {
+    for (const [name, ancestor, region, afterRole, expected, afterText = "After"] of [
+      ["an already rendered status accepts a replacement message", "", 'role="status"', "status", true],
+      ["a role added with the message does not count as a live region", "", "", "status", false],
+      ["an ancestor unhidden with the message does not count as rendered", "hidden", 'role="status"', "status", false],
+      ["aria-hidden removed with the update does not count as exposed", "", 'role="status" aria-hidden="true"', "status", false],
+      ["an aria-hidden ancestor hides its live region", 'aria-hidden="true"', 'role="status" aria-hidden="false"', "status", false],
+      ["inert removed from the region with the update does not count as exposed", "", 'role="status" inert', "status", false],
+      ["inert removed from an ancestor with the update does not count as exposed", "inert", 'role="status"', "status", false],
+      ["aria-live off overrides the status role", "", 'role="status" aria-live="off"', "status", false],
+      ["the region must keep its live semantics", "", 'role="log"', "status", false],
+      ["a known action can replace the message without changing its text", "", 'role="alert"', "alert", true, "Before"],
+    ]) {
+      await page.setContent(`<div ${ancestor}><div ${region}><p id="message">Before</p></div></div>`);
+      const { text, stayed } = await liveRegion(page, "message");
+      await page.locator("#message").evaluate((message, { afterRole, afterText }) => {
+        const region = message.parentElement;
+        for (const element of [region, region.parentElement]) {
+          for (const attribute of ["hidden", "aria-hidden", "inert"]) element.removeAttribute(attribute);
+        }
+        region.setAttribute("role", afterRole);
+        const replacement = message.cloneNode();
+        replacement.textContent = afterText;
+        message.replaceWith(replacement);
+      }, { afterRole, afterText });
+      report(name, (await stayed()) === expected && text === "Before");
+    }
+
+    for (const inside of [false, true]) {
+      const status = '<div role="status"><p id="message">Before</p></div>';
+      await page.setContent(inside ? `<dialog>${status}</dialog>` : `${status}<dialog></dialog>`);
+      await page.locator("dialog").evaluate((dialog) => dialog.showModal());
+      const { stayed } = await liveRegion(page, "message");
+      if (!inside) await page.locator("dialog").evaluate((dialog) => dialog.close());
+      await replaceMessage(page, "message", "After");
+      report(inside ? "a live region inside the modal is exposed" : "a live region behind the modal is not exposed",
+        (await stayed()) === inside);
+    }
+
+    for (const [name, markup] of [
+      ["opening details with the patch does not expose the original status", "<details><summary>Details</summary>STATUS</details>"],
+      ["revealing content-visibility with the patch does not expose the original status", '<div style="content-visibility:hidden">STATUS</div>'],
+    ]) {
+      await page.setContent(markup.replace("STATUS", '<div role="status"><p id="message">Before</p></div>'));
+      const { stayed } = await liveRegion(page, "message");
+      await page.locator("#message").evaluate((message) => {
+        const details = document.querySelector("details");
+        if (details) details.open = true;
+        else document.querySelector("[style]").removeAttribute("style");
+        const replacement = message.cloneNode();
+        replacement.textContent = "After";
+        message.replaceWith(replacement);
+      });
+      report(name, !(await stayed()));
+    }
+
+    for (const [name, markup, expected] of [
+      ["closing a modal after a patch does not expose the patch retroactively", "STATUS<dialog></dialog>", false],
+      ["closing a modal before a patch exposes the status again", "STATUS<dialog></dialog>", true],
+      ["opening details after a patch does not expose the patch retroactively", "<details open><summary>Details</summary>STATUS</details>", false],
+    ]) {
+      await page.setContent(markup.replace("STATUS", '<div role="status"><p id="message">Before</p></div>'));
+      const { stayed } = await liveRegion(page, "message");
+      await page.locator("#message").evaluate((message, revealFirst) => {
+        const dialog = document.querySelector("dialog");
+        const details = document.querySelector("details");
+        if (dialog) dialog.showModal();
+        if (details) details.open = false;
+        if (revealFirst) dialog.close();
+        const replacement = message.cloneNode();
+        replacement.textContent = "After";
+        message.replaceWith(replacement);
+        if (!revealFirst) dialog?.close();
+        if (details) details.open = true;
+      }, expected);
+      report(name, (await stayed()) === expected);
+    }
+
+    for (const [name, change, expected] of [
+      ["a patch must expose the replacement message itself", "hidden", false],
+      ["a replacement must not put its message inside a hidden descendant", "hidden-child", false],
+      ["a replacement must not turn off live updates for the message", "live-off", false],
+      ["a replacement message must not itself be a second status region", "nested-status", false],
+      ["a replacement message must not contain a second live region", "nested-live-child", false],
+      ["revealing a hidden message later in the same task does not expose its insertion", "reveal", false],
+      ["removing a sibling's CSS hiding after replacement does not expose the insertion", "sibling", false],
+      ["reattaching a region in the same task does not expose a detached replacement", "detach", false],
+      ["a later color change does not invalidate an exposed replacement", "color", true],
+    ]) {
+      await page.setContent(`
+        <style>#shield.hides + [role=status] { display: none }</style>
+        <div id="shield"></div><div role="status"><p id="message">Before</p></div>
+      `);
+      const { stayed } = await liveRegion(page, "message");
+      await page.evaluate((change) => {
+        const message = document.getElementById("message");
+        const region = message.parentElement;
+        const shield = document.getElementById("shield");
+        const replacement = message.cloneNode();
+        replacement.textContent = "After";
+        if (change === "nested-status") replacement.setAttribute("role", "status");
+        if (change === "live-off") replacement.setAttribute("aria-live", "off");
+        if (change === "nested-live-child" || change === "hidden-child") {
+          const child = document.createElement("span");
+          if (change === "hidden-child") child.setAttribute("aria-hidden", "true");
+          else child.setAttribute("aria-live", "polite");
+          child.textContent = replacement.textContent;
+          replacement.replaceChildren(child);
+        }
+        replacement.hidden = change === "hidden" || change === "reveal";
+        if (change === "sibling") shield.classList.add("hides");
+        if (change === "detach") region.remove();
+        message.replaceWith(replacement);
+        if (change === "reveal") replacement.hidden = false;
+        if (change === "sibling") shield.classList.remove("hides");
+        if (change === "detach") shield.after(region);
+        if (change === "color") region.style.color = "red";
+      }, change);
+      report(name, (await stayed()) === expected);
+    }
+
+    await page.setContent('<div role="status"><p id="message">Before</p></div>');
+    const fleeting = await liveRegion(page, "message");
+    await page.evaluate(async () => {
+      const message = document.getElementById("message");
+      const replacement = message.cloneNode();
+      replacement.textContent = "Briefly";
+      message.replaceWith(replacement);
+      await new Promise((resolve) => setTimeout(resolve, 18));
+      replacement.replaceWith(message);
+    });
+    report("a brief replacement is recorded even between polls", (await fleeting.changed(250)) === "Briefly");
+
+    await page.setContent('<div aria-live="polite"><p id="message">Before</p></div>');
+    const locate = page.locator.bind(page);
+    const evaluateHandle = page.evaluateHandle.bind(page);
+    const duringCapture = () => replaceMessage(page, "message", "During capture");
+    // Place the same update between locator resolution and evaluation, or just before an atomic
+    // evaluation. Only the split capture retains the now-detached message.
+    page.locator = (selector, options) => {
+      const locator = locate(selector, options);
+      locator.evaluateHandle = async (capture, arg) => {
+        const stale = await locator.elementHandle();
+        try {
+          await duringCapture();
+          return await stale.evaluateHandle(capture, arg);
+        } finally {
+          await stale.dispose();
+        }
+      };
+      return locator;
+    };
+    page.evaluateHandle = async (capture, arg) => {
+      await duringCapture();
+      return evaluateHandle(capture, arg);
+    };
+    try {
+      const { text, stayed } = await liveRegion(page, "message");
+      await replaceMessage(page, "message", "After");
+      report("capture sees the connected message even when a replacement arrives at lookup",
+        await stayed() && text === "During capture", text);
+    } finally {
+      page.locator = locate;
+      page.evaluateHandle = evaluateHandle;
+    }
+
+    await page.setContent('<corten-live aria-live="polite"><p id="last-trade">Last trade: first</p></corten-live>');
+    page.evaluateHandle = async (capture, arg) => {
+      const captured = await evaluateHandle(capture, arg);
+      await replaceMessage(page, "last-trade", "Last trade: first");
+      await page.evaluate(() => setTimeout(() => {
+        const message = document.getElementById("last-trade");
+        const replacement = message.cloneNode();
+        replacement.textContent = "Last trade: second";
+        message.replaceWith(replacement);
+      }, 50));
+      return captured;
+    };
+    await liveFragments(page, (name, ok, detail) => report(`after a same-text replacement: ${name}`, ok, detail));
+    page.evaluateHandle = evaluateHandle;
+
+    // Exercise the shipped runtime, not a fixture that substitutes dialog.close() for data-remove.
+    const runtime = fileURLToPath(new URL("../../crates/corten/js/dist/corten.js", import.meta.url));
+    await page.route("http://live-region.test/**", (route) => new URL(route.request().url()).pathname === "/corten/corten.js"
+      ? route.fulfill({ path: runtime, contentType: "text/javascript" })
+      : route.fulfill({
+        contentType: "text/html",
+        body: '<script type="module" src="/corten/corten.js"></script><div role="status"><p id="message">Before</p></div><dialog id="modal"></dialog>',
+      }));
+    for (const removeFirst of [false, true]) {
+      await page.goto("http://live-region.test/");
+      const { stayed } = await liveRegion(page, "message");
+      const applied = await page.evaluate(async (removeFirst) => {
+        const { patch } = await import("/corten/corten.js");
+        const remove = '<template id="modal" data-remove></template>';
+        const update = '<p id="message">After</p>';
+        document.querySelector("dialog").showModal();
+        await patch(removeFirst ? remove + update : update + remove);
+        return !document.querySelector("dialog") && document.getElementById("message").textContent === "After";
+      }, removeFirst);
+      const observed = await stayed();
+      report(removeFirst ? "data-remove before a message patch leaves it exposed" : "data-remove after a message patch does not retroactively expose it",
+        applied && observed === removeFirst);
+    }
+  } finally {
+    await page.close();
+  }
+}
+
+function replaceMessage(page, id, text) {
+  return page.evaluate(({ id, text }) => {
+    const message = document.getElementById(id);
+    const replacement = message.cloneNode();
+    replacement.textContent = text;
+    message.replaceWith(replacement);
+  }, { id, text });
+}
+
+export async function liveFragments(page, report = check) {
   // <corten-live src>: the server streams fragments and the runtime swaps them in by id.
-  const firstTrade = await page.textContent("#last-trade");
-  await page.waitForFunction((t) => document.getElementById("last-trade")?.textContent !== t, firstTrade, { timeout: 4000 }).catch(() => {});
-  // A trade a second: one drawn in four seconds is a fragment the runtime applied.
-  const nextTrade = (await page.textContent("#last-trade")) ?? "";
-  check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
+  const { text: firstTrade, changed } = await liveRegion(page, "last-trade");
+  // Use the text from the same replacement that passed the live-region identity check.
+  const nextTrade = await changed(4000);
+  report("<corten-live> swaps in the fragments the server streams", nextTrade?.startsWith("Last trade: ") === true, `${firstTrade} -> ${nextTrade ?? "no qualifying replacement"}`);
+  report("a trade replaces only the live region's message", nextTrade !== null);
 }
 
 export async function streamCompression(page) {

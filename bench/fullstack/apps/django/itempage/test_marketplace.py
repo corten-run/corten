@@ -15,6 +15,13 @@ from .marketplace import LABELS, MarketplaceFormat, MarketplaceSource
 RECORDS = json.loads(Path(__file__).with_name("marketplace_test_fixture.json").read_text())
 
 
+def get_and_head(client, path):
+    # Compare real headers at the same instant: Django computes Expires for each response.
+    with patch('django.utils.cache.time') as clock:
+        clock.time.return_value = 946684800
+        return client.get(path), client.head(path)
+
+
 @override_settings(STORAGES={"staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}})
 class MarketplaceTests(TestCase):
     def setUp(self):
@@ -52,14 +59,13 @@ class MarketplaceTests(TestCase):
 
     def test_json_head_matches_get_headers_without_a_body(self):
         path = '/api/marketplace/item_1'
-        response = self.client.get(path)
+        response, head = get_and_head(self.client, path)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'application/json')
         self.assertEqual(response.json(), RECORDS['item_1'])
         self.assertIn(b'\\"Dragon\\"', response.content)
         self.assertIsInstance(response.json()['summary']['lowest_minor'], int)
         self.assertIsInstance(response.json()['listings'][0]['rating_hundredths'], int)
-        head = self.client.head(path)
         self.assertEqual(head.status_code, response.status_code)
         self.assertEqual(dict(head.headers), dict(response.headers))
         self.assertEqual(head.content, b'')
@@ -67,11 +73,10 @@ class MarketplaceTests(TestCase):
 
     def test_missing_json_get_and_head_are_json_404(self):
         path = '/api/marketplace/missing'
-        response = self.client.get(path)
+        response, head = get_and_head(self.client, path)
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response['Content-Type'], 'application/json')
         self.assertEqual(response.json(), {'error': 'Not Found'})
-        head = self.client.head(path)
         self.assertEqual(head.status_code, 404)
         self.assertEqual(dict(head.headers), dict(response.headers))
         self.assertEqual(head.content, b'')
@@ -112,12 +117,11 @@ class MarketplaceTests(TestCase):
                 requests.ConnectionError('private address'), ValueError('private invalid JSON')):
             with self.subTest(error=type(error).__name__):
                 self.source.get.side_effect = error
-                response = client.get('/api/marketplace/item_1')
+                response, head = get_and_head(client, '/api/marketplace/item_1')
                 self.assertEqual(response.status_code, 500)
                 self.assertEqual(response['Content-Type'], 'application/json')
                 self.assertEqual(response.json(), {'error': 'Internal Server Error'})
                 self.assertNotIn(b'private', response.content)
-                head = client.head('/api/marketplace/item_1')
                 self.assertEqual(head.status_code, 500)
                 self.assertEqual(dict(head.headers), dict(response.headers))
                 self.assertEqual(head.content, b'')
@@ -147,11 +151,10 @@ class MarketplaceTests(TestCase):
             with self.subTest(record=record):
                 self.source.get.side_effect = None
                 self.source.get.return_value = record
-                response = client.get('/api/marketplace/item_1')
+                response, head = get_and_head(client, '/api/marketplace/item_1')
                 self.assertEqual(response.status_code, 500)
                 self.assertEqual(response['Content-Type'], 'application/json')
                 self.assertEqual(response.json(), {'error': 'Internal Server Error'})
-                head = client.head('/api/marketplace/item_1')
                 self.assertEqual(head.status_code, 500)
                 self.assertEqual(dict(head.headers), dict(response.headers))
                 self.assertEqual(head.content, b'')
@@ -168,8 +171,7 @@ class MarketplaceTests(TestCase):
                     upstream.json.side_effect = requests.exceptions.JSONDecodeError('private invalid JSON', '', 0)
                 source.session.get = Mock(return_value=upstream)
                 with patch('itempage.marketplace_views.source', source):
-                    response = self.client.get('/api/marketplace/item_1')
-                    head = self.client.head('/api/marketplace/item_1')
+                    response, head = get_and_head(self.client, '/api/marketplace/item_1')
                 self.assertEqual(response.status_code, expected_status)
                 self.assertEqual(response['Content-Type'], 'application/json')
                 self.assertIn('error', response.json())

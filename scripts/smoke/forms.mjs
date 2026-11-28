@@ -1,5 +1,6 @@
 import http from "node:http";
 import { base, shadowing, engine, skip, check, steps, pollFor, cleanUp } from "./helpers.mjs";
+import { liveRegion } from "./live-region.mjs";
 
 /**
  * A named control must not turn a runtime walk into form -> control -> form. The timeout
@@ -845,8 +846,10 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   }, shadowing);
   // Clicked from the page: Playwright's own click reads the form's getAttribute, which the
   // control named getAttribute shadows.
+  const { stayed: watchRegionStayed } = await liveRegion(page, "watch-message");
   await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#shadowed button")).click());
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Globex"), null, { timeout: 4000 }).catch(() => {});
+  check("a watch answer keeps the live region even when it replaces the form", await watchRegionStayed());
   page.off("request", onShadowed);
   check(
     "controls named action, method, id and the like do not change the post",
