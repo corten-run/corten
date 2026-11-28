@@ -30,10 +30,11 @@ async function open(context, reducedMotion = "no-preference") {
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(base);
   // The scripts are in, and the deck's feed is open (its snapshot has arrived).
-  await page.evaluate(async () => {
+  await page.waitForFunction(async () => {
     const { ready } = await import("corten");
     await ready;
-  });
+    return true;
+  }, null, { timeout: 10_000 });
   return page;
 }
 
@@ -76,6 +77,17 @@ const filterButton = "form[role=search] button";
 const home = new URL("/", base).href;
 const deckUrl = new URL("deck", home).href;
 const isSave = (request) => request.method() === "POST" && request.url() === deckUrl;
+const isLive = (request) => new URL(request.url()).pathname === "/feed/deck/live";
+
+/** Holds exactly one answer until the test has observed the edit it is meant to cover. */
+async function holdSave(page) {
+  const held = Promise.withResolvers();
+  await page.route("**/deck", async (route) => {
+    await held.promise;
+    await route.continue();
+  }, { times: 1 });
+  return () => held.resolve(undefined);
+}
 
 /** A box can still be invisible if it or an ancestor has zero opacity. */
 const drawn = (locator) => locator.evaluate((el) => {
@@ -177,6 +189,7 @@ const time = (page, name, act) =>
 
 try {
   const context = await browser.newContext();
+  context.setDefaultTimeout(10_000);
   const page = await open(context);
   const nav = await page.evaluate(() => {
     const t = /** @type {PerformanceNavigationTiming} */ (performance.getEntriesByType("navigation")[0]);
@@ -218,12 +231,8 @@ try {
   await page.click("thead th:nth-child(3) a");
 
   // Add: shown at once, then saved. The save is held, so the line is checked before any answer.
-  const heldSave = Promise.withResolvers();
   const loaded = Number(await version(page));
-  await page.route("**/deck", async (route) => {
-    await heldSave.promise;
-    await route.continue();
-  }, { times: 1 });
+  const releaseAdd = await holdSave(page);
   const answered = page.waitForResponse((r) => isSave(r.request()), { timeout: 10_000 });
   const painted = (async () => {
     try {
@@ -245,7 +254,7 @@ try {
       await page.waitForFunction(() => !document.querySelector('tbody tr[data-motion], ul li[data-motion]'), null, { timeout: 5_000 });
       check("motion markers clear after the animation", !(await page.locator("[data-motion]").count()));
     } finally {
-      heldSave.resolve(undefined);
+      releaseAdd();
     }
   })();
   await Promise.all([answered, painted]);
@@ -281,15 +290,14 @@ try {
   // A change the rules refuse is rolled back, with their words.
   await row(page, "ashen-drake").locator("button", { hasText: "Add" }).click();
   await settled(page);
-  await page.route("**/deck", async (route) => {
-    await new Promise((r) => (release = r));
-    await route.continue();
-  });
-  await row(page, "ashen-drake").locator("button", { hasText: "Add" }).click();
-  check("a third Ashen Drake shows at once", (await deck(page))["ashen-drake"] === 3, JSON.stringify(await deck(page)));
-  release();
+  const releaseRefusal = await holdSave(page);
+  try {
+    await row(page, "ashen-drake").locator("button", { hasText: "Add" }).click();
+    check("a third Ashen Drake shows at once", (await deck(page))["ashen-drake"] === 3, JSON.stringify(await deck(page)));
+  } finally {
+    releaseRefusal();
+  }
   await settled(page, "Not saved:");
-  await page.unroute("**/deck");
   check("the server refuses it and the page rolls it back with the reason", (await deck(page))["ashen-drake"] === 2 && (await status(page)).note === "Not saved: You own 2 copies of Ashen Drake.", (await status(page)).note);
   await page.click("button:has-text('Undo')");
   check("the history is as it was at the last save", (await deck(page))["ashen-drake"] === 1);
@@ -354,17 +362,19 @@ try {
   check("an idle page takes another tab's save and says so", (await status(page)).state === "updated" && (await version(page)) === (await version(other)));
 
   // Both change at once: the slower save is stale, and the player chooses.
-  await page.route("**/deck", async (route) => {
-    await new Promise((r) => (release = r));
-    await route.continue();
-  });
-  await row(page, "kiln-colossus").locator("button", { hasText: "Add" }).click();
-  await other.locator('tbody tr[data-key="undertow-serpent"] td:last-child button').click();
-  await settled(other);
-  const stale = page.waitForResponse("**/deck");
-  release();
-  check("a save built on an old version is refused as stale", (await (await stale).status()) === 409);
-  await page.unroute("**/deck");
+  const releaseStale = await holdSave(page);
+  const stale = page.waitForResponse((r) => isSave(r.request()));
+  const afterOther = (async () => {
+    try {
+      await row(page, "kiln-colossus").locator("button", { hasText: "Add" }).click();
+      await other.locator('tbody tr[data-key="undertow-serpent"] td:last-child button').click();
+      await settled(other);
+    } finally {
+      releaseStale();
+    }
+  })();
+  const [staleSave] = await Promise.all([stale, afterOther]);
+  check("a save built on an old version is refused as stale", staleSave.status() === 409);
   await page.waitForSelector("[role=alert]:not([hidden])");
   check("the page offers to keep both changes or take the other tab's deck", (await page.textContent("[role=alert]")).includes("changed in another tab"));
   await page.click("button:has-text('Keep both changes')");
@@ -374,17 +384,16 @@ try {
   check("and the other tab takes the merged deck", await comesToShow(other, "kiln-colossus", 1));
 
   // Take theirs: this page's change is dropped.
-  await page.route("**/deck", async (route) => {
-    await new Promise((r) => (release = r));
-    await route.continue();
-  });
-  await row(page, "lantern-warden").locator("button", { hasText: "Add" }).click();
-  await other.fill('li[data-key="undertow-serpent"] input[type=number]', "1");
-  await other.press('li[data-key="undertow-serpent"] input[type=number]', "Enter");
-  await settled(other);
-  release();
+  const releaseTheirs = await holdSave(page);
+  try {
+    await row(page, "lantern-warden").locator("button", { hasText: "Add" }).click();
+    await other.fill('li[data-key="undertow-serpent"] input[type=number]', "1");
+    await other.press('li[data-key="undertow-serpent"] input[type=number]', "Enter");
+    await settled(other);
+  } finally {
+    releaseTheirs();
+  }
   await page.waitForSelector("[role=alert]:not([hidden])");
-  await page.unroute("**/deck");
   await page.click("button:has-text(\"Use the other tab's deck\")");
   const theirs = await deck(page);
   check("taking the other tab's deck drops this page's change", theirs["undertow-serpent"] === 1 && theirs["lantern-warden"] === 3 && sameDeck(theirs, await deck(other)), JSON.stringify(theirs));
@@ -450,18 +459,14 @@ try {
   const third = await context.newPage();
   third.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   third.on("pageerror", (e) => errors.push(e.message));
-  let liveAsked = () => {};
-  const asked = new Promise((resolve) => (liveAsked = () => resolve(undefined)));
   let letLive = () => {};
   const held = new Promise((resolve) => (letLive = () => resolve(undefined)));
   await third.route("**/feed/deck/live**", async (route) => {
-    liveAsked();
     await held;
     await route.continue().catch(() => {});
   });
-  await third.goto(base);
   // The snapshot has arrived when the feed asks for its live stream.
-  await asked;
+  await Promise.all([third.waitForRequest(isLive), third.goto(base)]);
   /** @type {string[]} */
   const keys = [];
   third.on("request", (r) => r.method() === "POST" && r.url().endsWith("/deck") && keys.push(new URLSearchParams(r.postData() ?? "").get("submit") ?? ""));
@@ -496,17 +501,13 @@ try {
   const fourth = await context.newPage();
   fourth.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   fourth.on("pageerror", (e) => errors.push(e.message));
-  let fourthAsked = () => {};
-  const fourthFeed = new Promise((resolve) => (fourthAsked = () => resolve(undefined)));
   let letFourth = () => {};
   const fourthHeld = new Promise((resolve) => (letFourth = () => resolve(undefined)));
   await fourth.route("**/feed/deck/live**", async (route) => {
-    fourthAsked();
     await fourthHeld;
     await route.continue().catch(() => {});
   });
-  await fourth.goto(base);
-  await fourthFeed;
+  await Promise.all([fourth.waitForRequest(isLive), fourth.goto(base)]);
   const [lost, theirsToo] = await fourth.evaluate((skip) => {
     const taken = new Set(["salt-oracle", "regent-of-ash", "crown-of-thorns-and-glass", "kiln-colossus", ...skip]);
     for (const li of Array.from(document.querySelectorAll("ul li[data-key]"))) taken.add(li.getAttribute("data-key") ?? "");
@@ -567,12 +568,15 @@ try {
 
   // A phone: nothing wider than the screen.
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  phone.setDefaultTimeout(10_000);
   const small = await open(phone);
   const wide = await small.evaluate(() => document.documentElement.scrollWidth);
   check("at 390 px the page fits the screen", wide <= 390, `${wide}`);
 
   // Without JavaScript: the same deck, built with forms.
-  const plain = await (await browser.newContext({ javaScriptEnabled: false })).newPage();
+  const plainContext = await browser.newContext({ javaScriptEnabled: false });
+  plainContext.setDefaultTimeout(10_000);
+  const plain = await plainContext.newPage();
   await plain.goto(base);
   const before = await deck(plain);
   await Promise.all([plain.waitForEvent("load"), plain.locator('tbody tr[data-key="salt-oracle"] td:last-child button').click()]);
@@ -597,6 +601,7 @@ try {
   check("the filter is a GET form the server answers", plain.url().includes("q=oracle") && (await plain.locator("tbody tr:not([hidden])").count()) === 1);
 
   const reducedContext = await browser.newContext();
+  reducedContext.setDefaultTimeout(10_000);
   const reduced = await open(reducedContext, "reduce");
   await row(reduced, "pearl-diver").locator("button", { hasText: "Add" }).click();
   check("reduced motion keeps the change without animation markers", !(await reduced.locator("[data-motion]").count()));
