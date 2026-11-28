@@ -180,9 +180,6 @@ export async function pageWrites(page, browser) {
             // Counted as the write is sent, so the writes are numbered in the order the page sent them.
             if (write) seen.writes += 1;
             const writes = seen.writes;
-            // A read is held from the moment it reaches the stand-in (`holdRead` decides then), its
-            // answer let go only once that hold is.
-            const holding = write ? undefined : seen.holdRead(at);
             // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
             const sent = { ...req.headers(), "accept-encoding": "identity" };
             // The page's start time and its note of the stylesheet are the check's, not the server's.
@@ -193,6 +190,10 @@ export async function pageWrites(page, browser) {
             // (`exchange`); the holds are the case's, outside those bounds.
             const ex = exchange(route, `the write case's answer to ${write ? `write ${writes}` : seen.asked[at]}`, () => seen.over, () => route.abort());
             try {
+              // Decide the hold on arrival. Observe a rejection even while the fetch is still
+              // pending; awaiting the same promise below still reports the original failure.
+              const holding = write ? undefined : seen.holdRead(at);
+              holding?.catch(() => {});
               const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: sent }));
               const headers = res.headers();
               if (write) seen.answered = { ...headers };
@@ -218,8 +219,8 @@ export async function pageWrites(page, browser) {
               }
               await ex.send(5000, "its fulfill", () => route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }));
               if (write) seen.answers += 1;
-            } catch {
-              // Its fault is the exchange's, recorded below.
+            } catch (error) {
+              if (!ex.fault) await ex.stop(error instanceof Error ? error.message : String(error));
             } finally {
               if (ex.fault) seen.faults.push(ex.fault);
             }

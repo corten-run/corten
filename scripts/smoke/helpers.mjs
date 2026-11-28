@@ -384,7 +384,7 @@ const exchange = (route, what, ended = () => false, late = () => route.fallback(
     fault ||= `${what}: ${why}`;
     if (sent) return;
     sent = true;
-    await within(5000, "", route.abort()).catch(() => {});
+    await within(5000, "", Promise.resolve().then(() => route.abort())).catch(() => {});
   };
   /** Why a step named `step` with `ms` failed. @param {string} step @param {number} ms @param {unknown} error */
   const reason = (step, ms, error) => {
@@ -395,6 +395,8 @@ const exchange = (route, what, ended = () => false, late = () => route.fallback(
     get fault() {
       return fault;
     },
+    /** Records a fault outside a step (for example a rejected hold), without answering twice. */
+    stop,
     /**
      * `work()`, the exchange's step named `step`, within `ms`; one that fails or runs out stops the
      * exchange (`stop`) and rejects, as does one started once it has stopped.

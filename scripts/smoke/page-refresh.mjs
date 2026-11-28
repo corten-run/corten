@@ -2250,12 +2250,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * @type {import("@playwright/test").Request[]}
      */
     const again = [];
-    /**
-     * By each read in `again`, whether its own answer was a terminal patch: `Saved.` with no tag
-     * asking to be read again, after which the page asks nothing more (false for a read with no
-     * answer). @type {Map<import("@playwright/test").Request, Promise<boolean>>}
-     */
-    const terminal = new Map();
+    const alertsPath = (/** @type {URL} */ at) => at.origin === new URL(base).origin && at.pathname === "/alerts";
     /**
      * Whether `r` is a part read of the alerts page: a GET of `/alerts` on the watchlist's origin
      * with `corten: action`. Its address is parsed, so a read whose query puts `saved` anywhere, or
@@ -2264,31 +2259,79 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const alertsPartRead = (/** @type {import("@playwright/test").Request} */ r) => {
       if (r.method() !== "GET" || r.headers()["corten"] !== "action") return false;
       try {
-        const at = new URL(r.url());
-        return at.origin === new URL(base).origin && at.pathname === "/alerts";
+        return alertsPath(new URL(r.url()));
       } catch {
         return false;
       }
     };
     const onAgain = (/** @type {import("@playwright/test").Request} */ r) => {
-      if (!alertsPartRead(r)) return;
-      again.push(r);
-      const answered = r.response().then((res) => (res === null ? "" : res.text()));
-      terminal.set(r, answered.then((body) => body.includes(savedLine) && !body.includes("data-corten-read-again"), () => false));
+      if (alertsPartRead(r)) again.push(r);
     };
     page.on("request", onAgain);
     /** The length of `again` just before the latest press that sends a write. */
     let writeFrom = 0;
-    /**
-     * The place in `again` of the first read from `writeFrom` on whose answer was a terminal patch
-     * (`terminal`), its answers each read within 5 s, or -1.
-     */
-    const terminalAt = async () => {
-      const reads = again.slice(writeFrom);
-      const verdicts = await within(5000, "the answers to the patch's reads were not read within 5 s", Promise.all(reads.map((r) => terminal.get(r) ?? false))).catch(() => []);
-      const at = verdicts.indexOf(true);
-      return at < 0 ? -1 : writeFrom + at;
+    // A successful patch with Saved. and no read-again tag is only a candidate until that exact
+    // answer draws Saved. in the page. A whole HTML answer can say Saved. but the runtime ignores it.
+    const terminalMark = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    /** @type {Map<string, import("@playwright/test").Request>} */
+    const terminalReads = new Map();
+    /** @type {string[]} */
+    const terminalFaults = [];
+    let terminalOver = false;
+    const markTerminal = async (/** @type {import("@playwright/test").Route} */ route) => {
+      const request = route.request();
+      if (terminalOver || !alertsPartRead(request)) return letThrough(route);
+      const ex = exchange(route, "the terminal-patch case's read", () => terminalOver, () => route.abort());
+      try {
+        const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } }));
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await ex.step(5000, "reading its answer", () => res.text());
+        if (res.ok() && "corten-patch" in headers && body.includes(savedLine) && !body.includes("data-corten-read-again")) {
+          const mark = `${terminalMark}:${terminalReads.size}`;
+          terminalReads.set(mark, request);
+          body = body.replace(savedLine, savedLine.replace("<p ", `<p data-smoke-terminal="${mark}" `));
+        }
+        await ex.send(5000, "its fulfill", () => route.fulfill({ status: res.status(), headers, body }));
+      } catch (error) {
+        if (!ex.fault) await ex.stop(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (ex.fault) terminalFaults.push(ex.fault);
+      }
     };
+    const noteTerminalDraw = () => readWithin("arming the note of the first Saved. draw", page.evaluate((run) => {
+      const w = /** @type {any} */ (window);
+      if (w.__smokeTerminalOff === run) return;
+      w.__smokeTerminalObserver?.disconnect();
+      delete w.__smokeTerminalDraw;
+      let previous = document.getElementById("alert-status");
+      let text = previous?.textContent;
+      const observer = new MutationObserver(() => {
+        const status = document.getElementById("alert-status");
+        const next = status?.textContent;
+        // Ignore a Saved. already on the page when the observer was armed, not a new unmarked draw.
+        if (next === "Saved." && (status !== previous || next !== text)) {
+          w.__smokeTerminalDraw = { mark: status?.getAttribute("data-smoke-terminal") ?? null };
+          observer.disconnect();
+        }
+        previous = status;
+        text = next;
+      });
+      w.__smokeTerminalObserver = observer;
+      observer.observe(document, { subtree: true, childList: true, characterData: true });
+    }, terminalMark));
+    const stopTerminal = () => cleanUp(
+      () => (terminalOver = true),
+      () => within(5000, "the terminal-patch route was not removed within 5 s", page.unroute(alertsPath, markTerminal)),
+      () => readWithin("removing the note of the first Saved. draw", page.evaluate((run) => {
+        const w = /** @type {any} */ (window);
+        w.__smokeTerminalOff = run;
+        w.__smokeTerminalObserver?.disconnect();
+        delete w.__smokeTerminalObserver;
+        delete w.__smokeTerminalDraw;
+      }, terminalMark)),
+    );
     const save = 'form[action="/alerts"] button';
     /** When `submit` last asked for the key press that sends the alert, by the smoke's clock (`performance.now()`). */
     let pressedAt = 0;
@@ -2409,125 +2452,136 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     );
     errors.splice(errorsAtShadowed);
     await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7)));
-    await submit();
-    const patchedSoon = await savedSoon(pressedAt);
-    const patchedTo = await readWithin("the status line after the wait for Saved.", saved());
-    check(
-      "a patch waiting for a write is read again from its route until the write is in",
-      patchedSoon && patchedTo === "Saved." && again.length > 0 && page.url() === `${base}/alerts` && (await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 7))),
-      `${patchedTo}${patchedSoon ? "" : " (Saved. not seen within 6 s)"} after ${again.length} reads at ${page.url()}`,
-    );
-    check("reading a patch again keeps focus", await readWithin("the focused element", page.evaluate(() => document.activeElement?.textContent === "Save alert")));
-    // The list read again with the status line shows the alert once it is in; a remove is a write
-    // of its own, read again until the list no longer has it. The list is the browser's, kept under
-    // its visitor cookie, which this browser does not send over http.
-    /** Each alert listed, in order: its id (the remove form's `alert` field) and what it says. */
-    const alertsListed = () =>
-      readWithin(
-        "the alerts listed",
-        page.$$eval("#alert-list li", (items) =>
-          items.map((li) => ({ id: /** @type {HTMLInputElement | null} */ (li.querySelector('form input[name="alert"]'))?.value ?? null, label: li.querySelector("span")?.textContent ?? null })),
-        ),
-      );
-    if (signsIn) {
-      // The writes above saved ACME at $175.00; this one, at $150.00, is the only such alert.
-      const listedFirst = await alertsListed();
-      const shown = listedFirst.map((a) => a.label);
-      check("a saved alert is listed once it lands", shown.filter((s) => s === "ACME above $150.00").length === 1, shown.join(", "));
-      // The last alert listed is removed by its own Remove button. `Saving...` noted by the page as it
-      // is drawn (`noteSaving`, armed before the press), within 5 s of the press. Judged by the time
-      // the page noted `Saving...` as it drew it, against the time the page noted the press as it
-      // came, both by the page's monotonic clock (`performance.now()` there, which a step of the wall
-      // clock does not move): the draw must come after the press and within 5 s of it. The press is
-      // the first `click` on that alert's Remove button (its form's `alert` field is the alert's id),
-      // heard by a capturing listener armed before it, ahead of any of the page's own; a click
-      // anywhere else is not it. Looked for by that clock until 5 s from the press, each look reading
-      // the note and the page's time in one task (`lookUntil`), so neither an arming or a press whose
-      // answer comes back late nor a check that looks late fails a draw noted in time, and none noted
-      // after the 5 s passes. The listener is removed (bounded) however the case ends, and an install
-      // of it the page runs only after that removal does nothing. The alert pressed must be the one
-      // that leaves: the list after is the list before without it, in order.
-      const removed = listedFirst.at(-1)?.id ?? null;
-      /** This run of the case's, so an install of its listener the page runs after its removal does nothing. */
-      const pressToken = `${Date.now()}-${Math.random()}`;
-      /** @type {number | null} */
-      let pressedIn = null;
-      /** @type {number | false | undefined} */
-      let savingAt;
-      let removedSoon = false;
-      try {
-        await readWithin("the page's note of Saving...", noteSaving());
-        await readWithin(
-          "the page's note of the press of the alert's Remove button",
-          page.evaluate(({ id, token }) => {
-            const w = /** @type {any} */ (window);
-            if (w.__smokePressedRemoved === token) return;
-            if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
-            w.__smokePressed = null;
-            w.__smokePressedListener = (/** @type {Event} */ event) => {
-              if (w.__smokePressed !== null || !(event.target instanceof Element)) return;
-              const button = /** @type {HTMLButtonElement | null} */ (event.target.closest("#alert-list li form button"));
-              if (id !== null && /** @type {HTMLInputElement | null} */ (button?.form?.querySelector('input[name="alert"]'))?.value === id) w.__smokePressed = performance.now();
-            };
-            addEventListener("click", w.__smokePressedListener, { capture: true });
-          }, { id: removed, token: pressToken }),
-        );
-        const removedAt = performance.now();
-        writeFrom = again.length;
-        await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
-        pressedIn = await readWithin("the page's note of the press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokePressed))).catch(() => null);
-        savingAt =
-          typeof pressedIn !== "number"
-            ? undefined
-            : await lookUntil(page, pressedIn + 5000, () => ({ origin: performance.timeOrigin, now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
-        removedSoon = await savedSoon(removedAt);
-      } finally {
-        await within(
-          5000,
-          "the press listener of the removal case was not removed within 5 s",
-          page.evaluate((token) => {
-            const w = /** @type {any} */ (window);
-            w.__smokePressedRemoved = token;
-            if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
-            delete w.__smokePressedListener;
-          }, pressToken),
-        );
-      }
-      const removing = typeof pressedIn === "number" && typeof savingAt === "number" && savingAt >= pressedIn && savingAt <= pressedIn + 5000;
-      const leftAlerts = await alertsListed();
-      const left = leftAlerts.map((a) => a.label);
-      const expected = listedFirst.filter((a) => a.id !== removed);
-      const theOneLeft =
-        removed !== null &&
-        expected.length === listedFirst.length - 1 &&
-        leftAlerts.length === expected.length &&
-        leftAlerts.every((a, i) => a.id === expected[i].id && a.label === expected[i].label);
-      const removedTo = await readWithin("the status line after the wait for Saved.", saved());
+    try {
+      await within(5000, "the terminal-patch route was not set within 5 s", page.route(alertsPath, markTerminal));
+      await noteTerminalDraw();
+      await submit();
+      const patchedSoon = await savedSoon(pressedAt);
+      const patchedTo = await readWithin("the status line after the wait for Saved.", saved());
       check(
-        "a removed alert leaves the list once the removal lands",
-        removing && removedSoon && theOneLeft && removedTo === "Saved.",
-        `${shown.length} -> ${left.length}, ${removedTo}${removing ? "" : typeof pressedIn !== "number" ? ` (the page noted no press of alert ${removed ?? "none"}'s Remove button)` : ` (Saving... not seen within 5 s of the press${typeof savingAt === "number" ? `: noted ${Math.abs(Math.round(savingAt - pressedIn))} ms ${savingAt < pressedIn ? "before" : "after"} it` : ""})`}${removedSoon ? "" : " (Saved. not seen within 6 s)"}${theOneLeft ? "" : ` (pressed alert ${removed ?? "none"}; listed before ${listedFirst.map((a) => a.id).join(", ") || "none"}, after ${leftAlerts.map((a) => a.id).join(", ") || "none"})`}`,
+        "a patch waiting for a write is read again from its route until the write is in",
+        patchedSoon && patchedTo === "Saved." && again.length > 0 && page.url() === `${base}/alerts` && (await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 7))),
+        `${patchedTo}${patchedSoon ? "" : " (Saved. not seen within 6 s)"} after ${again.length} reads at ${page.url()}`,
       );
-    } else {
-      for (const name of ["a saved alert is listed once it lands", "a removed alert leaves the list once the removal lands"]) skip(name, "the browser does not send Secure cookies over http");
+      check("reading a patch again keeps focus", await readWithin("the focused element", page.evaluate(() => document.activeElement?.textContent === "Save alert")));
+      // The list read again with the status line shows the alert once it is in; a remove is a write
+      // of its own, read again until the list no longer has it. The list is the browser's, kept under
+      // its visitor cookie, which this browser does not send over http.
+      /** Each alert listed, in order: its id (the remove form's `alert` field) and what it says. */
+      const alertsListed = () =>
+        readWithin(
+          "the alerts listed",
+          page.$$eval("#alert-list li", (items) =>
+            items.map((li) => ({ id: /** @type {HTMLInputElement | null} */ (li.querySelector('form input[name="alert"]'))?.value ?? null, label: li.querySelector("span")?.textContent ?? null })),
+          ),
+        );
+      if (signsIn) {
+        // The writes above saved ACME at $175.00; this one, at $150.00, is the only such alert.
+        const listedFirst = await alertsListed();
+        const shown = listedFirst.map((a) => a.label);
+        check("a saved alert is listed once it lands", shown.filter((s) => s === "ACME above $150.00").length === 1, shown.join(", "));
+        // The last alert listed is removed by its own Remove button. `Saving...` noted by the page as it
+        // is drawn (`noteSaving`, armed before the press), within 5 s of the press. Judged by the time
+        // the page noted `Saving...` as it drew it, against the time the page noted the press as it
+        // came, both by the page's monotonic clock (`performance.now()` there, which a step of the wall
+        // clock does not move): the draw must come after the press and within 5 s of it. The press is
+        // the first `click` on that alert's Remove button (its form's `alert` field is the alert's id),
+        // heard by a capturing listener armed before it, ahead of any of the page's own; a click
+        // anywhere else is not it. Looked for by that clock until 5 s from the press, each look reading
+        // the note and the page's time in one task (`lookUntil`), so neither an arming or a press whose
+        // answer comes back late nor a check that looks late fails a draw noted in time, and none noted
+        // after the 5 s passes. The listener is removed (bounded) however the case ends, and an install
+        // of it the page runs only after that removal does nothing. The alert pressed must be the one
+        // that leaves: the list after is the list before without it, in order.
+        const removed = listedFirst.at(-1)?.id ?? null;
+        /** This run of the case's, so an install of its listener the page runs after its removal does nothing. */
+        const pressToken = `${Date.now()}-${Math.random()}`;
+        /** @type {number | null} */
+        let pressedIn = null;
+        /** @type {number | false | undefined} */
+        let savingAt;
+        let removedSoon = false;
+        try {
+          await readWithin("the page's note of Saving...", noteSaving());
+          await readWithin(
+            "the page's note of the press of the alert's Remove button",
+            page.evaluate(({ id, token }) => {
+              const w = /** @type {any} */ (window);
+              if (w.__smokePressedRemoved === token) return;
+              if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
+              w.__smokePressed = null;
+              w.__smokePressedListener = (/** @type {Event} */ event) => {
+                if (w.__smokePressed !== null || !(event.target instanceof Element)) return;
+                const button = /** @type {HTMLButtonElement | null} */ (event.target.closest("#alert-list li form button"));
+                if (id !== null && /** @type {HTMLInputElement | null} */ (button?.form?.querySelector('input[name="alert"]'))?.value === id) w.__smokePressed = performance.now();
+              };
+              addEventListener("click", w.__smokePressedListener, { capture: true });
+            }, { id: removed, token: pressToken }),
+          );
+          await noteTerminalDraw();
+          const removedAt = performance.now();
+          writeFrom = again.length;
+          await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
+          pressedIn = await readWithin("the page's note of the press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokePressed))).catch(() => null);
+          savingAt =
+            typeof pressedIn !== "number"
+              ? undefined
+              : await lookUntil(page, pressedIn + 5000, () => ({ origin: performance.timeOrigin, now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
+          removedSoon = await savedSoon(removedAt);
+        } finally {
+          await within(
+            5000,
+            "the press listener of the removal case was not removed within 5 s",
+            page.evaluate((token) => {
+              const w = /** @type {any} */ (window);
+              w.__smokePressedRemoved = token;
+              if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
+              delete w.__smokePressedListener;
+            }, pressToken),
+          );
+        }
+        const removing = typeof pressedIn === "number" && typeof savingAt === "number" && savingAt >= pressedIn && savingAt <= pressedIn + 5000;
+        const leftAlerts = await alertsListed();
+        const left = leftAlerts.map((a) => a.label);
+        const expected = listedFirst.filter((a) => a.id !== removed);
+        const theOneLeft =
+          removed !== null &&
+          expected.length === listedFirst.length - 1 &&
+          leftAlerts.length === expected.length &&
+          leftAlerts.every((a, i) => a.id === expected[i].id && a.label === expected[i].label);
+        const removedTo = await readWithin("the status line after the wait for Saved.", saved());
+        check(
+          "a removed alert leaves the list once the removal lands",
+          removing && removedSoon && theOneLeft && removedTo === "Saved.",
+          `${shown.length} -> ${left.length}, ${removedTo}${removing ? "" : typeof pressedIn !== "number" ? ` (the page noted no press of alert ${removed ?? "none"}'s Remove button)` : ` (Saving... not seen within 5 s of the press${typeof savingAt === "number" ? `: noted ${Math.abs(Math.round(savingAt - pressedIn))} ms ${savingAt < pressedIn ? "before" : "after"} it` : ""})`}${removedSoon ? "" : " (Saved. not seen within 6 s)"}${theOneLeft ? "" : ` (pressed alert ${removed ?? "none"}; listed before ${listedFirst.map((a) => a.id).join(", ") || "none"}, after ${leftAlerts.map((a) => a.id).join(", ") || "none"})`}`,
+        );
+      } else {
+        for (const name of ["a saved alert is listed once it lands", "a removed alert leaves the list once the removal lands"]) skip(name, "the browser does not send Secure cookies over http");
+      }
+      // The save after the refusal above answered the whole form, so the field is no longer marked.
+      const cleared = await readWithin("the field's error", page.evaluate(() => !document.querySelector("#alert-form [aria-invalid]") && !document.getElementById("alert-form-above-error")));
+      check("a save after a refusal clears the field's error", cleared);
+      // Count from the marked draw, but inspect the log from that patch's own request, so even a
+      // read sent between the draw and this look counts. A missing or unmarked first draw fails.
+      const drawn = /** @type {{ mark: string | null } | null} */ (await seenWithin(
+        6000, "the first Saved. from the terminal-patch case",
+        () => (/** @type {any} */ (window)).__smokeTerminalDraw, null,
+      ));
+      const ownRead = drawn?.mark == null ? undefined : terminalReads.get(drawn.mark);
+      const ended = ownRead === undefined ? -1 : again.indexOf(ownRead);
+      const drewTerminal = ended >= writeFrom;
+      if (drewTerminal) await pause(2200);
+      const afterEnd = drewTerminal ? again.length - ended - 1 : 0;
+      check(
+        "it stops once the patch no longer asks",
+        drewTerminal && afterEnd === 0 && terminalFaults.length === 0,
+        `${terminalFaults.length ? `${terminalFaults.join("; ")}; ` : ""}${
+          !drawn ? "no Saved. drawn within 6 s" : !drewTerminal ? "the first Saved. was not drawn by a successful terminal patch from this press" : `${afterEnd} reads after the terminal patch's own (read ${ended - writeFrom + 1} since the press)`
+        }`,
+      );
+    } finally {
+      await stopTerminal();
     }
-    // The save after the refusal above answered the whole form, so the field is no longer marked.
-    const cleared = await readWithin("the field's error", page.evaluate(() => !document.querySelector("#alert-form [aria-invalid]") && !document.getElementById("alert-form-above-error")));
-    check("a save after a refusal clears the field's error", cleared);
-    // Quiet once the terminal patch is in: no part read after that patch's own request in the log
-    // (`terminalAt`, the first read since the last write's press whose answer said `Saved.` with no
-    // tag asking again), as the log stands 2.2 s after the wait above saw `Saved.`, so a read sent
-    // between the terminal patch and the check counts against it.
-    const ended = await terminalAt();
-    await pause(2200);
-    const afterEnd = ended < 0 ? [] : again.slice(ended + 1);
-    check(
-      "it stops once the patch no longer asks",
-      ended >= 0 && afterEnd.length === 0,
-      ended < 0
-        ? `none of the ${again.length - writeFrom} reads since the last write's press was answered with Saved. and no tag asking again`
-        : `${afterEnd.length} reads after the terminal patch's own (read ${ended - writeFrom + 1} since the press)`,
-    );
     // Away with a read under way: the first part read after the write's press is held at the route,
     // its answer fetched as it comes and held, until the page has left for News, so the page leaves
     // while it waits for that read and what the check sees is the reads' cancellation, not polling
@@ -2546,7 +2600,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // within 15 s of the read reaching the route. The held read must still be under way as the
     // departure starts (the check has heard it neither finish nor fail, and the route has sent nothing
     // for it) and when the page hears the press of News (a wrapper of the page's `fetch`, set before
-    // the write's press, notes whether each of its part reads of the alerts page has settled, and a
+    // the write's press, marks each of its part reads of the alerts page with a unique `smoke-note`
+    // and notes whether that fetch has settled, and a
     // listener on the window, in the capture phase, puts that note in `sessionStorage` as the first
     // click on the link to News reaches the page, before the page acts on it; News then reads it), so
     // a read that had already ended is not taken for one the departure ended. Once News is drawn, an observer in the page notes
@@ -2556,7 +2611,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // the time the check heard it (and with it, News must be in the same document). Without the
     // Navigation API the page leaves by a full load, so News must be a new document and the browser
     // must cancel the held read with the old one: its failure must be heard after the departure
-    // started and within 5 s of News being drawn, before the held answer is let go, so one the
+    // started and by 5 s after the driver's News title wait returns, before the held answer is let go, so one the
     // route's own release or abort ended is not taken for the departure's. Then no part read may come after
     // the held one's own request in the log, as the log stands 2.2 s after that finish, nor the held
     // answer's status line ever enter the News page. The route and listeners are removed however the
@@ -2585,6 +2640,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     let heldReadyIn = () => {};
     /** Whether the held answer was fetched and confirmed to ask again, ready to be let go. @type {Promise<boolean>} */
     const heldReady = new Promise((resolve) => (heldReadyIn = resolve));
+    /** When the route confirmed the held answer, by the smoke's clock, or null. @type {number | null} */
+    let heldReadyAt = null;
     /** When the route first sent anything for the held read (an abort or its answer), by the smoke's clock, or null. @type {number | null} */
     let heldSentAt = null;
     /** The route's answer for the held read, `send` (an abort or a fulfill), noted as sent. @param {() => Promise<unknown>} send */
@@ -2635,6 +2692,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           await ex.send(5000, "its abort", heldSend(() => route.abort()));
           return;
         }
+        heldReadyAt = performance.now();
         heldReadyIn(true);
         await going;
         try {
@@ -2688,7 +2746,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const leaveKey = `smoke-leave-${heldMark}`;
     /**
      * What the departing page noted as the press of News reached it, read in News: whether the page's
-     * fetch of the held read's address was still unsettled then, or why that is not known; null if
+     * fetch for the held request itself was still unsettled then, or why that is not known; null if
      * the note was not read.
      * @type {{ pending: boolean, why: string } | null}
      */
@@ -2704,25 +2762,28 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         "the departing page's fetch notes",
         page.evaluate((key) => {
           const w = /** @type {any} */ (window);
-          /** The page's part reads of the alerts page (`corten: action` GETs), in the order it started them, and whether each fetch had settled. @type {{ url: string, settled: boolean }[]} */
+          /** By unique `smoke-note` id, whether the page's part fetch had settled. @type {{ id: string, settled: boolean }[]} */
           const reads = [];
           const original = window.fetch;
           w.__smokeLeaveFetch = original;
           w.__smokeLeaveWrapper = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
-            const out = original.apply(this, /** @type {any} */ (arguments));
+            /** @type {Headers | undefined} */
+            let headers;
             try {
               const at = new URL(input instanceof Request ? input.url : String(input), location.href);
-              const corten = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("corten");
+              const sent = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
               const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-              if (at.origin === location.origin && at.pathname === "/alerts" && corten === "action" && method === "GET") {
-                const read = { url: at.href, settled: false };
-                reads.push(read);
-                out.then(
-                  () => (read.settled = true),
-                  () => (read.settled = true),
-                );
-              }
+              if (at.origin === location.origin && at.pathname === "/alerts" && sent.get("corten") === "action" && method === "GET") headers = sent;
             } catch {}
+            if (headers === undefined) return original.apply(this, /** @type {any} */ (arguments));
+            const read = { id: `${key}:${reads.length}`, settled: false };
+            reads.push(read);
+            headers.set("smoke-note", read.id);
+            const out = original.call(this, input, { ...init, headers });
+            out.then(
+              () => (read.settled = true),
+              () => (read.settled = true),
+            );
             return out;
           };
           window.fetch = w.__smokeLeaveWrapper;
@@ -2740,7 +2801,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // Judged by when the route heard the read (`heldTime`), not by when `submit` returned: a
       // press acknowledged late does not fail a read held in time.
       heldSoon = await notedBy(pressedAt + 5000, () => heldTime, heldCame);
-      heldConfirmed = heldSoon && (await within(15_000, "", heldReady).catch(() => false));
+      heldConfirmed = heldSoon && (await notedBy(/** @type {number} */ (heldTime) + 15_000, () => heldReadyAt, heldReady));
       await readWithin(
         "the departing page's mark",
         page.evaluate((mark) => {
@@ -2764,18 +2825,18 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             return note;
           }, leaveKey),
         );
-        /** @type {{ url: string, settled: boolean }[] | null} */
+        /** @type {{ id: string, settled: boolean }[] | null} */
         let reads = null;
         try {
           reads = notes === null ? null : JSON.parse(notes);
         } catch {}
-        const url = /** @type {import("@playwright/test").Request} */ (held).url();
-        const own = Array.isArray(reads) ? reads.find((r) => r?.url === url) : undefined;
+        const id = /** @type {import("@playwright/test").Request} */ (held).headers()["smoke-note"];
+        const own = id && Array.isArray(reads) ? reads.find((r) => r?.id === id) : undefined;
         pendingAtPress =
           notes === null
             ? { pending: false, why: "the departing page left no note of its reads at the press of News" }
             : own === undefined
-              ? { pending: false, why: "the departing page noted no fetch of the held read's address" }
+              ? { pending: false, why: "the departing page noted no fetch with the held request's own smoke-note id" }
               : own.settled === false
                 ? { pending: true, why: "" }
                 : { pending: false, why: "the page's fetch of the held read had already settled when the press of News reached the page" };
@@ -2785,7 +2846,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // route's release nor its abort at the case's end can stand in for it.
         heldFinish = (await notedBy(newsAt + 5000, () => heldEndedAt, heldEnd))
           ? await within(5000, "", heldEnd).catch(() => ({ not: "the browser's end of the held read could not be read within 5 s" }))
-          : { not: heldEndedAt === null ? "the browser neither finished nor failed the held read within 5 s of News being drawn" : `the browser ended the held read only ${Math.round(heldEndedAt - newsAt)} ms after News was drawn` };
+          : { not: heldEndedAt === null ? "the browser neither finished nor failed the held read by 5 s after the News title wait returned" : `the browser ended the held read only ${Math.round(heldEndedAt - newsAt)} ms after the News title wait returned` };
       }
       if (heldConfirmed) {
         await readWithin(
