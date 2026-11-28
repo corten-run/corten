@@ -33,8 +33,8 @@ Visit [corten.run](https://corten.run) for a page that demonstrates Corten.
 - **Plain JavaScript where it is fastest.** Behavior is a function in a script next to its
   component, called from the markup by name. No WASM, no virtual DOM, no hydration.
   A 16.5 KB (gzip) runtime.
-- **Partial updates from the same handler.** A form marked `data-patch` gets back only the
-  elements that changed; without JavaScript the same handler answers with the whole page.
+- **Partial updates from the same handler.** A handler can send just the elements to replace
+  when a form marked `data-patch` submits with JavaScript, and the whole page without it.
 - **Live data.** `<corten-live>` fragments and keyed feeds stream numbered patches over
   server-sent events, with replay and resume, and one feed can run across several instances.
 - **Typed end to end.** Routes, form fields, element ids, CSS classes, handler calls, events and
@@ -72,14 +72,17 @@ through it.
 
 ## Example
 
-A page with a form. With JavaScript, submitting it swaps in the greeting; without JavaScript it
-posts and the whole page comes back, at the page's own address. One handler serves both.
+A form posts a name. With JavaScript, `greet` sends only the greeting and leaves the form
+untouched. Without JavaScript, the same handler returns the whole page.
 
 ```rust,no_run,edition2024
 use corten::prelude::*;
 
-// Every URL, typed, with the handler for each method. A route without one does not compile.
-// The form posts back to its page, so the page and its form share one address.
+async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
+    let name = form.name.as_str();
+    req.patch_or(Greeting { name }, || async { req.page(home_page(&req, name)) }).await
+}
+
 #[corten::routes]
 mod url {
     #[route("/", get = home, post = greet)]
@@ -92,15 +95,8 @@ async fn main() -> std::io::Result<()> {
     corten::serve(app).await
 }
 
-// The return type is what the route answers: a page, a patch or a redirect, and on failure the
-// app's error page. `JsonResult<T>` answers JSON, failures included.
 async fn home(req: Req) -> HtmlResult {
     req.page(home_page(&req, ""))
-}
-
-async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
-    // With JavaScript, only the greeting, swapped in by its id; without, the whole page.
-    req.patch_or(Greeting { name: &form.name }, || async { req.page(home_page(&req, &form.name)) }).await
 }
 
 #[derive(Fields)]
@@ -111,40 +107,24 @@ struct GreetForm {
 fn home_page(req: &Req, name: &str) -> impl Document {
     let f = GreetForm::FIELDS;
     html! {
-        <Layout req={req} title="Welcome">
-            <h1>"Welcome"</h1>
-            <form method="post" action={url::Home} data-patch>
-                <input name={f.name} required>
-                <button>"Greet me"</button>
-            </form>
-            <p aria-live="polite"><Greeting name={name} /></p>
-        </Layout>
-    }
-}
-
-/// The whole document, a component like any other: `corten new` writes one for you to change.
-/// A client navigation gets only the `<title>` and `<main>`'s children.
-#[component]
-fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
-    html! {
         <!DOCTYPE html>
         <html lang={req.lang()}>
-            <head>
-                <title>{title}</title>
-                <Corten />
-            </head>
-            <body>
-                <main>{children}</main>
-            </body>
+            <head><title>"Welcome"</title><Corten /></head>
+            <body><main>
+                <h1>"Welcome"</h1>
+                <form method="post" action={url::Home} data-patch>
+                    <label>"Your name" <input name={f.name} value={name} required></label>
+                    <button>"Greet me"</button>
+                </form>
+                <p aria-live="polite"><Greeting name={name} /></p>
+            </main></body>
         </html>
     }
 }
 
-/// The greeting's id, a type: the page and the patch name the element the same way.
 #[derive(Id)]
 struct GreetingId;
 
-/// Rendered by the page and by the patch, so the two cannot drift.
 #[component]
 fn Greeting(name: &str) -> impl Patch {
     html! {
@@ -156,6 +136,10 @@ fn Greeting(name: &str) -> impl Patch {
     }
 }
 ```
+
+The page and the patch use the same `Greeting` component. Its id tells the browser which
+element to replace. For a form that always returns a page instead, see
+[the whole app in one file](docs/guide/getting-started.md#a-whole-app-in-one-file).
 
 A misspelled route, field, prop or id does not compile, and neither does a route without a
 handler, a patch with a top-level element the browser would drop (one without an id), or a
