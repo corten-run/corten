@@ -8806,7 +8806,8 @@ rules something out.
     `compile_fail` doctest); a status, a file, a relay, a live stream, a feed), and
     one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
     what that one does, a tuple what each part's refusal does too, since a part that refuses
-    answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
+    answers in the body's place. A raw HTTP response says yes: it can be a converted `Public`
+    answer even when it is the error type of a tuple part. (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
     header where it was, so the watch must still see a `Public` answer under it); a type of the app's own always says yes, since Corten cannot see what its
     `into_response` makes (an enum with a `Public` variant beside a private one), and the type
     it returns is one an app cannot name, so it cannot say no, nor return what one of Corten's

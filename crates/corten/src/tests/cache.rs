@@ -3,6 +3,25 @@ use super::security::{big_policy_page, inline_default_page, inline_page, relayed
 use super::url::serves_url;
 use super::*;
 
+#[test]
+fn a_tuple_with_an_erased_refusal_needs_the_submit_key_watch() {
+    use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
+
+    struct Part;
+    impl IntoResponseParts for Part {
+        type Error = Response;
+
+        fn into_response_parts(self, parts: ResponseParts) -> Result<ResponseParts, Self::Error> {
+            Ok(parts)
+        }
+    }
+
+    assert!(<Response as IntoResponse>::may_share().0);
+    assert!(<(Part, ()) as IntoResponse>::may_share().0);
+    assert!(<(Option<Part>, ()) as IntoResponse>::may_share().0);
+    assert!(!<(http::HeaderMap, ()) as IntoResponse>::may_share().0);
+}
+
 /// Pages marked for shared caches, one that sets a cookie, one that must never be stored, and one
 /// that says nothing.
 fn cached_routes() -> Table {

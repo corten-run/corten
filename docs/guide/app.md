@@ -1640,6 +1640,8 @@ one does, in every build, with or without the app's kept answers, and on a route
 `Answer`), since it may hold a `Public` answer on one branch, and of `NoStore` or a tuple of
 headers around either (a `no-store` there does not take away a CDN's own caching header), or a
 tuple whose header part of the app's own refuses with one, since a refusal is the whole answer.
+That includes a part returning a raw `Response`: it may have been converted from `Public`, so
+a handler that drew a fresh submit key still makes it private.
 So is the handler of a page or a JSON answer (`HtmlResult`, `PageOr`, `JsonResponse`, and
 `JsonResult<T>`, whose `JsonError` may hold a `JsonResponse`): its `DerefMut` lets the handler
 put a `Public` answer it converted in its place (`*page = Public::new(..).into_response()`). The

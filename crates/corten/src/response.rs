@@ -173,11 +173,8 @@ where
     B: http_body::Body<Data = Bytes> + Send + 'static,
     B::Error: Into<BoxError>,
 {
-    #[inline]
-    fn may_share() -> MayShare {
-        MayShare::NO
-    }
-
+    // Keep the conservative default: the body type cannot tell whether this was a
+    // Public answer before conversion, including when a tuple part returns it as its error.
     #[inline]
     fn into_response(self) -> Response {
         self.map(Body::new)
