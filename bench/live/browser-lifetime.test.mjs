@@ -1,19 +1,24 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import fs, { closeSync, existsSync, lstatSync, mkdtempDisposableSync, openSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { fanoutJourney, waitForFanoutDrain } from "./fanout.mjs";
 import { portFor, settingsFor, workloadFor } from "./native.mjs";
 import { browserJourney, runLiveAdapters } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
+import { browserDockerGateChildFd, browserDockerGateEnv, browserDockerGateIdentity } from "../workloads/isolated/host-lifetime.mjs";
+import { liveActorCpus } from "../workloads/isolated/native-roles.mjs";
 
 const group = "live-delivery", workload = workloadFor();
 const settings = settingsFor(group, "normal");
@@ -387,6 +392,84 @@ test("production cancellation during launch closes the browser and removes its o
   const replay = await verifyRound(out);
   assert.equal(replay.cancelled, true); assert.equal(replay.readyForLoad, false);
   assert.deepEqual(replay.notAttempted.aspnet, { scenarios: ["normal", "slow-reader"], clients: [] });
+});
+
+const gatedRemovalTest = "isolated Live adapter holds the inherited gate during exact owned removal";
+test(gatedRemovalTest, { skip: process.platform !== "linux", timeout: 65000 }, async (t) => {
+  const child = "CORTEN_LIVE_GATE_TEST_CHILD";
+  if (process.env[child] !== "1") {
+    const scratch = mkdtempDisposableSync(join(tmpdir(), "live-docker-gate-"));
+    t.after(() => scratch.remove());
+    const anchor = join(scratch.path, "command.log");
+    await writeFile(anchor, "", { flag: "wx", mode: 0o600 });
+    const fd = openSync(anchor, "r");
+    try {
+      // Keep fd 4 in the test process itself, not a test-runner grandchild.
+      const stdio = ["ignore", "pipe", "pipe", "ignore"];
+      stdio[browserDockerGateChildFd] = fd;
+      const env = { ...process.env, TMPDIR: scratch.path, [child]: "1", [browserDockerGateEnv]: browserDockerGateIdentity(fd) };
+      delete env.NODE_TEST_CONTEXT;
+      delete env.NODE_TEST_WORKER_ID;
+      const result = spawnSync(process.execPath, ["--test", "--test-isolation=none", "--test-name-pattern",
+        "^" + gatedRemovalTest + "$", fileURLToPath(import.meta.url)], {
+        env, stdio, encoding: "utf8", timeout: 60000, killSignal: "SIGKILL",
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+    } finally { closeSync(fd); }
+    return;
+  }
+
+  const { out, history, spawn } = await runnerFixture(t);
+  const id = "1".repeat(64), pid = 4242;
+  const commandScope = "/system.slice/corten-bench-groups-r1-1234567890abcdef.service/native-0-0123456789abcdef";
+  const appScope = "/system.slice/docker-" + id + ".scope";
+  const cpusets = new Map([[commandScope, liveActorCpus.browser], [appScope, liveActorCpus.application]]);
+  const read = readFileSync, stat = lstatSync;
+  t.mock.method(fs, "readFileSync", (path, ...args) => {
+    if (path === "/proc/self/cgroup") return "0::" + commandScope + "\n";
+    if (path === "/proc/" + pid + "/cgroup") return "0::" + appScope + "\n";
+    for (const [scope, cpus] of cpusets) if (path === "/sys/fs/cgroup" + scope + "/cpuset.cpus.effective") return cpus + "\n";
+    return read(path, ...args);
+  });
+  t.mock.method(fs, "lstatSync", (path, ...args) => [...cpusets.keys()].some((scope) => path === "/sys/fs/cgroup" + scope)
+    ? stat(dirname(out)) : stat(path, ...args));
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  const probe = () => {
+    // Open independently; a dup of fd 4 would share its open file description.
+    const peer = openSync("/proc/self/fd/" + browserDockerGateChildFd, "r");
+    try {
+      const result = spawnSync("/usr/bin/flock", ["-s", "-n", "-E", "75", "0"],
+        { stdio: [peer, "ignore", "ignore"], timeout: 2000, killSignal: "SIGKILL" });
+      assert.ifError(result.error);
+      assert.equal(result.signal, null);
+      return result.status;
+    } finally { closeSync(peer); }
+  };
+  assert.equal(probe(), 0, "peer must be able to acquire the gate before the adapter runs");
+  const stop = new AbortController(), reason = new Error("cancel at browser launch");
+  await assert.rejects(runLiveAdapters({ group, out, requested: "aspnet", profile: "native-feed", isolated: true, measure: true }, {
+    signal: stop.signal, chromium: { async launch() { stop.abort(reason); return { async close() {} }; } },
+    journey: () => assert.fail("cancelled runner started a scenario"),
+    spawn(program, args) {
+      if (args[0] === "rm") {
+        assert.deepEqual(args, ["rm", "-f", "-v", id]);
+        assert.equal(probe(), 75, "peer acquired a shared lock during exact owned removal");
+      }
+      const result = spawn(program, args);
+      if (args[0] === "inspect") {
+        const [info] = JSON.parse(result.stdout);
+        info.HostConfig.CpusetCpus = liveActorCpus.application;
+        info.State = { Status: "running", Running: true, Pid: pid };
+        result.stdout = JSON.stringify([info]);
+      }
+      return { ...result, signal: null };
+    },
+  }), (error) => error === reason);
+  assert.deepEqual(history, ["start:aspnet", "remove:aspnet"]);
+  assert.equal(probe(), 0, "peer must be able to acquire the gate after the adapter settles");
 });
 
 for (const stage of ["scenario", "fanout", "fanout-lag"]) test(`production cancellation retains completed ${stage} prefix and never retries`, async (t) => {
