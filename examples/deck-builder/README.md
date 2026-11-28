@@ -23,10 +23,12 @@ Without JavaScript the same deck is built with forms: Add and Add selected post 
 cards added, Save posts the counts as typed, and the filter and the column headers are a `GET`
 form and links the server answers.
 
-Filter and Save stay visible with scripting enabled. If the builder module does not load,
-the same forms still work: successful writes redirect to the saved deck, and a refusal draws
-the page with its reason. With the module running, Filter keeps the page and Save uses the
-autosave queue.
+Filter and Save stay visible with scripting enabled. Until the builder starts, the browser
+submits the forms natively: successful writes redirect to the saved deck, and a refusal draws
+the page with its reason. If a first Save already committed, resending its key with different
+counts shows a conflict and asks the player to re-enter that edit on the saved deck. With the
+module running, Filter keeps the page and Save uses the autosave queue. A count being typed
+when the module starts keeps its field and focus.
 
 ## Run it
 

@@ -64,6 +64,9 @@ struct Saves {
 struct Applied {
     draft: u64,
     version: u64,
+    // A plain form has no draft queue to reconcile a changed resend. Remember its
+    // effective deck by collection index, not by a second copy of each card ID.
+    ordinary: Option<Box<[(usize, u32)]>>,
 }
 
 /// How long an applied save's key is remembered: a page sends a lost save again within moments,
@@ -79,6 +82,8 @@ pub enum Outcome {
     Saved { version: u64, draft: u64 },
     /// The rules refused it; the deck is as it was.
     Refused(u64, Refusal),
+    /// A plain form reused a key that already saved a different deck.
+    ChangedSubmit(u64),
     /// It was built on an older version: another tab saved first, or the server restarted since.
     /// `unsure`: a save made after that version has had its key forgotten, so if this key was
     /// sent before (its answer lost), that save may have been this one.
@@ -150,6 +155,16 @@ impl Builder {
             }
         }
         if let Some(applied) = saves.by_key.get(key) {
+            if draft == 0
+                && !applied.ordinary.as_ref().is_some_and(|original| {
+                    deck.len() == original.len()
+                        && deck.iter().zip(original.iter()).all(|((id, count), (index, before))| {
+                            self.index.get(id) == Some(index) && count == before
+                        })
+                })
+            {
+                return Outcome::ChangedSubmit(self.deck.seq());
+            }
             return Outcome::Saved { version: applied.version, draft: applied.draft };
         }
         let now = self.deck.seq();
@@ -176,7 +191,8 @@ impl Builder {
             }
         });
         let version = self.deck.seq();
-        saves.by_key.insert(key.clone(), Applied { draft, version });
+        let ordinary = (draft == 0).then(|| deck.iter().map(|(id, &count)| (self.index[id], count)).collect());
+        saves.by_key.insert(key.clone(), Applied { draft, version, ordinary });
         saves.order.push_back((at, key.clone()));
         Outcome::Saved { version, draft }
     }
@@ -314,6 +330,13 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
         Outcome::Refused(version, refusal) => {
             (Answer::Refused { version: *version, message: refusal.to_string() }, StatusCode::UNPROCESSABLE_ENTITY)
         }
+        Outcome::ChangedSubmit(version) => (
+            Answer::Refused {
+                version: *version,
+                message: "This form already saved a different edit. Enter your change again on the saved deck below.".into(),
+            },
+            StatusCode::CONFLICT,
+        ),
         Outcome::Stale { version, unsure } => (Answer::Stale { version: *version, unsure: *unsure }, StatusCode::CONFLICT),
     };
     if input.draft != 0
@@ -435,6 +458,27 @@ mod tests {
         assert!(stale.text().contains(r#"name="version" value="1""#));
         assert!(!stale.headers().contains_key("corten-patch"));
         assert_eq!((builder.deck.seq(), builder.saved().1.get("pearl-diver")), (1, Some(&1)));
+    }
+
+    #[tokio::test]
+    async fn a_plain_resend_reports_a_different_edit_without_overwriting_the_saved_deck() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let key = submit_key();
+        let f = DeckInput::FIELDS;
+        let add = || saving(&app, 0, &starter(), &key).field(f.add, "pearl-diver");
+        assert_eq!(add().await.status(), StatusCode::SEE_OTHER);
+
+        let mut deck = starter();
+        deck.push(("salt-oracle", 1));
+        assert_eq!(saving(&app, 1, &deck, &submit_key()).await.status(), StatusCode::SEE_OTHER);
+        // Even after the deck moves on, an exact resend is known to have been saved.
+        assert_eq!(add().await.status(), StatusCode::SEE_OTHER);
+        let changed = saving(&app, 0, &starter(), &key).await;
+        assert_eq!(changed.status(), StatusCode::CONFLICT);
+        assert!(changed.text().contains("Not saved: This form already saved a different edit."));
+        assert!(changed.text().contains(r#"name="version" value="2""#));
+        assert_eq!((builder.saved().0, builder.saved().1.get("salt-oracle")), (2, Some(&1)));
     }
 
     #[test]

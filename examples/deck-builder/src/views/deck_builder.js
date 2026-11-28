@@ -118,6 +118,7 @@ const kept = () =>
     /** The deck line order shown in this page. The server stores counts, not presentation order. */
     /** @type {string[]} */ order: [],
     /** @type {AbortSignal | undefined} */ signal: undefined,
+    /** @type {HTMLInputElement | undefined} */ startingEdit: undefined,
     motion: 0,
   }));
 
@@ -143,13 +144,22 @@ export function start(parts, copies, feed, signal) {
   s.generation = parts.generation.value;
   s.version = Number(parts.version.value);
   const lines = rows(parts.lines, DeckLine);
+  const focused = copies.find((input) => input === document.activeElement);
+  if (focused && (focused.value !== focused.defaultValue || focused.validity.badInput)) {
+    s.startingEdit = focused;
+    focused.addEventListener("focusout", () => {
+      if (s.startingEdit !== focused) return;
+      s.startingEdit = undefined;
+      heard(s, parts);
+    }, { once: true, signal });
+  }
   /** @type {Deck} */ const base = new Map();
   /** @type {Deck} */ const edited = new Map();
   for (const input of copies) {
     const line = lines.of(input);
     if (!line) continue;
     const saved = Number(input.defaultValue);
-    const count = Math.max(0, Math.trunc(Number(input.value)) || 0);
+    const count = input === focused ? saved : copiesFrom(input);
     if (saved > 0) base.set(line.id, saved);
     if (count > 0) edited.set(line.id, count);
   }
@@ -159,7 +169,8 @@ export function start(parts, copies, feed, signal) {
   s.theirs = new Map(base);
   s.theirGeneration = s.generation;
   s.theirVersion = s.version;
-  if (!same(base, edited)) draw(s, parts, edited);
+  // Refresh the readouts for completed edits without writing into a focused count.
+  if (!same(base, edited)) draw(s, parts, edited, !focused);
   subscribe(
     feed,
     {
@@ -206,6 +217,7 @@ export function start(parts, copies, feed, signal) {
     },
     { signal },
   );
+  parts.form.dataset.patch = "";
 }
 
 /** Whether two decks hold the same cards. @param {Deck} a @param {Deck} b */
@@ -254,9 +266,9 @@ function change(s, parts, change) {
  * Shows `deck`: the lines (made, filled or removed by key, in the page's presentation order), each
  * collection row's count in the deck, the count, the curve, the kinds, the deck list, and whether
  * undo and redo have anything.
- * @param {State} s @param {Parts} parts @param {Deck} deck
+ * @param {State} s @param {Parts} parts @param {Deck} deck @param {boolean} [drawLines]
  */
-function draw(s, parts, deck) {
+function draw(s, parts, deck, drawLines = true) {
   const cards = rows(parts.cards, CollectionRow);
   const changed = new Set(diff(s.drawn, deck).map(([id]) => id));
   s.motion += 1;
@@ -279,7 +291,7 @@ function draw(s, parts, deck) {
   s.order = order;
   const position = new Map(order.map((id, index) => [id, index]));
   items.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
-  rows(parts.lines, DeckLine, parts.template).replace(items);
+  if (drawLines) rows(parts.lines, DeckLine, parts.template).replace(items);
   for (const id of changed) {
     const card = cards.get(id);
     if (card) motion(card.el, "card", s.motion, s.signal);
@@ -415,7 +427,7 @@ export function answered(event, parts) {
  */
 function heard(s, parts) {
   const news = s.theirGeneration !== s.generation || s.theirVersion > s.version;
-  if (!news || s.sending) return;
+  if (!news || s.sending || s.startingEdit) return;
   const sent = s.unanswered.find((u) => same(u.deck, s.theirs));
   if (sent) {
     s.waiting = false;
@@ -504,12 +516,17 @@ export function retry(parts) {
 
 /**
  * Save through the autosave queue when this handler runs; otherwise the button submits the form.
- * @param {MouseEvent} event @param {Parts} parts
+ * @param {MouseEvent} event @param {Parts} parts @param {HTMLInputElement[]} copies
  */
-export function saveNow(event, parts) {
+export function saveNow(event, parts, copies) {
+  const s = kept();
+  if (!s.signal) return;
   event.preventDefault();
+  // Some browsers don't move focus to a clicked button.
+  const focused = s.startingEdit ?? copies.find((input) => input === document.activeElement);
+  if (focused) typed(focused, parts);
   if (parts.status.dataset.state === "offline") retry(parts);
-  else save(kept(), parts);
+  else save(s, parts);
 }
 
 /** @param {Parts} parts */
@@ -542,8 +559,15 @@ export function typed(input, parts) {
   const s = kept();
   const line = rows(parts.lines, DeckLine).of(input);
   if (!line) return;
-  const n = Math.max(0, Math.trunc(Number(input.value)) || 0);
-  change(s, parts, [[line.id, n - (s.drawn.get(line.id) ?? 0)]]);
+  const starting = input === s.startingEdit;
+  if (starting) s.startingEdit = undefined;
+  change(s, parts, [[line.id, copiesFrom(input) - (s.drawn.get(line.id) ?? 0)]]);
+  if (starting) heard(s, parts);
+}
+
+/** @param {HTMLInputElement} input */
+function copiesFrom(input) {
+  return Math.max(0, Math.trunc(Number(input.value)) || 0);
 }
 
 /**

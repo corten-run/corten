@@ -303,7 +303,7 @@ pub fn DeckBuilder<'a>(
                         </div>
                     }
                 </dl>
-                <form ref={form} id={DeckFormId} method="post" action={url::Save} data-patch novalidate>
+                <form ref={form} id={DeckFormId} method="post" action={url::Save} novalidate>
                     <input ref={generation_ref} type="hidden" name={f.generation} value={generation}>
                     <input ref={version_ref} type="hidden" name={f.version} value={version}>
                     {SubmitKey::field(f.submit)}
@@ -333,7 +333,7 @@ pub fn DeckBuilder<'a>(
                         }
                     </ul>
                     <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Drag cards here, or press Add."</p>
-                    <button type="submit" on:click={js::saveNow(event, parts)}>"Save"</button>
+                    <button type="submit" on:click={js::saveNow(event, parts, copies)}>"Save"</button>
                 </form>
                 <template ref={template}>
                     <DeckLine id="" name="" kind="" cost={0} count={0} owned={0} lift={lift} copies={copies} />

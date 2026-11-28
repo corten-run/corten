@@ -207,11 +207,13 @@ part's link is hidden only while a read is on its way ([A slow part](live-data.m
 There is no page-wide flag that says a script loaded.
 
 In [Deck Builder](../../examples/deck-builder/README.md), Save stays drawn too. The builder's
-handler uses its autosave queue. If the module does not load, the button submits the form:
-a successful save redirects to the current deck, and a refusal draws the page with its reason.
-If the module loads after the player has typed, the counts rendered by the server (`defaultValue`)
-are the saved baseline, not the values in the fields now. Save sends those edits, and Filter
-applies the current query even if its input handler was not there when the player typed it.
+handler opts the form into `data-patch` when it connects and uses its autosave queue. Until then
+the browser submits the plain form: a save redirects, and a refusal draws the page with its reason.
+If a native Save is still waiting after the server committed it, a different edit sent with that
+same form key gets a conflict, not a success for the first edit. If the module loads after the
+player has typed, `defaultValue` gives the saved baseline. A count still being typed keeps its
+field and focus; Save can commit it with the other edits. Filter applies the current query even
+if its input handler was not there when the player typed it.
 
 ### A value both sides compute
 
