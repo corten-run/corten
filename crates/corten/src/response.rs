@@ -59,9 +59,9 @@ pub trait IntoResponse {
     /// one it converted among them. A type of the app's own always does, since Corten cannot see what its
     /// `into_response` makes (a `Public` answer on one branch): its route's handler is watched
     /// for a form's new submit key, as a `Public` one's is, and an answer whose handler drew one is
-    /// sent to no shared cache. A raw `Response`, a `[(name, value)]` of headers and a
-    /// [`crate::Relay`] say no: what caching their headers say is the app's or the upstream's, and
-    /// the stages settle it as any answer's ([`crate::cache`]). Not a public API: its type is one
+    /// sent to no shared cache. A raw `Response` says yes: it could be a converted `Public`
+    /// answer. A header array alone and a [`crate::Relay`] say no. As a tuple part, a header
+    /// array can refuse with a raw `Response`, so the tuple says yes. Not a public API: its type is one
     /// an app cannot name, so an app's own type cannot say no, nor say what one of Corten's does.
     ///
     /// A function of the type, not a constant: an associated constant would make the trait one no

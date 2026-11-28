@@ -19,6 +19,9 @@ fn a_tuple_with_an_erased_refusal_needs_the_submit_key_watch() {
     assert!(<Response as IntoResponse>::may_share().0);
     assert!(<(Part, ()) as IntoResponse>::may_share().0);
     assert!(<(Option<Part>, ()) as IntoResponse>::may_share().0);
+    type Headers = [(&'static str, &'static str); 1];
+    assert!(<(Headers, ()) as IntoResponse>::may_share().0);
+    assert!(!<Headers as IntoResponse>::may_share().0);
     assert!(!<(http::HeaderMap, ()) as IntoResponse>::may_share().0);
 }
 

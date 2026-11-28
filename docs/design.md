@@ -8815,8 +8815,10 @@ rules something out.
     constant: a constant would make `dyn IntoResponse` fail to compile, and with it an app's own
     trait over `IntoResponse` that answers from a box (`self: Box<Self>`), both of which compiled
     before the watch (a doctest); such a box is a type of the app's own, so it is watched.
-    A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
-    app's or the upstream's, as it was. The watch wraps such a route in every build and whatever
+    A `Relay` and headers alone say no. An array of headers as a tuple part can refuse with a
+    raw `Response`, so that tuple is watched even when header conversion succeeds. A handler
+    returning a raw `Response` directly is watched too, including on an unstaged route.
+    The watch wraps a route whose answer type says yes in every build and whatever
     the store does (none kept, `corten dev`, a body route that leaves the store out, a build
     without `compress`), staged or `unstaged`: an unstaged route has no stage to settle its
     caching, so one whose handler drew a key is made `private, no-cache` there, with no caching
