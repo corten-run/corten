@@ -25,6 +25,7 @@
 // section (`file:(name)`) at 8 spaces or a symbol at 16. LLD lays the input sections of an output
 // section in order, each at the first multiple of its own alignment at or after the end of the
 // one before it.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
@@ -41,10 +42,9 @@ export const SECOND_PAD = ".text.corten_layout_pad2";
 /** The fifth point's pattern for a section named for a Rust-mangled symbol, as CONTRIBUTING.md prints it. */
 export const RUST_NAME = /\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}E(\.llvm\.\d+)?)$/;
 
-/** A map file's text, gunzipped when it is gzipped. */
-export function mapText(bytes) {
-  return (bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes).toString("utf8");
-}
+/** A map file's bytes, gunzipped when it is gzipped. */
+export const mapBytes = (bytes) => bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
+export const mapText = (bytes) => mapBytes(bytes).toString("utf8");
 
 /** The output sections of a map, each with its input sections, each with its symbols. */
 export function readMap(text) {
@@ -240,11 +240,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.log(`.data 0x${d.at?.toString(16)} offset ${d.offset} want ${d.want} ${d.fits ? "fits" : "elsewhere"}`);
     process.exit(d.fits ? 0 : 1);
   } else if (mode === "check" && b && Number.isInteger(Number(padArg)) && Number.isInteger(Number(secondArg))) {
-    const r = check(load(a), load(b), Number(padArg), Number(secondArg), shuffled);
+    const bytes = mapBytes(readFileSync(b));
+    const r = check(load(a), readMap(bytes.toString("utf8")), Number(padArg), Number(secondArg), shuffled);
     console.log(shuffled
       ? `.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link, in any order (layout.mjs --order checks it against the ordering file), between a first pad of ${r.pad} bytes and a second of ${r.second}; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`
       : `.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link between a first pad of ${r.pad} bytes and a second of ${r.second}; ${r.sectionsBeforeAlignedMovedByPad} of the ${r.sectionsBeforeAligned} sections before the first aligned beyond ${STEP} bytes moved by exactly the pad, with ${r.symbolsBeforeAlignedMovedByPad} symbols; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`);
-    console.log("JSON " + JSON.stringify(r));
+    console.log("JSON " + JSON.stringify(shuffled ? { ...r, placedMap: createHash("sha256").update(bytes).digest("hex") } : r));
     if (!r.ok) fail(r.why);
   } else {
     console.error("usage: node map.mjs record|refuse <unpadded map> | data <unpadded map> <placement map> <pad> | check <unpadded map> <placement map> <pad> <second pad> [--shuffled]");

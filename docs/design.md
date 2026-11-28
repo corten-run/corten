@@ -10331,8 +10331,9 @@ rules something out.
     diagnostic of where the build that ships sits among them; the fourth run, below, read four
     unpadded builds that way.
 
-    Inner layout. A pad moves `.text` and all after it as one block, so a plan's placements
-    sample where the image lies and never how one function lies against another. On
+    Inner layout. With no code aligned beyond 16 bytes, an unshuffled pad moves `.text` and
+    all after it as one block. With aligned code the shift can differ by section, but the
+    unshuffled links still keep their input sections in order. On
     [#2143 The one-pass scope lines merged in #2067 read a page about 0.9% slower in cycles across placements, a miss of its +1% margin](https://github.com/corten-run/corten/issues/2143)
     ([the diagnosis](https://github.com/corten-run/corten/issues/2143#issuecomment-7200507332),
     base `c6e9be955`, head `9a79ad877`) the same two commits read +249, +282 and -125 user
@@ -10341,9 +10342,9 @@ rules something out.
     which leave relative layout as a hypothesis. So a workload's plan may declare `shuffle`:
     placement i of each side is linked with the pad first and then every function of that
     side's unpadded `.text` in the order of a keyed hash of the workload's seed, i and each
-    name, the same order for every binary at i, so base and head lay the functions they share
-    alike and differ by the change's own, and another order at each i, so the placements sample
-    inner layouts as well as offsets. LLD gives an input section the earliest place the file
+    name, the same draw for shared names in every binary at i. Each index gets its own draw,
+    which can yield the same order at more than one index, so the placements sample inner
+    layouts as well as offsets. LLD gives an input section the earliest place the file
     gives any symbol defined in it, whatever its type (a function, a label, an object) and
     binding, so the run reads a section's place from every symbol its link's map lists in it,
     and refuses a placement whose file names a symbol the map also has in another output
@@ -10362,12 +10363,14 @@ rules something out.
     matched to a copy on the other side by its object, its section, its source file or its
     size, each of which a change or a rebuild can move; earlier versions matched copies so, and
     each way of matching certified some wrong layout. The compared names must lie in one order
-    on both sides, every name at one address (an alias, an identical-code fold) keeping its
-    place, and at least two must be compared; the report states, at each index, how many were
+    on both sides and share addresses with the same compared names (including aliases, identical-code
+    folds and names at input section boundaries). At least two must be compared; the gated report
+    states, at each index, how many were
     compared and how many left out. What is left out is unchecked: two links can lay base's and
     head's copies of a repeated name at other places, and a symbol one side alone has (an alias)
     can move a section both have that holds no compared name, or move one that holds a compared
-    name past sections that hold none, and the run reads each as alike.
+    name past sections that hold none, and the run reads each as alike if the compared names'
+    order and address sharing are unchanged.
     The other way, it refuses some pairs that are right: two input sections that share a key
     through a local name each defines (`init` in two objects), each also holding a name defined
     once, can lie in either order in either link, since LLD sorts by the key alone, and the check

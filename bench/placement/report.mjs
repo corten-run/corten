@@ -24,7 +24,7 @@
 //     names it compares with base's binary at its index lie in the same order
 //     (layout/head-p<n>-alike.txt) that names both ordering files so drawn and both placement maps
 //     so listed and gives how many names both sides have it compared and left out, whole numbers
-//     that add up; for one it does not, a layout or map check that is;
+//     that add up and meet the live check's minimum; for one it does not, a layout or map check that is;
 //   - placements not started one after another in the order run.
 // A placement leaves its comparison without a bound when its directory, its counts, its
 // placement.txt (the comparison, A and B with the build's SHA-256s, the run, the plan, its place
@@ -50,6 +50,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { FEWEST } from "./layout.mjs";
 import { mapText, readMap, record, refusals } from "./map.mjs";
 import { names as functionNames, order } from "./order.mjs";
 import { DRAWS, eligibility, failing, LIMIT, SEED, sizeByRule } from "./pilot.mjs";
@@ -180,19 +181,23 @@ export function read(dir) {
     if (!shas.has(b)) { refused.push(`${b}: not in sha256.txt`); continue; }
     if (verified.get(b) !== side) refused.push(`${b}: not verified to answer as its unpadded binary (verify/verdicts.txt)`);
     if (r.shuffle && !lists.has(side)) continue;
-    const shuffled = r.shuffle ? { shuffled: true } : { shuffled: undefined };
+    const map = placedMaps.get(b);
+    if (r.shuffle && !map) { refused.push(`${b}: no placement map digest in maps/placements.sha256`); continue; }
+    const shuffled = r.shuffle ? { shuffled: true, placedMap: map } : { shuffled: undefined };
     const sha = r.shuffle ? orderSha(side, pad) : undefined;
     if (r.shuffle && sha === null) refused.push(`${b}: its side's list of functions makes no ordering file (functions-${side}.txt.gz)`);
-    else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha, ...(r.shuffle ? { placedMap: placedMaps.get(b) ?? null } : {}) })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes and the ordering file drawn from its side's list of functions, seed ${r.seed} and its index (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
+    else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes and the ordering file drawn from its side's list of functions, seed ${r.seed} and its index (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
     if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second, ...shuffled }))) refused.push(`${b}: no second pad's line with a passing map check (second-pads.txt, layout/${b}-map.txt)`);
     // The check against base's placement at its index names the two ordering files and the two
     // placement maps it read, each the one this run drew or kept for that placement.
     // It also gives how many of the names both sides have it compared and how many it left out,
     // which the report states for each index.
     if (r.shuffle && side === "head") {
-      const a = check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder: orderSha("base", pad), headOrder: sha, baseMap: placedMaps.get(`base-p${pad}`) ?? null, headMap: placedMaps.get(b) ?? null });
+      const baseMap = placedMaps.get(`base-p${pad}`), baseOrder = orderSha("base", pad);
+      const a = baseMap && baseOrder && sha && check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder, headOrder: sha, baseMap, headMap: map });
       if (!a) refused.push(`${b}: no passing check that the names it compares with base-p${pad} lie in the same order, using the ordering files drawn for both and the placement maps kept for both (layout/${b}-alike.txt, maps/placements.sha256)`);
       else if (![a.shared, a.compared, a.leftOut].every((n) => Number.isInteger(n) && n >= 0) || a.compared + a.leftOut !== a.shared) refused.push(`${b}: its check against base-p${pad} does not say how many of the names both have it compared and left out (layout/${b}-alike.txt)`);
+      else if (a.compared < FEWEST) refused.push(`${b}: its check against base-p${pad} compared fewer than ${FEWEST} names (layout/${b}-alike.txt)`);
       else alike.push({ i: P.indexOf(pad) + 1, head: b, base: `base-p${pad}`, shared: a.shared, compared: a.compared, leftOut: a.leftOut });
     }
   }
@@ -286,7 +291,11 @@ export function report(dir) {
   if (dry) out.push("**DRY RUN: a test of the scripts, read for nothing. No figure below is a measurement of anything.**", "");
   out.push(`Run ${run.runId}, plan sha256 ${run.planSha}, inputs sha256 ${run.inputs.sha256} (the ${run.inputs.files} files the plan names by path: the probe's, the request script and any expected answer, kept with these results); base ${run.base}${part === "gated" ? `, head ${run.head}` : ""}; CPU ${run.hostId.model ?? "?"}, kernel ${run.hostId.kernel ?? "?"}. K = ${K} placements, R = ${R} recorded pairs in each after one that is not, ${run.seconds} s turns of \`wrk -t${plan.load.threads} -c${plan.load.connections}\`, every turn on a freshly started binary, the order drawn from seed ${run.seed}. Figures are per request, B / A - 1 per pair; a placement's statistic is the median of its pairs; the bound is the ${ord(run.rank)} smallest of the ${K} placement medians and the lower bound the ${ord(run.lowerRank)}. Every recorded turn is one in which wrk reported no failed request and every counter ran 100% of the turn.`, "");
   out.push(`The workload as the plan declares it: ${w.declared}`, "");
-  if (run.shuffle) out.push(`Inner layout: shuffled. Each placement i was linked with its pad first and then every .text function of its side's unpadded build in an order drawn from seed ${run.seed} and i (order.mjs), one order for every binary at i and another at each i, so the placements sample how a build lays its functions against each other as well as where its image lies. That order is partial: input sections the file gives one key lie in any order among themselves. At each index the check compared only names (less a ThinLTO suffix) it could identify unambiguously on both sides and checked that they lie in the same order. Names defined more than once or read otherwise by the symbol table or the map on either side were left out and counted (layout/head-p<n>-alike.txt)${run.alike.length ? `. Of the names both sides have, compared and left out at each index: ${run.alike.map((x) => `${x.i}: ${x.compared} and ${x.leftOut} of ${x.shared}`).join("; ")}` : ""}. Each placement is a link no app builds.`, "");
+  if (run.shuffle) {
+    const draw = `Inner layout: shuffled. Each placement i was linked with its pad first and then every .text function of its side's unpadded build in an order drawn from seed ${run.seed} and i (order.mjs); each index gets its own draw, and different indices can draw the same order. Binaries at the same index used the same draw for shared names, so the placements sample how a build lays its functions against each other as well as where its image lies. That order is partial: input sections the file gives one key lie in any order among themselves.`;
+    const pairs = part === "gated" ? ` At each index the check compared only names (less a ThinLTO suffix) it could identify unambiguously on both sides and checked that they lie in the same order and share addresses with the same names. Names defined more than once or read otherwise by the symbol table or the map on either side were left out and counted (layout/head-p<n>-alike.txt). Of the names both sides have, compared and left out at each index: ${run.alike.map((x) => `${x.i}: ${x.compared} and ${x.leftOut} of ${x.shared}`).join("; ")}.` : "";
+    out.push(`${draw}${pairs} Each placement is a link no app builds.`, "");
+  }
   // A K nothing checked is said in every reading: no bare pass for a K nobody checked.
   const unchecked = run.sized ? "" : "; K not checked by the kit";
   if (part === "gated") out.push(dry ? `K = ${K} is the dry run's, not one the plan declares or the sizing check passed.` : run.sized ? `K = ${K} is ${run.declaredK === "pilot" ? "the smallest at which the sizing check passes" : `the plan's number (which it says was sized from: ${run.sizedFrom}), checked at that K itself`} from run ${run.sized.from}: ${run.sized.counts.map((m) => `${m.model} ${m.failing} failing draws of ${DRAWS}`).join(", ")}, against at most ${LIMIT}.` : `K = ${K} is the plan's number, which the plan says was sized from: ${run.sizedFrom}. **The kit did not check it**: plan.mjs was given no results to check it from (--sized-from), so whether this K meets the sizing rule is the author's to show, and each reading below says so.`, "");

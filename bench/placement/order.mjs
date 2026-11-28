@@ -11,9 +11,9 @@
 //                                                     names in the order of their keys
 // A name's key is HMAC-SHA-256, keyed by "<seed>:<i>", of the name less a ThinLTO suffix
 // (".llvm.<n>", which layout.mjs strips too); names sort by key, then by the name as written. So
-// base and head at one index, and the A/A's two sides there, lay every function they share in one
-// order against every other, and only a change's own functions differ; each index draws another
-// order. The seed is the workload's, which also draws the order its placements run in. The
+// base and head at one index, and the A/A's two sides there, list their shared names in the same
+// order. Each index gets its own draw, which may yield the same order as another index.
+// The seed is the workload's, which also draws the order its placements run in. The
 // functions file may be gzipped, as the results keep it.
 import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";

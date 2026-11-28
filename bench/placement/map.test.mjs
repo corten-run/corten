@@ -7,11 +7,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { alike, compare, elfSymbols, entries, FEWEST, inText, ordered, symbols, textFunctions, textRange, textStart } from "./layout.mjs";
 import { check, data, mapText, origin, owner, PAD, readMap, record, refusals, RUST_NAME, SECOND_PAD, SIZES } from "./map.mjs";
 import { key, names, namesProblem, order } from "./order.mjs";
@@ -269,7 +270,7 @@ test("an ordering file: the pad and then the side's functions, by a key any host
   assert.equal(order(LISTED, 7, 1), "corten_layout_pad\nflush\n_ZN5probe4main17h0123456789abcdefE.llvm.123\ncrc\n_ZN5probe4page17hfedcba9876543210E\n_start\nflush_tail\n");
   // The same list, seed and index give the same bytes, whatever order the list is given in.
   assert.equal(order([...LISTED].reverse(), 7, 1), order(LISTED, 7, 1));
-  // Each index draws another order, and so does another seed: K placements sample K layouts.
+  // These draws differ with index or seed; other draws can produce the same order.
   const many = Array.from({ length: 30 }, (_, k) => `fn_${k}`);
   const drawn = Array.from({ length: 10 }, (_, k) => order(many, 7, k + 1));
   assert.equal(new Set(drawn).size, 10);
@@ -629,7 +630,7 @@ test("a shuffled placement: a function in an input section of no size is of that
   has(own({ ...sideOf(zero, other), order: lines(asked) }).why, "definitions where the ordering file puts them");
 });
 
-test("a shuffled change: definitions at one address are in the order of the input sections the placement's map lays", () => {
+test("a shuffled change: a tie at the boundary of two input sections must keep sharing an ELF address", () => {
   // Base's z_end ends .text.z where a_next begins; head adds head_only's section between them,
   // in its unpadded order. Drawn at seed 7, index 1, both files give z's section the first place
   // (z_end is drawn first), head_only the second, a_next the last.
@@ -639,13 +640,15 @@ test("a shuffled change: definitions at one address are in the order of the inpu
   assert.equal(fileOf(head), named("z_end", "head_only", "z", "a_next"));
   const b = sideOf(base, fileOf(base)), h = sideOf(head, fileOf(head));
   assert.deepEqual([own(b).why, own(h).why], [[], []]);
-  // In base's placement z_end and a_next share one address, z's section laid first.
-  assert.equal(b.eb.find((e) => e.raw === "z_end").at, b.eb.find((e) => e.raw === "a_next").at);
+  // The map's slot order is unchanged, but the two ELF addresses are no longer equal.
+  const gap = ({ eb }) => eb.find((e) => e.raw === "a_next").at - eb.find((e) => e.raw === "z_end").at;
+  assert.deepEqual([gap(b), gap(h)], [0, 64]);
   const r = alike(b, h, 320);
-  assert.deepEqual(r.why, []);
-  // Three names, each defined once, at three places: z and z_end at its end in z's section, then
-  // a_next, though z_end and a_next share an address in base's placement.
+  assert.equal(r.ok, false);
+  has(r.why, "share an ELF address in only one placement");
   assert.deepEqual([r.shared, r.compared, r.places, r.same], [3, 3, 3, 3]);
+  assert.equal(alike(h, b, 320).ok, false);
+  assert.deepEqual(alike(b, sideOf(base, fileOf(base)), 320).why, []);
 });
 
 test("a shuffled placement: a function of no size at the very end of .text is of the input section the map has it in", () => {
@@ -780,7 +783,7 @@ test("a shuffled run writes every map with --no-demangle, and an unshuffled run'
 // linked by LLD, with LLD's maps, read by layout.mjs as build.sh runs it.
 const LLD = { skip: process.platform === "linux" && spawnSync("sh", ["-c", "command -v clang && command -v ld.lld && command -v nm && command -v readelf"]).status === 0 ? false : "needs Linux with clang, ld.lld, nm and readelf" };
 
-test("a shuffled placement, linked by LLD: each definition by its own map's input section, in the order that map lays them", LLD, (t) => {
+test("a shuffled placement, linked by LLD: each definition by its own map's input section, in the order that map lays them", LLD, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "placement-lld-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const run = (cmd, args) => { const r = spawnSync(cmd, args, { cwd: dir, encoding: "utf8" }); if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")}: ${r.stderr}`); return r.stdout; };
@@ -816,24 +819,43 @@ test("a shuffled placement, linked by LLD: each definition by its own map's inpu
   assert.equal(turned.status, 1, turned.stdout);
   assert.match(turned.stdout, /^1 shared names compared, 1 left out as ambiguous/);
   assert.match(turned.stderr, /only 1 of the 2 names both placements have are defined exactly once on each side, fewer than the 2 an order needs/);
-  // Run build.sh's refusal branch against the same links, without building a Cargo probe.
-  const build = readFileSync(new URL("./build.sh", import.meta.url), "utf8");
-  const refusal = build.match(/^refused\(\).*$/m)?.[0];
-  const alikeCheck = build.match(/^    if \[ "\$SHUFFLE" = 1 \] && \[ "\$1" = head \]; then\n[\s\S]*?^    fi$/m)?.[0];
-  assert.ok(refusal && alikeCheck, "build.sh has a shuffled head refusal branch");
-  for (const folder of ["bin/layout", "maps", "orders"]) mkdirSync(join(dir, folder), { recursive: true });
-  for (const [name, src] of [["base", "dups"], ["head", "dups"], ["base-p320", "dups-p"], ["head-p320", "dups-yx"]]) {
-    symlinkSync(join(dir, src), join(dir, "bin", name));
-    if (name.endsWith("320")) {
-      writeFileSync(join(dir, "maps", `${name}.map.gz`), gzipSync(readFileSync(join(dir, `${src}.map`))));
-      symlinkSync(join(dir, `${src}.order`), join(dir, "orders", `${name}.txt`));
-    } else symlinkSync(join(dir, `${src}.map`), join(dir, "maps", `${name}.map`));
-  }
-  const refused = spawnSync("sh", ["-ec", `${refusal}\nSHUFFLE=1 SECOND=0 WORK=. B=bin M=maps pl=head-p320 pl_order=orders/head-p320.txt KIT=$3\n${alikeCheck}`, "build.sh", "head", "320", fileURLToPath(new URL(".", import.meta.url))], { cwd: dir, encoding: "utf8" });
-  assert.equal(refused.status, 3, refused.stderr);
-  const receipt = readFileSync(join(dir, "bin", "refused.txt"), "utf8");
-  assert.match(receipt, /^REFUSED: head has no reading against base across shuffled placements: .*fewer than the 2 an order needs/);
-  assert.doesNotMatch(receipt, /different orders/);
+  await t.test("build.sh dispatches the shuffled head placement and refuses the pair", () => {
+    // Stand in for the Cargo build and the captured command. build.sh still assembles its own
+    // pads, draws each order, and checks both sides and their pair using real LLD binaries/maps.
+    const kit = fileURLToPath(new URL(".", import.meta.url)), work = join(dir, "build"), probe = join(dir, "probe"), tools = join(dir, "tools");
+    for (const folder of [join(work, "plan"), probe, tools]) mkdirSync(folder, { recursive: true });
+    const manifest = '[package]\nname = "probe"\n', inputs = `${createHash("sha256").update(manifest).digest("hex")}  probe/Cargo.toml\n`;
+    writeFileSync(join(probe, "Cargo.toml"), manifest);
+    writeFileSync(join(work, "plan", "inputs.sha256"), inputs);
+    writeFileSync(join(work, "plan", "build-env.sh"), "");
+    const vars = {
+      WORK: work, KIT: kit, REPO: join(kit, "../.."), TREE: "Cargo.lock", PROBE: probe, BUILD: `sh "${join(dir, "compile.sh")}"`, BINARY: "probe", TOOLCHAIN: "fixture",
+      SHUFFLE: 1, DRY: 0, K: 1, SEED: 7, PADS_P: 320, PADS_Q: 384, SIDES: "base head", BASE: "HEAD", HEAD: "HEAD",
+      INPUTS_SHA: createHash("sha256").update(inputs).digest("hex"), PLAN_SHA: "fixture", PART: "gated", W: "fixture",
+    };
+    writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));
+    writeFileSync(join(dir, "compile.sh"), `set -eu\nmkdir -p "$CARGO_TARGET_DIR"\ncp "${join(dir, "dups")}" "$CARGO_TARGET_DIR/probe"\ntouch "$LINK_CAPTURE/args.json"\n`);
+    writeFileSync(join(tools, "rustc"), "#!/bin/sh\necho fixture rustc\n", { mode: 0o755 });
+    writeFileSync(join(tools, "node"), `#!/bin/sh
+set -eu
+case "$1" in
+  */relink.mjs)
+    shift
+    if [ "$#" -eq 5 ]; then
+      cp "${join(dir, "dups")}" "$2"
+      cp "${join(dir, "dups.map")}" "$4"
+    else
+      exec ld.lld -o "$2" -e 0 --gc-sections --no-demangle -Map "$4" --symbol-ordering-file "$9" "$7" "${join(dir, a)}" "${join(dir, x)}" "${join(dir, y)}"
+    fi ;;
+  *) exec "${process.execPath}" "$@" ;;
+esac
+`, { mode: 0o755 });
+    const refused = spawnSync("sh", [join(kit, "build.sh"), work], { cwd: dir, env: { PATH: `${tools}:${process.env.PATH}`, HOME: dir }, encoding: "utf8", timeout: 15000 });
+    assert.equal(refused.status, 3, refused.stderr || refused.stdout);
+    const receipt = readFileSync(join(work, "bin", "refused.txt"), "utf8");
+    assert.match(receipt, /^REFUSED: head has no reading against base across shuffled placements: .*fewer than the 2 an order needs/);
+    assert.doesNotMatch(receipt, /different orders/);
+  });
   // A link of another file, dup's sections before a, read for this one is refused.
   ld("dups-y", [pad, y, a, x], named("dup", "a"));
   const away = shuffled("dups", "dups-y", "dups-p");
@@ -854,18 +876,23 @@ test("a shuffled placement, linked by LLD: each definition by its own map's inpu
   assert.match(wrong.stderr, /definitions where the ordering file puts them/);
 
   // 3. Base's z_end ends .text.z where a_next begins; head adds head_only between them. At seed 7,
-  // index 1, both lay z's section first and a_next's last: each passes, and the two are alike.
+  // index 1, both lay z's section first and a_next's last: each passes its own check, but the
+  // pair refuses because z_end and a_next no longer share an address.
   const zz = obj("zz", [["z", [["z", 0], ["z_end", 0x40]], 0x40]]), h = obj("h", [["head_only", [["head_only", 0]], 0x40]]);
   ld("base", [zz, n]); ld("head", [zz, h, n]);
   const bFile = order(listed("base"), 7, 1), hFile = order(listed("head"), 7, 1);
   assert.equal(hFile, named("z_end", "head_only", "z", "a_next"));
   ld("base-p", [pad, zz, n], bFile); ld("head-p", [pad, zz, h, n], hFile);
-  const nmBase = entries(run("nm", ["--defined-only", "base-p"]));
-  assert.equal(nmBase.find((e) => e.raw === "z_end").at, nmBase.find((e) => e.raw === "a_next").at);
+  const gap = (bin) => { const ns = entries(run("nm", ["--defined-only", bin])); return ns.find((e) => e.raw === "a_next").at - ns.find((e) => e.raw === "z_end").at; };
+  assert.deepEqual([gap("base-p"), gap("head-p")], [0, 64]);
   for (const s of ["base", "head"]) assert.equal(shuffled(s, `${s}-p`, `${s}-p`).status, 0, shuffled(s, `${s}-p`, `${s}-p`).stderr);
   const both = layout("--alike", "base", "base-p", "base-p.order", "base.map", "base-p.map", "head", "head-p", "head-p.order", "head.map", "head-p.map", "320");
-  assert.equal(both.status, 0, both.stderr);
-  assert.match(both.stdout, /"shared":3/);
+  assert.equal(both.status, 1, both.stdout);
+  assert.match(both.stdout, /"shared":3,"compared":3/);
+  assert.match(both.stderr, /share an ELF address in only one placement/);
+  ld("base-again", [pad, zz, n], bFile);
+  const same = layout("--alike", "base", "base-p", "base-p.order", "base.map", "base-p.map", "base", "base-again", "base-again.order", "base.map", "base-again.map", "320");
+  assert.equal(same.status, 0, same.stderr);
 
   // 4. Head's alias, named first, lays .text.b before .text.a: z_end, the end of .text.a, is the
   // end of the placement's .text, and is one of its four definitions.
@@ -1079,7 +1106,7 @@ const keyLate = (t, label = true) => {
   writeFileSync(join(f.dir, "u.functions"), fns.stdout);
   const drawn = (seed) => { const r = kit("order.mjs", "order", "u.functions", String(seed), "1"); assert.equal(r.status, 0, r.stderr); return r.stdout; };
   const laid = (p) => readMap(readFileSync(join(f.dir, `${p}.map`), "utf8")).find((o) => o.name === ".text").inputs.slice(1).map((s) => s.section);
-  const check = (p, file, pad = "320") => kit("layout.mjs", "u", p, pad, "--order", file, "--map", "u.map", "--placed-map", `${p}.map`);
+  const check = (p, file, pad = "320", u = "u") => kit("layout.mjs", u, p, pad, "--order", file, "--map", `${u}.map`, "--placed-map", `${p}.map`);
   return { ...f, objs, drawn, laid, check };
 };
 
@@ -1108,6 +1135,30 @@ test("a shuffled placement, linked by LLD: a first pad of 320 bytes is not one o
   const short = check("s4", "s4.order", "304");
   assert.equal(short.status, 1, short.stdout);
   assert.match(short.stderr, /the first input section of \.text is pad\.o:\(\.text\.corten_layout_pad\), 320 bytes at 0x[0-9a-f]+, not the one first pad of 304 bytes at its start/);
+});
+
+test("a shuffled placement, linked by LLD: a local label with the pad's name orders .rodata and is refused", LLD, (t) => {
+  const { dir, run, ld, pad, objs, drawn, check } = keyLate(t, false);
+  const make = (name, label) => {
+    writeFileSync(join(dir, name + ".s"), [
+      '\t.section .rodata.early,"aR",@progbits', "early_label:", "\t.byte 1",
+      '\t.section .rodata.late,"aR",@progbits', label + ":", "\t.byte 2", "",
+    ].join("\n"));
+    run("clang", ["--target=x86_64-linux-gnu", "-c", name + ".s", "-o", name + ".o"]);
+    ld(name, [...objs, name + ".o"]);
+    ld(name + "-p", [pad, ...objs, name + ".o"], drawn(4));
+  };
+  const sections = (p) => readMap(readFileSync(join(dir, p + ".map"), "utf8")).find((o) => o.name === ".rodata").inputs.map((s) => s.section);
+  make("control", "late_label");
+  assert.deepEqual(sections("control-p"), [".rodata.early", ".rodata.late"]);
+  const control = check("control-p", "control-p.order", "320", "control");
+  assert.equal(control.status, 0, control.stderr);
+  make("collision", "corten_layout_pad");
+  assert.deepEqual(sections("collision"), [".rodata.early", ".rodata.late"]);
+  assert.deepEqual(sections("collision-p"), [".rodata.late", ".rodata.early"]);
+  const collision = check("collision-p", "collision-p.order", "320", "collision");
+  assert.equal(collision.status, 1, collision.stdout);
+  assert.match(collision.stderr, /outside \.text.*corten_layout_pad \(\.rodata\)/);
 });
 
 test("owner(): a definition's input section by the map, a section of no size and the end of one included", () => {
@@ -1155,6 +1206,21 @@ test("the map check of a shuffled placement: the unpadded sections between the p
   has(why(lay([UNPADDED[0], pad(p), ...sh.slice(1), pad2(n)])), "not the first pad");
   // A kept placement, linked with the pad alone, holds its unpadded link's sections too.
   assert.deepEqual(check(map("head"), map("head-p320-l48"), 320, 48, true).why, []);
+});
+
+test("a shuffled second-pad receipt hashes the same map bytes before and after gzip", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "placement-map-receipt-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const gz = blob(TAG, "placement-replay/results/head-p320-l48.map.gz"), bytes = gunzipSync(gz);
+  writeFileSync(join(dir, "head.map.gz"), blob(TAG, "placement-replay/results/head.map.gz"));
+  writeFileSync(join(dir, "placed.map"), bytes);
+  writeFileSync(join(dir, "placed.map.gz"), gz);
+  const kit = fileURLToPath(new URL("./map.mjs", import.meta.url));
+  for (const file of ["placed.map", "placed.map.gz"]) {
+    const r = spawnSync(process.execPath, [kit, "check", "head.map.gz", file, "320", "48", "--shuffled"], { cwd: dir, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout.split("\n").find((l) => l.startsWith("JSON ")).slice(5)).placedMap, createHash("sha256").update(bytes).digest("hex"));
+  }
 });
 
 test("the map check of a shuffled placement: two sections one file names alike are told apart by their symbols", () => {

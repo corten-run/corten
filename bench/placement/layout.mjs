@@ -37,16 +37,16 @@
 // of its map, at the function's address); a name defined more than once, or that those readings
 // disagree on, is left out and counted, never matched by an object, a section or a size. The
 // compared functions are taken in each placement's order (its map's order of their input sections,
-// then their distance into each), those at one place (ICF's folds, aliases) together, each by
-// name: alike when both lists are the same, and refused when fewer than FEWEST names are compared. Prints "<N> shared names compared, <M> left out as
-// ambiguous" and a JSON line with the counts and the SHA-256s of both ordering files and both
+// then their distance into each), those at one place together, each by name. The lists and
+// which names share an ELF address must agree; fewer than FEWEST compared names also refuse.
+// Prints "<N> shared names compared, <M> left out as ambiguous" and a JSON line with the counts
+// and the SHA-256s of both ordering files and both
 // placement maps (their bytes, gunzipped) it read, which report.mjs checks.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { gunzipSync } from "node:zlib";
-import { owner, PAD, pair, readMap, SECOND_PAD } from "./map.mjs";
+import { mapBytes, owner, PAD, pair, readMap, SECOND_PAD } from "./map.mjs";
 
 export const PADS = ["corten_layout_pad", "corten_layout_pad2"];
 
@@ -175,7 +175,8 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
   const missing = want.filter((n) => !pos.has(n)), extra = [...pos.keys()].filter((n) => !wanted.has(n));
   if (missing.length) why.push(`${missing.length} functions of the unpadded .text not in the ordering file: ${some(missing)}`);
   if (extra.length) why.push(`${extra.length} names in the ordering file that are no function of the unpadded .text: ${some(extra)}`);
-  const outside = [...new Set(elsewhere.filter((y) => pos.has(y.name)).map((y) => `${y.name} (${y.output})`))];
+  const orderedNames = new Set(order);
+  const outside = [...new Set(elsewhere.filter((y) => orderedNames.has(y.name)).map((y) => `${y.name} (${y.output})`))];
   if (outside.length) why.push(`${outside.length} names the ordering file lists are also defined outside .text, where LLD orders by them too and this check does not read: ${some(outside)}`);
   // Each function of .text, by its symbol's section index (inText()), and its input section by its
   // own link's map (owner(), whose names match the symbol table's when the map is written with
@@ -289,9 +290,9 @@ export const FEWEST = 2;
  * counted; no other identity (an object, a section, a size) stands in for it. A name one side
  * alone has is that side's own. Fewer than FEWEST compared names refuse the change. The compared
  * functions are then taken in each placement's order (its map's order of their input sections,
- * then their distance into each), those at one place (ICF's folds, aliases) together, every name
- * among them: alike when the two lists are the same, so each compared function lies in one order
- * against every other and shares its place with the same others. Where LLD's order is not promised (sections of one key), a difference refuses too.
+ * then their distance into each), those at one place together. Separately, each name must share
+ * its ELF address with the same others, including across input section boundaries. Where LLD's
+ * order is not promised (sections of one key), a difference refuses too.
  */
 export function alike(base, head, pad, second = false) {
   const check = (x) => ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, pad, second, x.elsewhere ?? []);
@@ -327,6 +328,21 @@ export function alike(base, head, pad, second = false) {
   for (let k = 0; k < n && first < 0; k++) if (la[k]?.join("\n") !== lb[k]?.join("\n")) first = k;
   const shown = (x) => (x ? x.join(" and ") : "nothing");
   if (compared.length >= FEWEST && first >= 0) why.push(`the ${compared.length} names both placements define exactly once do not lie in one order: place ${first + 1} holds ${shown(la[first])} in the first and ${shown(lb[first])} in the second`);
+  if (compared.length >= FEWEST && first < 0) {
+    // Use the first compared name at each address as its representative on that side. Walk
+    // names in the same order on both sides so only changes in address sharing change the match.
+    const a = new Map(), b = new Map();
+    for (const name of compared) {
+      const x = pa.out.get(name).at, y = pb.out.get(name).at;
+      if (!a.has(x)) a.set(x, name);
+      if (!b.has(y)) b.set(y, name);
+      if (a.get(x) !== b.get(y)) {
+        const other = a.get(x) === name ? b.get(y) : a.get(x);
+        why.push(`${name} and ${other} share an ELF address in only one placement`);
+        break;
+      }
+    }
+  }
   return { ok: why.length === 0, why, pad, shuffled: true, shared: shared.length, compared: compared.length, leftOut, onlyBase: pa.all.size - shared.length, onlyHead: pb.all.size - shared.length, places: la.length, same: first < 0 ? la.length : first };
 }
 
@@ -369,7 +385,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // A map's input sections of .text, the symbols it lists in its other output sections, and the
   // SHA-256 of its bytes, gunzipped: what build.sh writes to maps/placements.sha256 before gzipping it.
   const mapOf = (file) => {
-    const raw = readFileSync(file), bytes = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw) : raw, outs = readMap(bytes.toString("utf8")), t = outs.find((o) => o.name === ".text");
+    const bytes = mapBytes(readFileSync(file)), outs = readMap(bytes.toString("utf8")), t = outs.find((o) => o.name === ".text");
     if (!t) { console.error(`layout.mjs: no .text output section in ${file}`); process.exit(2); }
     const elsewhere = outs.filter((o) => o !== t).flatMap((o) => o.inputs.flatMap((s) => s.symbols.map((y) => ({ name: y.name, at: y.at, output: o.name }))));
     return { inputs: t.inputs, elsewhere, sha: createHash("sha256").update(bytes).digest("hex") };

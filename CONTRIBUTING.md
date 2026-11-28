@@ -856,8 +856,9 @@ establish a general ranking.
          A plan may instead declare a workload's placements shuffled
          ([design Choice 72](docs/design.md#choice-placement-runs), Inner layout): placement i
          of each side then orders every function of that side's unpadded `.text` after the pad
-         by a key of the workload's seed, i and the function's name, one order for every binary
-         at i and another at each i, and the run records that each placement has exactly that
+         by a key of the workload's seed, i and the function's name. Binaries at i use the same
+         draw for shared names; each index gets its own draw, which can yield the same order.
+         The run records that each placement has exactly that
          binary's functions and the pad, the pad first, in that order, in place of the move by
          the pad and the neighbours. LLD gives an input section the earliest place the file
          gives any symbol of it, a function, a label or an object, local or global, and the run
@@ -872,9 +873,8 @@ establish a general ranking.
          defined more than once on either side is left out, never matched to a copy on the other
          by its object, its section or its source, and the run reports how many names it compared
          and how many it left out. A change whose base and head at one index lay the names it
-         compares in different orders (each name at one address, an alias or a fold, keeping its
-         place), or that leaves fewer than two to compare, has no reading across shuffled
-         placements.
+         compares in different orders or change which compared names share an ELF address, or
+         that leaves fewer than two to compare, has no reading across shuffled placements.
          The run also records, from the unpadded link's map, what the fifth point asks of every
          run, with code aligned beyond 16 bytes or without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
