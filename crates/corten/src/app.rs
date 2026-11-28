@@ -2697,7 +2697,11 @@ impl<S: Steps> Layer<S> {
                     page.credentials = credentials.for_error_page(headers);
                     let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
                     let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
-                    let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                    let mut page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                    // This refusal leaves before the ordinary stages read the caller mark.
+                    if watch.0.is_personal() {
+                        page.extensions_mut().insert(cache::Personal);
+                    }
                     // The error page's language, as on any other answer (below).
                     let asked = watch.0.asked_language();
                     let mut page = signal::follow(page, watch, self.zoned());

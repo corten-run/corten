@@ -2693,7 +2693,8 @@ rules something out.
     `an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert` gives each kind of
     answer it lists, under each policy it lists and in each scope (an API, pages, an area, an
     API inside the area), to the pass and to the stages, compares the lines and their order,
-    and asserts which kinds the pass takes;
+    and asserts which kinds the pass takes. For a bare `Unshared` answer it also compares
+    the marks kept for an in-process relay, with and without a caller read;
     `an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_is_inserted_into`
     compares every answer of an app with pages, an area and APIs outside and inside the area,
     through the router, with the same app's answer when a middleware's one more line sends it
@@ -3285,7 +3286,8 @@ rules something out.
     Take the one pass at the last stage out, so that every answer is given each line by the
     stages again, when it saves the short answers that take it fewer than about 150
     instructions (`router_cost.rs` with jemalloc: 450 on its text and 312 under an API at
-    `fad2caf29`); or when an answer is found that the pass and the stages send differently; or
+    `fad2caf29`); or when an answer is found that the pass and the stages send differently,
+    including the marks that an app relaying the answer in process can read; or
     when a stage comes to read something of an answer or its request that the pass's two tests
     cannot vary, so that nothing would hold the two paths equal. Search the lines of every
     answer for its tag again when a tag comes to be made from something of an answer's lines
@@ -3295,7 +3297,14 @@ rules something out.
     it kept what its lines say, or to keep that where a request reads nothing else, which
     `a_scope_s_layout` fails on.
 
-    Last checked: 2026-11-26, the tag of an answer that took the pass at `10bfc8a21` against
+    Last checked: 2026-11-28, reopened because at `1b9c1b0dd` a bare `Unshared` answer to a
+    request that read its caller kept the `Personal` mark in the one pass but not in the full stages.
+    The headers were already private on both paths. Keep the pass for its measured saving
+    on short answers above: the full stages now preserve the same mark and the parity test
+    checks it as well as the headers. An early refused write that renders an HTML error page
+    has its own signal. A separate router test checks that it too carries the caller read,
+    but a refusal that read no caller is not marked personal;
+    2026-11-26, the tag of an answer that took the pass at `10bfc8a21` against
     `e87ad02da`, instructions and allocations a request and idle memory by
     `bench/request-cost` (valgrind 3.24.0, rustc 1.100.0; no cycles), a scope's size and
     its fields' offsets on both, and the crate's tests against eleven ways of breaking it. Ten

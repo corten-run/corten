@@ -6462,6 +6462,43 @@ async fn a_later_vary_line_after_the_page_s_own_survives_and_is_not_kept() {
     }
 }
 
+/// The same constant error page with and without a caller extractor. Neither puts visitor data
+/// in the answer; only one reads who the page is for.
+fn denied_page_app(read_caller: bool) -> Router {
+    let routes = Table::new().route("/", get(|| async { "home" }).post(|| async { "saved" }));
+    let app = App::new(Routes::from(routes)).api(|routes| api_module::api(routes, 100));
+    let page = |req: Req| req.test_page("Denied", html! { <p>"Write declined."</p> });
+    if read_caller {
+        app.error_page(move |_: Failure, req: Req, _: Option<crate::Caller<Viewer>>| async move { page(req) }, ()).router()
+    } else {
+        app.error_page(move |_: Failure, req: Req| async move { page(req) }, ()).router()
+    }
+}
+
+async fn denied_write(router: &Router, path: &str, accept: &'static str) -> Response {
+    let req = Request::post(path).header("sec-fetch-site", "cross-site").header(header::ACCEPT, accept);
+    router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_refused_write_marks_only_the_error_page_that_read_the_caller() {
+    for read_caller in [false, true] {
+        let router = denied_page_app(read_caller);
+        for (path, accept, html) in
+            [("/", "text/html", true), ("/", "application/json", false), ("/v1/items/7", "text/html", false)]
+        {
+            let (parts, body) = denied_write(&router, path, accept).await.into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            assert_eq!(parts.status, StatusCode::FORBIDDEN);
+            assert_eq!(String::from_utf8_lossy(&body).contains("Write declined."), html);
+            assert_eq!(parts.headers[header::CACHE_CONTROL], "private, no-cache");
+            assert!(CDN_OVERRIDES.iter().all(|name| !parts.headers.contains_key(*name)));
+            assert!(parts.extensions.get::<crate::cache::Unshared>().is_some());
+            assert_eq!(parts.extensions.get::<crate::cache::Personal>().is_some(), read_caller && html, "{path} {accept}");
+        }
+    }
+}
+
 /// A cross-site write refused with the app's error page, which reads its messages after it built
 /// its page, names `Accept-Language` as any other answer does.
 #[tokio::test]
@@ -7475,7 +7512,9 @@ async fn settle_unstaged_private() -> String {
 /// runs, and is watched for a key, on every request. With
 /// `SETTLE_CDN` set, a staged middleware writes the six caching headers
 /// a CDN reads first on every answer, and each answer is checked to keep them (`kept`) or not
-/// (`dropped`), so the count includes their removal. Counting it under callgrind at two numbers of
+/// (`dropped`), so the count includes their removal. `denied-html` and `denied-caller` count an
+/// early refused write's constant HTML error page without and with a caller read, respectively.
+/// Counting it under callgrind at two numbers of
 /// requests gives the instructions per request. Run in release:
 /// `cargo test --release -p corten-run --all-features --lib --no-run`, then
 /// `SETTLE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::cache::what_settling_a_page_costs`
@@ -7517,6 +7556,18 @@ fn what_settling_a_page_costs() {
     let case = std::env::var("SETTLE_CASE").unwrap_or_else(|_| "public".to_string());
     let cdn = std::env::var("SETTLE_CDN").ok();
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    if case == "denied-html" || case == "denied-caller" {
+        let router = denied_page_app(case == "denied-caller");
+        runtime.block_on(async {
+            for _ in 0..requests {
+                let (parts, body) = denied_write(&router, "/", "text/html").await.into_parts();
+                assert_eq!(parts.status, StatusCode::FORBIDDEN);
+                assert_eq!(parts.headers[header::CACHE_CONTROL], "private, no-cache");
+                assert!(String::from_utf8_lossy(&body.collect().await.unwrap().to_bytes()).contains("Write declined."));
+            }
+        });
+        return;
+    }
     if case == "unstaged" || case == "control" {
         let router = App::new(settle_unstaged::router()).router();
         let control = tower::service_fn(|req: Request| async move {
