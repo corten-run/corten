@@ -155,7 +155,7 @@ class PageTests(unittest.TestCase):
         self.assertIn("Bad Gateway", page.text)
         self.assertNotIn("upstream diagnostic", page.text)
         self.assertEqual(api.status_code, 502)
-        self.assertFalse(api.headers["content-type"].startswith("text/html"))
+        self.assertEqual(api.headers["content-type"].split(";", 1)[0], "application/json")
 
     def test_a_record_that_is_not_one_is_a_502(self):
         bad = [{**RECORD, "extra": 1}, {k: v for k, v in RECORD.items() if k != "offers"}, {**RECORD, "summary": {**RECORD["summary"], "count": "1"}},
@@ -166,7 +166,13 @@ class PageTests(unittest.TestCase):
             source.client = httpx.AsyncClient(base_url="http://upstream.test", transport=httpx.MockTransport(lambda request: httpx.Response(200, json=record)))
             with patch.object(main, "marketplace_source", source):
                 for path in ["/marketplace/en-US/item_1", "/api/marketplace/item_1"]:
-                    self.assertEqual(self.client.get(path).status_code, 502, (path, record.keys()))
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 502, (path, record.keys()))
+                    if path.startswith("/api/"):
+                        self.assertEqual(response.headers["content-type"].split(";", 1)[0], "application/json")
+                    else:
+                        self.assertTrue(response.headers["content-type"].startswith("text/html"))
+                        self.assertEqual(response.headers["cache-control"], "private, no-store")
             asyncio.run(source.client.aclose())
 
 
