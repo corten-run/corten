@@ -229,6 +229,18 @@ test("native live runtime descriptions match their checked-in build inputs", () 
   }
 });
 
+test("both Phoenix recipes pin the images for the advertised OTP patch and release OS", () => {
+  // The Elixir tag names only the OTP major; the digest distinguishes patch releases.
+  const expected = [
+    "FROM elixir:1.20.5-otp-29@sha256:028a755eef5692f4f64b06c68104b7a326e0f610646e9d8faa8d3a651f1060f3 AS tools",
+    "FROM debian:trixie-20261123-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0",
+  ];
+  for (const suite of ["fullstack", "live"]) {
+    const recipe = readFileSync(new URL(`../${suite}/apps/phoenix/Dockerfile`, import.meta.url), "utf8");
+    assert.deepEqual(recipe.split(/\r?\n/).filter((line) => /^FROM (elixir|debian):/.test(line)), expected, suite);
+  }
+});
+
 test("every required native live input gates source registration independently", () => {
   for (const [app, bridge] of [["topcoat", "static/bridge.js"], ["leptos", "public/bridge.js"], ["corten", "src/parity_screen.js"], ["rails", "client.js"], ["phoenix", "client.js"], ["laravel", "client.js"]]) {
     const original = manifest("recoverable-live", app);
