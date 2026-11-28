@@ -1,5 +1,11 @@
 # Server runtime refresh
 
+**Phoenix update, 2026-11-28.** The Fullstack and Live Dockerfiles now build on
+Elixir 1.20.5 with [OTP 29.1.3](https://github.com/erlang/otp/releases/tag/OTP-29.1.3)
+and run the release on Debian 13.8 (`trixie-20261123-slim`), both by digest.
+This changes the inputs for new builds. The earlier measurements below still
+describe their own binaries; no performance comparison or requalification is implied.
+
 The runtime slices were prepared in an author worktree; origin was fetched and
 read at `4966977c8b8a7a367c0ed9087e1ae4e0b938f288` on 2026-11-13. Author-local
 revision identities remain in retained operator receipts, not published commit citations.

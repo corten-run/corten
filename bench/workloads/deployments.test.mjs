@@ -214,7 +214,7 @@ test("live representatives use dispatched native ports and missing recovery port
 test("native live runtime descriptions match their checked-in build inputs", () => {
   const sources = [
     ["rails", "CRuby 4.0.10", "ruby:4.0.10-slim@sha256:"],
-    ["phoenix", "Elixir 1.20.5 / OTP 29.1.2 release", "elixir:1.20.5-otp-29@sha256:"],
+    ["phoenix", "Elixir 1.20.5 / OTP 29.1.3 release", "elixir:1.20.5-otp-29@sha256:"],
     ["gin", "Go 1.27.4 native", "golang:1.27.4-alpine@sha256:"],
   ];
   for (const [app, runtime, image] of sources) {
