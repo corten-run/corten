@@ -85,7 +85,7 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
 
 /// Whether the browser test runs the app (`SMOKE_TRUSTED_TYPES=1`): it then gets its own policy
 /// and routes (`smoke.rs`), among them a stream that never ends, so a deployment leaves it unset.
-fn for_the_smoke() -> bool {
+pub(crate) fn for_the_smoke() -> bool {
     std::env::var("SMOKE_TRUSTED_TYPES").is_ok_and(|on| on == "1")
 }
 

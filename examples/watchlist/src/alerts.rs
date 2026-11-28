@@ -4,11 +4,12 @@
 //! saving and has its status line and list read again (the whole page, without JavaScript).
 use std::{
     collections::VecDeque,
+    convert::Infallible,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use corten::{i18n::Minor, prelude::*};
+use corten::{extract::FromRequestParts, http::request::Parts, i18n::Minor, prelude::*};
 
 use crate::{
     account::Viewer,
@@ -244,6 +245,19 @@ fn AlertList<'a>(t: Msg, alerts: &'a [Alert]) -> impl Patch {
     }
 }
 
+/// Only the smoke's first full load and first part read need to render a known receipt as still
+/// saving, however long the browser took to send the read. It does not change the store.
+pub(crate) struct SmokeSaving(bool);
+
+impl<S: Sync> FromRequestParts<S> for SmokeSaving {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
+        let asked = parts.headers.get("watchlist-smoke-alert-saving").is_some_and(|value| value == "1");
+        Ok(Self(asked && crate::app::for_the_smoke()))
+    }
+}
+
 /// The alerts page, which reads a write that has not landed yet. Until reads have the address's
 /// receipt the page says so and asks for its status line and list to be read again, which the
 /// runtime does in place however the page was reached, leaving the form as the user has it
@@ -258,9 +272,13 @@ pub(crate) async fn page(
     viewer: Option<Caller<Viewer>>,
     State(store): State<AlertStore>,
     visitor: Visitor,
+    SmokeSaving(saving): SmokeSaving,
     Params(at): Params<url::Alerts>,
 ) -> HtmlResult<Patches> {
-    let read = store.read(Instant::now(), visitor.known(), at.saved);
+    let mut read = store.read(Instant::now(), visitor.known(), at.saved);
+    if saving && read.status == Status::Saved {
+        read.status = Status::Saving;
+    }
     let t: Msg = req.t();
     // A read again from a write's patch: the status line and the list, asking again from this
     // route while the write is landing. A view renders only when it is sent, so a page load does

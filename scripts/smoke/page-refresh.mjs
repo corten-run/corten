@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, steps, pollFor } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, steps, pollFor, cleanUp } from "./helpers.mjs";
 import { liveRegion } from "./live-region.mjs";
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
@@ -33,59 +33,114 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // reached, and the form beside them stays as the user has it. Its head's ReadAgain is for a
     // browser without JavaScript.
     {
+      const { step } = steps(15_000, "the first alerts part did not draw and settle in 15 s");
+      const url = await step(pending);
       /** @type {string[]} */
       const parts = [];
       /** @type {string[]} */
       const whole = [];
+      let initial = true;
       const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
         if (r.method() !== "GET" || !r.url().includes("/alerts?saved=")) return;
+        if (initial && r.url() === url && r.isNavigationRequest()) {
+          initial = false;
+          return;
+        }
         (r.headers()["corten"] === "action" ? parts : whole).push(r.url());
       };
-      const url = await pending();
-      // The page's own tag, as the server drew it, so the check below can tell it from the one an
-      // answer put in its place.
-      await page.addInitScript(() =>
-        document.addEventListener("DOMContentLoaded", () => {
-          (/** @type {any} */ (window)).__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
-        }),
-      );
-      await page.goto(url);
+      // Use the real renderer, not the race between the browser's first poll and the store's
+      // 1.5 s lag. Only the document and its first part read render as still saving. Hold the
+      // first read until the original DOM is captured, the next until the asking patch is seen.
+      const first = Promise.withResolvers();
+      const next = Promise.withResolvers();
+      let documentRead = false;
+      let partRead = false;
+      const saving = async (/** @type {import("@playwright/test").Route} */ route) => {
+        const request = route.request();
+        if (request.method() !== "GET") return route.fallback();
+        if (request.headers()["corten"] === "action") {
+          if (partRead) {
+            await next.promise;
+            return route.fallback();
+          }
+          partRead = true;
+          await first.promise;
+        } else if (!documentRead && request.isNavigationRequest()) documentRead = true;
+        else return route.fallback();
+        return route.fallback({ headers: { ...request.headers(), "watchlist-smoke-alert-saving": "1" } });
+      };
       page.on("request", onPart);
-      const { stayed: regionStayed } = await liveRegion(page, "alert-status");
-      const waiting = await saved();
-      await page.fill("input[name=above]", "123.45");
-      await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
-      const entries = await page.evaluate(() => history.length);
-      await savedSoon();
-      check("reading an alert's status again replaces only the live region's message", await regionStayed());
-      check(
-        "a page's part waiting for a write is read again after a full load, not the page",
-        waiting === "Saving..." && (await saved()) === "Saved." && parts.length > 0 && whole.length === 0 && page.url() === url,
-        `${waiting} -> ${await saved()} after ${parts.length} part and ${whole.length} page reads`,
-      );
-      const kept = await page.evaluate(() => ({
-        marker: (/** @type {any} */ (window)).__marker,
-        entries: history.length,
-        above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
-      }));
-      check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
-      // The part's answer that asked again put its tag in the page's tag's place: one tag, the
-      // last read's, and not the page's own (whose address is the same here).
-      const tagged = await page.evaluate(() => {
-        const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
-        const first = (/** @type {any} */ (window)).__pageTag;
-        return {
-          tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
-          pageTag: !!first,
-          pageTagGone: !!first && !first.isConnected && !all.includes(first),
-        };
-      });
-      const tags = tagged.tags;
-      check(
-        "a page part's answer that asks again takes the place of the tag that asked",
-        tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
-        `${JSON.stringify(tagged)} after ${parts.at(-1)}`,
-      );
+      let before, regionStayed;
+      try {
+        await step(() => page.route(url, saving));
+        await step(() => page.goto(url));
+        const region = await step(() => liveRegion(page, "alert-status"));
+        regionStayed = region.stayed;
+        before = await step(() => page.evaluateHandle(() => ({
+          tag: document.querySelector("main template[data-corten-read-again][data-from]"),
+          message: document.getElementById("alert-status"),
+        })));
+        await step(() => page.fill("input[name=above]", "123.45"));
+        const entries = await step(() => page.evaluate(() => {
+          (/** @type {any} */ (window)).__marker = 8;
+          return history.length;
+        }));
+        first.resolve(undefined);
+        const tagged = await step(async () => {
+          // A change of message element (not text) shows the patch drew. Do not wait for the
+          // tag to change: if it did not, the assertion must see the old one, not the next reply.
+          const draw = await page.waitForFunction(({ tag, message }) => {
+            const drawn = document.getElementById("alert-status");
+            if (!drawn || drawn === message) return false;
+            const tags = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
+            return {
+              status: drawn.textContent,
+              tags: tags.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
+              pageTagGone: !!tag && !tag.isConnected,
+            };
+          }, before, { timeout: 6000 });
+          try {
+            return await draw.jsonValue();
+          } finally {
+            await draw.dispose();
+          }
+        });
+        check(
+          "a page part's answer that asks again takes the place of the tag that asked",
+          !!tagged && tagged.status === "Saving..." && tagged.tags.length === 1 && tagged.tags[0] === parts[0] && tagged.pageTagGone,
+          `${JSON.stringify(tagged)} after ${parts[0]}`,
+        );
+        next.resolve(undefined);
+        await step(savedSoon);
+        const regionKept = await step(() => {
+          regionStayed = undefined;
+          return region.stayed();
+        });
+        check("reading an alert's status again replaces only the live region's message", regionKept);
+        const terminal = await step(saved);
+        check(
+          "a page's part waiting for a write is read again after a full load, not the page",
+          region.text === "Saving..." && terminal === "Saved." && parts.length >= 2 && whole.length === 0 && page.url() === url,
+          `${region.text} -> ${terminal} after ${parts.length} part and ${whole.length} page reads`,
+        );
+        const kept = await step(() => page.evaluate(() => ({
+          marker: (/** @type {any} */ (window)).__marker,
+          entries: history.length,
+          above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
+        })));
+        check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
+      } catch (error) {
+        page.off("request", onPart);
+        throw error;
+      } finally {
+        first.resolve(undefined);
+        next.resolve(undefined);
+        await cleanUp(
+          () => within(3000, "unroute the first alerts part", page.unroute(url, saving)),
+          () => regionStayed && within(3000, "release the alerts live-region check", regionStayed()),
+          () => before && within(3000, "release the original alerts DOM handle", before.dispose()),
+        );
+      }
       const settled = parts.length;
       await page.waitForTimeout(2200);
       check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);
