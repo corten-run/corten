@@ -10,8 +10,8 @@
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
 // the growth of the process's resident memory (VmRSS) by the connections. It prints that growth in
-// bytes and the page size (`getconf PAGESIZE`), which CONTRIBUTING's gate reads. With --allocator,
-// a separate diagnostic run also samples jemalloc and the serving thread. The kernel's socket
+// bytes and the page size (`getconf PAGESIZE`). With --allocator it also samples jemalloc and
+// the serving thread; the gate decides on jemalloc live growth. The kernel's socket
 // buffers are not the process's and are not counted. A run prints no figure when an answer was
 // not the case's or did not come in 30 seconds, when the probe had closed a connection, or when
 // its open files did not grow by the number of connections.
@@ -122,7 +122,7 @@ try {
   }
   const what = values.silent ? `sent nothing to the probe for ${name}` : `answered ${requests} ${name}`;
   // In JSON a connection that was sent nothing answered 0 requests. The growth and the page size
-  // decide the gate only for observer-off runs; `bytes` is rounded and does not.
+  // describe resident memory; only allocator live growth decides the gate.
   const measured = { kind: diagnostic ? "idle-allocator" : "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, grown: after - before, page, seconds, ...diagnostic };
   if (values.json) json = JSON.stringify(measured);
   else {

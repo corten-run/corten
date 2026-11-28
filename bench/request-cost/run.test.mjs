@@ -283,7 +283,7 @@ test("count.mjs --allocations prints calls a request, and no figure for a dump w
 });
 
 test("idle.mjs prints a figure when the probe's open files grew by the connections, counted from after the warm ones closed", { skip }, async () => {
-  // The required invocation does not inherit the idle observer or depend on a reply.
+  // The invocation without --allocator does not inherit the idle observer or depend on a reply.
   const run = await running("idle.mjs", ["--connections", "40"], { PROBE_IDLE_MEMORY: "1", STAND_IN_SWEEP_FRAME: "missing" });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.observer, null);
@@ -401,15 +401,15 @@ test("each kind of run compare.mjs asks for is one the kit takes, and its --json
     // The growth and the page size the gate decides by, beside the rounded figure.
     const [before, after, grown, bytes] = standInReadings(requests);
     assert.deepEqual([found.requests, found.connections, found.before, found.after, found.grown, found.page, found.bytes], [requests, 40, before, after, grown, 4096, bytes], file);
-    assert.equal(found.kind, "idle", file);
-    assert.equal(Object.hasOwn(found, "allocator") || Object.hasOwn(found, "sweepNanos"), false, file);
+    assert.equal(found.kind, "idle-allocator", file);
+    assert.deepEqual(found.allocator, { live: 4920, threadNet: -120, active: 163840 }, file);
     assert.equal(compare.figure(text, expect), null, file);
     const diagnostic = await take(file.replace("idle-", "idle-allocator-"), ["--connections", "40"], { connections: 40 });
     assert.equal(diagnostic.found.kind, "idle-allocator", file);
     assert.deepEqual(diagnostic.found.allocator, { live: 4920, threadNet: -120, active: 163840 }, file);
     assert.deepEqual(diagnostic.found.sweepNanos, [246_002, 246_003], file);
     assert.deepEqual(diagnostic.connections, connections, file);
-    assert.equal(compare.figure(diagnostic.text, { ...expect, connections: 40 }), null, file);
+    assert.deepEqual(compare.figure(diagnostic.text, { ...expect, connections: 40 }), diagnostic.found, file);
   }
   // The page size getconf gives is the one the JSON carries. Its resident memory is still the
   // stand-in's, in 4,096-byte pages: the printed JSON is read here, and the 65,536-byte rule is
