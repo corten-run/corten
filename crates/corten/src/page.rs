@@ -782,6 +782,13 @@ pub struct NavLink<'a> {
     prefetch: bool,
 }
 
+impl NavLink<'_> {
+    /// Whether this link writes `aria-current="page"` for this request.
+    pub fn is_current(&self) -> bool {
+        self.current
+    }
+}
+
 impl crate::view::__private::Writes for NavLink<'_> {
     type Static = NavLink<'static>;
     const WRITES: &'static [&'static str] =
