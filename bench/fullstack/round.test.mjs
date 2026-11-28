@@ -8,7 +8,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
-import { admitCount, beginCount, countFinish, countIdentity, readCount } from "./count-admission.mjs";
+import { admitCount, beginCount, checkCountCollection, countFinish, countIdentity, readCount } from "./count-admission.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
 import { roundsIn } from "./trend.mjs";
@@ -1104,7 +1104,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.ok(finished.deleted, finished.calls.join("\n---\n").slice(0, 2000));
     assert.equal(finished.status, 1);
     assert.ok(!existsSync(join(fullstack, "results", "r1")));
-    for (const mode of ["failed", "plain finish", "torn finish", "different run", "occupied", "new start", "new finish", "no count", "new count"]) {
+    for (const mode of ["failed", "plain finish", "torn finish", "different run", "occupied", "new start", "new finish", "no count", "new count", "stale summary"]) {
       const local = join(fullstack, "results", "r1");
       const remoteResult = join(dirname(remoteProgress), "results", "r1");
       const { argv, options } = prepare({ log: done, collect: true });
@@ -1113,11 +1113,14 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       const instructions = join(remoteResult, "instructions.json");
       writeFileSync(instructions, old);
       writeFileSync(join(remoteResult, "other-raw.txt"), "partial evidence\n");
-      if (["occupied", "new start", "new finish", "new count"].includes(mode)) {
+      if (["occupied", "new start", "new finish", "new count", "stale summary"].includes(mode)) {
         const file = join(root, "fresh.json");
         writeFileSync(file, JSON.stringify({ "corten/json": countRows(1000) }));
         admitCount(remoteResult, id, file, ["corten/json"], 3);
-        writeFileSync(join(remoteResult, "summary.json"), JSON.stringify({ countAdmission: countIdentity(readCount(remoteResult)), instructions: { "corten/json": { user: 1000 } } }));
+        writeFileSync(join(remoteResult, "summary.json"), JSON.stringify({
+          countAdmission: countIdentity(readCount(remoteResult)),
+          instructions: { "corten/json": { user: mode === "stale summary" ? 123456 : 1000, kernel: 1000, kernelLoad: "second", runs: 3, failed: 0 } },
+        }));
       } else writeFileSync(join(remoteResult, "summary.json"), JSON.stringify({
         countAdmission: countIdentity(readCount(remoteResult)), instructions: mode === "no count" ? {} : { "corten/json": { user: 123456 } },
       }));
@@ -1143,6 +1146,11 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
         assert.ok(!existsSync(join(local, "instructions.json")), message);
         assert.equal(readCount(local)?.rows, null, message);
       } else if (mode === "new count") assert.equal(readCount(local)?.rows["corten/json"][0].userPerRequest, 1000, message);
+      else if (mode === "stale summary") {
+        assert.ok(!existsSync(local), message);
+        assert.equal(JSON.parse(raw("instructions.json"))["corten/json"][0].userPerRequest, 1000, message);
+        assert.equal(JSON.parse(raw("summary.json")).instructions["corten/json"].user, 123456, message);
+      }
       else if (mode === "occupied") {
         assert.equal(readFileSync(join(local, "instructions.json"), "utf8"), old, message);
         assert.deepEqual(readdirSync(local), ["instructions.json"], message);
@@ -1397,7 +1405,8 @@ test("summary rebuild and trend never use unadmitted counts, while legacy offlin
       assert.deepEqual(summary.build, other);
       return summary;
     };
-    const trend = () => roundsIn(results)[0].summary.instructions;
+    const trendSummary = () => roundsIn(results)[0].summary;
+    const trend = () => trendSummary().instructions;
     const legacy = rebuild();
     assert.ok(!Object.hasOwn(legacy, "countAdmission"));
     assert.equal(legacy.instructions["corten/json"].user, 123456);
@@ -1405,14 +1414,33 @@ test("summary rebuild and trend never use unadmitted counts, while legacy offlin
     const id = beginCount(dir);
     assert.deepEqual(trend(), {}, "still on the old summary, before rebuilding");
     assert.deepEqual(rebuild().instructions, {});
+    assert.equal(checkCountCollection(dir, id)?.rows, null, "an empty instruction section is a valid managed non-count outcome");
     assert.equal(readFileSync(join(dir, "instructions.json"), "utf8"), old);
     const file = join(root, "fresh.json");
-    writeFileSync(file, JSON.stringify({ "corten/json": countRows(1000) }));
-    assert.throws(() => admitCount(dir, id, file, ["corten/json", "corten/page"], 3), /each requested target/);
+    const rows = { "corten/json": [3000, 400, 1000].map((n) => countRows(n)[0]), "corten/page": { failed: "no container" } };
+    writeFileSync(file, JSON.stringify(rows));
+    assert.throws(() => admitCount(dir, id, file, ["corten/json"], 3), /each requested target/);
     assert.deepEqual(trend(), {});
-    admitCount(dir, id, file, ["corten/json"], 3);
-    assert.equal(rebuild().instructions["corten/json"].user, 1000);
-    assert.equal(trend()["corten/json"].user, 1000);
+    admitCount(dir, id, file, ["corten/json", "corten/page"], 3);
+    const fresh = rebuild();
+    assert.deepEqual(fresh.instructions, {
+      "corten/json": { user: 1000, kernel: 1000, kernelLoad: "second", runs: 3, failed: 0 },
+      "corten/page": { failed: "no container" },
+    });
+    assert.deepEqual(checkCountCollection(dir, id)?.rows, rows);
+    assert.deepEqual(trend(), fresh.instructions);
+    const summaryPath = join(dir, "summary.json");
+    const saved = { ...fresh, instructions: { ...fresh.instructions, "corten/json": { ...fresh.instructions["corten/json"], user: 123456 } } };
+    writeFileSync(summaryPath, JSON.stringify(saved));
+    assert.equal(saved.countAdmission, countIdentity(readCount(dir)));
+    assert.deepEqual(readCount(dir)?.rows, rows, "only the saved summary changed");
+    assert.equal(checkCountCollection(dir, id), null);
+    assert.deepEqual(trend(), {});
+    assert.deepEqual(trendSummary().build, other);
+    assert.equal(JSON.parse(readFileSync(summaryPath, "utf8")).instructions["corten/json"].user, 123456, "trend does not rewrite evidence");
+    assert.deepEqual(rebuild().instructions, fresh.instructions);
+    assert.deepEqual(checkCountCollection(dir, id)?.rows, rows);
+    assert.deepEqual(trend(), fresh.instructions);
     writeFileSync(join(dir, "instructions.json"), old);
     assert.deepEqual(trend(), {}, "a standalone write cannot certify itself for the managed round");
     rmSync(join(dir, "count-admission.json"));

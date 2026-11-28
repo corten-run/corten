@@ -29,7 +29,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyK6Provenance } from "../load-tool.mjs";
-import { countIdentity, readCount } from "./count-admission.mjs";
+import { matchesCountSummary, readCount } from "./count-admission.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -257,8 +257,7 @@ export function roundsIn(results) {
       const { commit, dirty } = of;
       const summary = JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8"));
       const count = readCount(join(results, d.name));
-      if ((count || Object.hasOwn(summary, "countAdmission"))
-        && (!count?.rows || summary.countAdmission !== countIdentity(count))) summary.instructions = {};
+      if ((count || Object.hasOwn(summary, "countAdmission")) && !matchesCountSummary(count, summary)) summary.instructions = {};
       // The matched tier's rounds are m<n>; one in an r<n> folder would mix its numbers into the trend.
       if (summary.tier === "matched") throw new Error(`${d.name}'s summary.json is of the matched tier, whose rounds are m<n>: it does not belong among the defaults tier's r<n>`);
       return [{ round: d.name, commit, dirty, at: time(d.name, commit), summary }];

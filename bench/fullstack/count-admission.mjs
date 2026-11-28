@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 export const COUNT_RECEIPT = "count-admission.json";
 export const COUNT_OUTPUT = "instructions.json";
@@ -33,6 +34,32 @@ export function readCount(/** @type {string} */ dir) {
 
 export const countIdentity = (/** @type {ReturnType<typeof readCount>} */ count) =>
   count?.id ? `${count.id}:${count.digest ?? "-"}` : null;
+
+const median = (/** @type {number[]} */ values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
+
+/** The instruction section summarize writes, from the exact rows (or none) that it can read. */
+export function projectCountRows(rows) {
+  return Object.fromEntries(Object.entries(rows ?? {}).map(([key, runs]) => {
+    if (!Array.isArray(runs)) return [key, { failed: runs.failed }];
+    // A row with kernelPass counted kernel instructions over a second load. Older rows used the
+    // same load as user instructions; a summary may contain both kinds.
+    const second = runs.filter((r) => r?.kernelPass != null).length;
+    const kernelLoad = second === runs.length ? "second" : second === 0 ? "same" : "mixed";
+    return [key, {
+      user: median(runs.map((r) => r.userPerRequest)),
+      kernel: median(runs.map((r) => r.kernelPerRequest)),
+      kernelLoad,
+      runs: runs.length,
+      failed: runs.reduce((n, r) => n + r.failed + (r.kernelPass?.failed ?? 0), 0),
+    }];
+  }));
+}
+
+export function matchesCountSummary(/** @type {ReturnType<typeof readCount>} */ count, summary) {
+  if (!count?.id || summary?.countAdmission !== countIdentity(count)) return false;
+  try { return isDeepStrictEqual(summary.instructions, projectCountRows(count.rows)); }
+  catch { return false; }
+}
 
 export function syncDirectory(/** @type {string} */ dir) {
   // Directory fsync is used on the Linux guest. Windows does not open directories this way.
@@ -99,9 +126,7 @@ export function checkCountCollection(/** @type {string} */ dir, /** @type {strin
   try {
     const file = join(dir, "summary.json");
     if (!lstatSync(file, { throwIfNoEntry: false })?.isFile()) return null;
-    const { countAdmission, instructions } = JSON.parse(readFileSync(file, "utf8"));
-    return countAdmission === countIdentity(count) && instructions && typeof instructions === "object"
-      && !Array.isArray(instructions) && (count.rows !== null || Object.keys(instructions).length === 0) ? count : null;
+    return matchesCountSummary(count, JSON.parse(readFileSync(file, "utf8"))) ? count : null;
   } catch {
     return null;
   }

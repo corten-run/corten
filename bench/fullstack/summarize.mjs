@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps, tier } from "./apps.mjs";
-import { countIdentity, COUNT_OUTPUT, readCount } from "./count-admission.mjs";
+import { countIdentity, COUNT_OUTPUT, projectCountRows, readCount } from "./count-admission.mjs";
 import { rawOf } from "./pack.mjs";
 import { roundNameError } from "./round.mjs";
 import { classes, kinds, slowMs, slowShare } from "./mixed.mjs";
@@ -40,7 +40,6 @@ if (existsSync(skippedFile)) {
 
 summary.ssr = ssrOf(raw, Object.keys(apps));
 
-const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 const count = readCount(dir);
 let rebuildManaged = false;
 if (!count) {
@@ -50,14 +49,7 @@ if (!count) {
 }
 if (count || rebuildManaged) Object.assign(summary, { countAdmission: countIdentity(count) });
 const instructions = count || rebuildManaged ? count?.rows : read(join(dir, COUNT_OUTPUT));
-for (const [key, runs] of Object.entries(instructions ?? {})) {
-  if (!Array.isArray(runs)) { summary.instructions[key] = { failed: runs.failed }; continue; }
-  // Which load kernel instructions came from: a row with `kernelPass` counted them over a second
-  // load of their own (#2151); one without, from before that, over the load user instructions are.
-  const second = runs.filter((r) => r?.kernelPass != null).length;
-  const kernelLoad = second === runs.length ? "second" : second === 0 ? "same" : "mixed";
-  summary.instructions[key] = { user: median(runs.map((r) => r.userPerRequest)), kernel: median(runs.map((r) => r.kernelPerRequest)), kernelLoad, runs: runs.length, failed: runs.reduce((n, r) => n + r.failed + (r.kernelPass?.failed ?? 0), 0) };
-}
+summary.instructions = projectCountRows(instructions);
 
 const rows = read(join(dir, "browser.json")) ?? [];
 for (const row of rows) {

@@ -1472,10 +1472,11 @@ three runs:
    it. The log's `all done` only says whether a round
    that has ended finished or stopped short: it is printed before the unit's process exits, and a
    round going on with `--from` keeps the earlier run's log, so one read while the unit is active
-   is not the round's end, whichever run printed it. For Fullstack, a complete progress finish
-   naming the downloaded count receipt and its matching summary is also required before
-   publication. A plain finish is not proof of an older count. The collector keeps the original
-   download under `bench/fullstack/diagnostics/`, including on refusal or partial completion.
+   is not the round's end, whichever run printed it. Fullstack publication also requires a
+   complete progress finish naming the downloaded count receipt and a summary whose instruction
+   values match the admitted rows. A plain finish is not proof of an older count. The collector
+   keeps the original download under `bench/fullstack/diagnostics/`, including on refusal or
+   partial completion.
    Inspect unverified downloads there rather than unpacking them over a replay directory.
    A verified Fullstack archive publishes only into an absent round directory. It never overlays
    an already-populated directory, including on same-name recollection. This requires local space
@@ -1626,8 +1627,9 @@ three runs:
    output after a settled successful exit covering the requested targets and repeats. The durable
    receipt names the logical round and the exact count bytes. A reboot retains that identity only
    when it agrees with the saved progress; continuing past an uncompleted count does not adopt an
-   old file. Summary rebuilds and trend omit unadmitted count rows without discarding other
-   evidence. A standalone merge that changes admitted bytes does not refresh a managed receipt.
+   old file. Summary rebuilds and trend omit unadmitted counts without discarding other evidence.
+   Trend also omits counts whose saved values disagree with a fresh summary of the admitted rows.
+   A standalone merge that changes admitted bytes does not refresh a managed receipt.
    Already-saved legacy results without a receipt can still be read offline. A count
    does not depend on what else the machine is doing, so it is steadier than
    time; it does not see waiting (I/O, locks) or how well the instructions run.
