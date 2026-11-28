@@ -14,7 +14,7 @@ import { componentLifecycle } from "./smoke/component-lifecycle.mjs";
 import { liveFragments, liveRegionControls, streamCompression, streamRecovery } from "./smoke/live-streams.mjs";
 import { partReads, partsInPatches } from "./smoke/parts.mjs";
 import { trustedTypes } from "./smoke/trusted-types.mjs";
-import { submitQueue } from "./smoke/submit-queue.mjs";
+import { queuedPage, submitQueue } from "./smoke/submit-queue.mjs";
 import { busyForms } from "./smoke/busy.mjs";
 import { sectionNavigation, redirects, guardedNavigation, shellChanges, navigationMarks, currentLinks, fragmentTargets, earlyNavigation } from "./smoke/navigation.mjs";
 import { scroll } from "./smoke/scroll.mjs";
@@ -51,6 +51,7 @@ await runSmoke(async (browser) => {
   await formFailures(page, failWatch, openFeeds);
   const { zero } = await submitKeys(page, holdWatch, failWatch, errors, browser, bug, cut);
   await submitQueue(holdWatch, page, abandoned, errors, zero);
+  await queuedPage(browser);
   const { redirectName } = await busyForms(page);
   const { sectors, styleLinks, noteBorder } = await sectionNavigation(feedSources, page, redirectName, openFeeds, holdWatch, abandoned, openStreams, swaps);
   await scroll(swaps, page, errors, browser, noSwaps);

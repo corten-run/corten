@@ -1198,10 +1198,13 @@ network failed, or the browser is leaving the page) or one the runtime does not 
 (`Errors::refuse`, a 409 or 410), which the user reads before anything else goes; or a 5xx,
 after which the server may or may not have applied the write; when the answer sends the browser
 elsewhere (Corten's own redirect, `corten-location`, or a reload), or removed the form or the
-pressed button; and a navigation aborts everything, so a
-late answer never patches a page it was not meant for. A screen whose every press is a step of
-its own (a count's + and -, each a delta the server adds) keeps its own ordered queue in its
-script: the form sends where the user ended up, not each step.
+pressed button. A navigation aborts in-flight submits, so a late answer never patches a page
+it was not meant for. If a navigation draws a page at another address between the waiting press
+and its retry, the runtime drops that submit too, even if the new page has a form with the same `id`.
+If a connecting component presses a form while the navigation is drawing, its waiting press
+belongs to the new page only if that same form element is still there when the draw finishes.
+A screen whose every press is a step of its own (a count's + and -, each a delta the server adds)
+keeps its own ordered queue in its script: the form sends where the user ended up, not each step.
 
 A `204 No Content` or `205 Reset Content` that is not Corten's redirect (`corten-location`), a
 patch or a page (`StatusCode::NO_CONTENT`, the answer for a write with nothing to say) is the
