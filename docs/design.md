@@ -12024,17 +12024,18 @@ rules something out.
     one and dropped it, and in tokio 1.54.1 a timer made and a timer dropped each take the one
     lock of the runtime's timer wheel, so on the multi-threaded runtime every thread serving such
     requests queued there twice a request. A connection `corten::serve` accepts now keeps one
-    (`crates/corten/src/deadline.rs`) once two distinct polls of the connection have returned
-    pending with a deadline of its newly waiting. Until then those deadlines make their own, as
-    before. A deadline that borrows the connection's timer moves it later (`Sleep::reset`, a
-    compare-and-swap with no lock while the timer is still set and the new time is not earlier)
-    and gives it back still set; the timer is dropped with the connection. A connection on
-    which only one deadline waits makes none. The connection's task owns the timer and lends
-    it to the thread only while the connection is polled, under a number of the connection's own,
-    so a deadline finds it there and gives it back only to the connection that made it. A deadline
-    that finds none makes its own and drops it, whether the connection has not made a timer,
-    another deadline is using it, or the request is polled anywhere else (`app.router()` served
-    another way, a call a layer moved to another task).
+    (`crates/corten/src/deadline.rs`) once two distinct polls of the connection have each
+    returned pending after a deadline of its made a timer of its own during that poll (the
+    deadline need not still be waiting when the poll returns). Until then those deadlines make
+    their own, as before. A deadline that borrows the connection's timer sets it to its own
+    time (`Sleep::reset`, a compare-and-swap with no lock while the timer is still set and the
+    new time is not earlier) and gives it back still set; the timer is dropped with the
+    connection. A connection only one of whose polls ends so makes none. The connection's task
+    owns the timer and lends it to the thread only while the connection is polled, under a number
+    of the connection's own, so a deadline finds it there and gives it back only to the
+    connection that made it. A deadline that finds none makes its own and drops it, whether the
+    connection has not made a timer, another deadline is using it, or the request is polled
+    anywhere else (`app.router()` served another way, a call a layer moved to another task).
 
     What it gave is requests a second where threads queued on that lock, measured on this form
     (`bf13f4822` against `main` at `e2d0c464e`; every run, with its scripts, under the tag

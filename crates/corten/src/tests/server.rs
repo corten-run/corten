@@ -3341,6 +3341,7 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
     use std::{
         future::{poll_fn, Future},
         pin::pin,
+        task::Poll,
         time::Instant,
     };
     use tokio::io::AsyncWriteExt;
@@ -3350,16 +3351,20 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
     let (armed, mut arming) = tokio::sync::mpsc::unbounded_channel();
     // The inner answer cannot be sent to the client once the outer runtime is gone.
     let (saw, seen) = std::sync::mpsc::channel();
+    // Dropped when the test ends, also when it fails: an inner request still waiting then gives
+    // up, so its thread does not stay blocked on a timer nothing will fire.
+    let (over, gone) = tokio::sync::watch::channel(());
     let inner_routes = Table::new().route("/never", get(std::future::pending::<&'static str>));
     let inner = App::new(Routes::from(inner_routes)).deadline(DEADLINE).dev(true).router();
     let relay = get(move || {
-        let (inner, armed, saw) = (inner.clone(), armed.clone(), saw.clone());
+        let (inner, armed, saw, mut gone) = (inner.clone(), armed.clone(), saw.clone(), gone.clone());
         async move {
             tokio::task::block_in_place(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                let (status, body) = runtime.block_on(async {
+                let answered = runtime.block_on(async {
                     let request = Request::get("/never").header("accept", "text/html").body(Body::empty()).unwrap();
                     let mut answer = pin!(inner.oneshot(request));
+                    let mut gone = pin!(gone.changed());
                     let began = Instant::now();
                     let before = taken();
                     let mut armed = Some(armed);
@@ -3369,17 +3374,24 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
                             assert!(polled.is_pending(), "the inner request waits on its deadline");
                             assert_eq!(taken() - before, 1, "the inner deadline borrowed the connection's timer");
                             // Counted at reset, and the request's pending poll has now armed it.
-                            let _ = armed.send(began);
+                            let _ = armed.send(());
                         }
-                        polled
+                        // The answer first: the test's end never takes one that is ready away.
+                        if polled.is_pending() && gone.as_mut().poll(cx).is_ready() {
+                            return Poll::Ready(None);
+                        }
+                        polled.map(Some)
                     })
-                    .await
+                    .await?
                     .unwrap();
+                    // Timed where it was answered, not where the test's thread reads it.
+                    let took = began.elapsed();
                     let status = res.status().as_u16();
                     let body = res.into_body().collect().await.unwrap().to_bytes();
-                    (status, body)
+                    Some((status, body, took))
                 });
-                let _ = saw.send((status, body));
+                let Some((status, body, took)) = answered else { return String::new() };
+                let _ = saw.send((status, body, took));
                 status.to_string()
             })
         }
@@ -3404,19 +3416,21 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
         ((conn, stop, server), borrowed)
     });
     outer.shutdown_background();
-    let began =
-        borrowed.expect("the inner request armed the connection's timer in time").expect("the inner request reports arming");
-    let (status, body) = seen.recv_timeout(WAIT).expect("the inner request answered after the connection's runtime shut down");
-    assert!(began.elapsed() < DEADLINE, "the inner request answered before its deadline");
+    borrowed.expect("the inner request armed the connection's timer in time").expect("the inner request reports arming");
+    let (status, body, took) =
+        seen.recv_timeout(WAIT).expect("the inner request answered after the connection's runtime shut down");
+    assert!(took < DEADLINE, "the inner request answered before its deadline: {took:?}");
     assert_eq!(status, 500, "answered 500 once the connection's runtime has shut down");
     let body = String::from_utf8_lossy(&body);
-    // Tokio can notice shutdown at the timer entry's check or when it reads the entry's result.
+    // The first is what tokio 1.54.1 panics with here, at the timer's check that its runtime is
+    // running. The second is its error for a timer whose driver has shut down, which this test
+    // was not seen to reach: allowed so a tokio that makes the two checks in another order passes.
     assert!(
         body.contains("the handler panicked: A Tokio 1.x context was found, but it is being shutdown.")
             || body.contains("the handler panicked: timer error: the timer is shutdown"),
         "{body}"
     );
-    drop(open);
+    drop((open, over));
 }
 
 /// A deadline polled while its thread ends, after the thread's place for a connection's timer is
