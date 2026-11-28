@@ -26,7 +26,7 @@ function retired() {
     retirement: { kind: "native-failed", evidenceSha256: "d".repeat(64) } };
 }
 
-const roots = ["/bench/campaign", "/bench/repo/bench/json-api/results/j210", "/bench/repo/bench/json-api/results/r105"];
+const roots = ["/bench/campaign", "/bench/repo/bench/json-api/results/j210", "/bench/repo/bench/json-api/results/j211"];
 const grouped = { roots, host: { bootId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", name, knownHostsSha256: "e".repeat(64) } };
 const snapshot = "c".repeat(64), fence = { snapshotSha256: snapshot,
   roots: [...roots, "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"].map(path => ({ path, present: true })) };
@@ -35,8 +35,8 @@ const capture = (state) => failedNativeScript(state, null, null, grouped);
 test("retired JSON API custody with the original nine-app roster reproduces all three saved scripts", () => {
   const state = retired();
   assert.deepEqual([capture(state), failedNativeScript(state, snapshot, null, grouped), failedNativeScript(state, snapshot, fence, grouped)]
-    .map(script => digest(script)), ["0b060b5de10b86eb3e20434f4e8729eae3847055c8cfd4a44d0bb4b1e2f0591b",
-    "2b35de358352c906e2dbce4606987ccc601f92c93f6df709c065307c8f77a0de", "b3e2a3d3e6a16ff425732613671b0eae42152d8039085b1b43be020ef27ff141"]);
+    .map(script => digest(script)), ["c30fd5426f445e2755a8ef32d805a3489fe38da9c5eeae9a846937eb38e49607",
+    "c3500e9044097248a3712019f712e93454888f26d6bf2593da2e7364716d1744", "ec8cba4c360425fd770331e7236a5dff1a10991b1b8a30639d6ddee3ed545894"]);
   const files = remoteFiles(state);
   assert.deepEqual(Object.fromEntries(Object.entries(files).map(([key, bytes]) => [key, digest(bytes)])), {
     "job.sh": "e9b1d9b7f5208d00b7144d9b46105066c9648edb3731dfc31267a713d53c354c",
