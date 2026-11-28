@@ -33,6 +33,8 @@ html! { <div class={Field}><label for={QtyId}>{t.quantity()}</label><NumberField
 
 Steps start at the minimum. For example, a minimum of `0.25` with a step of `0.5`
 gives `0.25`, `0.75`, `1.25` and so on, both in the initial HTML and when stepping.
+The buttons keep the browser's spelling rather than pad it if it uses an exponent,
+needs more than 100 decimal places, or padding would change its value or validity.
 
 `NumberField` is for counts and measures, not money: a number input takes only the browser's
 own decimal syntax (`$1,299.99` and a French `1 299,99` never reach the server), and the

@@ -1,7 +1,7 @@
 // @ts-check
 // NumberField (number_field.rs). The input is a native number input, whose stepUp and stepDown
 // already keep min, max and step; this adds the buttons, press and hold, Page Up and Page Down,
-// Home and End, and the step's decimals. A step sends `input` and `change` like typing does, and
+// Home and End, and decimal padding. A step sends `input` and `change` like typing does, and
 // the input's own on:input (`sync`) then disables a button at its bound, as a form reset does.
 
 import { keep } from "corten";
@@ -122,13 +122,27 @@ function set(input, value) {
   commit(input, before);
 }
 
+/** @param {string} bound */
+function decimals(bound) {
+  return /\.(\d+)$/.exec(bound)?.[1]?.length ?? 0;
+}
+
 /**
- * Shows the step's decimals and, when the value changed, tells the page as typing would.
+ * Pads to the minimum and step's scale without rounding away any of the native value.
  * @param {HTMLInputElement} input @param {string} before
  */
 function commit(input, before) {
-  if (input.value !== "" && input.step !== "any") {
-    input.value = Number(input.value).toFixed((input.step.split(".")[1] ?? "").length);
+  const value = input.value;
+  const places = Math.max(decimals(input.min), decimals(input.step));
+  if (value && places > 0 && places <= 100 && !/[eE]/.test(value)) {
+    const missing = places - decimals(value);
+    if (missing > 0) {
+      const number = input.valueAsNumber;
+      const valid = input.validity.valid;
+      input.value = value + (value.includes(".") ? "" : ".") + "0".repeat(missing);
+      // Keep the native spelling if padding changes how the browser reads it.
+      if (!Object.is(input.valueAsNumber, number) || input.validity.valid !== valid) input.value = value;
+    }
   }
   if (input.value === before) return false;
   input.dispatchEvent(new Event("input", { bubbles: true }));

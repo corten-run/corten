@@ -140,5 +140,56 @@ export async function numberField(page) {
   check("the prefilled tiny stepped value is valid and finite f32 bounds block overflow in both directions",
     otherBounds === "true true true", otherBounds);
   await discount.fill("");
+  await stepBase(page);
   return { qty, qtyButtons };
+}
+
+/** @param {import("@playwright/test").Page} page */
+async function stepBase(page) {
+  const cases = [
+    { name: "a fractional minimum with a whole step", min: "0.5", step: "1", from: "0.5", to: "1.5" },
+    { name: "a fractional value step base without a minimum", min: null, step: "0.25", from: "0.125", to: "0.375" },
+    { name: "a step that pads an exact value", min: "0.25", step: "0.25", from: "0.75", to: "1.00" },
+    { name: "a scale set by the minimum", min: "0.50", step: "1", from: "0.50", to: "1.50" },
+    { name: "an exponent value in its native notation", min: "-5e-7", step: "0.00000001", from: "0", key: "Home", to: "-5e-7" },
+    { name: "a value at a precision beyond toFixed", min: "0.5", step: `0.${"0".repeat(100)}1`, from: "1", key: "Home", to: "0.5" },
+  ];
+  for (const { name, min, step, from, to, key } of cases) {
+    const state = await page.locator("#weight").evaluate(async (weight, { min, step, from, key }) => {
+      // Let Corten connect a fresh copy inside a separate form. Leave the real gallery form,
+      // its listeners, and the state other smoke areas use alone.
+      const form = document.createElement("form");
+      const field = /** @type {Element} */ (weight.closest("[data-scope=ui-number-field]")?.cloneNode(true));
+      const input = /** @type {HTMLInputElement} */ (field.querySelector("input"));
+      const increase = /** @type {HTMLButtonElement} */ (field.querySelectorAll("button")[1]);
+      input.id = "step-base-smoke";
+      for (const button of field.querySelectorAll("button")) button.setAttribute("aria-controls", input.id);
+      if (min === null) input.removeAttribute("min");
+      else input.min = min;
+      input.step = step;
+      input.setAttribute("value", from);
+      input.value = from;
+      form.append(field);
+      /** @type {FormDataEntryValue[]} */
+      const submitted = [];
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submitted.push(...new FormData(form).getAll(input.name));
+      });
+      let changes = 0;
+      input.addEventListener("change", () => changes++);
+      document.body.append(form);
+      try {
+        await new Promise((resolve) => setTimeout(resolve)); // let the runtime wire the clone
+        if (key) input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+        else increase.click();
+        form.requestSubmit();
+        return { value: input.value, valid: input.validity.valid, submitted, changes };
+      } finally {
+        form.remove();
+      }
+    }, { min, step, from, key });
+    check(`NumberField keeps ${name} valid and submits it`, state.valid && state.changes === 1 &&
+      state.value === to && state.submitted.length === 1 && state.submitted[0] === to, JSON.stringify(state));
+  }
 }
