@@ -158,9 +158,10 @@ impl Builder {
             if draft == 0
                 && !applied.ordinary.as_ref().is_some_and(|original| {
                     deck.len() == original.len()
-                        && deck.iter().zip(original.iter()).all(|((id, count), (index, before))| {
-                            self.index.get(id) == Some(index) && count == before
-                        })
+                        && deck
+                            .iter()
+                            .zip(original.iter())
+                            .all(|((id, count), (index, before))| self.index.get(id) == Some(index) && count == before)
                 })
             {
                 return Outcome::ChangedSubmit(self.deck.seq());
