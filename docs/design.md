@@ -10032,7 +10032,7 @@ rules something out.
     workload, estimated, with builds and setup beside, where a single-build comparison of 100
     pairs took about 12 minutes ([design Choice 71](#choice-layout-floor)'s runs). The first two
     runs' 30 placements (164 minutes for the second's four comparisons) are not a size to assume
-    (How many placements, below). A placement run's A/A records the workload's
+    (How many placements, below). An unshuffled placement run's A/A records the workload's
     placement spread here, its lowest and highest placement median, only if its plan declares
     before the run that it records one (asked of plans declared once this sentence is on `main`:
     the three spreads below were recorded before it, the third run's plan declared that it
@@ -10063,10 +10063,13 @@ rules something out.
     placement run on its setup
     records one. These are what decide which code a request runs, what else runs with it and what a
     placement costs on the CPU's caches and predictors; the kernel and toolchain are not among
-    them, as a policy choice (Stands on, bet). Only a complete, resolved A/A (both readings, below) records a
-    spread or replaces one, by a pull request that changes this Choice, and a run reads the spread
-    recorded here on `main` when its plan is declared, so a wider spread recorded after a miss
-    does not reopen it. The first run's spreads are recorded although its A/A was on main, not the
+    them, as a policy choice (Stands on, bet). Only a complete, resolved, unshuffled A/A (both
+    readings, below) records a policy spread or replaces one, by a pull request that changes this
+    Choice. A shuffled A/A still reports its measured spread, but shuffled and unshuffled spreads
+    have not been compared, so a shuffled one cannot change the spread or default band used to
+    judge single-build results. A run reads the spread recorded here on `main` when its plan is
+    declared, so a wider spread recorded after a miss does not reopen it. The first run's spreads
+    are recorded although its A/A was on main, not the
     change's base (an exception, stated below). Recorded spreads: `plain` -2.42% to +2.92% and
     `kept` -2.98% to +3.33% (the first run's A/As below: main `a02c81e86`, 2026-11-23, tag
     `evidence/ee7b0b41`), for the probe program in that tag (the one
@@ -11207,7 +11210,7 @@ rules something out.
     change and a single-build run
     on the same commits disagree past their bounds often enough to show the pads' placements are not
     those real builds land in, or that two functions' distance apart matters; a shuffled run's
-    A/A records a spread outside an unshuffled one's on the same setup, either way, or a change
+    A/A measures a spread outside an unshuffled one's on the same setup, either way, or a change
     reads past its bound across one kind of placement and inside it across the other, so one of
     the two should be every plan's; a pad is found to
     take more from one side of a comparison than from the other, a base against its head or one

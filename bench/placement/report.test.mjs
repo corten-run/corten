@@ -372,7 +372,7 @@ test("code aligned beyond 16 bytes: each side's sections and list, and every pla
 // both ordering files and both maps.
 const FUNCTIONS = "_start\ncrc\n_ZN5probe4main17h0123456789abcdefE.llvm.123\n";
 const mapSha = (b) => createHash("sha256").update(`map of ${b}`).digest("hex");
-const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = {}, mapCheck = {}, alike = {}, functions = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; }, touch: (res, put, r) => {
+const shuffledRun = ({ touch = () => {}, edit = () => {}, align = 16, index = (i) => i, layout = {}, mapCheck = {}, alike = {}, functions = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; edit(p); }, touch: (res, put, r) => {
   const second = align > 16;
   const names = (side) => functions[side] ?? FUNCTIONS;
   for (const side of r.sides) put(`functions-${side}.txt.gz`, gzipSync(names(side)));
@@ -392,6 +392,35 @@ const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = 
   }
   touch(res, put, r);
 } });
+
+test("a complete, resolved shuffled A/A cannot record the policy placement spread", () => {
+  const edit = (p) => { p.workloads[0].recordsSpread = true; };
+  const change = (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : 0);
+  const r = report(shuffledRun({ edit, change }));
+  assert.equal(r.exit, 0, r.json.refused?.join(" | "));
+  assert.equal(r.json.gated.resolution, "resolved");
+  assert.equal(r.json.gated.recordsSpread, false);
+  near(r.json.gated.aaMin, -0.002);
+  near(r.json.gated.aaMax, 0.002);
+  assert.match(r.md, /shuffled A\/As cannot record or replace the policy placement spread/);
+  assert.match(r.md, /Shuffled and unshuffled spreads have not been compared/);
+  assert.doesNotMatch(r.md, /this A\/A records a placement spread/);
+  const declared = resolve(plan(numbered((p) => { edit(p); p.workloads[0].shuffle = true; })), "gated", "plain");
+  assert.ok(declaration(declared).includes("the A/A cannot record a policy placement spread with shuffled placements"));
+});
+
+test("replay refuses a truncated shuffled function list and writes the refusal", () => {
+  const file = "functions-base.txt.gz";
+  const res = shuffledRun({ touch: (dir, put) => put(file, readFileSync(join(dir, file)).subarray(0, -4)) });
+  const r = spawnSync(process.execPath, [join(here, "report.mjs"), res], { encoding: "utf8" });
+  assert.equal(r.status, 2, r.stderr || r.stdout);
+  assert.equal(r.stderr, "");
+  assert.match(r.stdout, /^# Refused: these results are not read/m);
+  assert.match(r.stdout, /base: cannot read function list \(functions-base\.txt\.gz\)/);
+  assert.deepEqual(JSON.parse(readFileSync(join(res, "report.json"), "utf8")), {
+    exit: 2, refused: ["base: cannot read function list (functions-base.txt.gz)"],
+  });
+});
 
 test("a shuffled run's report gives, at each index, how many names head's check compared and left out", () => {
   // The renumbered name is shared; its extra ThinLTO copy on head is ambiguous, not a fourth name.

@@ -903,12 +903,14 @@ establish a general ranking.
          per-pair change B / A - 1 read as A / B - 1), since a list whose placements happened to
          run faster would lower one reading's bound and raise the other's. Its bounds in the two
          readings are what the run can resolve, and its lowest and highest placement median as
-         recorded are the spread the Choice records for the workload, if the plan declares
-         before the run that it records one. If either bound is at or
+         recorded give its measured spread. If either bound is at or
          above +1%, the workload is **not resolved**, and not resolved does not pass, whatever the
-         change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
-         pull request that changes the Choice; a run reads the spread recorded in the Choice on
-         `main` when its plan is declared, whatever a later run records.
+         change's own bound. Only a complete, resolved, unshuffled A/A whose plan declares one
+         before the run records or replaces the policy spread, through a pull request that changes
+         the Choice. A shuffled A/A still reports its measured spread, but shuffled and unshuffled
+         spreads have not been compared, so it cannot change the spread or default band used to
+         judge single-build results. A run reads the spread recorded in the Choice on `main`
+         when its plan is declared, whatever a later run records.
       5. Nothing about code aligned beyond 16 bytes, which the run records and checks. C code a
          dependency compiles can align input sections of `.text` to 32 or 64 bytes, and a pad can
          then move some functions, and the data after `.text`, by other than its size

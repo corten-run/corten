@@ -16,8 +16,8 @@
 //   - a binary a comparison reads that was not verified against its side's unpadded binary, has
 //     no passing layout check or, where either side has a section of .text aligned beyond 16
 //     bytes, no second pad's line and map check;
-//   - for a workload the plan shuffles (README.md, workloads[].shuffle), a side without its list
-//     of functions (functions-<side>.txt.gz), a missing or altered placement map, or a binary whose
+//   - for a workload the plan shuffles (README.md, workloads[].shuffle), a missing or unreadable
+//     list of functions (functions-<side>.txt.gz), a missing or altered placement map, or a binary whose
 //     layout check (and map check, with a second pad) is not a shuffled one for the ordering file
 //     order.mjs draws from that list, the seed and the binary's index, and for the placement map
 //     maps/placements.sha256 lists for it, or a head binary without a passing check that the
@@ -159,9 +159,10 @@ export function read(dir) {
   // no "shuffled" and no "order".
   const lists = new Map();
   if (r.shuffle) for (const side of r.sides) {
-    const f = join(dir, `functions-${side}.txt.gz`);
-    if (!existsSync(f)) { refused.push(`${side}: no list of its functions (functions-${side}.txt.gz); a shuffled run without it does not show the order each placement was linked in`); continue; }
-    lists.set(side, functionNames(readFileSync(f)));
+    const file = `functions-${side}.txt.gz`, f = join(dir, file);
+    if (!existsSync(f)) { refused.push(`${side}: no list of its functions (${file}); a shuffled run without it does not show the order each placement was linked in`); continue; }
+    try { lists.set(side, functionNames(readFileSync(f))); }
+    catch { return { refused: [...refused, `${side}: cannot read function list (${file})`] }; }
   }
   const orderSha = (side, pad) => {
     const i = P.includes(pad) ? P.indexOf(pad) + 1 : Q.indexOf(pad) + 1;
@@ -315,6 +316,7 @@ export function report(dir) {
   } else {
     const aa = g[`aa-${W}`], ch = g[`change-${W}`].recorded;
     const res = resolution(aa.recorded, aa.swapped), gate = margin(ch, res);
+    const recordsSpread = !run.shuffle && w.recordsSpread;
     const word = (gate === "meets +1%" ? "pass" : gate === "misses +1%" ? "miss" : gate.startsWith("not resolved") ? "not resolved" : "no bound") + unchecked;
     const reads = (t) => w.reads.includes(t), left = "not read by this run: it stays as one build read it, whatever this run reads";
     out.push("## Reading", "", "Each threshold the plan declares for the workload is stated on its own. The margin is +1% with no floor.", "",
@@ -324,7 +326,7 @@ export function report(dir) {
       `| change-${W} | ${results[`change-${W}`].placements.length} of ${K} | ${fmt(ch.median)} | ${ch.bound == null ? "none" : pct(ch.bound)} | ${fmt(ch.lower)} | ${reads("margin") ? `**${gate}${unchecked}**` : "the margin is not read"} |`, "",
       `The A/A's lowest and highest placement median as recorded: ${fmt(aa.recorded.min)} to ${fmt(aa.recorded.max)} (standard deviation ${width(aa.recorded.sd)}); the change's: ${fmt(ch.min)} to ${fmt(ch.max)}.`, "",
       `- The margin, \`${W}\`: ${reads("margin") ? `**${word}** (${gate}).` : `${left}.`}`);
-    json.gated = { resolution: res, reads: w.reads, margin: reads("margin") ? gate : "not read", reading: reads("margin") ? word : "not read", aaBound: aa.recorded.bound, aaBoundSwapped: aa.swapped.bound, aaLower: aa.recorded.lower, aaLowerSwapped: aa.swapped.lower, aaMin: aa.recorded.min, aaMax: aa.recorded.max, changeMedian: ch.median, changeBound: ch.bound, recordsSpread: w.recordsSpread };
+    json.gated = { resolution: res, reads: w.reads, margin: reads("margin") ? gate : "not read", reading: reads("margin") ? word : "not read", aaBound: aa.recorded.bound, aaBoundSwapped: aa.swapped.bound, aaLower: aa.recorded.lower, aaLowerSwapped: aa.swapped.lower, aaMin: aa.recorded.min, aaMax: aa.recorded.max, changeMedian: ch.median, changeBound: ch.bound, recordsSpread };
     if (w.reduction == null) out.push("- A CPU-cost win: the plan declares no reduction for this workload, so none is read.");
     else if (!reads("reduction")) { out.push(`- A CPU-cost win, a smallest worthwhile reduction of ${(100 * w.reduction).toFixed(2)}%: ${left}.`); json.gated.win = "not read"; }
     else {
@@ -333,7 +335,8 @@ export function report(dir) {
       json.gated.win = benefit;
     }
     const canRecord = res === "resolved";
-    out.push(w.recordsSpread
+    if (run.shuffle) out.push("- The spread: shuffled A/As cannot record or replace the policy placement spread, even if the plan declares one. Shuffled and unshuffled spreads have not been compared.", "");
+    else out.push(recordsSpread
       ? `- The spread: the plan declares that this A/A records a placement spread for the workload. ${canRecord ? `It is complete and resolved, so it gives ${fmt(aa.recorded.min)} to ${fmt(aa.recorded.max)}, which is recorded only by a pull request that changes the Choice.` : "It is not a complete, resolved A/A, so it records none."}`
       : "- The spread: the plan declares that this A/A records no placement spread, so it records none whatever it read.", "");
   }
