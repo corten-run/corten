@@ -21,7 +21,7 @@ checking the reported numbers, not native replay or qualification.
 | Client-heavy | [8b4e863b1](https://github.com/corten-run/corten/commit/8b4e863b15020d720b22d5cf1665f9ae16b2473a) | 2026-11-26 | [Browser journey timings](r87/client-heavy/report.md). Six contenders passed; action-level ranges, not an overall ranking. |
 | Live delivery | | | No verified result yet |
 | Recoverable live | | | No verified result yet |
-| Hardening | | | No verified result yet |
+| Hardening | [6345df88c](https://github.com/corten-run/corten/commit/6345df88c530fe7fcca7f10bab934aa324179de5) | 2026-11-27 to 2026-11-28 | [Timeout, limit and recovery outcomes](r112/hardening/report.md). All 108 cells observed; eight adapters met the scoped production checks. |
 
 On the lean catalog page at 64 users, Corten served **29,160 pages/s** from the in-memory
 fixture and **9,227 pages/s** with the HTTP data source. Axum + Maud was next among eligible
@@ -46,3 +46,9 @@ adapter and source. For each measured profile and adapter it retains the cold pr
 and timed numeric inputs and failures by pass, plus the outcomes used to rebuild
 the report. Comparison is limited to admitted, measured adapters and does not rank
 the omitted inventory.
+
+Hardening's [evidence record](r112/hardening/provenance.json) links the compact
+export of all 108 cells. Group by adapter, data source, deployment, and phase to
+recompute coverage. Count expected probe outcomes and healthy terminals separately.
+Count API recovery only on the API source, and group the production-qualified cells
+by adapter and deployment. No cell is eligible for numeric comparison.
