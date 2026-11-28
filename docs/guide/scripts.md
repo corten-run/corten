@@ -431,17 +431,16 @@ A script that submits a `data-patch` form (`form.requestSubmit()`) and needs wha
 decided learns it the same way: the patch the handler answers with carries an element whose
 `on:connect` dispatches a typed event with the values the handler read, and the screen listens
 for it. The outcome is then the handler's own data, typed by its Rust struct and checked at the
-call, which a status could not carry. `examples/deck-builder`'s `SaveNote` is this: each save's
-patch draws a note whose
-`on:connect={js::answered(target, answer.outcome(), answer.version(), answer.draft(), answer.unsure())}`
-dispatches `DeckAnswered`, and the deck builder takes the saved version, a refusal or a stale
-save from it. Which of those it was is a `SaveOutcome`, an enum that derives `ToJson`, as the
-event's field and as `answered`'s parameter (`@param {import("../../types/app").SaveOutcome} outcome`),
+call, which a status could not carry. `examples/deck-builder`'s `SaveNote` is this: a scripted
+save's patch draws a note whose `on:connect={js::acknowledge(target, outcome, version, draft, unsure)}`
+dispatches `DeckAnswered`. The note uses `#[component(js = super::deck_builder::DeckBuilder)]`
+so the handler is already loaded when the builder sends the save. A note on a full page only
+shows its text and dispatches nothing. The builder takes the saved version, a refusal or a stale
+save from `DeckAnswered`. Which of those it was is a `SaveOutcome`, an enum that derives `ToJson`,
+as the event's field and as `acknowledge`'s parameter (`@param {import("../../types/app").SaveOutcome} outcome`),
 so `tsc` checks the builder's `event.outcome === "Refused"` against the enum's names: a renamed
 variant fails the Rust build and then `tsc`, where a `String` field would let the branch quietly stop
-matching. The page as first loaded has had no save answered, and a generated declaration cannot be
-optional at a call (the table at the top of this page), so that is a variant of its own, `Loaded`,
-for which `answered` dispatches nothing. A submit with no answer to draw (other than a bare `204` or
+matching. A submit with no answer to draw (other than a bare `204` or
 `205`, the submit done with nothing to draw) is `corten:error` on the
 form (when a read drew over it while the write was out, on the form the read drew in its place
 on the same page, else on the document; it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps

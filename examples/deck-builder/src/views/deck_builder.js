@@ -8,10 +8,9 @@
 // says what became of it. The saved deck's feed says when another tab saved.
 import { keep, subscribe } from "corten";
 import { CollectionRow, DeckLine, rows } from "corten/views";
-import { DeckPreviewChanged } from "corten/events";
+import { DeckAnswered, DeckPreviewChanged } from "corten/events";
 /** @import { CortenError, FeedUrl, Message, NumberFormat } from "corten" */
 /** @import { Holds } from "corten/views" */
-/** @import { DeckAnswered } from "corten/events" */
 
 /** @typedef {import("../../types/app").Slot} Slot Generated from `Slot` in src/app.rs. */
 
@@ -376,6 +375,15 @@ function save(s, parts) {
   s.unanswered.push({ deck: new Map(s.drawn), draft: s.drafts, history: { undo: s.undo.slice(), redo: s.redo.slice() } });
   say(parts, "saving");
   parts.form.requestSubmit();
+}
+
+/**
+ * The save patch calls this when its note joins the page. No other module needs to load.
+ * @param {HTMLSpanElement} note @param {import("../../types/app").SaveOutcome} outcome
+ * @param {number} version @param {number} draft @param {boolean} unsure
+ */
+export function acknowledge(note, outcome, version, draft, unsure) {
+  note.dispatchEvent(new DeckAnswered({ outcome, version, draft, unsure }));
 }
 
 /**

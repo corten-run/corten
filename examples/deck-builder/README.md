@@ -35,7 +35,8 @@ started, that document keeps its fields, focus, and native Save. Selections made
 stay checked and count toward Add selected; the checkbox for selecting every visible card is
 disabled until the module can apply it. With the module running, Filter keeps the page, and a
 subsequent native Save returns to that filter. A refusal page displays the reason without
-notifying autosave. Only a patch answers a save that the queue sent.
+notifying autosave. Only a patch answers a save that the queue sent. Its note calls the
+builder's already-loaded script, so the queue can advance without fetching another module.
 
 ## Run it
 
@@ -69,31 +70,33 @@ The routes and what each does are in the table at the top of [`src/app.rs`](src/
 | The layout, and the screen in the order the address asks for | [`src/views.rs`](src/views.rs) |
 | The builder: its markup, its script (every change, autosave, moves, the collection) and its styles | [`src/views/deck_builder.rs`](src/views/deck_builder.rs), [`src/views/deck_builder.js`](src/views/deck_builder.js), [`src/views/deck_builder.css`](src/views/deck_builder.css) |
 | A collection row and a deck line | [`src/views/collection_row.rs`](src/views/collection_row.rs), [`src/views/deck_line.rs`](src/views/deck_line.rs) |
-| The save note, which tells the builder a save's answer | [`src/views/save_note.rs`](src/views/save_note.rs), [`src/views/save_note.js`](src/views/save_note.js) |
+| The save note, whose patch calls the builder to acknowledge a save | [`src/views/save_note.rs`](src/views/save_note.rs), [`src/views/deck_builder.js`](src/views/deck_builder.js) |
 
 Its browser test, which also times the screen: [`smoke.mjs`](smoke.mjs).
 
 ### Byte comparison
 
-Compared with merge base `1b9c1b0dd8348228f705b240cd44b74027469292` on 2026-11-28, using
-real Windows dev builds on loopback HTTP, Chromium 159.0.8154.6, and fresh 240-card app and
-browser contexts. Each of the three readings per build was identical. The startup numbers
-are uncompressed response bodies for the first `GET /` and the scripts loaded by the time
-the builder requested the deck's live feed.
+Measured on 2026-11-28 with Chromium 159.0.8154.6 over loopback HTTP, with a fresh Windows app
+process (240 cards) and browser context for every sample. Each of the three readings per build
+and save mode was identical. The merge base is `1b9c1b0dd8348228f705b240cd44b74027469292`; the
+pre-repair checkout is `582018fce979cfdd097a3df0b2b027bcb3b691ba`.
 
-| Bytes | Merge base | This change |
-|---|---:|---:|
-| Startup HTML | 164,146 | 161,100 |
-| `deck_builder.js` | 21,805 | 22,690 |
-| All startup script bodies (11 at base, 10 here) | 90,972 | 91,288 |
-| Native Save: POST, 303, redirected GET and its response | 169,454 | 166,408 |
+| Bytes | Merge base | Before acknowledgement repair | After repair |
+|---|---:|---:|---:|
+| Startup HTML body | 164,146 | 161,100 | 161,100 |
+| `deck_builder.js` body | 21,805 | 22,690 | 22,857 |
+| All startup script bodies (11 / 10 / 10) | 90,972 | 91,288 | 91,455 |
+| Startup exchange: HTML and scripts | 271,217 | 267,175 | 267,342 |
+| First autosave exchange: POST and any acknowledgement script | 1,707 | 3,451 | 1,727 |
+| First native Save exchange: POST, 303, redirected GET and its response | 169,406 | 166,360 | 166,360 |
 
-For native Save, JavaScript was off on both builds. From `/?q=oracle`, both posted Gravel
-Sprite's count from 3 to 2, then returned to the same one-row filter with the saved count.
-The total is HTTP request and response headers and bodies as reported by Playwright. Both
-POST bodies were 242 bytes and both 303 bodies were empty. The final GET returned 165,864
-versus 162,818 uncompressed HTML bytes. The total excludes the page open before Save,
-subresources, and transport framing. These are real app bytes, not a fixture or a speed claim.
+Both saves changed Gravel Sprite's count from 3 to 2. The scripted save left the edited field to
+trigger autosave; before the repair its `200` patch led to a separate 1,744-byte script exchange.
+After the repair that request is gone, while the patch body grew from 93 to 112 bytes. The native
+Save ran with JavaScript off, starting at `/?q=oracle` and returning to that filter with the saved
+count. Exchange totals include HTTP request and response headers and bodies as reported by
+Playwright, not transport framing. Startup excludes styles, images and feed traffic; save totals
+exclude the page open before the save and its subresources. These are byte counts, not timings.
 
 ## Nested Preview
 

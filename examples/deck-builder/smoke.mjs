@@ -1,6 +1,6 @@
 // Browser smoke test and timings for the deck builder: every move in the browser, autosave with
 // its refusals, another tab's edits, and the same forms with JavaScript off or the builder blocked.
-// Usage: node examples/deck-builder/smoke.mjs http://localhost:18487 [--handoff-only]
+// Usage: node examples/deck-builder/smoke.mjs http://localhost:18487 [--autosave-only | --handoff-only]
 import http from "node:http";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
@@ -48,11 +48,11 @@ const status = (page) => page.evaluate(() => {
   return { state: s.dataset.state, note: document.getElementById("save-note")?.textContent ?? "" };
 });
 /** Waits for the save on its way to be answered and taken: the status shows the note again. */
-const settled = (page, note = "Saved.") =>
+const settled = (page, note = "Saved.", timeout) =>
   page.waitForFunction((note) => {
     const s = /** @type {HTMLElement} */ (document.querySelector("[role=status][data-state]"));
     return s.dataset.state === "" && document.getElementById("save-note")?.textContent?.startsWith(note);
-  }, note);
+  }, note, { timeout });
 /** Whether `page` comes to show `count` copies of `id` in its deck within five seconds. */
 const comesToShow = (page, id, count) =>
   page
@@ -81,6 +81,55 @@ const postedGravel = (request) => {
   const fields = saveFields(request);
   return fields.getAll("count")[fields.getAll("card").indexOf("gravel-sprite")];
 };
+
+/** Two edits in one enhanced document, each acknowledged before the next. */
+async function successiveAutosaves() {
+  const context = await browser.newContext();
+  try {
+    context.setDefaultTimeout(10_000);
+    const page = await open(context);
+    // A save must be acknowledged even if the browser cannot fetch another app script.
+    const scripts = "**/scripts/*.js";
+    await page.route(scripts, (route) => route.abort());
+    const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
+    const start = await count.inputValue();
+    const loaded = Number(await version(page));
+    let previousKey;
+    for (const [index, copies] of [start === "2" ? "3" : "2", start].entries()) {
+      const [reply] = await Promise.all([
+        page.waitForResponse((r) => isSave(r.request()) && postedGravel(r.request()) === copies, { timeout: 5_000 }).catch((error) => {
+          if (error.name !== "TimeoutError") throw error;
+          return null;
+        }),
+        (async () => {
+          await count.fill(copies);
+          await page.locator(saveButton).click();
+        })(),
+      ]);
+      const fields = reply && saveFields(reply.request());
+      const key = fields?.get("submit");
+      check(`autosave ${index + 1}: sends a new non-navigation POST and gets a 200 patch`,
+        reply?.status() === 200 && !reply.request().isNavigationRequest() && "corten-patch" in reply.headers() &&
+        !!key && key !== previousKey && fields?.get("version") === String(loaded + index) && fields?.get("draft") === String(index + 1),
+        reply ? `HTTP ${reply.status()}` : "no matching POST response");
+      const ack = reply && await settled(page, "Saved.", 5_000).then(() => true, (error) => {
+        if (error.name !== "TimeoutError") throw error;
+        return false;
+      });
+      check(`autosave ${index + 1}: acknowledges the patch and advances the version without navigating`,
+        !!ack && await version(page) === String(loaded + index + 1) && page.url() === home, JSON.stringify(await status(page)));
+      previousKey = key;
+    }
+    await page.unroute(scripts);
+    await page.reload();
+    const savedCount = await count.inputValue();
+    const savedVersion = Number(await version(page));
+    check("the server kept both autosaves", savedCount === start && savedVersion === loaded + 2,
+      `count ${start} to ${savedCount}, version ${loaded} to ${savedVersion}`);
+  } finally {
+    await context.close();
+  }
+}
 
 /** Holds exactly one answer until the test has observed the edit it is meant to cover. */
 async function holdSave(page) {
@@ -398,6 +447,7 @@ async function nativeRefusal(code) {
     ]);
     check(`native ${code}: the refusal is a full navigation with its reason`, refusal.status() === code &&
       refusal.request().isNavigationRequest() && (await page.textContent("#save-note")).includes("Not saved:"));
+    check(`native ${code}: the notice has no autosave handler`, await page.locator("#save-note").getAttribute("data-on") === null);
     const previous = Number(await version(page));
     const intended = code === 409 ? original : edited;
     if (code === 422) await count(page).fill(intended);
@@ -967,10 +1017,16 @@ async function smoke() {
 }
 
 try {
-  if (!process.argv.includes("--handoff-only")) await smoke();
-  for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
-  for (const selected of [false, true]) await nativeAddHandoff(selected);
-  for (const code of [409, 422]) await nativeRefusal(code);
+  if (process.argv.includes("--autosave-only")) await successiveAutosaves();
+  else {
+    if (!process.argv.includes("--handoff-only")) {
+      await successiveAutosaves();
+      await smoke();
+    }
+    for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
+    for (const selected of [false, true]) await nativeAddHandoff(selected);
+    for (const code of [409, 422]) await nativeRefusal(code);
+  }
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those
   // answers.
