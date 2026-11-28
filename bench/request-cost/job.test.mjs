@@ -33,8 +33,11 @@ const standIns = {
     'chmod +x "$2/bin/$1"',
     'echo "built $2/bin/$1"',
   ],
-  // node compare.mjs --readings: two runs to take on each build.
-  "compare.mjs": ['console.log("count-get.json count.mjs --json --cases get\\nidle-silent-1.json idle.mjs --json --silent");'],
+  // node compare.mjs --readings: the two required runs or the separate idle diagnostic.
+  "compare.mjs": [
+    'if (process.argv.includes("--allocator")) console.log("idle-allocator-silent-1.json idle.mjs --json --allocator --silent");',
+    'else console.log("count-get.json count.mjs --json --cases get\\nidle-silent-1.json idle.mjs --json --silent");',
+  ],
   // node count.mjs <probe> --cpu <cpu> <options>: notes the call, as `<commit> <options>`, and
   // does what STAND_IN_DOES says of that call's first time, second time and so on: refuses as the
   // kit does, exits 124, waits for or ignores TERM, or prints a line and ends.
@@ -212,6 +215,23 @@ test("a run the kit refuses is taken again, once, with why kept, and a run that 
   assert.match(compared().markdown, /^- `count-get\.json` on head: `not a count: the stand-in refuses`$/m);
   assert.deepEqual(readdirSync(join(builds, "head")).sort(), ["answers", "build.log", "commit", "count-get.json", "count-get.json.refused", "idle-silent-1.json", "sha256"]);
   assert.deepEqual(readdirSync(join(builds, "base")).sort(), ["answers", "build.log", "commit", "count-get.json", "idle-silent-1.json", "sha256"]);
+});
+
+test("explicit diagnostics run only the observer-on idle plan on both builds and leave the required readings intact", { skip }, (t) => {
+  const { builds, base, head, job, called, left } = fixture(t);
+  assert.equal(job({ STAND_IN_DIFFERS: head }, "build", builds).status, 0);
+  const env = { STOP_AT: later() };
+  assert.equal(job(env, "read", builds, "3").status, 0);
+  const required = called();
+  const off = ["base", "head"].map((side) => left(`${side}/idle-silent-1.json`));
+  assert.ok(off.every(Boolean));
+  assert.equal(left("base/idle-allocator-silent-1.json"), null);
+  const diagnose = job(env, "diagnose", builds, "3");
+  assert.equal(diagnose.status, 0, diagnose.stderr);
+  assert.deepEqual(called().slice(required.length), [`${base} --json --allocator --silent`, `${head} --json --allocator --silent`]);
+  assert.equal(left("base/idle-allocator-silent-1.json"), `${JSON.stringify({ call: `${base} --json --allocator --silent` })}\n`);
+  assert.equal(left("head/idle-allocator-silent-1.json"), `${JSON.stringify({ call: `${head} --json --allocator --silent` })}\n`);
+  assert.deepEqual(["base", "head"].map((side) => left(`${side}/idle-silent-1.json`)), off);
 });
 
 test("a reading that exits 124 early records its status and seconds and is taken again", { skip }, (t) => {

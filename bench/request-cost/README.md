@@ -146,8 +146,7 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
    is for.
 3. `--allocations` prints allocations and frees a request, and the calls they are made of.
 4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), the resident
-   growth in bytes and the page size it is read from, and three allocator growths for diagnosis
-   (Idle memory, below). One client
+   growth in bytes and the page size it is read from (Idle memory, below). One client
    address has ports for about 28,000: for more, `--addresses` spreads them over that many
    loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
@@ -156,12 +155,36 @@ for two runs side by side on CPUs of their own. `--depth` takes at most 240. `--
 count, on `--allocations` or on `idle.mjs`, prints in place of the text a line of JSON a case
 with what was measured, unrounded: each window's instructions, seconds and other threads, the
 allocator's calls and the requests they are over, an idle run's bytes a connection, its
-connections, its resident before and after, growth and page size, allocator growths, and the
-two counter sweeps' times in nanoseconds (before and after). It is what
+connections, its resident before and after, growth and page size. It is what
 [`compare.mjs`](compare.mjs) reads; the text is for people. A count of several cases prints
 each case's line as it is counted, so one that fails at a later case has printed the earlier
 ones: the hosted job counts one case an invocation. `idle.mjs` prints its line once the probe
 has stopped.
+
+### Allocator diagnostics
+
+To investigate what moves RSS, repeat the idle workload with `idle.mjs --allocator`.
+Use the same case, requests, connections, addresses and CPU on both builds. To take the
+kit's full matched diagnostic set from both binaries left by `job.sh build` in a merge
+checkout, run the separate plan and report:
+
+```sh
+STOP_AT=$(($(date +%s) + 1440)) bash bench/request-cost/job.sh diagnose <directory> <cpu>
+node bench/request-cost/compare.mjs <directory>/base <directory>/head --allocator
+```
+
+This runs the same three idle cases three times per build, without capturing answers
+or repeating the instruction or allocation counts. The report shows resident growth
+alongside all three allocator growths for each run. A missing or mismatched diagnostic pair
+leaves this report incomplete and exits 1. Neither the observed RSS nor missing diagnostics
+can change a verdict from the required observer-off runs. The hosted job does not run this
+optional plan.
+
+Observer-off JSON keeps `kind: "idle"`. An explicit `--allocator --json` run writes
+`kind: "idle-allocator"` and adds `allocator` growths and two `sweepNanos` values (before
+and after). The scripts use distinct receipt names: the original `idle-{request,browser,silent}-*.json`
+for the gate, and `idle-allocator-*.json` for diagnostics. The gate never accepts an observer-on
+receipt, including one from an earlier kit with allocator fields under `kind: "idle"`.
 
 ## How a number is read
 
@@ -257,8 +280,9 @@ refuses readings over fewer connections than a page has bytes, where four pages 
 four bytes a connection: over 40, four 4,096-byte pages are 410 bytes a connection, a step the
 gate would let pass unseen.
 
-At the two resident readings, a kit-only signal asks the probe's serving thread for an allocator
-snapshot, with no extra connection or HTTP request. The reply starts with `IDLE_ALLOCATOR` and
+In an [allocator diagnostic](#allocator-diagnostics), a kit-only signal at the two resident
+readings asks the probe's serving thread for an allocator snapshot, with no extra connection
+or HTTP request. The reply starts with `IDLE_ALLOCATOR` and
 a space on the probe's stdout and ends with a line feed. The kit skips ordinary stdout logs
 and refuses an unterminated, malformed or oversized observer reply. The observer is warmed
 once before the warm connections and is off for instruction and allocation counts. Each
@@ -270,19 +294,18 @@ Debian's jemalloc 5.3.0 includes cached regions in `stats.allocated`. Subtractin
 memory still held by the app from space held by the allocator. The thread reading covers only
 that thread's allocations and frees; active bytes describe allocator pages, not the process's
 resident footprint. A run reports each growth as after less before, in bytes, not per connection.
-These columns explain a resident reading and do not change the rule. The observer itself is not
-free for resident memory: in a control on one binary (three runs on, three off), resident growth
-was 1 to 3 pages lower with it on. The hosted job uses the same observer-on kit on both builds.
-An equal shift cancels, but that control does not show the shift is equal across builds, so
-compare only readings taken the same way and never an observer-on reading with an observer-off
-one. If a probe cannot give the counters, the run refuses rather than report the missing
-counters as zero.
+The observer itself moves resident memory: in a control on one binary (three runs on, three
+off), resident growth was 1 to 3 pages lower with it on. That control does not show that the
+shift cancels between builds, so only observer-off RSS decides the rule. The diagnostic pairs
+show RSS from their own observer-on runs, never RSS borrowed from the gate. If a probe cannot
+give the counters, the requested diagnostic refuses rather than falling back to RSS or reporting
+missing counters as zero.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
 when it may open fewer files than there are connections and the rest wait in its listen queue.
-The kit checks both at the final resident reading and again after the allocator reply, before
-closing its side of the connections, so a connection lost during the sweep also refuses the run.
+The kit checks both at the final resident reading. In an allocator diagnostic it checks both
+again after the reply, so a connection lost during the sweep also refuses that run.
 A request on a connection waiting there is not answered while it waits, and such a run ends in
 one of two ways: no answer has come for 30 seconds, or the probe closed connections first,
 since Corten closes the ones it holds at its own 30 seconds and then accepts those that
@@ -394,9 +417,8 @@ On one runner it does what [Running it](#running-it) says, the first three by
    writes what it prints to the job's summary: for each case base, head, the difference and
    the percent, every count of every run with its longest window and the most that other
    threads ran in one, the allocator's calls, every idle run's resident growth in bytes with its
-   rounded figure a connection and what base's runs allow, a per-run table of resident and
-   allocator growths for both builds, each idle run's line with its resident before, after,
-   growth and page size, each attempt that gave
+   rounded figure a connection and what base's runs allow, each idle run's line with its resident
+   before, after, growth and page size, each attempt that gave
    no figure, and one
    line of verdict. Its exit status is the job's.
 
@@ -414,12 +436,8 @@ a connection apart (over base's three equal 62,808,064 they read 12,562 and 12,5
 for: its case, depth, requests and 5,000 connections from one address, three counts whose
 median is the one stated, and for an idle run its growth equal to its after less its before
 and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
-growth is not guessed from its figure. The summary names the observer mode. For saved JSON,
-valid `allocator` growths and both `sweepNanos` times together identify an observer-on reading.
-Absence of both fields means legacy observer-off: an all-legacy comparison with a resident
-growth and page size still decides by RSS, with allocator columns unavailable. Partial or malformed
-observer evidence, or mixed modes anywhere in either build's idle runs, leave the idle
-comparison undecided. The job's connections stay 5,000: on a runner whose page
+growth is not guessed from its figure. The summary covers only observer-off readings, using
+the same receipt format as before. The job's connections stay 5,000: on a runner whose page
 has more bytes than that (65,536-byte pages), four pages are more than four bytes a connection
 (52), and `idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
 asking `idleRise`. Either way the reading is not decided and cannot be counted. An answer is a capture that is one
@@ -713,9 +731,11 @@ ahead of the warm connections, fails. Two runs are checked less: one starts `idl
 the preload and reads the stand-in's own status in `/proc`, as a host does, and is checked only for
 a growth that is its after less its before, a figure that is that growth over the connections and
 a before that is not the stand-in's; the `--json` run with a 65,536-byte page is checked only for
-the page size it carries. The stand-in replies to the idle-only signal with known counters;
-the tests check their growth, the two sweep times, that ordinary stdout lines are ignored, and
-refusal of a malformed observer frame or a connection closed before the final reply.
+the page size it carries. The required run never asks for a sample. When explicitly requested,
+the stand-in replies with known counters; tests check their growth, the two sweep times,
+ignored logs, and refusal on a missing or malformed reply or a connection closed before the
+final reply. The collection and report tests exercise the separate paths and refuse substituted
+or incomplete evidence.
 
 The probe is outside the workspace's test suite. On Linux, after `build.sh` has built the probe
 against a named commit in `<directory>`, run the Rust counter test against that same copied
@@ -728,8 +748,7 @@ build_dir=/tmp/request-cost
 ```
 
 For a real observer check, run
-`node bench/request-cost/idle.mjs <directory>/bin/<commit> --cpu <cpu> --connections 40 --json`
-and verify that the receipt has integer `allocator` growths and two `sweepNanos` values.
+`node bench/request-cost/idle.mjs <directory>/bin/<commit> --cpu <cpu> --connections 40 --json --allocator`
+and verify that the receipt has kind `idle-allocator`, integer `allocator` growths and two
+`sweepNanos` values. Without `--allocator` it must have kind `idle` and neither diagnostic field.
 This is a smoke check of the actual jemalloc and signal path, not a counted idle reading.
-For a kit change, inspect the hosted observer-on receipts too: a same-binary verdict can
-pass without comparing any readings.

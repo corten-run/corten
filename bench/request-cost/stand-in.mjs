@@ -30,7 +30,7 @@
 //   STAND_IN_CLOSE_ON_SWEEP=<n>  close one held connection before replying to the nth sweep
 //   STAND_IN_SWEEP_LOG=1         emit ordinary stdout lines before the allocator reply
 //   STAND_IN_BAD_SWEEP=<n>        write an invalid observer frame before the nth valid reply
-//   STAND_IN_SWEEP_FRAME         split, eof, cr, or oversized final observer reply
+//   STAND_IN_SWEEP_FRAME         split, eof, cr, missing, or oversized final observer reply
 import { once } from "node:events";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import net from "node:net";
@@ -62,7 +62,7 @@ function serve() {
   const out = options.find((option) => option.startsWith("--callgrind-out-file="))?.slice("--callgrind-out-file=".length);
   writeFileSync(
     join(/** @type {string} */ (state), "started.json"),
-    JSON.stringify({ options, binary: rest.length === 3 ? rest[0] : null, port, configuration, LD_PRELOAD: process.env.LD_PRELOAD, MALLOC_CONF: process.env.MALLOC_CONF, PROBE_ALLOCATOR: process.env.PROBE_ALLOCATOR, HOSTS: process.env.HOSTS ?? null }),
+    JSON.stringify({ options, binary: rest.length === 3 ? rest[0] : null, port, configuration, LD_PRELOAD: process.env.LD_PRELOAD, MALLOC_CONF: process.env.MALLOC_CONF, PROBE_ALLOCATOR: process.env.PROBE_ALLOCATOR, HOSTS: process.env.HOSTS ?? null, PROBE_IDLE_MEMORY: process.env.PROBE_IDLE_MEMORY ?? null }),
   );
   /** @type {Record<string, Record<string, string>>} */
   const bodies = { api: { "GET /baseline11?a=1&b=2": "3", "GET /unstaged11?a=1&b=2": "3", "GET /pipeline": "ok" }, pages: { "GET /text": "ok" } };
@@ -207,6 +207,8 @@ function serve() {
           process.stdout.write(`${frame}\r`);
           // Allow the reader's 5 s deadline to fire but bound this fixture if the reader fails.
           setTimeout(() => process.exit(1), 9000).unref();
+          break;
+        case "missing":
           break;
         case "oversized":
           process.stdout.write(`${frame}${" ".repeat(2048)}\n`);

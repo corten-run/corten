@@ -20,9 +20,12 @@
 #   stopped gave no figure: what it printed is removed, why is added to
 #   <file>.refused, a line an attempt, and it is taken again, once. No run is taken again for
 #   its figure.
+# bash job.sh diagnose <directory> <cpu>
+#   The separate observer-on idle plan, with the same bounds and both builds, but no
+#   answer captures, request counts or allocation profiles. Writes only diagnostic readings.
 set -eo pipefail
 
-usage() { echo "usage: bash job.sh build <directory> | bash job.sh read <directory> <cpu>" >&2; exit 2; }
+usage() { echo "usage: bash job.sh build <directory> | bash job.sh {read|diagnose} <directory> <cpu>" >&2; exit 2; }
 kit=$(cd "$(dirname "$0")" && pwd -P)
 builds=${2:-}
 
@@ -75,10 +78,11 @@ build)
     echo "build $side $((SECONDS - began))" >> "$builds/seconds"
   done
   ;;
-read)
+read|diagnose)
   [ $# -eq 3 ] || usage
+  mode=$1
   cpu=$3
-  : "${STOP_AT:?job.sh read: STOP_AT is not set}"
+  : "${STOP_AT:?job.sh $mode: STOP_AT is not set}"
   # A build's probe, or nothing: for a build with `unbuilt`, though a build that was stopped
   # may have left a binary.
   probe() {
@@ -99,16 +103,23 @@ read)
     fi
     return "$status"
   }
+  if [ "$mode" = read ]; then
+    began=$SECONDS
+    for side in base head; do
+      binary=$(probe "$side")
+      [ -n "$binary" ] || continue
+      within node "$kit/count.mjs" "$binary" --cpu "$cpu" --answers "$builds/$side/answers" < /dev/null || echo "::warning::not every answer from $side"
+    done
+    if diff -r "$builds/base/answers" "$builds/head/answers"; then echo "the two builds answer the same"; fi
+    echo "answers $((SECONDS - began))" >> "$builds/seconds"
+    plan=readings
+    options=()
+  else
+    plan=allocator-readings
+    options=(--allocator)
+  fi
   began=$SECONDS
-  for side in base head; do
-    binary=$(probe "$side")
-    [ -n "$binary" ] || continue
-    within node "$kit/count.mjs" "$binary" --cpu "$cpu" --answers "$builds/$side/answers" < /dev/null || echo "::warning::not every answer from $side"
-  done
-  if diff -r "$builds/base/answers" "$builds/head/answers"; then echo "the two builds answer the same"; fi
-  echo "answers $((SECONDS - began))" >> "$builds/seconds"
-  began=$SECONDS
-  node "$kit/compare.mjs" --readings > "$builds/readings"
+  node "$kit/compare.mjs" --readings "${options[@]}" > "$builds/$plan"
   while read -r file script options; do
     for side in base head; do
       binary=$(probe "$side")
@@ -133,8 +144,8 @@ read)
         [ "$(date +%s)" -lt "$STOP_AT" ] || break
       done
     done
-  done < "$builds/readings"
-  echo "readings $((SECONDS - began))" >> "$builds/seconds"
+  done < "$builds/$plan"
+  echo "$plan $((SECONDS - began))" >> "$builds/seconds"
   ;;
 *) usage ;;
 esac
