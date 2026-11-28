@@ -3373,15 +3373,16 @@ const submits = new Map();
  * next navigation reads the page whole. Every cut-off is recorded before any is aborted. Says
  * whether there was one.
  * @param {(pending: NonNullable<ReturnType<typeof submits.get>>) => boolean} [spared]
+ * @param {typeof submits | NonNullable<ReturnType<typeof submits.get>>[]} [outstanding]
  */
-function leaveSubmits(spared = () => false) {
+function leaveSubmits(spared = () => false, outstanding = submits) {
   let cut = false;
-  for (const pending of submits.values()) {
+  for (const pending of outstanding.values()) {
     if (spared(pending) || !pending.write || pending.answered) continue;
     cut = true;
     if (pending.went) undrawn.add(++writesIn);
   }
-  for (const pending of submits.values()) if (!spared(pending)) pending.controller.abort();
+  for (const pending of outstanding.values()) if (!spared(pending)) pending.controller.abort();
   return cut;
 }
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
@@ -3587,7 +3588,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
     settled(press);
     throw error;
   }
-  // The press fences only a read: a write is never dropped.
+  // A newer press fences only a read. A turn that leaves the page can stop either.
   const read = sends.method === "get" ? press : null;
   // The one place a read is let go before it is sent, whether new or sent again after a write:
   // what runs of the page from here to the fetch is the runtime's, so a read that could not draw
@@ -3799,11 +3800,14 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
         const leave = () => {
           turns += 1;
           draw.page = pending.page = ++addressPage;
-          for (const other of submits.values()) {
+          // Capture at the turn, not the draw. A submit made during an abort can replace an old
+          // write in the map before its turn to be aborted; keep that controller in the cutoff.
+          const outstanding = [...submits.values()];
+          for (const other of outstanding) {
             if (other.draw === draw) other.page = addressPage;
             else if (other.next !== undefined && other.nextPress?.by === draw) other.kept = other.nextPress;
           }
-          leaveSubmits((other) => other.page === addressPage);
+          leaveSubmits((other) => other.page === addressPage, outstanding);
         };
         done = function replace() {
           // The draw is over: history listeners and abort callbacks are not part of it.

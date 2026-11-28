@@ -3573,6 +3573,7 @@ export async function heldBoundaryPresses(browser, errors) {
     fresh: "a trusted commit listener without a pending write submits the same layout form at the destination",
     draw: "a POST sent by the marked patch's own draw can still paint after its held replace commits",
     nav: "a held replace marks the destination link current even when an earlier listener stops its commit event",
+    reentrant: "a submit made while the commit is aborting source writes cannot save the source write it replaces",
   };
   for (const [kind, name] of Object.entries(names)) {
     const page = await browser.newPage();
@@ -3605,8 +3606,8 @@ export async function heldBoundaryPresses(browser, errors) {
         if (req.method() !== "POST") return route.fallback();
         const body = req.postData();
         posts.push(`${req.url().slice(base.length)} ${body}`);
-        if (body === "v=first") await writing;
-        await route.fulfill(kind === "late" || kind === "draw"
+        if (body === "v=first" || body === "v=lead") await writing;
+        await route.fulfill(kind === "late" || kind === "draw" || (kind === "reentrant" && body === "v=first")
           ? { headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<p id="held-boundary-panel">written</p>' }
           : { status: 204 }).catch(() => {});
       });
@@ -3637,6 +3638,18 @@ export async function heldBoundaryPresses(browser, errors) {
           v.value = value;
           write.requestSubmit();
         };
+        if (kind === "reentrant") {
+          const lead = /** @type {HTMLFormElement} */ (write.cloneNode(true));
+          lead.id = "held-boundary-lead";
+          (/** @type {HTMLInputElement} */ (lead.elements.namedItem("v"))).value = "lead";
+          document.body.append(lead);
+          w.__lead = () => lead.requestSubmit();
+          const fetch = window.fetch;
+          window.fetch = (url, init) => {
+            if (init?.body === "v=lead") init.signal?.addEventListener("abort", () => w.__post("second"), { once: true });
+            return fetch(url, init);
+          };
+        }
         customElements.define("smoke-held-write", class extends HTMLElement {
           connectedCallback() { w.__post("first"); }
         });
@@ -3662,8 +3675,13 @@ export async function heldBoundaryPresses(browser, errors) {
         });
         if (location.pathname !== source) throw new Error("held replacement fixture is not on its source page");
       }, { kind, source, destination, to });
-      const initial = kind === "retry" || kind === "commit";
+      const initial = kind === "retry" || kind === "commit" || kind === "reentrant";
       const writes = initial || kind === "late" || kind === "draw";
+      if (kind === "reentrant") {
+        const lead = page.waitForRequest((r) => r.postData() === "v=lead", { timeout: 5000 });
+        await page.evaluate(() => /** @type {any} */ (window).__lead());
+        await lead;
+      }
       const first = writes ? page.waitForRequest((r) => r.url() === base + source && r.method() === "POST" && r.postData() === "v=first", { timeout: 5000 }).then(() => true, () => false) : true;
       if (initial) {
         await page.evaluate(() => /** @type {any} */ (window).__post("first"));
@@ -3689,20 +3707,22 @@ export async function heldBoundaryPresses(browser, errors) {
         release();
         await page.waitForFunction(() => typeof (/** @type {any} */ (window).__retry) === "function", undefined, { timeout: 5000 });
       }
-      const destinationPost = kind === "commit" || kind === "fresh";
+      const destinationPost = kind === "commit" || kind === "fresh" || kind === "reentrant";
       const second = destinationPost ? page.waitForRequest((r) => r.url() === base + to && r.method() === "POST" && r.postData() === "v=second", { timeout: 2000 }).then(() => true, () => false) : false;
+      const cut = kind === "reentrant" ? page.waitForEvent("requestfailed", { predicate: (r) => r.postData() === "v=first", timeout: 2000 }).then(() => true, () => false) : true;
       await page.evaluate(() => /** @type {any} */ (window).__commit());
       await page.waitForFunction((to) => location.pathname + location.search === to, to, { timeout: 5000 });
       if (kind === "retry") await page.evaluate(() => /** @type {any} */ (window).__retry());
       if (kind === "nav") await page.evaluate(() => /** @type {any} */ (window).__finish());
       const secondSent = await second;
+      const wasCut = await cut;
       release();
       await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition) && !document.getElementById("held-boundary-write")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 });
       const after = await state();
-      const expected = [...(writes ? [`${source} v=first`] : []), ...(destinationPost ? [`${to} v=second`] : [])];
-      check(name, during.at === source && during.panel === "destination" && firstSent && after.at === to && after.heard &&
+      const expected = [...(kind === "reentrant" ? [`${source} v=lead`] : []), ...(writes ? [`${source} v=first`] : []), ...(destinationPost ? [`${to} v=second`] : [])];
+      check(name, during.at === source && during.panel === "destination" && firstSent && wasCut && after.at === to && after.heard &&
         after.panel === (kind === "draw" ? "written" : "destination") && secondSent === destinationPost && posts.join() === expected.join() &&
-        (kind !== "nav" || (during.current === source && after.current === destination)), JSON.stringify({ during, firstSent, after, posts, secondSent }));
+        (kind !== "nav" || (during.current === source && after.current === destination)), JSON.stringify({ during, firstSent, wasCut, after, posts, secondSent }));
     } finally {
       await page.close();
     }

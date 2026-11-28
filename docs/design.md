@@ -12651,8 +12651,10 @@ rules something out.
     a submit's press, answer or retry can act and when the held navigation settles, even if the page
     stops `currententrychange`; the same check updates nav links on a held commit. It ends every
     submit of the old page, even one sent after the draw and before the commit, sparing its own
-    submit and those the draw made. It uses the same code as a visit to number a write it cut off
-    before its answer came, so the next navigation reads the page whole, and counts the turn by
+    submit and those the draw made. It fixes the set at commit, not at draw, so a destination
+    press made during an abort cannot remove a source controller from that set. It uses the same
+    code as a visit to number a write it cut off before its answer came, so the next navigation
+    reads the page whole, and counts the turn by
     which a failed write is said only on a form drawn with no navigation to another address since
     its press. A press the draw made of a form whose write it ends (an element's
     `connectedCallback` that presses a form of the layout), which waits for that write as any press
@@ -12929,10 +12931,12 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 4,031 bytes larger raw (46,502 to 50,533), 1,626
-    with gzip (16,718 to 18,344) and 1,467 with brotli (15,106 to 16,573), paid once a release by
-    every user (207, 87 and 82 larger than `4465e4303`, which missed source writes and retries
-    outside the draw-time snapshot, dropped a destination press behind a source write, and left
+    What it costs: the runtime every page loads is 4,049 bytes larger raw (46,502 to 50,551), 1,645
+    with gzip (16,718 to 18,363) and 1,485 with brotli (15,106 to 16,591), paid once a release by
+    every user (18, 19 and 18 larger than `e3b11c27b`, which could miss a source write replaced in
+    the map as it aborted another; that build was 207, 87 and 82 larger than `4465e4303`, which
+    missed source writes and retries outside the draw-time snapshot, dropped a destination press
+    behind a source write, and left
     the nav link stale when a listener stopped the commit event; that build was 81, 21 and 26
     larger than `e281140d6`, which replayed a later press as the draw's,
     dropped a marked read queued by the draw, and could let an old write draw if a listener stopped
