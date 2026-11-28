@@ -12,7 +12,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const answerMs = 4000;
 const drawMs = 2000;
 
-test("the failed-part link's smoke checks the first click and its answer", { concurrency: 4 }, async (t) => {
+test("the failed-part link's smoke checks the first click and its answer", { concurrency: 2 }, async (t) => {
   const engines = { chromium, firefox, webkit };
   const engine = process.env.SMOKE_PARTS_ENGINE ?? "chromium";
   const controls = process.env.SMOKE_PARTS_CONTROLS ?? "all";
@@ -24,11 +24,14 @@ test("the failed-part link's smoke checks the first click and its answer", { con
     { name: "a whole document can answer the click", mode: "document", browserSensitive: true, clicks: 1, requests: ["click"] },
     { name: "a corten: page fetch can answer the click", mode: "page", browserSensitive: true, clicks: 1, requests: ["click"] },
     { name: "an answer can finish more than three seconds after the click", mode: "slow", clicks: 1, requests: ["click"] },
-    { name: "an intercepted click keeps Playwright's timeout", mode: "covered", browserSensitive: true, answerMs, failure: /the click on the link failed.*Timeout/, clicks: 0, requests: [] },
-    { name: "the smoke opts out of hover prefetch and the click fetches the page", mode: "opt-out", browserSensitive: true, clicks: 1, requests: ["click"] },
+    { name: "a missing activation target keeps Playwright's timeout", mode: "missing-at-press", browserSensitive: true, answerMs, failure: /keyboard activation of the link failed.*Timeout/, clicks: 0, requests: [] },
+    { name: "a pointer cover does not block keyboard activation", mode: "covered", browserSensitive: true, clicks: 1, requests: ["click"] },
+    { name: "keyboard activation fetches the page without triggering hover prefetch", mode: "no-hover", browserSensitive: true, clicks: 1, requests: ["click"] },
     { name: "a swallowed first click is not made again", mode: "swallow", answerMs, failure: /no answer.*0 click requests/, clicks: 1, requests: [] },
     { name: "a hover that draws the right page cannot stand in for a swallowed click", mode: "hover-draw", answerMs, failure: /no answer.*0 click requests/, clicks: 1, requests: ["prefetch"] },
-    { name: "an unlabelled hover that draws the right page cannot stand in for a swallowed click", mode: "unlabelled-hover-draw", browserSensitive: true, answerMs, failure: /no answer.*0 click requests/, clicks: 1, requests: ["hover"] },
+    { name: "an unlabelled hover that draws the right page cannot stand in for a swallowed click", mode: "unlabelled-hover-draw", browserSensitive: true, failure: /no answer.*0 click requests/, clicks: 1, requests: ["hover"] },
+    { name: "a delayed hover cannot supply the answer to a swallowed activation", mode: "delayed-hover", browserSensitive: true, answerMs, failure: /no answer.*0 click requests/, clicks: 1, requests: [] },
+    { name: "a response delivered before the activation witness is read is accepted", mode: "delayed-witness", browserSensitive: true, clicks: 1, requests: ["click"] },
     { name: "the Watchlist link must have exactly the expected query", mode: "wrong-query", failure: /the waiting part links to .*unexpected=1.*expected .*\?picks=true/, clicks: 0, requests: [] },
     { name: "a failed first navigation is not replaced by a second click", mode: "first-503", failure: /"status":503/, clicks: 1, requests: ["click"] },
     { name: "a good unused prefetch cannot hide the click's 503 and stale picks", mode: "stale", failure: /no answer.*"status":503/, clicks: 1, requests: ["prefetch", "click"] },
@@ -65,11 +68,46 @@ test("the failed-part link's smoke checks the first click and its answer", { con
       const base = `http://127.0.0.1:${server.address().port}`;
       const page = await browser.newPage();
       t.after(() => page.close());
+      if (mode === "delayed-witness") {
+        // If attribution uses a console witness, deliver it only after the real response event.
+        const emit = page.emit.bind(page);
+        let delayed;
+        let responded = false;
+        page.emit = (event, message, ...args) => {
+          if (!responded && event === "console" && message.text().startsWith("picks click ")) {
+            delayed = () => emit(event, message, ...args);
+            return true;
+          }
+          const result = emit(event, message, ...args);
+          if (event === "response" && message.request().headers().corten === "nav") {
+            responded = true;
+            delayed?.();
+            delayed = undefined;
+          }
+          return result;
+        };
+        const press = page.press.bind(page);
+        page.press = async (...args) => {
+          // Both network events must reach the helper before the press can return and it can
+          // read the page witness. Do not delay the request, the response, or the click itself.
+          await Promise.all([
+            page.waitForResponse((r) => r.request().headers().corten === "nav", { timeout: args[2]?.timeout }),
+            press(...args),
+          ]);
+        };
+      }
+      if (mode === "missing-at-press") {
+        const press = page.press.bind(page);
+        page.press = async (...args) => {
+          await page.locator("#picks a").evaluate((a) => a.remove());
+          await press(...args);
+        };
+      }
       if (mode === "late-click-body") {
-        const click = page.click.bind(page);
-        page.click = async (...args) => {
+        const press = page.press.bind(page);
+        page.press = async (...args) => {
           clickStarted = performance.now();
-          await click(...args);
+          await press(...args);
           // Model Playwright waiting after dispatch. The body ends after the click-start deadline,
           // but within a fresh budget started when this call settles.
           await pause(answerMs / 2);
@@ -84,7 +122,7 @@ test("the failed-part link's smoke checks the first click and its answer", { con
       });
       await page.route(`${base}${target}`, async (route) => {
         const prefetch = route.request().headers().purpose === "prefetch";
-        const hover = mode === "unlabelled-hover-draw";
+        const hover = ["unlabelled-hover-draw", "delayed-hover"].includes(mode);
         if ((prefetch && mode === "held-prefetch") || (!prefetch && ["held-click", "late-click-body"].includes(mode))) return route.fallback();
         asked.push(prefetch ? "prefetch" : hover ? "hover" : "click");
         if (!prefetch && (mode === "stale" || (mode === "first-503" && asked.length === 1))) return route.fulfill({ status: 503, ...html("Unavailable") });
@@ -97,15 +135,21 @@ test("the failed-part link's smoke checks the first click and its answer", { con
       await page.goto(base);
       await page.evaluate(({ mode, rows }) => {
         sessionStorage.clicks = "0";
+        sessionStorage.pointerEvents = "0";
         const link = document.querySelector("#picks a");
-        const hoverDraws = ["hover-draw", "unlabelled-hover-draw"].includes(mode);
+        for (const type of ["pointerover", "pointerenter"]) {
+          link.addEventListener(type, () => { sessionStorage.pointerEvents++; });
+        }
+        const hoverDraws = ["hover-draw", "unlabelled-hover-draw", "delayed-hover"].includes(mode);
         let prefetched;
-        if (hoverDraws || ["stale", "held-prefetch", "opt-out"].includes(mode)) {
-          link.addEventListener("pointerover", () => {
-            // Model the runtime's opt-out in the positive control. The other fixtures deliberately
-            // issue a hover request despite the marker, to prove that the smoke will not use it.
-            if (mode === "opt-out" && link.closest("[data-no-prefetch]")) return;
-            prefetched = fetch(link.href, { headers: mode === "unlabelled-hover-draw" ? { corten: "nav" } : { corten: "nav", purpose: "prefetch" } });
+        if (hoverDraws || ["stale", "held-prefetch", "no-hover"].includes(mode)) {
+          link.addEventListener("pointerover", async () => {
+            // These fixtures deliberately fetch on hover even if prefetch is disabled.
+            if (mode === "delayed-hover") {
+              while (sessionStorage.clicks === "0") await new Promise(requestAnimationFrame);
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            prefetched = fetch(link.href, { headers: ["unlabelled-hover-draw", "delayed-hover"].includes(mode) ? { corten: "nav" } : { corten: "nav", purpose: "prefetch" } });
             if (hoverDraws) {
               void prefetched.then(async (answer) => {
                 const body = await answer.text();
@@ -125,7 +169,7 @@ test("the failed-part link's smoke checks the first click and its answer", { con
           if (n === 1 && (mode === "swallow" || mode === "first-503")) event.stopImmediatePropagation();
           if ((mode === "swallow" && n === 1) || hoverDraws) return;
           if (prefetched) await prefetched; // At least headers, before the click's answer.
-          const answer = (mode === "opt-out" && prefetched) || await fetch(link.href, { headers: { corten: mode === "page" ? "page" : "nav" } }).catch(() => null);
+          const answer = await fetch(link.href, { headers: { corten: mode === "page" ? "page" : "nav" } }).catch(() => null);
           if (!answer) return;
           if (!answer.ok && mode !== "stale") return;
           const body = mode === "part-read" ? await fetch("/part", { headers: { corten: "action" } }) : answer;
@@ -133,19 +177,38 @@ test("the failed-part link's smoke checks the first click and its answer", { con
           history.pushState(null, "", mode === "wrong-address" ? "/wrong" : link.href);
         }, { capture: true });
       }, { mode, rows });
+      // Supply overlap explicitly in the existing prefetch controls; followPicks no longer
+      // moves the pointer. For the unlabelled one, start it inside the observation window but
+      // before the key press, so rejecting it really tests the request-start fence.
+      const hovering = () => page.waitForRequest(`${base}${target}`, { timeout: answerMs });
+      if (["hover-draw", "stale", "held-prefetch"].includes(mode)) {
+        await Promise.all([hovering(), page.hover("#picks a", { timeout: answerMs })]);
+      }
+      if (mode === "unlabelled-hover-draw") {
+        const press = page.press.bind(page);
+        page.press = async (...args) => {
+          // Dispatch only the fixture event, without Playwright's pointer-action waits.
+          await Promise.all([
+            hovering(),
+            page.evaluate(() => document.querySelector("#picks a").dispatchEvent(new PointerEvent("pointerover"))),
+          ]);
+          await press(...args);
+        };
+      }
       const result = await followPicks(page, { answerMs: answerBudget, drawMs: drawBudget });
       const actualClicks = await page.evaluate(() => Number(sessionStorage.clicks));
       t.diagnostic(`${actualClicks} click(s), requests ${JSON.stringify(asked)}, ${result || "accepted"}`);
       if (["hover-draw", "unlabelled-hover-draw"].includes(mode)) {
         assert.equal(page.url(), `${base}${target}`);
         assert.deepEqual(await page.locator("ul#picks li").allTextContents(), ["One", "Two"]);
-        assert.equal(actualClicks, 1);
-        assert.deepEqual(asked, requests);
       }
       if (failure) assert.match(result, failure);
       else assert.equal(result, "");
       assert.equal(actualClicks, clicks);
       assert.deepEqual(asked, requests);
+      if (["no-hover", "delayed-hover"].includes(mode)) {
+        assert.equal(await page.evaluate(() => Number(sessionStorage.pointerEvents)), 0);
+      }
     }),
   ));
 });

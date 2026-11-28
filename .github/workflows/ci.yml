@@ -272,7 +272,8 @@ jobs:
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18480/; do sleep 1; done'
           $PLAYWRIGHT npm run smoke -- http://localhost:18480 $engine
           docker rm -f corten-watchlist
-          # Run the whole fixture suite once; other engines repeat the browser-sensitive controls.
+          # Run the whole fixture suite once; all engines check keyboard activation, hover
+          # isolation and a navigation response that arrives before the click witness is read.
           controls=browser
           if [[ "$engine" == chromium ]]; then controls=all; fi
           $PLAYWRIGHT env SMOKE_PARTS_ENGINE="$engine" SMOKE_PARTS_CONTROLS="$controls" node --test scripts/smoke/parts.test.mjs
