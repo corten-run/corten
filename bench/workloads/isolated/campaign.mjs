@@ -133,7 +133,9 @@ export function createCampaign({ authorize }) {
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
-      const browserDockerGate = process.platform === "linux" && binding.request.group === "fullstack-browser"
+      const group = binding.request.group;
+      const browserDockerGate = process.platform === "linux"
+        && (group === "fullstack-browser" || liveGroup(group) && binding.request.recipe === "native-feed-measure")
         && invocation === binding.execution.invocation ? { fd, identity: browserDockerGateIdentity(fd) } : undefined;
       if (browserDockerGate) browserDockerFd = reopenBrowserDockerGate(browserDockerGate);
       result = await supervise({ ...invocation, shell: false }, { cwd: repo,

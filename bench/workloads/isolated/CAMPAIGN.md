@@ -288,6 +288,15 @@ through the Docker CLI's `close`, including after a client timeout. That is not
 daemon acknowledgement: a late daemon removal can still create an observation
 gap, which fails closed.
 
+The exact bound Linux Live Delivery and Recoverable Live `native-feed-measure`
+invocations use the same gate. Live keeps its 100 ms interval and its existing
+actor receipts and workload-end clock. After the original full ID and ownership
+labels are checked, only `docker rm -f -v <id>` takes the exclusive lock. The
+synchronous Docker CLI keeps its existing deadline, with SIGKILL on timeout;
+the lock is released after the call settles, not on a daemon acknowledgement.
+An outside removal or a wait that exhausts the observation budget can still
+disqualify the run. Standalone Live runs and other invocations are not gated.
+
 The observer retains raw initial process observations content-addressed under processes/, references
 the independently re-read identities in each sample, and records raw CPU accounting,
 memory current/peak/events and effective controls. No environment or arbitrary command-line
