@@ -11943,25 +11943,25 @@ rules something out.
     purpose, under which a nearby commit compiles a path nearly as its base. Nothing in the
     repository measures what a rise in a request's instructions costs it in cycles, so that a
     rise inside the budget costs under +1% is a bet too. Idle memory has a statistic of its
-    own, since the kit prints one figure a run and its page records one binary at 2,641 to
-    2,645 bytes a connection between runs: three runs a build, and a rise only when the median
-    of head's growths of resident memory, in bytes, is above base's by more than the larger of
-    base's three span and four pages. The required readings leave the allocator observer off.
-    A [separate matched diagnostic](../bench/request-cost/README.md#allocator-diagnostics)
-    prints each of its runs' growth in jemalloc live bytes (allocated less thread-cache bytes),
-    the serving thread's net allocated bytes and jemalloc active bytes, alongside RSS from
-    that same run. The observer itself can move RSS, so none of those diagnostic figures
-    decides the rule.
-    Resident memory is reported a page at a time, so base's three can agree exactly and one
-    page is the least step a run can show. One page was the
+    own: three runs a build, and a rise only when the median of head's growths in allocator
+    live bytes is above base's by more than the larger of base's three span and four pages.
+    These are observer-on runs; growth is the difference between snapshots of allocated bytes
+    less thread-cache bytes. The observer can move RSS, which is reported from those same runs
+    but does not decide. An unread live-byte sample gives no figure, not a decision on RSS.
+    The [separate matched diagnostic](../bench/request-cost/README.md#allocator-diagnostics)
+    also shows the serving thread's net bytes and growth in active pages; its runs do not
+    enter the counted comparison.
+
+    The former rule decided on resident memory, reported a page at a time, so base's three
+    could agree exactly and one page was the least step a run could show. One page was the
     least allowed, the step of the reading and not a measured bound on its accuracy, from
     [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
-    until 2026-11-27, when the maintainer raised it to four (The idle floor, below): four pages
+    until 2026-11-27, when the maintainer raised it to four (The former resident-memory floor, below): four pages
     of the size the runs print, only over at
     least as many connections as a page has bytes, so they are at most four bytes a connection,
-    and 16,384 bytes, under 3.3 a connection, at the gate's 5,000 in 4,096-byte pages; a reading
-    over fewer decides nothing. The figures a
-    connection are rounded and do not decide it: on
+    and 16,384 bytes, under 3.3 a connection, at the gate's 5,000 in 4,096-byte pages. That
+    arithmetic and the minimum connection count stay in the live-byte rule. The rounded
+    resident figures per connection had already stopped deciding it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
     head's median rounded figure a connection was 1 byte above base's three equal figures. Rounding
     keeps the order, so head's growth was above base's, and over 5,000 connections in 4,096-byte
@@ -12058,7 +12058,7 @@ rules something out.
     when the condition the ruling met gives way to the next: four weekly rows in the trend's
     table, when the threshold is read again against what those runs resolved and read.
 
-    The idle floor. On 2026-11-27 the maintainer raised the least a rise of idle memory is
+    The former resident-memory floor. On 2026-11-27 the maintainer raised the least a rise of idle memory is
     allowed from one page to four. The question put was what should happen with
     [#2185 Hand on a request's body that has already ended without wrapping and boxing it](https://github.com/corten-run/corten/pull/2185),
     which failed the count on one idle reading, head over base by 8,192 bytes in the hosted job
@@ -12108,12 +12108,27 @@ rules something out.
     that the floor is four pages of the other size too, and that it is up to four bytes a
     connection over as few as 4,096, have no reading and no separate ruling behind them. By
     the kit's model ([`idle-model.mjs`](../bench/request-cost/idle-model.mjs)), two builds
-    that are the same read a rise in about one comparison in 260 with four pages at its
-    assumed spread, where one page read one in about nineteen, and in about one in 140 and
-    one in 30 with a spread fitted to each reading's spans in the hosted runs (Revisit when,
-    below). Both questions of 2026-11-27 as they were put, and the answers chosen, are in the
-    description of
+    that are the same read a resident rise in about one comparison in 260 with four pages at
+    its assumed spread, where one page read one in about nineteen, and in about one in 140
+    and one in 30 with a spread fitted to each reading's spans in the hosted runs. This model
+    describes a figure that no longer decides, not the spread of live bytes. Both questions
+    and answers about the trend threshold and raising the former floor are in the description of
     [#2225 Record two rulings of the maintainer: the trend's threshold settled at +2%, and the counted lane's idle-memory floor raised to four pages](https://github.com/corten-run/corten/pull/2225).
+
+    The live-byte ruling. On 2026-11-27 the maintainer was asked: what should the idle-memory
+    check measure when it passes or fails a change? The three options, as put in
+    [#2271 Decide the counted lane's idle-memory rule on the allocator's live bytes, with resident growth reported (the maintainer's ruling of 2026-11-27)](https://github.com/corten-run/corten/issues/2271),
+    were: (1) decide on the allocator's count of live bytes, and keep reporting resident memory
+    beside it, recommended with one condition: the pull request that switches the rule must show
+    hosted runs of one binary against itself where live bytes agree within the floor, the floor
+    staying at four pages to start and tightened once that data exists; (2) keep deciding on
+    resident memory, and print live bytes only as an explanation when a change misses; (3) leave
+    the check as it is. The answer, verbatim: "Option one is approved".
+
+    The floor now guards against run-to-run variation in the live-byte reading, not page placement
+    or rounding to resident pages. Four pages is an initial allowance, not a measured bound on
+    live-byte variation. If live bytes do not agree within the floor in the hosted self-comparison,
+    the rule is not switched and the readings go back to the maintainer.
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
@@ -12134,8 +12149,8 @@ rules something out.
     floor lands". The floor landed on 2026-11-27, in merge commit `456d8fd68`
     ([#2225 Record two rulings of the maintainer: the trend's threshold settled at +2%, and the counted lane's idle-memory floor raised to four pages](https://github.com/corten-run/corten/pull/2225)).
     The answer gives an order and no reason. By the kit's fitted model, two builds of one
-    binary would read as an idle-memory miss under the two-binary rule in about one job in
-    fifty with four pages and one in ten with one page (The idle floor, above). These are
+    binary would read as a resident-memory miss under the former two-binary rule in about one
+    job in fifty with four pages and one in ten with one page. These are
     modelled misses, not failures of the required check: the first ruling below makes one
     binary pass uncompared. Being required makes the check no more an attestation than it was.
     A change goes from counted to measured when a count sends it there. A pull request that
@@ -12210,11 +12225,10 @@ rules something out.
     handler add up to, though two requests to one probe do not take every path a counted change
     can cost on, and the release and `main` answer one of them differently, by a difference a
     run records and nobody reviews, so part of what a run reads there is the answer and not
-    the path to it; and a rise of up to four pages over base's three, 16,384 bytes and under
-    3.3 bytes a connection at the gate's settings, is where the allocator put things or a cost
-    too small to refuse a change for, and not memory a connection holds, which the
-    maintainer's ruling of 2026-11-27 takes on three sizes of reading whose cause no run
-    established); measured (the kit's
+    the path to it; and four pages, 16,384 bytes and under 3.3 bytes a connection at the gate's
+    settings, is enough to cover ordinary live-byte variation without hiding a cost worth
+    refusing a change for, which the live-byte ruling takes as a starting allowance, not a
+    measured bound); measured (the kit's
     repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
@@ -12235,10 +12249,9 @@ rules something out.
     thread's user-space instructions, so the kernel, another thread, a lock, a wait and the
     cache are not in a count, which is what the list is made from; one idle figure a run
     cannot be told from another of the same binary, so a rise is read against base's own
-    runs; 8 bytes more a connection is 40,000 bytes over the gate's 5,000 connections, over
-    twice the four pages, so the floor still sees a field a connection keeps, which is
-    arithmetic no run has read, resident memory moving by the allocator's size classes and
-    not by a field's bytes; and a count attributes a cost to one pull request where a reading of `main` against
+    runs; 8 more live bytes a connection would be 40,000 bytes over the gate's 5,000 connections,
+    over twice the four pages, which is arithmetic, not a reading of an added field; and a count
+    attributes a cost to one pull request where a reading of `main` against
     a release cannot, so the count gates and the trend reports); value (Fast, and proven
     fast: a claim has the number that can see it behind it, instructions where a count sees
     the change and cycles where only cycles do, README Values).
@@ -12249,12 +12262,11 @@ rules something out.
     record them, whose count is the baseline, the changes before it not having been counted,
     or cannot be taken because the
     probe does not build against that tag, so nothing bounds what counted costs add up to;
-    a change shown to hold memory a connection keeps passes the idle rule under the four
-    pages, so the floor hides a real cost; the hosted job fails a change on idle memory alone
-    at four pages, with no memory a connection keeps shown, so four pages are still under
-    what a run reads of where things were put (since the first of the required check's
-    rulings, of two binaries alone: one binary fails nothing); a run shows what the pages of
-    the readings the floor rests on are, either way;
+    enough complete hosted self-comparisons exist to estimate the run-to-run spread in live
+    bytes for each idle case and tighten the initial floor without treating ordinary variation
+    as a rise; a change shown to hold memory a connection keeps passes the idle rule under
+    four pages, so the floor hides a real cost; or a change with no corroborated increase in
+    memory held fails on live bytes alone;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
@@ -12278,26 +12290,15 @@ rules something out.
     of instructions between two commits are worth; the hosted job counts one binary more than
     a quarter of the budget apart in a case, which fails no job and means its count no longer
     resolves the budget there (two binaries of the same crates that differ so are where the
-    code was placed, which a count cannot tell from a change); the hosted job reads idle
-    memory to rise between two builds of the same crates, which since the first of the required
-    check's rulings fails no job where they are one binary, the verdict saying what the rule
-    would have read, and so shows the runner reading more than the floor allows, which a change
-    of two binaries is held to (the first run of
-    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and report ambiguous build exits](https://github.com/corten-run/corten/pull/2245),
-    of one binary, read before any byte 16,384 bytes over base's with 16,384 allowed, at the
-    floor and not over it, so it did not meet this; three runs a build drawn from one
-    distribution read a rise in about one comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
-    growths in 4,096-byte pages and base's span alone, in about one in nineteen by those
-    growths with one page allowed, and in about one in 260 with the four pages now allowed,
-    on the same draws, at a spread of 1.5 bytes a
-    connection, and in about one in 30 with one page and one in 140 with four at a spread
-    for each reading fitted to base's spans in nine hosted runs, each simulated by the kit's
-    `idle-model.mjs`, not a rate seen on runners, which the rule's idle statistic was
-    not chosen against); a job comes to tell the kinds a count cannot judge
+    code was placed, which a count cannot tell from a change); live growth from any idle case
+    differs by more than the floor in a hosted self-comparison, even though one binary fails no
+    job and the verdict says only what the rule would have read; a job comes to tell the kinds a count cannot judge
     from a diff, so the line says nothing the job does not know and can be dropped; or a reading
     across placements comes to cost what a count does, so cycles can be asked of every change.
 
-    Last checked: 2026-11-25, the kit's page read at `3eb752d8e` for its repeats and its builds
+    Last checked: 2026-11-28, the live-byte ruling above read in full and the kit at
+    `394e777f3` read for the observer-on snapshots and the comparison workflow, which uses the
+    merge checkout's kit for both builds; 2026-11-25, the kit's page read at `3eb752d8e` for its repeats and its builds
     in five directories (taken on `c9666dc96`, not taken again), and
     [design Choice 72](#choice-placement-runs) read at `9e209a32f` for the default band, the
     hours a reading across placements takes, the fourth run's 0.5% and the first run's reading

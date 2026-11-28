@@ -10,7 +10,7 @@
 //          the table and the verdict, in Markdown
 //        node compare.mjs <diagnostic directory from job.sh diagnose> --allocator
 //          only the matched observer-on diagnostic report; an unfinished collection or missing
-//          figures fail this command, never the separate observer-off RSS verdict
+//          figures fail this command, never the separate counted comparison
 //
 // A build's directory holds what the kit printed with `--json`, a file a run, named as
 // `--readings` names it; `answers/`, as `count.mjs --answers` wrote it; beside a run that was
@@ -30,10 +30,10 @@
 //
 // The rule: no case's instructions a request rise by more than +0.5% of base's, by the medians
 // the kit gives; no case's allocations rise, by the calls themselves; and no idle reading rises,
-// by `idleRise` (figures.mjs): the median of head's three growths of resident memory, in bytes
-// (each run's after less its before), is not above base's by more than the larger of base's
-// three span and four pages, over at least as many connections as the page has bytes. The figures a
-// connection are rounded and decide nothing. A reading with no figure on either build, an idle
+// by `idleRise` (figures.mjs): the median of head's three growths in allocator live bytes is
+// not above base's by more than the larger of base's three span and four pages, over at least
+// as many connections as the page has bytes. Resident growth is reported, never substituted for
+// live growth. A reading with no figure on either build, an idle
 // reading `idleRise` cannot decide (its six runs not of one page size, or 5,000 connections
 // being fewer than a page has bytes), or a case either build gave no answer to, cannot be
 // counted, which sends the change to the measured way as a rise does.
@@ -70,13 +70,12 @@ const SIDES = /** @type {const} */ (["base", "head"]);
 /** What job.sh leaves in `unbuilt` when timeout returns an ambiguous status. */
 export const STOPPED = /^the build ended with status (124|137) after \d+ s \(limit \d+ s\)$/;
 
-/** The same idle cases and settings, but distinct files, invocation and receipt kind. @param {boolean} allocator */
-function idleReadings(allocator) {
-  const kind = allocator ? "idle-allocator" : "idle";
+/** The same observer-on runs, with distinct file names for the separate diagnostic collection. @param {boolean} diagnostic */
+function idleReadings(diagnostic) {
   return Array.from({ length: RUNS }, (_, at) => IDLE.map(({ name, what, options, of }) => ({
-    file: `${kind}-${name}-${at + 1}.json`, script: /** @type {const} */ ("idle.mjs"),
-    options: ["--json", ...(allocator ? ["--allocator"] : []), ...options],
-    expect: { kind, ...of, connections: 5000, addresses: 1 },
+    file: `${diagnostic ? "idle-allocator" : "idle"}-${name}-${at + 1}.json`, script: /** @type {const} */ ("idle.mjs"),
+    options: ["--json", "--allocator", ...options],
+    expect: { kind: "idle-allocator", ...of, connections: 5000, addresses: 1 },
     what, run: at + 1,
   }))).flat();
 }
@@ -139,15 +138,11 @@ export function figure(text, expect) {
   // An idle run's growth is its after less its before, stated as `grown` too, with the page size
   // it was read in: a run printed before they were has no figure, its growth not guessed from its
   // rounded `bytes`.
-  if (expect.kind === "idle" || expect.kind === "idle-allocator") {
+  if (expect.kind === "idle-allocator") {
     // Resident memory is whole pages, so each reading of it is too, not only their difference.
     const paged = Number.isSafeInteger(found.page) && found.page > 0 && found.before % found.page === 0 && found.after % found.page === 0;
     const sound = Number.isSafeInteger(found.bytes) && whole(found.before) && whole(found.after) && found.grown === found.after - found.before && paged;
     if (!sound || found.bytes !== Math.round(found.grown / found.connections)) return null;
-    if (expect.kind === "idle") {
-      // Early observer-on receipts used "idle" too. They must never count as observer-off.
-      return Object.hasOwn(found, "allocator") || Object.hasOwn(found, "sweepNanos") ? null : found;
-    }
     const growth = found.allocator;
     const times = found.sweepNanos;
     return [growth?.live, growth?.threadNet, growth?.active].every(Number.isSafeInteger) &&
@@ -196,24 +191,19 @@ function taken(directory, { file, expect }, digest) {
   const refused = lines(`${at}.refused`);
   if (!existsSync(at)) return { figure: null, why: refused.at(-1) ?? "the run left no output", refused };
   let text;
-  if (expect.kind === "idle-allocator") {
-    let bytes;
-    try {
-      bytes = readFileSync(at);
-    } catch {
-      return { figure: null, why: "the receipt could not be read", refused };
-    }
-    if (createHash("sha256").update(bytes).digest("hex") !== digest) {
+  try {
+    const bytes = readFileSync(at);
+    if (digest !== undefined && createHash("sha256").update(bytes).digest("hex") !== digest) {
       return { figure: null, why: "the receipt does not match the collection completion record", refused };
     }
     text = bytes.toString("utf8");
-  } else {
-    text = readFileSync(at, "utf8");
+  } catch {
+    return { figure: null, why: "the receipt could not be read", refused };
   }
   const found = figure(text, expect);
-  const why = expect.kind === "idle-allocator" ? "the run did not give a whole observer-on reading with all allocator counters and sweep times"
-    : expect.kind === "idle" && unpaged(text) ? "the run gives no page size or growth, as idle.mjs printed before them, and its growth is not guessed from its figure"
-    : "the run's output is not the whole of the run asked for";
+  const why = expect.kind !== "idle-allocator" ? "the run's output is not the whole of the run asked for"
+    : unpaged(text) ? "the run gives no page size or growth, as idle.mjs printed before them, and its growth is not guessed from its figure"
+    : "the run did not give a whole observer-on reading with all allocator counters and sweep times";
   return { figure: found, why: found === null ? why : "", refused };
 }
 
@@ -221,7 +211,7 @@ function taken(directory, { file, expect }, digest) {
 function unpaged(text) {
   try {
     const found = JSON.parse(text);
-    return found !== null && typeof found === "object" && found.kind === "idle" && (!("page" in found) || !("grown" in found));
+    return found !== null && typeof found === "object" && (found.kind === "idle" || found.kind === "idle-allocator") && (!("page" in found) || !("grown" in found));
   } catch {
     return false;
   }
@@ -286,7 +276,7 @@ export function allocatorReport(directory) {
   const markdown = [
     `## Idle allocator diagnostics: ${code(short(head))} and ${code(short(base))}`,
     missing ? "**Incomplete diagnostic match.**" : "**Every diagnostic pair is present.**",
-    "Observer on. Each run used 5,000 connections from one address. The growths in bytes below, including resident growth, do not enter the separate observer-off RSS verdict.",
+    "Observer on. Each run used 5,000 connections from one address. These optional runs do not enter the separate counted comparison.",
     table(["Build", "Reading", "Run", "Page size", "Resident", "Jemalloc live", "Serving-thread net", "Jemalloc active"], rows),
     ...(refused.length ? ["### Diagnostic refusals", refused.join("\n")] : []),
   ].join("\n\n");
@@ -354,10 +344,9 @@ export function compare(base, head, { description = "", names = { base: "base", 
     return [code(name), each(b), each(h), `${signed(more)} in ${whole(h.requests)}`, percent(b.allocations, h.allocations), calls(b), calls(h), more > 0 ? "rose" : ""];
   });
 
-  // An idle reading is decided by its growths in bytes, not by the figures a connection, which
-  // are rounded: `idleRise` is the rule, and a reading it cannot decide is not counted.
+  // `idleRise` compares growth in live bytes. Resident growth from the same run is reported only.
   const connections = /** @type {number} */ (/** @type {ReturnType<typeof readings>[number]} */ (plan["idle-request-1.json"]).expect.connections);
-  /** Each idle run's record, as `idle.mjs` prints it on a host, with what decides: its before, after, growth and page size. */
+  /** Each idle run's live growth beside its resident before, after, growth and page size. */
   const records = /** @type {string[]} */ ([]);
   const idle = IDLE.map(({ name, what }) => {
     const runs = [];
@@ -367,13 +356,14 @@ export function compare(base, head, { description = "", names = { base: "base", 
       found.forEach((run, at) => {
         if (run === null) return;
         const did = run.requests === 0 ? `sent nothing to the probe for ${run.case}` : `answered ${run.requests} ${run.case}`;
-        records.push(`${side}, ${what}, run ${at + 1}: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
+        records.push(`${side}, ${what}, run ${at + 1}: ${run.allocator.live} live bytes grown; resident: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
       });
     /** A build's runs of the reading, when every run gave a figure: a median of fewer is not the rule's. */
     const all = (/** @type {any[]} */ found) => (found.every((run) => run !== null) ? found : null);
-    const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
+    const live = (/** @type {any} */ run) => /** @type {number} */ (run.allocator.live);
+    const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : whole(live(run)))).join(" ");
     const [bases, heads] = [all(/** @type {any[]} */ (b)), all(/** @type {any[]} */ (h))];
-    const grown = (/** @type {any[]} */ found) => found.map((run) => /** @type {number} */ (run.grown));
+    const grown = (/** @type {any[]} */ found) => found.map(live);
     if (!bases || !heads) return [what, bases ? whole(median(grown(bases))) : "none", heads ? whole(median(grown(heads))) : "none", "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "no figure"];
     const [low, high] = [median(grown(bases)), median(grown(heads))];
     const pages = [...new Set([...bases, ...heads].map((run) => /** @type {number} */ (run.page)))];
@@ -386,7 +376,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
       return [what, whole(low), whole(high), signed(high - low), percent(low, high), "", shown(bases), shown(heads), "not decided"];
     }
     const { rise, allowed, rose } = decided;
-    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and ${FLOOR_WORD} ${whole(/** @type {number} */ (pages[0]))}-byte pages)`);
+    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} live bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and ${FLOOR_WORD} ${whole(/** @type {number} */ (pages[0]))}-byte pages)`);
     return [what, whole(low), whole(high), signed(rise), percent(low, high), whole(allowed), shown(bases), shown(heads), rose ? "rose" : ""];
   });
 
@@ -477,10 +467,9 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Allocations a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
     "### Memory idle connections hold",
-    "Allocator observer off. The separate observer-on runs are diagnostic only.",
-    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
+    `Allocator observer on. Growth in live bytes over ${whole(connections)} connections decides the rule: a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
-    "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
+    "Each run's live growth and resident memory from the same run. Resident growth and its rounded figure per connection are reported only:",
     ["```text", ...records, "```"].join("\n"),
     ...(refusals.length > 0 ? ["### Runs that gave no figure", refusals.join("\n")] : []),
   ].join("\n\n");

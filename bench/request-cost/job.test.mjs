@@ -38,7 +38,7 @@ const standIns = {
   // node compare.mjs --readings: the two required runs or the separate idle diagnostic.
   "compare.mjs": [
     `if (process.argv.includes("--allocator")) console.log(${JSON.stringify(allocatorPlan.map(({ file, script, options }) => [file, script, ...options].join(" ")).join("\n"))});`,
-    'else console.log("count-get.json count.mjs --json --cases get\\nidle-silent-1.json idle.mjs --json --silent");',
+    'else console.log("count-get.json count.mjs --json --cases get\\nidle-silent-1.json idle.mjs --json --allocator --silent");',
   ],
   // node count.mjs <probe> --cpu <cpu> <options>: notes the call, as `<commit> <options>`, and
   // does what STAND_IN_DOES says of that call's first time, second time and so on: refuses as the
@@ -151,7 +151,7 @@ for (const failing of /** @type {const} */ (["base", "head"])) {
     chmodSync(join(builds, "bin", made[failing]), 0o755);
     const read = job({ STOP_AT: later() }, "read", builds, "3");
     assert.equal(read.status, 0, read.stderr);
-    assert.deepEqual(called(), [`${made[other]} --answers ${join(builds, other, "answers")}`, `${made[other]} --json --cases get`, `${made[other]} --json --silent`]);
+    assert.deepEqual(called(), [`${made[other]} --answers ${join(builds, other, "answers")}`, `${made[other]} --json --cases get`, `${made[other]} --json --allocator --silent`]);
     assert.deepEqual([left(`${other}/count-get.json`), left(`${failing}/count-get.json`), left(`${failing}/count-get.json.refused`)], [`${JSON.stringify({ call: `${made[other]} --json --cases get` })}\n`, null, null]);
     const { markdown, status } = compared("Request path: measured");
     assert.equal(status, failing === "head" ? 1 : 0);
@@ -213,8 +213,8 @@ test("a run the kit refuses is taken again, once, with why kept, and a run that 
     `${base} --json --cases get`,
     refused,
     refused,
-    `${base} --json --silent`,
-    `${head} --json --silent`,
+    `${base} --json --allocator --silent`,
+    `${head} --json --allocator --silent`,
   ]);
   // The second attempt's output, the first's reason and nothing else of either.
   assert.equal(left("head/count-get.json"), `${JSON.stringify({ call: refused })}\n`);
@@ -230,8 +230,8 @@ test("explicit diagnostics run only the observer-on idle plan on both builds and
   const env = { STOP_AT: later() };
   assert.equal(job(env, "read", builds, "3").status, 0);
   const required = called();
-  const off = ["base", "head"].map((side) => left(`${side}/idle-silent-1.json`));
-  assert.ok(off.every(Boolean));
+  const counted = ["base", "head"].map((side) => left(`${side}/idle-silent-1.json`));
+  assert.ok(counted.every((receipt) => receipt && JSON.parse(receipt).allocator?.live === 17));
   assert.equal(left("base/idle-allocator-silent-1.json"), null);
   const directory = join(builds, "fresh diagnostics");
   const diagnose = job(env, "diagnose", builds, "3", directory);
@@ -241,7 +241,7 @@ test("explicit diagnostics run only the observer-on idle plan on both builds and
   assert.equal(report.status, 0, report.markdown);
   assert.match(report.markdown, /Every diagnostic pair is present/);
   assert.equal(report.markdown.split("\n")[0], `## Idle allocator diagnostics: \`${head.slice(0, 9)}\` and \`${base.slice(0, 9)}\``);
-  assert.deepEqual(["base", "head"].map((side) => left(side + "/idle-silent-1.json")), off);
+  assert.deepEqual(["base", "head"].map((side) => left(side + "/idle-silent-1.json")), counted);
   assert.equal(left("base/idle-allocator-silent-1.json"), null);
 
   // Seed the former locations with valid receipts, then point the build record at an absent

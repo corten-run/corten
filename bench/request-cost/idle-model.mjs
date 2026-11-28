@@ -1,5 +1,6 @@
-// How often the idle rule reads a rise between two builds that are the same: a model, by
-// simulation. It is not a measurement and no check runs it; the kit's page (The hosted job) and
+// How often the former resident-memory rule read a rise between two builds that are the same.
+// Resident growth no longer decides; this model does not describe the live-byte rule.
+// It is not a measurement and no check runs it; the kit's page (The hosted job) and
 // docs/design.md#choice-counted-or-measured give its figures and say what they are worth.
 //
 // A job is three comparisons, one for each idle reading. A comparison is three runs of base and

@@ -12,8 +12,8 @@ small Corten app, the [probe](probe/src/main.rs), built against the commit being
 1. Instructions a request: what the thread that serves runs to read one HTTP/1.1 request off a
    keep-alive connection and write its answer, counted by callgrind.
 2. Allocations a request: calls into the allocator, from the same callgrind profile.
-3. Memory an idle connection holds: how much the process's resident memory grows for each open
-   connection, after one request, after three, or before any byte.
+3. Memory idle connections hold: growth in the allocator's live bytes, after one request, after
+   three, or before any byte. Resident growth from each run is reported beside it.
 
 Nothing here is part of the workspace or of `corten`. The scripts are Node, standard library
 only, and a POSIX shell.
@@ -129,9 +129,9 @@ node bench/request-cost/count.mjs <probe> --cpu <cpu> --answers <directory>/answ
 node bench/request-cost/count.mjs <probe> --cpu <cpu>
 node bench/request-cost/count.mjs <probe> --cpu <cpu> --depth 16 --cases pipeline,get,unstaged,text
 node bench/request-cost/count.mjs <probe> --cpu <cpu> --allocations
-node bench/request-cost/idle.mjs <probe> --cpu <cpu>
-node bench/request-cost/idle.mjs <probe> --cpu <cpu> --case get-browser --requests 3
-node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --allocator
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --allocator --case get-browser --requests 3
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --allocator --silent
 ```
 
 1. `--answers` writes each case's answer as sent, with its `Date` and `ETag` values replaced.
@@ -145,8 +145,9 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
    many they were (`243 in 1`). [How a number is read](#how-a-number-is-read) says what each
    is for.
 3. `--allocations` prints allocations and frees a request, and the calls they are made of.
-4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), the resident
-   growth in bytes and the page size it is read from (Idle memory, below). One client
+4. `idle.mjs --allocator` prints growth in live bytes for 5,000 connections (`--connections`),
+   with resident growth, its rounded bytes a connection and the page size (Idle memory, below).
+   One client
    address has ports for about 28,000: for more, `--addresses` spreads them over that many
    loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
@@ -155,7 +156,8 @@ for two runs side by side on CPUs of their own. `--depth` takes at most 240. `--
 count, on `--allocations` or on `idle.mjs`, prints in place of the text a line of JSON a case
 with what was measured, unrounded: each window's instructions, seconds and other threads, the
 allocator's calls and the requests they are over, an idle run's bytes a connection, its
-connections, its resident before and after, growth and page size. It is what
+connections, its resident before and after, growth and page size, and with `--allocator`,
+its allocator growths and sweep times. It is what
 [`compare.mjs`](compare.mjs) reads; the text is for people. A count of several cases prints
 each case's line as it is counted, so one that fails at a later case has printed the earlier
 ones: the hosted job counts one case an invocation. `idle.mjs` prints its line once the probe
@@ -163,10 +165,9 @@ has stopped.
 
 ### Allocator diagnostics
 
-To investigate what moves RSS, repeat the idle workload with `idle.mjs --allocator`.
-Use the same case, requests, connections, addresses and CPU on both builds. To take the
-kit's full matched diagnostic set from both binaries left by `job.sh build` in a merge
-checkout, run the separate plan and report:
+The counted idle runs use `idle.mjs --allocator`. To investigate what moves RSS without
+repeating the instruction or allocation counts, take the kit's full matched diagnostic set
+from both binaries left by `job.sh build` in a merge checkout:
 
 ```sh
 STOP_AT=$(($(date +%s) + 1440)) bash bench/request-cost/job.sh diagnose <build-directory> <cpu> <new-diagnostic-directory>
@@ -185,15 +186,14 @@ it reads, so moving or substituting a receipt with different bytes refuses the m
 describes the same case. An interrupted collection, a record without the digests, or a missing
 or mismatched diagnostic pair leaves the report incomplete and it exits 1. An older complete
 directory still reports only its own pair, not the current contents of the build directory.
-The report shows resident growth alongside all three allocator growths for each run. Neither
-the observed RSS nor missing diagnostics can change the verdict from the required observer-off
-runs. The hosted job does not run this optional plan.
+The report shows resident growth alongside all three allocator growths for each run. The
+hosted job does not run this optional plan; these separate runs never enter its verdict.
 
-Observer-off JSON keeps `kind: "idle"`. An explicit `--allocator --json` run writes
-`kind: "idle-allocator"` and adds `allocator` growths and two `sweepNanos` values (before
-and after). The scripts use distinct receipt names: the original `idle-{request,browser,silent}-*.json`
-for the gate, and `idle-allocator-*.json` for diagnostics. The gate never accepts an observer-on
-receipt, including one from an earlier kit with allocator fields under `kind: "idle"`.
+A `--allocator --json` run writes `kind: "idle-allocator"`, `allocator` growths and two
+`sweepNanos` values (before and after). The scripts use distinct receipt names:
+`idle-{request,browser,silent}-*.json` for the gate and `idle-allocator-*.json` for the optional
+collection. A run without `--allocator` is still available for observer-off controls. Its
+`kind: "idle"` receipts do not count, including older receipts of that kind with allocator fields.
 
 ## How a number is read
 
@@ -275,21 +275,15 @@ allocates for each request, so it is not a profile of them.
 
 **Idle memory.** The probe is started without callgrind and warmed with 50 connections. The
 client then opens the connections one after another, sends what the case says on each and reads
-the answers, and waits a second. The growth of the process's `VmRSS` over those connections,
-divided by their number, is the figure. The kernel's socket buffers are not the process's and
-are not in it. Resident memory moves a page at a time (`getconf PAGESIZE`, 4,096 bytes on
-x86-64 Linux), so two readings differ by whole pages, and one page, under a byte a connection
-over 5,000 with 4,096-byte pages (13 with 65,536-byte ones), is the least they can differ by: the step of the reading, not a measured bound on
-its accuracy. The run prints the growth in bytes and the page
-size beside the figure, and CONTRIBUTING's gate compares the growths, not the figures, which are
-rounded: two pages more can round to one byte a connection more. [`idleRise`](figures.mjs) is
-that comparison. It allows a rise of four pages whatever base's runs span
-([The idle floor](#the-idle-floor) says why four and not the one page of the step), and it
-refuses readings over fewer connections than a page has bytes, where four pages are more than
-four bytes a connection: over 40, four 4,096-byte pages are 410 bytes a connection, a step the
-gate would let pass unseen.
+the answers, and waits a second. The gate compares growth in allocator live bytes over those
+connections. It also reports the process's `VmRSS` growth and its rounded bytes a connection.
+The kernel's socket buffers are not the process's and are not in either figure. Resident growth
+moves in whole pages (`getconf PAGESIZE`, 4,096 bytes on x86-64 Linux); live growth need not.
+[`idleRise`](figures.mjs) allows a rise up to the larger of base's span and four pages
+([The idle floor](#the-idle-floor)). It still refuses readings over fewer connections than a page
+has bytes, where four pages would allow more than four bytes a connection.
 
-In an [allocator diagnostic](#allocator-diagnostics), a kit-only signal at the two resident
+With `--allocator`, a signal at the two resident
 readings asks the probe's serving thread for an allocator snapshot, with no extra connection
 or HTTP request. The reply starts with `IDLE_ALLOCATOR` and
 a space on the probe's stdout and ends with a line feed. The kit skips ordinary stdout logs
@@ -305,16 +299,15 @@ that thread's allocations and frees; active bytes describe allocator pages, not 
 resident footprint. A run reports each growth as after less before, in bytes, not per connection.
 The observer itself moves resident memory: in a control on one binary (three runs on, three
 off), resident growth was 1 to 3 pages lower with it on. That control does not show that the
-shift cancels between builds, so only observer-off RSS decides the rule. The diagnostic pairs
-show RSS from their own observer-on runs, never RSS borrowed from the gate. If a probe cannot
-give the counters, the requested diagnostic refuses rather than falling back to RSS or reporting
-missing counters as zero.
+shift cancels between builds. The gate takes no separate observer-off runs: it reports RSS from
+its own observer-on runs, and RSS never decides. If the probe cannot give the counters, the run
+gives no figure rather than falling back to RSS or reporting missing counters as zero.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
 when it may open fewer files than there are connections and the rest wait in its listen queue.
-The kit checks both at the final resident reading. In an allocator diagnostic it checks both
-again after the reply, so a connection lost during the sweep also refuses that run.
+The kit checks both at the final resident reading. With the observer on it checks both again
+after the reply, so a connection lost during the sweep also refuses that run.
 A request on a connection waiting there is not answered while it waits, and such a run ends in
 one of two ways: no answer has come for 30 seconds, or the probe closed connections first,
 since Corten closes the ones it holds at its own 30 seconds and then accepts those that
@@ -425,28 +418,24 @@ On one runner it does what [Running it](#running-it) says, the first three by
 4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
    writes what it prints to the job's summary: for each case base, head, the difference and
    the percent, every count of every run with its longest window and the most that other
-   threads ran in one, the allocator's calls, every idle run's resident growth in bytes with its
-   rounded figure a connection and what base's runs allow, each idle run's line with its resident
-   before, after, growth and page size, each attempt that gave
-   no figure, and one
-   line of verdict. Its exit status is the job's.
+   threads ran in one, the allocator's calls, every idle run's growth in live bytes and what
+   base's runs allow, each idle run's resident before, after, growth, rounded figure a connection
+   and page size, each attempt that gave no figure, and one line of verdict. Its exit status is
+   the job's.
 
 `compare.mjs` holds the figures to the rule of
 [CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests) (Pull requests, item 2.1, Counted): no
 case's instructions a request more than +0.5% over base's by the kit's medians, no case's
 allocations up (by the allocator's calls over the same requests, so 16,004 against 16,000 in
 1,000 requests is a rise, though both print as 16.00), and no idle reading that rises by
-[`idleRise`](figures.mjs): the median of head's three growths of resident memory, each run's
-after less its before in bytes, above base's by more than the larger of base's three span and
-four pages ([The idle floor](#the-idle-floor)). The figures a connection are rounded and do not
-decide it: four pages more over base's three equal 62,812,160 bytes pass, where the figures
-read 12,562 and 12,566, and five pages more fail, though their figures can also be four bytes
-a connection apart (over base's three equal 62,808,064 they read 12,562 and 12,566 too). A figure is read only from the whole JSON of the run asked
-for: its case, depth, requests and 5,000 connections from one address, three counts whose
-median is the one stated, and for an idle run its growth equal to its after less its before
-and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
-growth is not guessed from its figure. The summary covers only observer-off readings, using
-the same receipt format as before. The job's connections stay 5,000: on a runner whose page
+[`idleRise`](figures.mjs): the median of head's three growths in live bytes above base's
+by more than the larger of base's three span and four pages ([The idle floor](#the-idle-floor)).
+Exactly 16,384 bytes over an agreeing base pass with 4,096-byte pages; 16,385 fail. A figure is
+read only from the whole JSON of the run asked for: its case, depth and requests, three counts
+whose median is the one stated, or for an idle run its observer-on receipt with the allocator
+counters, resident readings and page size, and 5,000 connections from one address. If live bytes
+could not be read, there is no figure; resident growth is never substituted. The job's
+connections stay 5,000: on a runner whose page
 has more bytes than that (65,536-byte pages), four pages are more than four bytes a connection
 (52), and `idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
 asking `idleRise`. Either way the reading is not decided and cannot be counted. An answer is a capture that is one
@@ -597,10 +586,9 @@ with valgrind 3.26.0 and rustc 1.100.0:
    2,661 before any byte). In a fifth run, of `bd7506d60`, the six before any byte spanned 5,
    2,657 to 2,662.
 
-The idle rule can read a rise between two builds that are the same, since it compares two
-medians of three by a span of three, or four pages when that is more: base's growths within
-four pages of each other and a head five pages above base's median would be one. A model says
-how often, not the runners. When the rule compared the figures a connection by base's span
+The former resident-memory rule could read a rise between two builds that were the same. The
+model below estimates how often for that figure, which no longer decides; it does not model
+live-byte variation. When the rule compared the figures a connection by base's span
 alone, with every run drawn independently from one distribution, it did so in 8.7% of
 comparisons and 23.8% of jobs, a job being three readings, when the draws are normal, and in
 5.5% and 15.7% when they are normal with a standard deviation of 1.5 bytes a connection and
@@ -608,7 +596,7 @@ rounded to whole bytes. On the growths, with that standard deviation over 5,000 
 (7,500 bytes, 1.8 pages of 4,096), each draw rounded to whole pages and the mean placed
 anywhere in a page, the same draws read one by base's span alone in 5.9% of comparisons and
 16.7% of jobs, with one page allowed, the rule until 2026-11-27, in 5.4% and 15.3%, and with
-the four pages now allowed in 0.38% and 1.1% (each simulated, 1,000,000 jobs): most of the
+four pages allowed in 0.38% and 1.1% (each simulated, 1,000,000 jobs): most of the
 fall from 8.7% to 5.4% is the rounding, the one page took away about half a point more, and
 the four pages take away nearly all the rest at that spread. The model is
 [`idle-model.mjs`](idle-model.mjs), which no check runs and which decides nothing: one seed
@@ -638,20 +626,23 @@ not once in ninety, and about once in ten with one page, not once in seven. Thes
 failures of the required check: a job with one binary passes uncompared. In the 27 hosted
 readings the largest rise, 16,384 bytes, was on the reading before any byte. None of the five
 runs read such a rise, whose figures were compared, not their growths, which those runs did
-not print. A job of two different binaries that fails on idle memory alone is to be read with
-that in mind; its readings are not taken again for their result.
+not print. Those readings and the model describe the former resident-memory rule, not the
+chance of a miss under the live-byte rule.
 
 ## The idle floor
 
 The least a rise of idle memory is allowed, whatever base's runs span, is four pages of the
 size the runs were read in: 16,384 bytes in 4,096-byte pages, under 3.3 bytes a connection over
 the default 5,000, and four bytes a connection over 4,096, the fewest connections `idleRise`
-takes a reading in such pages over. It was one page, the step of the reading, until
-2026-11-27, when the maintainer raised it to four
-([design Choice 76](../../docs/design.md#choice-counted-or-measured) records the ruling). It is
-a ruling on readings, not a measured bound, and the readings are these, each of head's median
-over base's, over 5,000 connections from one address in 4,096-byte pages, in pull requests
-whose descriptions say that nothing they add is held for a connection:
+takes a reading in such pages over. Live growth is not measured in pages: the floor starts
+at the same number of bytes to allow for run-to-run variation, not to account for where the
+allocator places pages. It is a starting allowance, not a measured bound on live-byte variation.
+[Design Choice 76](../../docs/design.md#choice-counted-or-measured) records when to revisit it.
+
+The former resident-memory floor was one page until 2026-11-27, when the maintainer raised it
+to four. The historical resident readings behind that ruling follow: head's median over
+base's, over 5,000 connections from one address in 4,096-byte pages, in pull requests whose
+descriptions say that nothing they add is held for a connection:
 
 | Pull request | Reading | Where | Base's three growths, bytes | Head's three | Head over base | Base's span |
 | --- | --- | --- | --- | --- | ---: | ---: |
@@ -681,22 +672,18 @@ puts things from a cost of two to three bytes a connection, which is 2,000 to 3,
 fit either and show neither: no run says what the pages are, so memory a connection holds is
 not ruled out.
 
-What the floor gives up, and keeps:
+What the live-byte floor gives up, and keeps:
 
-1. A cost under about 3.3 bytes a connection is not seen at the default: it reads at most
-   16,384 bytes over 5,000 connections, which passes. Under one page that was about 0.8. A
-   reading is whole pages, so a cost of 4 bytes a connection, 20,000 bytes, can read as four
-   pages or as five.
-2. 8 bytes more a connection is 40,000 bytes over 5,000 connections and 32,768 over 4,096,
-   each more than the floor, so by arithmetic it is still a rise wherever base's span is
-   under it. No run has read an added field, and resident memory moves by the allocator's
-   size classes, so a field can read as nothing or as more. A span of base's over four pages
-   governs as before, and hides more.
+1. A rise of 16,384 live bytes passes at the default, about 3.3 bytes a connection. There is
+   no rounding to whole pages in that comparison.
+2. A measured rise of 8 live bytes a connection would be 40,000 bytes over 5,000 connections
+   and 32,768 over 4,096, both over the floor if base's span is smaller than the rise. This
+   is arithmetic, not a reading of an added field; a field can still fit an existing size
+   class. A wider span of base's governs as before.
 3. It is one rule for both page sizes. In 65,536-byte pages four pages are 262,144 bytes, over
    at least 65,536 connections, so at most the same four bytes a connection. No reading in
-   such pages stands behind that: every reading above is in 4,096-byte pages, and that a
-   process which touches a few more pages does so whatever their size is reasoned, not read.
-   The hosted job, at 5,000 connections, still leaves such a runner's readings not decided.
+   such pages stands behind that: every reading above is in 4,096-byte pages. The hosted job,
+   at 5,000 connections, still leaves such a runner's readings not decided.
 4. The fewest connections stay the page's bytes. Keeping the floor at a byte a connection
    would take 16,384 connections for 4,096-byte pages and refuse the default 5,000, the
    setting the ruling names and every reading above was taken at.
@@ -719,7 +706,7 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one to four pages over base's agreeing three passing, five pages failing, a span of base's over four pages governing and more than it failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, either build ending with status 124 or 137, answers missing, empty, cut short or with more after them, which lines declare, what each declaration does with the verdict, one binary passing under each declaration whatever its figures, and missing, unusable or different checksums compared as two binaries |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growth in live bytes (the floor or base's wider span passing, a byte beyond either failing, resident growth reported but not deciding, and missing live bytes giving no figure), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, either build ending with status 124 or 137, answers missing, empty, cut short or with more after them, which lines declare, what each declaration does with the verdict, one binary passing under each declaration whatever its figures, and missing, unusable or different checksums compared as two binaries |
 | `job.test.mjs` | `job.sh` with stand-ins in a checkout made for it: no merge base, both probes' checksums, ordinary failures, `timeout` statuses and timings (including TERM, KILL, and early exits), real comparison of the records, and readings retried once or not at all |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
@@ -740,8 +727,8 @@ ahead of the warm connections, fails. Two runs are checked less: one starts `idl
 the preload and reads the stand-in's own status in `/proc`, as a host does, and is checked only for
 a growth that is its after less its before, a figure that is that growth over the connections and
 a before that is not the stand-in's; the `--json` run with a 65,536-byte page is checked only for
-the page size it carries. The required run never asks for a sample. When explicitly requested,
-the stand-in replies with known counters; tests check their growth, the two sweep times,
+the page size it carries. The observer-off control never asks for a sample. With the observer
+on the stand-in replies with known counters; tests check their growth, the two sweep times,
 ignored logs, and refusal on a missing or malformed reply or a connection closed before the
 final reply. The collection and report tests exercise the separate paths and refuse substituted
 or incomplete evidence.

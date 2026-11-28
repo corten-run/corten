@@ -629,20 +629,19 @@ establish a general ranking.
       (which it does not print, so the description names it), over at least as many connections as
       the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
       pages, over `--addresses 3`), so four pages are at most four bytes a connection, since a reading over
-      fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
-      resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
-      than the larger of base's three span and four pages (of the size it prints, the step
-      resident memory is reported in: 16,384 bytes with 4,096-byte pages, under 3.3 bytes a
-      connection over the default 5,000); the figures a connection are rounded and do not decide
-      it. The floor was one page until 2026-11-27, when the maintainer raised it to four:
-      [design Choice 76](docs/design.md#choice-counted-or-measured) gives the readings it rests
-      on, whose cause was not established, and what it gives up, a cost under about 3.3 bytes a
-      connection at the default, where 8 bytes more a connection is 40,000 bytes by arithmetic,
-      which no run has read. The
-      hosted job decides each idle reading so, from each run's growth and page size, and at its
-      fixed 5,000 connections a runner whose page has more bytes than that leaves the reading
-      not decided, a case that cannot be counted. The description gives every figure of every run for both builds, each idle run's whole line as
-      `idle.mjs` printed it (its growth and settings, which decide; the hosted job's summary gives each run's before, after, growth and page size, which stands in for it), and says why the change is none of the kinds above, which the review
+      fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the
+      median of head's three growths in allocator live bytes is not above base's by more than
+      the larger of base's three span and four pages (16,384 bytes with 4,096-byte pages, under
+      3.3 bytes a connection over the default 5,000). The observer is on for those idle runs;
+      resident growth from the same runs is reported for both builds and never decides. A run
+      with no live-byte reading gives no figure, even if resident growth is available.
+      [Design Choice 76](docs/design.md#choice-counted-or-measured) gives the ruling and why the
+      floor starts at four pages. At the hosted job's fixed 5,000 connections a runner whose page
+      has more bytes than that leaves the reading not decided, a case that cannot be counted.
+      The description gives every figure of every run for both builds and each idle run's whole
+      line as `idle.mjs --allocator` printed it (the hosted job's summary gives each run's live
+      growth, resident before, after and growth, and page size, which stands in for it), and
+      says why the change is none of the kinds above, which the review
       accepts. No run is taken again for its result. A run the kit refuses gave no figure, so
       it may be taken again, and the description gives the refusal and the kit's reason for
       it; a case that still cannot be counted sends the change to measured. A cost inside the

@@ -93,11 +93,11 @@ const FLOOR_PAGES = 4;
 export const FLOOR_WORD = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight"][FLOOR_PAGES] ?? String(FLOOR_PAGES);
 
 /**
- * Whether head's idle memory rose past base's, read from each run's growth of resident memory in
- * bytes (its after less its before, which `idle.mjs` prints), never from the figures a connection,
- * which are rounded. Head rises when the median of its three growths is above base's by more than
- * the larger of base's three span and four pages (`FLOOR_PAGES`): resident memory moves a page at
- * a time, and the span is what base's own readings moved by. Four pages are the least allowed,
+ * Whether head's idle memory rose past base's, read from each run's growth in allocator live
+ * bytes. Head rises when the median of its three growths is above base's by more than the larger
+ * of base's three span and four pages (`FLOOR_PAGES`). Live growth need not be in whole pages;
+ * the floor allows variation between runs, and the span is what base's own readings moved by.
+ * Four pages are the least allowed,
  * not the most, and they are allowed only over at least as many connections as a page has bytes,
  * so they are at most four bytes a connection (16,384 bytes over 5,000 connections in 4,096-byte
  * pages is under 3.3): over fewer, four pages are a coarser step than the gate lets pass, and the
@@ -114,9 +114,6 @@ export function idleRise({ base, head, page, connections }) {
     if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
     for (const growth of growths) {
       if (!Number.isSafeInteger(growth)) throw new Error(`${side}'s growth of ${growth} bytes is not a whole number`);
-      // Resident memory moves a page at a time, so a growth that is not whole pages is not one
-      // `idle.mjs` printed: a figure a connection, which is rounded, given in its place.
-      if (growth % page !== 0) throw new Error(`${side}'s growth of ${growth} bytes is not whole ${page}-byte pages: give each run's growth, not its figure a connection`);
     }
   }
   const rise = median(head) - median(base);

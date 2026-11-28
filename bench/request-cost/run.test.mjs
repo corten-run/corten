@@ -89,7 +89,7 @@ function sent(name, port) {
 
 /**
  * Requires the line an idle run over 40 connections printed for `what` (`answered 1 pipeline`),
- * whole: the readings the counted gate decides by, its growth after less before, and its figure
+ * whole: the resident readings, their growth after less before, and the rounded figure
  * that growth over the connections. With `requests`, the readings are the stand-in's: 10,440 kB
  * before (10,240 and a 4,096-byte page each of the 50 warm connections left behind), and two
  * pages more after for each connection and one for each request on it.
@@ -283,7 +283,7 @@ test("count.mjs --allocations prints calls a request, and no figure for a dump w
 });
 
 test("idle.mjs prints a figure when the probe's open files grew by the connections, counted from after the warm ones closed", { skip }, async () => {
-  // The required invocation does not inherit the idle observer or depend on a reply.
+  // The observer-off invocation does not inherit the idle observer or depend on a reply.
   const run = await running("idle.mjs", ["--connections", "40"], { PROBE_IDLE_MEMORY: "1", STAND_IN_SWEEP_FRAME: "missing" });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.observer, null);
@@ -398,18 +398,20 @@ test("each kind of run compare.mjs asks for is one the kit takes, and its --json
   // The stand-in's 40 connections are a whole run of 40, and not the reading of 5,000 asked for.
   for (const [file, requests] of /** @type {const} */ ([["idle-request-1.json", 1], ["idle-browser-1.json", 3], ["idle-silent-1.json", 0]])) {
     const { text, expect, found, connections } = await take(file, ["--connections", "40"], { connections: 40 });
-    // The growth and the page size the gate decides by, beside the rounded figure.
+    // The deciding live bytes and diagnostic resident growth come from the same run.
     const [before, after, grown, bytes] = standInReadings(requests);
     assert.deepEqual([found.requests, found.connections, found.before, found.after, found.grown, found.page, found.bytes], [requests, 40, before, after, grown, 4096, bytes], file);
-    assert.equal(found.kind, "idle", file);
-    assert.equal(Object.hasOwn(found, "allocator") || Object.hasOwn(found, "sweepNanos"), false, file);
+    assert.equal(found.kind, "idle-allocator", file);
+    assert.deepEqual(found.allocator, { live: 4920, threadNet: -120, active: 163840 }, file);
+    assert.deepEqual(found.sweepNanos, [246_002, 246_003], file);
     assert.equal(compare.figure(text, expect), null, file);
     const diagnostic = await take(file.replace("idle-", "idle-allocator-"), ["--connections", "40"], { connections: 40 });
-    assert.equal(diagnostic.found.kind, "idle-allocator", file);
-    assert.deepEqual(diagnostic.found.allocator, { live: 4920, threadNet: -120, active: 163840 }, file);
-    assert.deepEqual(diagnostic.found.sweepNanos, [246_002, 246_003], file);
+    assert.deepEqual(diagnostic.found, { ...found, seconds: diagnostic.found.seconds }, file);
     assert.deepEqual(diagnostic.connections, connections, file);
-    assert.equal(compare.figure(diagnostic.text, { ...expect, connections: 40 }), null, file);
+    const off = await running("idle.mjs", [...plan[file].options.filter((option) => option !== "--allocator"), "--connections", "40"]);
+    assert.equal(off.status, 0, off.stderr);
+    assert.equal(JSON.parse(off.stdout).kind, "idle", file);
+    assert.equal(compare.figure(off.stdout, { ...expect, connections: 40 }), null, file);
   }
   // The page size getconf gives is the one the JSON carries. Its resident memory is still the
   // stand-in's, in 4,096-byte pages: the printed JSON is read here, and the 65,536-byte rule is
