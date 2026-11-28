@@ -567,18 +567,6 @@ export async function navAlso(browser, swaps) {
   await context.close();
 }
 
-/**
- * Nav links whose `href` leads off this site, `//corten.invalid/smoke/far/old` and the same with
- * `/\` or a tab after the first `/`, which the browser reads as that host's `/smoke/far/old`: in a
- * nav with other addresses, in one without and as a lone `req.nav` link (`/smoke/far/{name}`). None
- * is current at `/smoke/far/old`, nor at `/smoke/far/older`, an other address the server leaves out
- * of an off-site entry; only the sections are. Here, whose other address leads off too and is left
- * out, is current at its kept one, `/smoke/far/before`. The nav without other addresses holds
- * `//[` too, which no browser parses as a URL: never current, and the runtime ranks its siblings
- * at a full load and after a client navigation without throwing. The server's answer to the
- * browser's own request, and the runtime after a client navigation on copies of the links it never
- * saw marked.
- */
 export async function navTies(browser, swaps) {
   const context = await browser.newContext();
   try {
@@ -691,6 +679,18 @@ export async function navTies(browser, swaps) {
   }
 }
 
+/**
+ * Nav links whose `href` leads off this site, `//corten.invalid/smoke/far/old` and the same with
+ * `/\` or a tab after the first `/`, which the browser reads as that host's `/smoke/far/old`: in a
+ * nav with other addresses, in one without and as a lone `req.nav` link (`/smoke/far/{name}`). None
+ * is current at `/smoke/far/old`, nor at `/smoke/far/older`, an other address the server leaves out
+ * of an off-site entry; only the sections are. Here, whose other address leads off too and is left
+ * out, is current at its kept one, `/smoke/far/before`. The nav without other addresses holds
+ * `//[` too, which no browser parses as a URL: never current, and the runtime ranks its siblings
+ * at a full load and after a client navigation without throwing. The server's answer to the
+ * browser's own request, and the runtime after a client navigation on copies of the links it never
+ * saw marked.
+ */
 export async function navFar(browser, swaps) {
   const name = "a nav link that leads off this site is never current, by the server and the runtime alike";
   const context = await browser.newContext();
