@@ -2634,13 +2634,14 @@ fn a_header_name_http_refuses_is_refused() {
     }
 }
 
-/// Four heads as browsers sent them over HTTP/1.1, byte for byte but the line ends, from
+/// The field lines come verbatim from four HTTP/1.1 heads printed by
 /// `node scripts/request-heads.mjs --heads` (Playwright 1.65.1: Chromium 159.0.8154.6, Firefox
 /// 159.0, WebKit 27.2): Chromium's navigation by a link and the fetch Corten's runtime makes for a
-/// visit, Firefox's fetch for a visit and WebKit's navigation by a link. Each line is sent again in
-/// the other spelling the connection takes, where it takes the name, and in upper case, which it
-/// leaves to `http`; the request made of it is the one `http`'s own constructors make of its lines:
-/// every line in its order, with its value, and the connection kept.
+/// visit, Firefox's fetch for a visit and WebKit's navigation by a link. The test builds its own
+/// heads with `GET / HTTP/1.1` and adds duplicates: each field with its name in upper case, and,
+/// where the connection takes the name, also in the other spelling it takes. The request made
+/// of each head is the one `http`'s own constructors make of its lines: the same names, values
+/// and order, and the connection kept.
 #[test]
 fn a_browsers_head_is_made_into_the_request_it_was_before() {
     let chromium_navigation = [
