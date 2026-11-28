@@ -153,6 +153,8 @@ async function stepBase(page) {
     { name: "a scale set by the minimum", min: "0.50", step: "1", from: "0.50", to: "1.50" },
     { name: "the last whole step below the maximum", min: "0", max: "2.4", step: "1", from: "0", key: "End", to: "2" },
     { name: "an aligned maximum", min: "0", max: "2", step: "1", from: "0", key: "End", to: "2" },
+    { name: "a maximum just above a whole step", min: "0", max: "2.00000001", step: "1", from: "0", key: "End", to: "2" },
+    { name: "a maximum just below a whole step", min: "0", max: "1.99999999", step: "1", from: "0", key: "End", to: "1" },
     { name: "the last fractional step below the maximum", min: "0.25", max: "0.9", step: "0.5", from: "0.25", key: "End", to: "0.75" },
     { name: "the last step below a negative maximum", min: "-2.3", max: "-0.1", step: "1", from: "-2.3", key: "End", to: "-0.3" },
     { name: "an exponent value in its native notation", min: "-5e-7", step: "0.00000001", from: "0", key: "Home", to: "-5e-7" },
@@ -189,12 +191,13 @@ async function stepBase(page) {
         if (key) input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
         else increase.click();
         form.requestSubmit();
-        return { value: input.value, valid: input.validity.valid, submitted, changes };
+        return { value: input.value, valid: input.validity.valid, submitted, changes, atEnd: increase.disabled };
       } finally {
         form.remove();
       }
     }, { min, max, step, from, key });
     check(`NumberField keeps ${name} valid and submits it`, state.valid && state.changes === 1 &&
-      state.value === to && state.submitted.length === 1 && state.submitted[0] === to, JSON.stringify(state));
+      state.value === to && state.submitted.length === 1 && state.submitted[0] === to &&
+      (key !== "End" || state.atEnd), JSON.stringify(state));
   }
 }

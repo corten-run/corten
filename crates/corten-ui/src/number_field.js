@@ -80,8 +80,8 @@ export function key(event, input) {
   // they can land on a hinted end, even if the handler refuses it.
   if (input.step === "any") return;
   if (event.key === "PageUp" || event.key === "PageDown") step(input, event.key === "PageUp" ? 10 : -10);
-  else if (event.key === "Home" && input.min !== "") set(input, input.min);
-  else if (event.key === "End" && input.max !== "") set(input, input.max);
+  else if (event.key === "Home" && input.min !== "") set(input, false);
+  else if (event.key === "End" && input.max !== "") set(input, true);
   else return;
   event.preventDefault();
 }
@@ -95,7 +95,10 @@ export function sync(decrease, input, increase) {
   const known = !Number.isNaN(value);
   const off = input.disabled || input.step === "any";
   decrease.disabled = off || (known && input.min !== "" && value <= Number(input.min));
-  increase.disabled = off || (known && input.max !== "" && value >= Number(input.max));
+  const max = Number(input.max);
+  // Only the last interval can end below max. Probe a copy there, never the user's live edit.
+  increase.disabled = off || (known && input.max !== "" && (value >= max ||
+    (max - value <= (Number(input.step) || 1) && value >= maximum(/** @type {HTMLInputElement} */ (input.cloneNode())))));
 }
 
 /**
@@ -114,13 +117,22 @@ function step(input, by) {
   return commit(input, before);
 }
 
-/** @param {HTMLInputElement} input @param {string} value */
-function set(input, value) {
+/** Set an input to the last native step and return it. @param {HTMLInputElement} input */
+function maximum(input) {
+  input.value = input.max;
+  // Some engines accept a near-grid max as valid. A zero step snaps it without
+  // decrementing an aligned max; for an off-grid max they may still need stepDown.
+  input.stepUp(0);
+  if (input.validity.stepMismatch) input.stepDown();
+  return input.valueAsNumber;
+}
+
+/** @param {HTMLInputElement} input @param {boolean} end */
+function set(input, end) {
   if (input.disabled || input.readOnly) return;
   const before = input.value;
-  input.value = value;
-  // The minimum anchors the grid, but the maximum need not be on it.
-  if (input.validity.stepMismatch) input.stepDown();
+  if (end) maximum(input);
+  else input.value = input.min;
   commit(input, before);
 }
 
