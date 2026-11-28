@@ -16,7 +16,7 @@ import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot, r
 import { fakeChild } from "./test-fixtures/process.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
-import { composePhase } from "./composition.mjs";
+import { commandResult, composePhase } from "./composition.mjs";
 import * as actualLifetime from "./host-lifetime.mjs";
 import { reserveCompilerTarget } from "../../client-heavy/compiler.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
@@ -199,13 +199,36 @@ function expectedDockerGate(argv) {
   return process.platform === "linux" && (argv[0] === "bench/fullstack-browser/run.mjs"
     || ["bench/live/run.mjs", "bench/recoverable-live/run.mjs"].includes(argv[0]) && argv.includes("--measure"));
 }
+function lateLiveDockerObservation(observer, directory) {
+  return { ...observer, finish(...args) {
+    observer.finish(...args);
+    const terminalPath = join(directory, "terminal.json"), samplesPath = join(directory, "samples.jsonl");
+    const terminal = JSON.parse(readFileSync(terminalPath));
+    const samples = readFileSync(samplesPath, "utf8").trimEnd().split("\n").map((row) => JSON.parse(row));
+    const drain = samples.pop(), lastSampleAt = samples.at(-1).at;
+    // Match the portable receipt from the late-census control in host-lifetime-docker-removal.test.mjs.
+    // The missed census writes no sample; the follow-up census drains but cannot restore continuity.
+    drain.at = lastSampleAt + 1001;
+    const failure = { phase: "finish", operation: "docker-inventory", code: "unknown",
+      at: drain.at, samples: samples.length, lastSampleAt };
+    terminal.observerError = "host-observation-gap";
+    terminal.observerFailures = { count: 1, first: failure, last: failure };
+    delete terminal.terminalClock;
+    writeFileSync(samplesPath, [...samples, drain].map((row) => JSON.stringify(row) + "\n").join(""));
+    writeFileSync(terminalPath, JSON.stringify(terminal) + "\n");
+    return evidence.tree(directory);
+  } };
+}
 mock.module("./host-lifetime.mjs", { exports: {
   ...actualLifetime,
   beginLifetime(args) {
     const gated = expectedDockerGate(args.invocation.argv);
     assert.equal(!!args.browserDockerGate, gated);
     if (gated) assert.equal(actualLifetime.browserDockerGateIdentity(args.browserDockerGate.fd), args.browserDockerGate.identity);
-    if (liveRoundTrip) return isolatedLiveLifetime(liveRoundTrip.capture, args, liveRoundTrip.clock);
+    if (liveRoundTrip) {
+      const observer = isolatedLiveLifetime(liveRoundTrip.capture, args, liveRoundTrip.clock);
+      return liveRoundTrip.lateDocker ? lateLiveDockerObservation(observer, args.directory) : observer;
+    }
     if (lifetimeRun) {
       const run = lifetimeRun;
       return run.setup = actualLifetime.beginLifetime(args).then((observer) => {
@@ -611,9 +634,12 @@ test("isolated Live fixture drains a setup fault without OS signaling", { timeou
     error: "native host observation setup failed", success: false });
 });
 
-for (const [group, offline, early = false] of [["live-delivery", false], ["live-delivery", true],
-  ["recoverable-live", false], ["recoverable-live", true], ["live-delivery", true, true]]) {
-  test(`isolated Live round trip: ${group} ${offline ? "offline" : "monitored"}${early ? " refuses unproved early settle" : ""}`, async (t) => {
+for (const [group, offline, scenario] of [["live-delivery", false], ["live-delivery", true],
+  ["recoverable-live", false], ["recoverable-live", true], ["live-delivery", true, "early"],
+  ["live-delivery", false, "late-docker"], ["recoverable-live", false, "late-docker"]]) {
+  const early = scenario === "early", lateDocker = scenario === "late-docker";
+  const suffix = early ? " refuses unproved early settle" : lateDocker ? " refuses late terminal Docker census" : "";
+  test(`isolated Live round trip: ${group} ${offline ? "offline" : "monitored"}${suffix}`, lateDocker ? { timeout: 20000 } : {}, async (t) => {
     forbidLiveSignals(t);
     const { campaign, plan } = setupGroup(group), proof = syntheticBootstrap(t);
     plan.round = proof.binding.round;
@@ -631,7 +657,7 @@ for (const [group, offline, early = false] of [["live-delivery", false], ["live-
     const control = offline ? { ...proof, offlineHandoff: true } : monitoredSettlementControl(proof, liveActorCpus, events);
     const offlineClock = offline ? [0n, 0n, 2000000n, 5000000n, 5015000000n].map((offset) => String(boot + offset)) : null;
     const workloadEnd = early ? { bootId: clock.bootId, uptime: "103.03 1277.00\n", monoNs: String(boot + 3500000n) } : undefined;
-    liveRoundTrip = { capture, output, clock, workloadEnd, offlineClock, events, nativeReads: [] };
+    liveRoundTrip = { capture, output, clock, workloadEnd, offlineClock, events, nativeReads: [], lateDocker };
     const handle = await campaign.begin(plan, { stateRoot: "/bench/campaign", control });
     controlWindows.directory = handle.directory; controlWindows.phase = `00-${group}-timing`;
     if (early) {
@@ -641,6 +667,41 @@ for (const [group, offline, early = false] of [["live-delivery", false], ["live-
       assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, cleanupComplete }) => [status, cleanupComplete]), [["invalid", false]]);
       assert.equal(campaign.status(handle).state, "preserved-uncertain");
       assert.ok(!readdirSync(handle.directory).some((name) => name.endsWith("-group-finished.json")));
+      return;
+    }
+    if (lateDocker) {
+      await assert.rejects(campaign.advance(handle), /command lifetime or cleanup unproven; retain pending native root/);
+      const status = campaign.status(handle);
+      assert.equal(status.state, "preserved-uncertain");
+      assert.equal(status.outcomes[0].outcome, "preserved-uncertain");
+      assert.deepEqual(status.uncollectedNativeRoots.map(({ group, phase }) => [group, phase]), [[group, "timing"]]);
+      const paths = readdirSync(handle.directory);
+      const exit = JSON.parse(readFileSync(join(handle.directory, paths.find((name) => name.endsWith("-command-exited.json")))));
+      const phase = join(handle.directory, controlWindows.phase), hostPath = join(phase, "command-0-host");
+      const result = commandResult(exit);
+      assert.equal(exit.hostManifestSha256, evidence.tree(hostPath).sha256);
+      assert.equal(result.terminal, true);
+      assert.equal(result.code, 1);
+      assert.equal(result.cancelled, false);
+      const observation = actualLifetime.inspectLifetime(capture.binding, capture.binding.execution.invocation, hostPath,
+        { campaign: handle.id, command: 0, pid: liveFixturePid, result, phase: "timing" });
+      assert.equal(observation.status, "blocked");
+      assert.equal(observation.cleanupComplete, false);
+      assert.equal(observation.checks.terminal, true);
+      assert.equal(observation.checks.empty, true);
+      assert.equal(observation.checks.observer, false);
+      assert.equal(observation.terminalClock, undefined);
+      assert.ok(existsSync(output), "original native output remains pending");
+      assert.equal(existsSync(join(phase, "native-manifest.json")), false);
+      assert.ok(!paths.some((name) => name.endsWith("-group-finished.json")));
+      const saved = await validateSavedCampaign({ folder: root, round: plan.round, commit: plan.commit });
+      assert.equal(saved.status, "failed", JSON.stringify(saved));
+      assert.equal(saved.collectionIntegrity, "unsealed-partial");
+      assert.equal(saved.commandLifecycle, "observed-terminal");
+      assert.equal(saved.qualified, false);
+      assert.deepEqual(saved.groups, []);
+      assert.ok(saved.blockers.includes(`${group}/timing: host observations incomplete`), "saved replay must report the failed observation");
+      assert.deepEqual(liveRoundTrip.nativeReads, [], "neither live admission nor saved replay can reach native qualification");
       return;
     }
     const status = await campaign.advance(handle);
