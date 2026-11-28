@@ -13125,7 +13125,12 @@ rules something out.
     or the platform gains a call that aborts a navigation on its way without beginning another,
     when a replace a page's listener holds could be ended rather than waited out.
 
-    Last checked: 2026-11-27, an actionless POST queued after a marked patch drew while its replace
+    Last checked: 2026-11-27, the runtime's default-zlib sizes at `e3b11c27b`, and a source retry
+    scheduled before commit, a source write sent after the draw, a destination press from an
+    earlier commit listener, and nav-current with the commit event stopped, in Linux Playwright
+    1.65.1's Chromium, Firefox and WebKit (each fails at `4465e4303`, where the draw's own new write
+    and a destination press with no pending source write already pass);
+    2026-11-27, an actionless POST queued after a marked patch drew while its replace
     was held, a marked GET the draw queued behind a write, and an old write answered after a
     held replace committed without delivering `currententrychange` to the runtime, in Linux
     Playwright 1.65.1's Chromium (each regression reproduced against `e281140d6`);
