@@ -716,6 +716,8 @@ journal with an expired peer lease, the matching audit delivery and no terminal
 or close record, collection evidence or recovery lock. It rechecks those bytes
 and the same census before create. This records the failed attempt without
 trying to recover or qualify it.
+Replay checks the roster in the original digest-bound subject. A newly listed
+adapter is required for new deliveries, not for a previously sealed audit.
 
 The same receipt can record external cleanup of a monitored attempt that stopped
 after an accepted create but before binding the droplet. The original reservation
