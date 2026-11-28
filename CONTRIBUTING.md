@@ -749,16 +749,19 @@ elsewhere), however late the arming or the click returns, with the
 list after the removal the list before it without that alert, in order, and the held slow part's busy, done and
 failed marks, read once each wait has come or run out. The terminal-patch quiet check marks only a
 successful `corten-patch` answer with `Saved.` and no read-again tag. An observer armed before the
-press notes the first `Saved.` draw, which must carry the mark of that press's own part read. The
+press notes the first `Saved.` draw, which must carry the mark of a part read at the address named
+by that press's POST answer. The page records the press and the draw on its own monotonic clock:
+the draw must follow the press within six seconds even if the driver acknowledges it later. The
 check waits 2.2 s once it has that note and counts every read logged after the marked request,
 including any sent before the check read the note. The check that navigating away stops a
 patch's reads holds the first part read after the write's press, taken within five seconds of the
-press by the time the route heard it, and fetches and holds its answer until the page has left for
-News. That answer must ask again, since a terminal one (`Saved.`, no tag) ends the reads whether or
+press by the time the route heard it. It must read the address named by the press's own POST answer.
+The route fetches and holds its answer until the page has left for News. That answer must ask
+again, since a terminal one (`Saved.`, no tag) ends the reads whether or
 not the page left: it is the server's own while that says `Saving...`, or, once the write has
 landed, the stand-in's answer as the server's while it lands (`Saving...` and a tag asking again
 from the read's own address after one second), held only when the server answered it as a patch
-(status 200 with `corten-patch`, without which the runtime draws nothing and asks nothing again),
+(a 2xx status with `corten-patch`, without which the runtime draws nothing and asks nothing again),
 and the route parses it in the page as the runtime parses a patch, confirming that it asks again
 within 15 seconds of the read reaching the route; one that does not ask again is
 never sent, and fails the check. The held read must still be under way as the departure starts (the
@@ -767,17 +770,18 @@ of News reaches the page: a wrapper of the page's `fetch` gives each alerts part
 `smoke-note` id and notes whether it has settled. The check uses only the note matching the held
 request's id, never another fetch of the same address. A window listener in the capture phase
 saves the notes to `sessionStorage` on the first click on the link to News, before the page acts on
-it, for News to read. Once News is drawn, an observer in the page notes any element of the
-held answer (its status line, marked) entering it, and the answer is let go: the browser must finish
-loading that exact request with it (its `requestfinished`, with the answer's own `smoke-held`
-header) within five seconds of the release, by the time the check heard it. Without the Navigation
-API (WebKit) the page leaves by a full load, which takes the runtime's reads with its document: News
-must then be a new document, and the browser must cancel the held read, which is never received:
-its failure must be heard after the departure started, no later than five seconds after the
-driver's News title wait returns, and before the answer is let go, so a read that failed earlier,
-or one ended by the route's own release
-or abort, is not taken for the departure's; with it, News must be drawn in the same document. Then no part read may follow the held
-one in the log, as it stands 2.2 s later, nor the held answer ever enter the News page. The check that a read the server
+it, for News to read. Which departure to expect depends on whether the case's page exposes
+`window.navigation`, not on the engine's name. With it, News must be drawn in the same document.
+When the route lets the answer go, the browser must finish loading that exact request with it
+(its `requestfinished`, with the answer's own `smoke-held` header) within five seconds of the
+release, by the time the check heard it. Without the API, News must be a new document, and
+the old page must record the held fetch's own `smoke-note` as still pending at `beforeunload`.
+The failure must be heard after the departure started, no later than five seconds after the
+driver's News title wait returns, and before the answer is let go, so a read that failed in the old
+document before unloading, or one ended by the route's own release or abort, is not taken for the
+departure's. In either case, an observer notes any insertion of the held answer's marked status
+line in News. No part read may follow the held one in the log as it stands 2.2 s later, nor the
+held answer ever enter the News page. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read
 sent while the check fills or focuses the form is not taken for it. That read must be of the receipt

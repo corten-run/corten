@@ -2250,7 +2250,48 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * @type {import("@playwright/test").Request[]}
      */
     const again = [];
-    const alertsPath = (/** @type {URL} */ at) => at.origin === new URL(base).origin && at.pathname === "/alerts";
+    const alertsOrigin = new URL(base).origin;
+    const alertsPath = (/** @type {URL} */ at) => at.origin === alertsOrigin && at.pathname === "/alerts";
+    /**
+     * The receipt the press's POST answer asks to be read again from: its read-again template's
+     * `data-from`, as a full URL, origin included; null if that answer was not read within 5 s or
+     * names none. The answer is the one at the end of the POST's redirects (WebKit over http can be
+     * sent on with a 307, whose own body Playwright does not keep), parsed in the page as the runtime
+     * parses a patch (a template's `innerHTML`, `readAgainFault` above): the tag is the last top-level
+     * element with `data-corten-read-again`, the one the runtime keeps, and its `data-from` is
+     * resolved against the document's base URL, as the runtime's `fetch` resolves it, so a tag in a
+     * comment is none and a `data-from` of another origin is not this page's receipt.
+     * @param {import("@playwright/test").Request | undefined} post
+     */
+    const receiptOf = async (post) => {
+      if (!post) return null;
+      const body = await readWithin(
+        "the press's POST answer",
+        (async () => {
+          let request = post;
+          for (;;) {
+            const res = await request.response();
+            const next = request.redirectedTo();
+            if (res === null || next === null) return res === null ? null : res.text();
+            request = next;
+          }
+        })(),
+      ).catch(() => null);
+      if (body === null) return null;
+      return readWithin(
+        "the press's POST answer's read-again tag",
+        page.evaluate((answer) => {
+          const template = document.createElement("template");
+          template.innerHTML = /** @type {any} */ (window).__html(answer);
+          const again = Array.from(template.content.children).filter((el) => el.hasAttribute("data-corten-read-again")).at(-1);
+          const from = again?.getAttribute("data-from");
+          if (from == null) return null;
+          const at = new URL(from, document.baseURI);
+          at.hash = "";
+          return at.href;
+        }, body),
+      ).catch(() => null);
+    };
     /**
      * Whether `r` is a part read of the alerts page: a GET of `/alerts` on the watchlist's origin
      * with `corten: action`. Its address is parsed, so a read whose query puts `saved` anywhere, or
@@ -2264,12 +2305,24 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         return false;
       }
     };
-    const onAgain = (/** @type {import("@playwright/test").Request} */ r) => {
-      if (alertsPartRead(r)) again.push(r);
-    };
-    page.on("request", onAgain);
     /** The length of `again` just before the latest press that sends a write. */
     let writeFrom = 0;
+    /** The first alerts POST from the latest press, or undefined. @type {import("@playwright/test").Request | undefined} */
+    let writePost;
+    let writePath = "";
+    const startWrite = (path = "/alerts") => {
+      writeFrom = again.length;
+      writePost = undefined;
+      writePath = path;
+    };
+    const onAgain = (/** @type {import("@playwright/test").Request} */ r) => {
+      if (alertsPartRead(r)) again.push(r);
+      if (!writePost && r.method() === "POST") {
+        const at = new URL(r.url());
+        if (at.origin === alertsOrigin && at.pathname === writePath) writePost = r;
+      }
+    };
+    page.on("request", onAgain);
     // A successful patch with Saved. and no read-again tag is only a candidate until that exact
     // answer draws Saved. in the page. A whole HTML answer can say Saved. but the runtime ignores it.
     const terminalMark = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -2300,10 +2353,19 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         if (ex.fault) terminalFaults.push(ex.fault);
       }
     };
-    const noteTerminalDraw = () => readWithin("arming the note of the first Saved. draw", page.evaluate((run) => {
+    /** @param {string | null} button If given, record the first click of this button in the page's clock. */
+    const noteTerminalDraw = (button = null) => readWithin("arming the note of the first Saved. draw", page.evaluate(({ run, button }) => {
       const w = /** @type {any} */ (window);
       if (w.__smokeTerminalOff === run) return;
       w.__smokeTerminalObserver?.disconnect();
+      if (w.__smokeTerminalClick) removeEventListener("click", w.__smokeTerminalClick, true);
+      w.__smokeTerminalPress = null;
+      if (button !== null) {
+        w.__smokeTerminalClick = (/** @type {Event} */ e) => {
+          if (w.__smokeTerminalPress === null && e.target instanceof Element && e.target.closest(button)) w.__smokeTerminalPress = performance.now();
+        };
+        addEventListener("click", w.__smokeTerminalClick, true);
+      }
       delete w.__smokeTerminalDraw;
       let previous = document.getElementById("alert-status");
       let text = previous?.textContent;
@@ -2312,7 +2374,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const next = status?.textContent;
         // Ignore a Saved. already on the page when the observer was armed, not a new unmarked draw.
         if (next === "Saved." && (status !== previous || next !== text)) {
-          w.__smokeTerminalDraw = { mark: status?.getAttribute("data-smoke-terminal") ?? null };
+          w.__smokeTerminalDraw = { at: performance.now(), mark: status?.getAttribute("data-smoke-terminal") ?? null };
           observer.disconnect();
         }
         previous = status;
@@ -2320,7 +2382,23 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       });
       w.__smokeTerminalObserver = observer;
       observer.observe(document, { subtree: true, childList: true, characterData: true });
-    }, terminalMark));
+    }, { run: terminalMark, button }));
+    /** @typedef {{ at: number, mark: string | null }} TerminalDraw */
+    /** Read the first draw against the page's own press time, regardless of driver acknowledgement. @param {number | null} pressed */
+    const timelyTerminal = async (pressed) => {
+      if (pressed === null) return null;
+      const draw = await lookUntil(page, pressed + 6000, () => ({
+        origin: performance.timeOrigin,
+        now: performance.now(),
+        value: /** @type {TerminalDraw | undefined} */ ((/** @type {any} */ (window)).__smokeTerminalDraw),
+      }));
+      return draw && draw.at >= pressed && draw.at <= pressed + 6000 ? draw : null;
+    };
+    /** Index of the read whose marked answer drew Saved. and carries this press's receipt, or -1. */
+    const ownTerminal = (/** @type {TerminalDraw | null} */ draw, /** @type {string | null} */ receipt) => {
+      const read = draw?.mark == null ? undefined : terminalReads.get(draw.mark);
+      return read !== undefined && receipt !== null && read.url() === receipt ? again.indexOf(read) : -1;
+    };
     const stopTerminal = () => cleanUp(
       () => (terminalOver = true),
       () => within(5000, "the terminal-patch route was not removed within 5 s", page.unroute(alertsPath, markTerminal)),
@@ -2328,7 +2406,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const w = /** @type {any} */ (window);
         w.__smokeTerminalOff = run;
         w.__smokeTerminalObserver?.disconnect();
+        if (w.__smokeTerminalClick) removeEventListener("click", w.__smokeTerminalClick, true);
         delete w.__smokeTerminalObserver;
+        delete w.__smokeTerminalClick;
+        delete w.__smokeTerminalPress;
         delete w.__smokeTerminalDraw;
       }, terminalMark)),
     );
@@ -2371,7 +2452,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       await sending.step(noteSaving);
       await sending.step(() => {
         pressedAt = performance.now();
-        writeFrom = again.length;
+        startWrite();
         return page.keyboard.press("Enter");
       });
       await sending.poll(notedSaving);
@@ -2454,14 +2535,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7)));
     try {
       await within(5000, "the terminal-patch route was not set within 5 s", page.route(alertsPath, markTerminal));
-      await noteTerminalDraw();
+      await noteTerminalDraw(save);
       await submit();
-      const patchedSoon = await savedSoon(pressedAt);
+      const pressed = await readWithin("the page's note of the Save alert press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokeTerminalPress)));
+      let drawn = await timelyTerminal(pressed);
+      let receipt = await receiptOf(writePost);
+      const patchedSoon = ownTerminal(drawn, receipt) >= writeFrom;
       const patchedTo = await readWithin("the status line after the wait for Saved.", saved());
       check(
         "a patch waiting for a write is read again from its route until the write is in",
         patchedSoon && patchedTo === "Saved." && again.length > 0 && page.url() === `${base}/alerts` && (await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 7))),
-        `${patchedTo}${patchedSoon ? "" : " (Saved. not seen within 6 s)"} after ${again.length} reads at ${page.url()}`,
+        `${patchedTo}${patchedSoon ? "" : " (no first marked Saved. from this press's receipt within 6 s)"} after ${again.length} reads at ${page.url()}`,
       );
       check("reading a patch again keeps focus", await readWithin("the focused element", page.evaluate(() => document.activeElement?.textContent === "Save alert")));
       // The list read again with the status line shows the alert once it is in; a remove is a write
@@ -2519,15 +2603,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             }, { id: removed, token: pressToken }),
           );
           await noteTerminalDraw();
-          const removedAt = performance.now();
-          writeFrom = again.length;
+          startWrite("/alerts/remove");
           await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
           pressedIn = await readWithin("the page's note of the press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokePressed))).catch(() => null);
           savingAt =
             typeof pressedIn !== "number"
               ? undefined
               : await lookUntil(page, pressedIn + 5000, () => ({ origin: performance.timeOrigin, now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
-          removedSoon = await savedSoon(removedAt);
+          drawn = await timelyTerminal(pressedIn);
+          receipt = await receiptOf(writePost);
+          removedSoon = ownTerminal(drawn, receipt) >= writeFrom;
         } finally {
           await within(
             5000,
@@ -2563,12 +2648,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       check("a save after a refusal clears the field's error", cleared);
       // Count from the marked draw, but inspect the log from that patch's own request, so even a
       // read sent between the draw and this look counts. A missing or unmarked first draw fails.
-      const drawn = /** @type {{ mark: string | null } | null} */ (await seenWithin(
-        6000, "the first Saved. from the terminal-patch case",
-        () => (/** @type {any} */ (window)).__smokeTerminalDraw, null,
-      ));
-      const ownRead = drawn?.mark == null ? undefined : terminalReads.get(drawn.mark);
-      const ended = ownRead === undefined ? -1 : again.indexOf(ownRead);
+      const ended = ownTerminal(drawn, receipt);
       const drewTerminal = ended >= writeFrom;
       if (drewTerminal) await pause(2200);
       const afterEnd = drewTerminal ? again.length - ended - 1 : 0;
@@ -2576,16 +2656,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         "it stops once the patch no longer asks",
         drewTerminal && afterEnd === 0 && terminalFaults.length === 0,
         `${terminalFaults.length ? `${terminalFaults.join("; ")}; ` : ""}${
-          !drawn ? "no Saved. drawn within 6 s" : !drewTerminal ? "the first Saved. was not drawn by a successful terminal patch from this press" : `${afterEnd} reads after the terminal patch's own (read ${ended - writeFrom + 1} since the press)`
+          !drawn ? "no Saved. drawn within 6 s of the press in the page" : !drewTerminal ? "the first Saved. was not drawn by a successful terminal patch for this press's POST receipt" : `${afterEnd} reads after the terminal patch's own (read ${ended - writeFrom + 1} since the press)`
         }`,
       );
     } finally {
       await stopTerminal();
     }
-    // Away with a read under way: the first part read after the write's press is held at the route,
-    // its answer fetched as it comes and held, until the page has left for News, so the page leaves
-    // while it waits for that read and what the check sees is the reads' cancellation, not polling
-    // that had already ended. The held answer must be one that asks again, which the route confirms
+    // Away with a read under way: hold the first part read after the press and require the receipt
+    // named by that press's POST. Hold its answer until the page has left for News, so it leaves
+    // while waiting for that read and the check sees cancellation, not polling that had already
+    // ended. The held answer must be one that asks again, which the route confirms
     // before it lets the answer go: a terminal answer (`Saved.`, no tag) ends the reads whether or
     // not the page left, so it would show nothing. It is the server's own answer while that still
     // says `Saving...`; once the write has landed and the server says `Saved.`, the stand-in answers
@@ -2594,7 +2674,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // sent, is parsed in the page as the runtime parses a patch (`readAgainFault`): its status line
     // among its elements and its last read-again tag `ReadAgain::from`'s, asking again from the held
     // read's address after `AGAIN_SECONDS`; an answer that is not is never sent, and fails the check.
-    // It is held only when the server answered the read as a patch (status 200 with `corten-patch`,
+    // It is held only when the server answered the read as a patch (status 2xx with `corten-patch`,
     // without which the runtime draws nothing and asks nothing again, `readPatchAgain`).
     // The hold must be taken within 5 s of the press, before the page leaves, and the answer confirmed
     // within 15 s of the read reaching the route. The held read must still be under way as the
@@ -2610,9 +2690,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // `requestfinished`, with the answer's own `smoke-held` header) within 5 s of the release, by
     // the time the check heard it (and with it, News must be in the same document). Without the
     // Navigation API the page leaves by a full load, so News must be a new document and the browser
-    // must cancel the held read with the old one: its failure must be heard after the departure
-    // started and by 5 s after the driver's News title wait returns, before the held answer is let go, so one the
-    // route's own release or abort ended is not taken for the departure's. Then no part read may come after
+    // must cancel the held read with the old one. Its own fetch must still be pending at
+    // `beforeunload`. Its failure must be heard after the departure started, by 5 s after the News
+    // title wait returns, and before the answer is let go, so a failure caused by the route's own
+    // release or abort is not taken for the departure's. Then no part read may come after
     // the held one's own request in the log, as the log stands 2.2 s after that finish, nor the held
     // answer's status line ever enter the News page. The route and listeners are removed however the
     // case ends.
@@ -2742,15 +2823,33 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     let leftAt = null;
     /** Whether the held read was still under way as the departure started: neither finished nor failed as the check heard it, and nothing sent for it by the route. */
     let pendingAtLeave = false;
-    /** The `sessionStorage` key of the departing page's note of its reads at the press of News, this run's own. */
+    /** This run's `sessionStorage` key for the note at the press of News; a suffix distinguishes the unload note. */
     const leaveKey = `smoke-leave-${heldMark}`;
     /**
-     * What the departing page noted as the press of News reached it, read in News: whether the page's
-     * fetch for the held request itself was still unsettled then, or why that is not known; null if
-     * the note was not read.
-     * @type {{ pending: boolean, why: string } | null}
+     * What the departing page noted: whether the held request's own fetch was unsettled at a
+     * milestone, or why that is not known.
+     * @typedef {{ pending: boolean, why: string }} PendingNote
      */
+    /** @type {PendingNote | null} */
     let pendingAtPress = null;
+    /** @type {PendingNote | null} */
+    let pendingAtUnload = null;
+    /** @type {string | null} */
+    let heldReceipt = null;
+    /** @param {string | null} note @param {string | undefined} id @param {string} when @returns {PendingNote} */
+    const pendingNote = (note, id, when) => {
+      if (note === null) return { pending: false, why: `the departing page left no note of its reads at ${when}` };
+      /** @type {{ id: string, settled: boolean }[] | null} */
+      let reads = null;
+      try {
+        reads = JSON.parse(note);
+      } catch {}
+      const own = id && Array.isArray(reads) ? reads.find((r) => r?.id === id) : undefined;
+      if (own === undefined) return { pending: false, why: `no fetch with the held request's own smoke-note id was noted at ${when}` };
+      return own.settled === false
+        ? { pending: true, why: "" }
+        : { pending: false, why: `the page's fetch of the held read had already settled at ${when}` };
+    };
     /** Whether News was drawn in the document the patch's page was in (a client navigation, true) or a new one (a full load, false); null if not read. @type {boolean | null} */
     let inPlace = null;
     try {
@@ -2760,7 +2859,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // Before the press, so the held read's own fetch is among those noted.
       await readWithin(
         "the departing page's fetch notes",
-        page.evaluate((key) => {
+        page.evaluate(({ key, swaps }) => {
           const w = /** @type {any} */ (window);
           /** By unique `smoke-note` id, whether the page's part fetch had settled. @type {{ id: string, settled: boolean }[]} */
           const reads = [];
@@ -2787,21 +2886,28 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             return out;
           };
           window.fetch = w.__smokeLeaveWrapper;
-          w.__smokeLeavePress = (/** @type {Event} */ e) => {
-            const link = e.target instanceof Element ? e.target.closest('a[href="/news"]') : null;
-            if (!link || sessionStorage.getItem(key) !== null) return;
+          const snapshot = (/** @type {string} */ at) => {
             try {
-              sessionStorage.setItem(key, JSON.stringify(reads));
+              if (sessionStorage.getItem(at) === null) sessionStorage.setItem(at, JSON.stringify(reads));
             } catch {}
           };
+          w.__smokeLeavePress = (/** @type {Event} */ e) => {
+            const link = e.target instanceof Element ? e.target.closest('a[href="/news"]') : null;
+            if (link) snapshot(key);
+          };
           addEventListener("click", w.__smokeLeavePress, { capture: true });
-        }, leaveKey),
+          if (!swaps) {
+            w.__smokeLeaveUnload = () => snapshot(`${key}:unload`);
+            addEventListener("beforeunload", w.__smokeLeaveUnload, { capture: true, once: true });
+          }
+        }, { key: leaveKey, swaps }),
       );
       await submit();
       // Judged by when the route heard the read (`heldTime`), not by when `submit` returned: a
       // press acknowledged late does not fail a read held in time.
       heldSoon = await notedBy(pressedAt + 5000, () => heldTime, heldCame);
       heldConfirmed = heldSoon && (await notedBy(/** @type {number} */ (heldTime) + 15_000, () => heldReadyAt, heldReady));
+      heldReceipt = await receiptOf(writePost);
       await readWithin(
         "the departing page's mark",
         page.evaluate((mark) => {
@@ -2819,27 +2925,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       if (heldConfirmed && held !== null) {
         const notes = await readWithin(
           "the departing page's note of its reads",
-          page.evaluate((key) => {
-            const note = sessionStorage.getItem(key);
-            sessionStorage.removeItem(key);
-            return note;
-          }, leaveKey),
+          page.evaluate((key) => ({ press: sessionStorage.getItem(key), unload: sessionStorage.getItem(`${key}:unload`) }), leaveKey),
         );
-        /** @type {{ id: string, settled: boolean }[] | null} */
-        let reads = null;
-        try {
-          reads = notes === null ? null : JSON.parse(notes);
-        } catch {}
         const id = /** @type {import("@playwright/test").Request} */ (held).headers()["smoke-note"];
-        const own = id && Array.isArray(reads) ? reads.find((r) => r?.id === id) : undefined;
-        pendingAtPress =
-          notes === null
-            ? { pending: false, why: "the departing page left no note of its reads at the press of News" }
-            : own === undefined
-              ? { pending: false, why: "the departing page noted no fetch with the held request's own smoke-note id" }
-              : own.settled === false
-                ? { pending: true, why: "" }
-                : { pending: false, why: "the page's fetch of the held read had already settled when the press of News reached the page" };
+        pendingAtPress = pendingNote(notes.press, id, "the press of News");
+        if (!swaps) pendingAtUnload = pendingNote(notes.unload, id, "beforeunload");
       }
       if (heldConfirmed && !swaps) {
         // The full load's cancellation, heard before the held answer is let go, so neither the
@@ -2885,10 +2975,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               const w = /** @type {any} */ (window);
               if (w.__smokeLeaveWrapper && window.fetch === w.__smokeLeaveWrapper) window.fetch = w.__smokeLeaveFetch;
               if (w.__smokeLeavePress) removeEventListener("click", w.__smokeLeavePress, { capture: true });
+              if (w.__smokeLeaveUnload) removeEventListener("beforeunload", w.__smokeLeaveUnload, { capture: true });
               delete w.__smokeLeaveWrapper;
               delete w.__smokeLeaveFetch;
               delete w.__smokeLeavePress;
+              delete w.__smokeLeaveUnload;
               sessionStorage.removeItem(key);
+              sessionStorage.removeItem(`${key}:unload`);
             }, leaveKey),
           ),
       );
@@ -2906,38 +2999,45 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             }),
           );
     const heldAt = held === null ? -1 : again.indexOf(held);
+    const holdsReceipt = heldAt >= writeFrom && heldReceipt !== null && again[heldAt].url() === heldReceipt;
     const afterHeld = heldAt < 0 ? [] : again.slice(heldAt + 1);
     const delivered = releasedAt !== null && releaseFault === "" && heldFinish !== null && "at" in heldFinish && heldFinish.at - releasedAt <= 5000;
     // Without the Navigation API the page leaves by a full load: its document, with the runtime's
     // reads, is gone, and the browser cancels the held read with it, so the answer cannot be
-    // received. There the departure must be a new document and the held read, under way as the
-    // departure started, failed by the browser after that start and before the answer was let go.
+    // received. There the departure must be a new document and the held read, still under way at
+    // beforeunload, failed by the browser before the answer was let go.
     const failedAt = heldFinish !== null && "failedAt" in heldFinish ? heldFinish.failedAt : undefined;
     const cancelled = failedAt !== undefined && leftAt !== null && failedAt >= leftAt && (heldSentAt === null || heldSentAt > failedAt);
     const leftAsMeant = inPlace === swaps;
-    const departed = leftAsMeant && pendingAtLeave && pendingAtPress?.pending === true && (swaps ? delivered : cancelled);
+    const departed = leftAsMeant && pendingAtLeave && pendingAtPress?.pending === true && (swaps ? delivered : pendingAtUnload?.pending === true && cancelled);
     check(
       "navigating away stops a patch's reads",
-      heldSoon && heldAt >= writeFrom && heldConfirmed && heldFault === "" && departed && drawnOnNews === false && afterHeld.length === 0,
+      heldSoon && holdsReceipt && heldConfirmed && heldFault === "" && departed && drawnOnNews === false && afterHeld.length === 0,
       !(heldSoon && heldAt >= writeFrom)
         ? "no part read held within 5 s of the press, so the page did not leave with one under way"
-        : !heldConfirmed
-          ? `the held read's answer was not confirmed as one that asks again${heldFault ? `: ${heldFault}` : " within 15 s"}, so its end would not show the page stopping`
-          : !leftAsMeant
-            ? inPlace === null
-              ? "whether News was drawn in the patch's page's document was not read"
-              : inPlace
-                ? "News was drawn in the patch's page's document, though without the Navigation API a navigation is a full load"
-                : "News was a new document, though the browser swaps a page in"
-            : swaps && !delivered
-              ? `the held answer (${heldFrom}) was not received: ${heldFault || releaseFault || (heldFinish === null ? "it was not let go" : "not" in heldFinish ? heldFinish.not : `the browser finished it ${Math.round(heldFinish.at - /** @type {number} */ (releasedAt))} ms after its release`)}`
-              : !pendingAtLeave
-                ? `the held read was no longer under way as the page left: ${heldSentAt !== null && (heldEndedAt === null || heldSentAt <= heldEndedAt) ? "the route had already sent it an answer or abort" : `the browser had ended it ${Math.round(/** @type {number} */ (leftAt) - /** @type {number} */ (heldEndedAt))} ms before the departure started`}, so its end shows nothing of the departure`
-                : pendingAtPress?.pending !== true
-                  ? `the held read was not shown under way at the press of News: ${pendingAtPress?.why ?? "the departing page's note was not read"}, so its end shows nothing of the departure`
-                  : !swaps && !cancelled
-                    ? `the page left by a full load, but the browser did not cancel the held read with its document before the held answer was let go: ${heldFault || (heldFinish === null ? "it was not let go" : "not" in heldFinish ? heldFinish.not : "it finished the read with the held answer")}`
-                    : `${afterHeld.length} reads after the read held as the page left${swaps ? "" : ` by a full load, which cancelled it ${Math.round(/** @type {number} */ (failedAt) - /** @type {number} */ (leftAt))} ms after the departure started, before its answer was let go`}, whose answer (${heldFrom}) asked again${drawnOnNews === false ? "" : drawnOnNews ? ", and the News page drew it" : ", and the News page's note of it is missing"}`,
+        : !holdsReceipt
+          ? heldReceipt === null
+            ? "no receipt read from the press's POST answer"
+            : `the held read was of ${again[heldAt].url()}, not the press's POST receipt ${heldReceipt}`
+          : !heldConfirmed
+            ? `the held read's answer was not confirmed as one that asks again${heldFault ? `: ${heldFault}` : " within 15 s"}, so its end would not show the page stopping`
+            : !leftAsMeant
+              ? inPlace === null
+                ? "whether News was drawn in the patch's page's document was not read"
+                : inPlace
+                  ? "News was drawn in the patch's page's document, though without the Navigation API a navigation is a full load"
+                  : "News was a new document, though the browser swaps a page in"
+              : swaps && !delivered
+                ? `the held answer (${heldFrom}) was not received: ${heldFault || releaseFault || (heldFinish === null ? "it was not let go" : "not" in heldFinish ? heldFinish.not : `the browser finished it ${Math.round(heldFinish.at - /** @type {number} */ (releasedAt))} ms after its release`)}`
+                : !pendingAtLeave
+                  ? `the held read was no longer under way as the page left: ${heldSentAt !== null && (heldEndedAt === null || heldSentAt <= heldEndedAt) ? "the route had already sent it an answer or abort" : `the browser had ended it ${Math.round(/** @type {number} */ (leftAt) - /** @type {number} */ (heldEndedAt))} ms before the departure started`}, so its end shows nothing of the departure`
+                  : pendingAtPress?.pending !== true
+                    ? `the held read was not shown under way at the press of News: ${pendingAtPress?.why ?? "the departing page's note was not read"}, so its end shows nothing of the departure`
+                    : !swaps && pendingAtUnload?.pending !== true
+                      ? `the held read was not shown under way at beforeunload: ${pendingAtUnload?.why ?? "the departing page's unload note was not read"}, so its end shows nothing of the full load`
+                      : !swaps && !cancelled
+                        ? `the page left by a full load, but the browser did not cancel the held read with its document before the held answer was let go: ${heldFault || (heldFinish === null ? "it was not let go" : "not" in heldFinish ? heldFinish.not : "it finished the read with the held answer")}`
+                        : `${afterHeld.length} reads after the read held as the page left${swaps ? "" : ` by a full load, which cancelled it ${Math.round(/** @type {number} */ (failedAt) - /** @type {number} */ (leftAt))} ms after the departure started, before its answer was let go`}, whose answer (${heldFrom}) asked again${drawnOnNews === false ? "" : drawnOnNews ? ", and the News page drew it" : ", and the News page's note of it is missing"}`,
     );
     // A read the server fails (its error page, not a patch) stops the reads without a console
     // error: the server logged the failure, and the part stays as it was. The press's read is the
@@ -2994,46 +3094,6 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     };
     /** A heard read's address (path and query). @param {{ request: import("@playwright/test").Request }} h */
     const addressOf = (h) => new URL(h.request.url()).pathname + new URL(h.request.url()).search;
-    /**
-     * The receipt the press's POST answer asks to be read again from: its read-again template's
-     * `data-from`, as a full URL, origin included; null if that answer was not read within 5 s or
-     * names none. The answer is the one at the end of the POST's redirects (WebKit over http can be
-     * sent on with a 307, whose own body Playwright does not keep), parsed in the page as the runtime
-     * parses a patch (a template's `innerHTML`, `readAgainFault` above): the tag is the last top-level
-     * element with `data-corten-read-again`, the one the runtime keeps, and its `data-from` is
-     * resolved against the document's base URL, as the runtime's `fetch` resolves it, so a tag in a
-     * comment is none and a `data-from` of another origin is not this page's receipt.
-     * @param {import("@playwright/test").Request | undefined} post
-     */
-    const receiptOf = async (post) => {
-      if (!post) return null;
-      const body = await readWithin(
-        "the press's POST answer",
-        (async () => {
-          let request = post;
-          for (;;) {
-            const res = await request.response();
-            const next = request.redirectedTo();
-            if (res === null || next === null) return res === null ? null : res.text();
-            request = next;
-          }
-        })(),
-      ).catch(() => null);
-      if (body === null) return null;
-      return readWithin(
-        "the press's POST answer's read-again tag",
-        page.evaluate((answer) => {
-          const template = document.createElement("template");
-          template.innerHTML = /** @type {any} */ (window).__html(answer);
-          const again = Array.from(template.content.children).filter((el) => el.hasAttribute("data-corten-read-again")).at(-1);
-          const from = again?.getAttribute("data-from");
-          if (from == null) return null;
-          const at = new URL(from, document.baseURI);
-          at.hash = "";
-          return at.href;
-        }, body),
-      ).catch(() => null);
-    };
     try {
       await within(5000, "the failing read's route was not set within 5 s", page.route("**/alerts?saved=*", failRead));
       await within(30_000, "the alerts page was not loaded within 30 s", page.goto(`${base}/alerts`));
