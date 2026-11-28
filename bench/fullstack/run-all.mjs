@@ -29,11 +29,12 @@
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
+import { admitCount, beginCount, COUNT_OUTPUT, COUNT_OUTPUT_ARG, countBoot, readCount, syncDirectory } from "./count-admission.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
 import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
@@ -55,6 +56,8 @@ const now = () => new Date().toISOString();
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8", timeout: 5 * minute });
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 const progressFile = join(here, `results-${round}.progress`);
+const results = join(here, "results", round);
+let countId = "";
 /** This boot's ID, or null where it cannot be read. */
 const bootId = () => { try { return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null; } catch { return null; } };
 // Written whole or not at all (appendLine throws, and the step is not started), then synced to disk
@@ -65,11 +68,12 @@ const progress = (/** @type {string} */ what) => {
   if (!unattended) return;
   const created = !existsSync(progressFile);
   const fd = openSync(progressFile, "a+");
-  const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd() : what;
+  const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd()
+    : what === "boot" || what === "finished" ? `${what} ${countId}` : what;
   try { appendLine(fd, `${now()} ${line}`); fsyncSync(fd); } finally { closeSync(fd); }
-  if (created) { const dir = openSync(here, "r"); try { fsyncSync(dir); } finally { closeSync(dir); } }
+  if (created) syncDirectory(here);
 };
-const skippedFile = join(here, "results", round, "skipped.txt");
+const skippedFile = join(results, "skipped.txt");
 const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
   const line = `${now()} step ${step} skipped: ${why}`;
   console.log(line);
@@ -81,7 +85,7 @@ const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
 // limit or quiet for too long, it is stopped with everything it started (its process group: perf,
 // the docker clients; the containers they started go in reset()), and an output something it
 // started holds open after it exits is released (round.mjs, superviseCall).
-const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
+const runCall = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
   console.log(now(), "node", args.join(" "));
   // Only count-pairs.mjs sets this mode. A round never passes it to count.mjs.
   const env = args[0] === "count.mjs" ? { ...process.env } : undefined;
@@ -98,6 +102,25 @@ const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) =
   });
   if (!result.stopped && result.code !== 0) console.log(`step failed with ${result.code}`);
   return result;
+};
+
+const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
+  if (args[0] !== "count.mjs") return runCall(limit, args);
+  const stage = mkdtempSync(join(dirname(results), ".count-"));
+  try {
+    const file = join(stage, COUNT_OUTPUT);
+    const result = await runCall(limit, [...args, COUNT_OUTPUT_ARG + file]);
+    if (result.code === 0 && !result.stopped && !result.live) {
+      const [, , repeats, names] = args;
+      // calls() requests the fixture page and JSON, except JSON-only apps.
+      const expected = names.split(",").flatMap((name) => apps[name].pages === false ? [`${name}/json`] : [`${name}/page`, `${name}/json`]);
+      admitCount(results, countId, file, expected, Number(repeats));
+    }
+    return result;
+  } finally {
+    try { rmSync(stage, { recursive: true, force: true }); }
+    catch { console.warn("could not remove private count output"); }
+  }
 };
 
 // Unattended only: a clean slate after a stopped call, a build that exited with an error, or a
@@ -205,7 +228,7 @@ try {
   if (unattended) {
     const text = existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "";
     const state = resumeAt(text, from);
-    if (state.ended) process.exit(0);
+    if (state.ended && text.endsWith("\n")) process.exit(0);
     // Before anything is written or cleaned: a count step whose perf may still run ends the round,
     // as a halt does. A progress file whose last line was cut short is left as it is: appending
     // ends that line first, and a start stopped part way through the append would leave the next
@@ -217,7 +240,9 @@ try {
       skip("count", halted);
       throw new Error(halted);
     }
-    // Written before anything else, so every start counts, even one cut short in reset().
+    const prior = countBoot(text);
+    countId = prior && readCount(results)?.id === prior ? prior : beginCount(results);
+    // Written before reset, so every start counts, even one cut short there.
     progress("boot");
     if (state.boots) {
       console.log(now(), "the round starts again after the droplet restarted");
@@ -232,12 +257,12 @@ try {
     reset();
     first = state.next;
     built = state.built;
-  }
+  } else countId = beginCount(results);
   const jsonOnly = Object.keys(apps).filter((name) => !(name in pageApps));
   // The browser step reaches each app as the round's load phases do: the matched tier's through the edge.
   const urls = Object.values(pageApps).map((a) => (viaEdge ? edgeBase(a, "outside") : `http://localhost:${a.port}`));
   const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES), pageOnly);
-  // A count call that exits 4 or is stopped (round.mjs, countHalt), or any call left running after
+  // A count call that fails or is stopped, or any call left running after
   // its stop or whose output was released after its exit, ends the round there: no later step,
   // call, clean slate or summary, and the round is recorded failed.
   await runSteps(first ? stepsUntil(first, until).steps : [], all, {

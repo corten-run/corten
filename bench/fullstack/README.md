@@ -1400,7 +1400,9 @@ three runs:
    does not reach the probe's process group of its own) ends the round there, with the reason in
    `skipped.txt`: no later step, clean slate or summary runs and the round is recorded failed, so
    it does not start again at boot. `run-all.mjs` writes the boot's ID on the count step's start
-   line, and a round that starts again while its count step had not ended goes on only where that
+   line. An ordinary nonzero count exit also fails the round before any later step or summary,
+   without claiming that a perf process remains. A partial archive still keeps the earlier output.
+   A round that starts again while its count step had not ended goes on only where that
    ID is another boot's: one started again in the same boot (`run-all.mjs` itself killed or
    stopped), or with no ID to compare, ends the round the same way, before its clean slate. Each
    progress line is written whole and synced before its step starts (a write cut short stops the
@@ -1470,8 +1472,25 @@ three runs:
    it. The log's `all done` only says whether a round
    that has ended finished or stopped short: it is printed before the unit's process exits, and a
    round going on with `--from` keeps the earlier run's log, so one read while the unit is active
-   is not the round's end, whichever run printed it. The
-   upload leaves out the working tree's own
+   is not the round's end, whichever run printed it. Fullstack publication also requires a
+   complete progress finish naming the downloaded count receipt and a summary whose instruction
+   values match the admitted rows. A plain finish is not proof of an older count. The collector
+   keeps the original download under `bench/fullstack/diagnostics/`, including on refusal or
+   partial completion.
+   Inspect unverified downloads there rather than unpacking them over a replay directory.
+   A verified Fullstack archive publishes only into an absent round directory. It never overlays
+   an already-populated directory, including on same-name recollection. This requires local space
+   for the original archive plus the published result; it does not authorize host deletion.
+   Before deleting or retrying deletion, the Fullstack collector checks that the ended unit
+   snapshot and the last progress record still match the original observation, including for
+   legacy rounds without a count ID. Confirmed absence can match confirmed absence; an unreadable
+   progress file cannot. If either check fails, that collector leaves the host even if a later read
+   would match again.
+   New Browser and Hardening downloads put their Fullstack-side files in
+   `bench/fullstack/results/.suites/<suite>/<round>/` (`browser` or `harden`), not in a managed
+   Fullstack round. Read older downloads where they were saved; no migration is required.
+   Browser's separate `bench/browser/results/<round>/` path and direct local runs are unchanged.
+   The upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.
    A droplet
@@ -1623,8 +1642,17 @@ three runs:
    switch, are a suspect
    ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/corten-run/corten/issues/812));
    r16's counts are compared with r15's. An app that cannot be counted is
-   recorded as failed and the others are still counted, and `instructions.json` is written after
-   each app. A count does not depend on what else the machine is doing, so it is steadier than
+   recorded as failed and the others are still counted. Standalone `count.mjs` writes
+   `instructions.json` after each app, merging only the selected targets. A managed
+   `run-all.mjs` round starts with an unavailable count receipt; it admits only its own private
+   output after a settled successful exit covering the requested targets and repeats. The durable
+   receipt names the logical round and the exact count bytes. A reboot retains that identity only
+   when it agrees with the saved progress; continuing past an uncompleted count does not adopt an
+   old file. Summary rebuilds and trend omit unadmitted counts without discarding other evidence.
+   Trend also omits counts whose saved values disagree with a fresh summary of the admitted rows.
+   A standalone merge that changes admitted bytes does not refresh a managed receipt.
+   Already-saved legacy results without a receipt can still be read offline. A count
+   does not depend on what else the machine is doing, so it is steadier than
    time; it does not see waiting (I/O, locks) or how well the instructions run.
    `node count.mjs <round> 3 <apps> page,json api` counts with items from the item API instead,
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).
@@ -2739,7 +2767,7 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`,
    `docker-rebuild.json`, `rust-analyzer.json`, `bytes.json`, `cold-start.json`,
-   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and
+   `instructions.json`, `count-admission.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and
    `raw.txt` (below). Its raw output (each app's k6, CPU and startup files, every count) is one
    archive beside them, `raw.tar.xz`, which Git ignores (`bench/fullstack/.gitignore`). Only
    the packed archive is ignored: the loose raw files of a round not yet packed are not, so pack a

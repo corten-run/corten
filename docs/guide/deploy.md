@@ -989,6 +989,10 @@ drained. The result is retirement evidence, not a benchmark result.
 
 When collecting a completed group, allow up to 15 minutes for each local replay of
 the saved evidence. A timed-out or cancelled replay does not qualify the results.
+After a timeout, a completed monitored child with a saved archive can use the
+[sealed archive retry](../../bench/workloads/CLOUD.md#api) at the
+original measured commit, allowing up to 45 minutes per replay without rerunning
+the group.
 The replay time is not part of any framework's timing.
 
 To build the Git-capable browser test image manually, run `npm ci` from the repository

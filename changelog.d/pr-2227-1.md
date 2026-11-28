@@ -1,0 +1,3 @@
+- `corten_cluster::begin` refuses an idempotency key a write to another feed used, with the new
+  `IdempotencyKeyReused` (answer it with a 422), instead of replaying that feed's write.
+  ([#2218 corten_cluster::begin looks up an idempotency key without its feed, so a key already used on one feed answers a write to another feed as a replay and nothing is written](https://github.com/corten-run/corten/issues/2218))

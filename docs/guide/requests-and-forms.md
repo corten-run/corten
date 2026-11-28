@@ -1031,9 +1031,11 @@ two of one type cannot clash.
 A refusal no single field explains (a rule across fields, or a service the handler wrote to
 saying no: "The policy was retired meanwhile.") is the form's own message:
 `errors.add_form(text)`, shown with `{errors.form_message()}` at the top of the form, a
-`role="alert"` paragraph that is announced when the patch arrives. It is a live region of its
-own, so it goes inside no other: in the UI kit's look it is
-`<FormAlert errors={&errors} .. />`, the destructive `Alert` around the message, not
+`role="alert"` paragraph. Where the platform supports it, browsers can send an
+[accessibility alert event](https://www.w3.org/TR/wai-aria-1.2/#alert) when an alert is inserted, even
+without a live region already on the page. Whether a patched form alert is spoken has not been
+verified with NVDA or VoiceOver. The alert is a live region of its own, so it goes inside no other.
+For the UI kit's look use `<FormAlert errors={&errors} .. />`, the destructive `Alert` around the message, not
 `form_message()` inside an `Alert`. JSON clients get it first in
 `message` and as `form`; an agent tool gets it first in its error.
 
@@ -1097,7 +1099,11 @@ browser without JavaScript, a data client) is the same submission: the app answe
 it did the first time, and the user sees that and can send the change. A `data-patch` form's
 change made while its write is out waits for the answer instead, and goes under the new key
 (below). The key is the app's to store, next to the write (Corten keeps
-no store); `corten_cluster::begin` takes it as its idempotency key. A field that is not a UUID v4
+no store); `corten_cluster::begin` takes it as its idempotency key. It answers a write sent again
+as the one before only while the store keeps the key: `corten_cluster::prune` drops keys older than
+the age it is given, and a key sent after that is a new write. Its keys are unique across the whole
+cluster store, not per feed: while it is kept, a key a write to one feed used is refused on another
+(`corten_cluster::IdempotencyKeyReused`, which the app answers with a 422), never replayed there. A field that is not a UUID v4
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
 
@@ -1126,12 +1132,24 @@ away. A page that draws a key with `SubmitKey::field` is also never shared, what
 says: a cache that gave one visitor's page to the next would have the second visitor's submit
 taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
 without the CDN caching headers a middleware wrote (`CDN-Cache-Control`, `Surrogate-Control` and
-the others [caching](app.md#caching) lists), so the browser asks again before reusing it, the
+the others [caching](app.md#caching) lists) and without a tag it was given, so the browser asks again before reusing it, the
 app does not keep it, and `corten dev` logs it; one that says `no-store` goes out `private,
 no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer it is drawn
-for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text carries no mark: a
+for: a page, a patch, the layout's reads, and a `Rendered` placed in one; one made with
+`req.rendered` marks its request's answer wherever it is placed. Text carries no mark: a
 live stream's fragment
-(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A live
+(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A `Public`
+route's handler (and an answer type of the app's own, a page or a JSON answer, whose response
+the handler may replace with a `Public` one it converted, `NoStore` or a tuple of headers around
+any of them, staged or `unstaged`) is watched for a key
+it draws as text too (in JSON, in text, in a file, or placed in a page with `raw`), and that
+answer is sent as a keyed page is. The watch sees only what the handler draws on its own thread
+before it returns: not a key a bare render (`to_html()`) draws in a task it spawned or on
+another thread, nor one drawn as a body is sent (`Media::stream`, a relay's body, a live
+stream's fragments), nor one in a feed's rows or snapshot, where a per-visitor key never goes
+([caching](app.md#caching)). A render that
+marks the answer itself (a page's, a patch's, one made with `req.rendered`) does not rely on the
+watch and is seen on whatever thread it runs. A live
 stream whose fragments may draw a key is never `Public`, says `Cache-Control: private` itself and
 carries no CDN caching header ([live data](live-data.md)). Under `corten dev`, a stream is logged
 when a fragment it gives draws a key and its settled answer has no bare `private` in
@@ -1143,7 +1161,9 @@ a retry, a malformed key is refused before the tool runs, and the tool gets a `S
 has no key field of its own, so the key is an argument, and a tool whose input requires one is
 marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
 when it stores it. Two differences from a form's key: the agent makes it, not the server,
-so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+so store it per caller and tool (an agent may reuse a key another sent), making it unique to that
+scope yourself, for example by prefixing the caller and tool to it, since a store such as
+`corten_cluster::begin`'s keeps one scope for every key; and answer a repeat
 whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
 and leave the field without a doc comment, which would replace the retry instruction in its
 description. A write that is idempotent already ("set the quantity to 5") needs no key and is
@@ -1292,11 +1312,21 @@ would never show. `action.patch`, `action.patch_with_status` and `req.invalid` t
 `Remove`, or a component declared `-> impl Patch`, whose markup must be such an `html!`:
 
 ```rust,ignore
+#[derive(Id)]
+struct StatusId;
+
 #[component]
 pub fn Status(text: &str) -> impl Patch {
-    html! { <p id={StatusId} role="status">{text}</p> }   // the root has the id
+    html! { <p id={StatusId}>{text}</p> }
 }
+
+// On the page, including when there is nothing to announce yet:
+let status_region = html! { <div role="status"><Status text="" /></div> };
 ```
+
+Keep the live region on the page and send `Status` alone in the patch. The id goes on
+the message inside the region, so the patch changes what the region says rather than
+replacing the region itself ([UI](ui.md)).
 
 Rows known only from data (the fields of the items a write touched) are a `for` among the
 patch's parts, with its `let`s and branches, as in a page:

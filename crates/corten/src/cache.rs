@@ -380,17 +380,25 @@ fn sets_cookie(headers: &HeaderMap) -> bool {
 /// CDN reads first ([`CDN_CACHING`]), whatever its `Cache-Control` says, and a `NoStore` one goes
 /// out `private, no-store` whatever a middleware made of its header.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
+    settle_drawn(res, seen, path, false);
+}
+
+/// [`settle`], for the stages, which know from their signal whether the answer drew a form's new
+/// submit key (`drew_key`) and have marked it so ([`unrepeatable`]): one that did is not looked
+/// up for the mark again.
+pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key: bool) {
     // An answer marked as no handler's own ([`Unshared`]): never shared, whatever it says and
     // whatever status it goes out with. The usual answer has no extensions, so this is a null check.
     if res.extensions().get::<Unshared>().is_some() {
-        settle_unshared(res);
+        settle_unshared(res, drew_key);
         return;
     }
-    // A page that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
-    // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays.
-    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
+    // An answer that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
+    // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays,
+    // and no tag either.
+    let drew_key = drew_key || res.extensions().get::<Unrepeatable>().is_some();
     if drew_key {
-        drop_cdn_caching(res.headers_mut());
+        drop_keyed_reuse(res.headers_mut());
     }
     // Another Corten app settled it as one visitor's ([`Personal`]) and a middleware here relays
     // it: it is that visitor's still, as if this request had read the caller.
@@ -496,6 +504,10 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         // that ignores `no-store`.
         if (personal || partial) && !(is_private && plain) {
             headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+        } else if drew_key {
+            // Already a plain `private` with its `no-store`: a lifetime beside them goes, as on
+            // every answer that drew a form's new submit key ([`keyed_private`]).
+            keyed_private(headers);
         } else if quoted || !text {
             headers.insert(header::CACHE_CONTROL, NO_STORE);
         } else if lines > 1 {
@@ -521,6 +533,12 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             must_understand && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()))
         })
     {
+        // A browser asks again before it shows an answer that drew a form's new submit key: one it
+        // reused unasked would send the key that answer had, as the guide says it never does. So
+        // a lifetime a middleware or the app gave it goes, as one a CDN reads does above.
+        if drew_key {
+            keyed_private(headers);
+        }
         return;
     }
     if let Some(bug) = bug {
@@ -586,6 +604,47 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
         for name in &CDN_HEADERS {
             headers.remove(name);
         }
+    }
+}
+
+/// Removes from an answer that drew a form's new submit key what would let it be given again: the
+/// caching headers a CDN reads first ([`drop_cdn_caching`]) and a tag, whoever set it (the app, a
+/// middleware, an upstream it relays). Corten makes no tag for one ([`tag`]); one it was given
+/// names a body whose key a browser may already have sent, and a `304` to it would keep that body.
+/// One pass over the names finds both, as [`drop_cdn_caching`]'s does: the usual answer has none.
+pub(crate) fn drop_keyed_reuse(headers: &mut HeaderMap) {
+    let (mut cdn, mut tag) = (false, false);
+    for name in headers.keys() {
+        if *name == header::ETAG {
+            tag = true;
+        } else if CDN_CACHING.contains(&name.as_str()) {
+            cdn = true;
+        }
+    }
+    if cdn {
+        for name in &CDN_HEADERS {
+            headers.remove(name);
+        }
+    }
+    if tag {
+        headers.remove(header::ETAG);
+    }
+}
+
+/// Gives an answer that drew a form's new submit key, whose `Cache-Control` is already a plain
+/// `private`, the policy every such answer goes out with: `private, no-store` where any reader
+/// could find a `no-store` in it, `private, no-cache` otherwise, so a lifetime it was given (a
+/// middleware's `private, max-age=60`) does not let the browser show it again unasked.
+#[cold]
+#[inline(never)]
+fn keyed_private(headers: &mut HeaderMap) {
+    let policy = if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
+        PRIVATE_NO_STORE
+    } else {
+        PRIVATE
+    };
+    if headers.get(header::CACHE_CONTROL) != Some(&policy) {
+        headers.insert(header::CACHE_CONTROL, policy);
     }
 }
 
@@ -668,11 +727,18 @@ impl Marks {
 /// Settles an [`Unshared`] answer: the default, whatever it said, and none of the CDN caching
 /// headers written on it. One that names `no-store`, or is a `NoStore` answer whatever a
 /// middleware made of its header, goes out `private, no-store`, as [`settle`] gives a personal one.
+/// One that drew a submit key ([`Unrepeatable`], an error page with a form) loses a tag it was
+/// given too ([`drop_keyed_reuse`]).
 #[cold]
-fn settle_unshared(res: &mut Response) {
+fn settle_unshared(res: &mut Response, drew_key: bool) {
     let kept_out = Typed::is_no_store(res);
+    let drew_key = drew_key || res.extensions().get::<Unrepeatable>().is_some();
     let headers = res.headers_mut();
-    drop_cdn_caching(headers);
+    if drew_key {
+        drop_keyed_reuse(headers);
+    } else {
+        drop_cdn_caching(headers);
+    }
     let no_store = kept_out || headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
     headers.insert(header::CACHE_CONTROL, if no_store { PRIVATE_NO_STORE } else { PRIVATE });
 }
@@ -681,7 +747,7 @@ fn settle_unshared(res: &mut Response) {
 /// an [`Unshared`] one: an app that relays it inline settles it the same way.
 pub(crate) fn settle_refused(res: &mut Response) {
     res.extensions_mut().insert(Unshared);
-    settle_unshared(res);
+    settle_unshared(res, false);
 }
 
 /// The empty answer sent in place of one whose exact-size body failed as it was read after the
@@ -737,9 +803,30 @@ pub(crate) fn accepts_a_coding(headers: &HeaderMap) -> bool {
 /// make two bodies share a tag.
 static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
 
-/// Marks a page whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
+/// Marks `res` as an answer that drew a form's new submit key ([`Unrepeatable`]), where the mark
+/// is not on it already: a second insert into a full map would grow it. The stages call it too
+/// where the request says its answer drew one and a middleware made a new response of that
+/// answer, with its body and without its extensions.
+#[cold]
+#[inline(never)]
+pub(crate) fn unrepeatable(res: &mut Response) {
+    if res.extensions().get::<Unrepeatable>().is_none() {
+        res.extensions_mut().insert(Unrepeatable);
+    }
+}
+
+/// Marks an answer whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
 /// new key): its tag would never match, so it is not made; no cache may give it to another
 /// visitor or reuse it unasked ([`settle`]), and the app does not keep it ([`crate::kept`]).
+/// The render that draws the key sets it on a page, a patch or the layout's reads, and the watch
+/// around the handler of a route whose answer may be `Public` sets it on any answer whose handler
+/// drew one, rendered to a string included (`answer::Made`; an unstaged route's `route::Watched`,
+/// whose mark another Corten app that relays the answer inline reads, as it reads [`Personal`]).
+/// A render also marks the request's signal ([`crate::Signal::mark_key_drawn`]); the watch marks
+/// the answer alone. The route's answer, with the mark, marks the signal the stages hold as it
+/// comes back past the app's middleware (`middleware::Keyed`, on whatever thread polled it), which
+/// they read before [`settle`]: so a middleware that rebuilds the response, and the request it
+/// gives `next` too, does not take the mark away.
 #[derive(Clone, Copy)]
 pub(crate) struct Unrepeatable;
 
@@ -755,19 +842,20 @@ pub(crate) struct Unrepeatable;
 /// value drawn for this request ([`Unrepeatable`]), is left as it is. An answer compression sends
 /// as it is (an image, a PDF, `no-transform`) is tagged too: its `304` saves no compression but the
 /// whole body, which costs the client far more to receive than the hash costs here.
-pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
-    let headers = res.headers();
+///
+/// `given` is what the answer's scope's lines say of themselves ([`BesideATag`]) when it was
+/// given them in one pass ([`crate::security::Applied::ready`]): it brought its `Content-Type` at
+/// most, and every other line it has is one of those. Where none of them leaves an answer
+/// untagged or is part of a tag, its lines are not searched for one that does and its tag is made
+/// from its type alone: the answer and the tag the search would give. Any other answer is
+/// searched. It is handed over where the scope keeps it, not copied: with the byte itself for an
+/// argument the search's lookup of `Cache-Control` was a call again and a compressed page's
+/// request counted 55 instructions more (`bench/request-cost`, `page-browser`, at `dd17a6e8c`),
+/// which is why [`untagged`] is kept in line.
+pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<&BesideATag>) -> Response {
+    let ready = given.is_some_and(|lines| lines.0);
     if res.status() != StatusCode::OK
-        || headers.contains_key(header::ETAG)
-        || headers.contains_key(header::CONTENT_ENCODING)
-        || headers.contains_key(header::CONTENT_RANGE)
-        || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
-            // The default says neither, and most answers have it: it is compared, not searched.
-            // An immutable answer is never asked about again.
-            *line != PRIVATE
-                && (mentions_no_store(line.as_bytes())
-                    || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")))
-        })
+        || (!ready && untagged(res.headers()))
         || res.extensions().get::<crate::answer::Relayed>().is_some()
         || res.extensions().get::<Unrepeatable>().is_some()
         || http_body::Body::size_hint(res.body()).exact().is_none()
@@ -781,7 +869,7 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
         return unread(parts);
     };
     // A kept answer's body is read once, for its first tag.
-    let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers);
+    let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers, ready);
     if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
         parts.status = StatusCode::NOT_MODIFIED;
         // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
@@ -828,19 +916,77 @@ impl http_body::Body for Unsized {
 #[cfg(test)]
 fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     let body = bytes::Bytes::copy_from_slice(body);
-    tagged(crate::kept::Kept::hashed(&http::Extensions::new(), &body, &*TAG_KEY), headers)
+    tagged(crate::kept::Kept::hashed(&http::Extensions::new(), &body, &*TAG_KEY), headers, false)
+}
+
+/// Whether a header line of an answer leaves it without a tag ([`tag`]): a tag or an encoding of
+/// its own, a part of a body, or a `Cache-Control` that keeps it out of every cache or says it
+/// never changes. In line in [`tag`], which asks it of every answer whose lines it searches: as a
+/// function `tag` called, the lookup of `Cache-Control` became a call inside it and a compressed
+/// page's request (`bench/request-cost`, `page-browser`) counted more than with it in line.
+#[inline(always)]
+fn untagged(headers: &HeaderMap) -> bool {
+    headers.contains_key(header::ETAG)
+        || headers.contains_key(header::CONTENT_ENCODING)
+        || headers.contains_key(header::CONTENT_RANGE)
+        || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
+            // The default says neither, and most answers have it: it is compared, not searched.
+            // An immutable answer is never asked about again.
+            *line != PRIVATE
+                && (mentions_no_store(line.as_bytes())
+                    || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")))
+        })
+}
+
+/// Whether a header line of this name is part of an answer's tag ([`tagged`]).
+fn counts(name: &header::HeaderName) -> bool {
+    name == header::CONTENT_TYPE || name.as_str().starts_with("corten-")
+}
+
+/// Whether a scope's lines ([`crate::security::Applied::lines`]) are beside the tag of an answer
+/// they are given to: none leaves it untagged ([`untagged`]) and none is part of its tag
+/// ([`counts`]). Made only by [`BesideATag::of`], from the lines it is given and by the two tests
+/// [`tag`] makes of an answer's lines, once for each scope when the router is built: so it is
+/// true to the lines it is given whatever a later change makes them (that they are the scope's
+/// own is `Scopes::new`'s, which makes both in one closure), and it is what lets `tag` make
+/// neither test of an answer whose other lines are its scope's. No line a scope has today does
+/// either, so it holds of every scope; where a line comes to, its scope's answers are searched
+/// as any other's.
+#[derive(Clone, Copy)]
+pub(crate) struct BesideATag(bool);
+
+impl BesideATag {
+    pub(crate) fn of(lines: &HeaderMap) -> Self {
+        BesideATag(!untagged(lines) && !lines.keys().any(counts))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn holds(self) -> bool {
+        self.0
+    }
 }
 
 /// The tag from `hasher`, which has read the body with its length
-/// ([`crate::kept::Kept::hashed`]), and the headers that count.
-fn tagged(mut hasher: std::hash::DefaultHasher, headers: &HeaderMap) -> [u8; 20] {
+/// ([`crate::kept::Kept::hashed`]), and the headers that count, in the order the answer has them:
+/// found among all of them, or, for an answer whose other lines are beside a tag (`ready`,
+/// [`tag`]), its `Content-Type` alone, the one line of such an answer that can count.
+fn tagged(mut hasher: std::hash::DefaultHasher, headers: &HeaderMap, ready: bool) -> [u8; 20] {
     use std::hash::Hasher;
-    for (name, value) in headers {
-        if name == header::CONTENT_TYPE || name.as_str().starts_with("corten-") {
-            hasher.write_usize(name.as_str().len());
-            hasher.write(name.as_str().as_bytes());
-            hasher.write_usize(value.len());
-            hasher.write(value.as_bytes());
+    let mut line = |name: &header::HeaderName, value: &HeaderValue| {
+        hasher.write_usize(name.as_str().len());
+        hasher.write(name.as_str().as_bytes());
+        hasher.write_usize(value.len());
+        hasher.write(value.as_bytes());
+    };
+    if ready {
+        if let Some(kind) = headers.get(header::CONTENT_TYPE) {
+            line(&header::CONTENT_TYPE, kind);
+        }
+    } else {
+        for (name, value) in headers {
+            if counts(name) {
+                line(name, value);
+            }
         }
     }
     let hash = hasher.finish();
@@ -1158,8 +1304,9 @@ mod tests {
     }
 
     /// A page that drew a submit key for this request ([`Unrepeatable`]) is the browser's alone
-    /// and asked about again, whoever set its header; a plain `private` stands, and a `no-store`
-    /// goes out `private, no-store`, since some CDNs keep an answer that says only `no-store`.
+    /// and asked about again, whoever set its header: a plain `private` with a lifetime goes out
+    /// `private, no-cache`, and a `no-store` goes out `private, no-store`, with no lifetime beside
+    /// it and `private` since some CDNs keep an answer that says only `no-store`.
     #[test]
     fn an_answer_that_drew_a_submit_key_is_not_shared() {
         let drawn = |cache: Option<Cache>, lines: &[&'static str], seen: Seen| {
@@ -1184,7 +1331,16 @@ mod tests {
             assert_eq!(drawn(None, &["public, max-age=60"], asked()), "private, no-cache", "a header written by hand");
         }
         assert_eq!(drawn(None, &[], seen()), "private, no-cache", "the default");
-        assert_eq!(drawn(None, &["private, max-age=60"], seen()), "private, max-age=60", "the app's own choice");
+        for partial in [false, true] {
+            let asked = || Seen { partial, ..seen() };
+            assert_eq!(drawn(None, &["private, max-age=60"], asked()), "private, no-cache", "a lifetime the app gave it");
+            assert_eq!(drawn(None, &["private, no-store=1"], asked()), "private, no-store", "a no-store with a value");
+            assert_eq!(
+                drawn(None, &["private, no-store, max-age=60"], asked()),
+                "private, no-store",
+                "a no-store with a lifetime"
+            );
+        }
         assert_eq!(drawn(None, &["private, no-store"], seen()), "private, no-store", "already private");
         // Every way a `no-store` goes out keeps the browser out and says `private` to a CDN.
         assert_eq!(drawn(Some(Cache::no_store()), &[], seen()), "private, no-store", "NoStore");

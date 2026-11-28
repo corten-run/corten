@@ -73,6 +73,13 @@ test("local and remote inboxes agree on current JSON audit envelopes without adm
     }
   }
 });
+test("new JSON API audit delivery must include newly registered apps", () => {
+  const delivery = syntheticDelivery("json-api");
+  const options = { campaign, approveSubject: delivery.subjectSha256, auditGroup: "json-api" };
+  assert.equal(auditDelivery(Buffer.from(JSON.stringify(delivery)), options).group, "json-api");
+  delivery.bundle.receipts = delivery.bundle.receipts.filter((r) => r.identity.app !== "ntex");
+  assert.throws(() => auditDelivery(Buffer.from(JSON.stringify(delivery)), options), /complete native audit selection required/);
+});
 test("fixed remote inbox publishes once, rebinds subject body, and never overwrites a collision", () => {
   for (const group of ["json-api", "mixed-production"]) {
   const h = fake({}, group); h.run(); assert.ok(h.files.has(h.target)); assert.ok(!h.files.has(h.stage)); assert.equal(h.moves, 1);

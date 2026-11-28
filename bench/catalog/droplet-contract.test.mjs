@@ -27,7 +27,12 @@ test("CLI requires explicit catalog-page, distinct round, full SHA and one mode;
 
 test("reservation derives exact registry, current native defaults and disjoint CPU budgets, not an app count", () => {
   const s = state(), group = groupDescriptor("catalog-page");
-  assert.deepEqual(s.group, group); assert.equal(s.group.apps.length, 7);
+  assert.deepEqual(s.group, group); assert.equal(s.group.apps.length, 8);
+  const prior = structuredClone(s);
+  prior.group = groupDescriptor("catalog-page", { savedHash: "67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0" });
+  prior.options.apps = prior.group.apps;
+  assert.equal(prior.options.apps.length, 7);
+  assert.equal(validateState(prior, "c2"), prior);
   assert.deepEqual(s.options, parseArgs(["c2", "--build", "--group", "catalog-page"], Object.fromEntries(group.apps.map((a) => [a, {}]))));
   assert.deepEqual(s.options, measurements("c2")); assert.deepEqual(s.cpus, cpuSettings(cpuEnv));
   assert.deepEqual(Object.fromEntries(Object.entries(s.cpus).map(([k, v]) => [k, [v.quota, v.cpuset]])), { app: [1, "1"], load: [4, "4-7"], api: [2, "2-3"] });

@@ -13,6 +13,7 @@ import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dock
 import { calls, compiledFirst, idleMinutes } from "./round.mjs";
 import { imageBuildTimeoutMs as catalogBuildTimeoutMs } from "../catalog/contract.mjs";
 import { imageBuildTimeoutMs as marketplaceBuildTimeoutMs } from "../marketplace/run-contract.mjs";
+import { nativeDeployment } from "../mixed-production/source-audit.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -484,12 +485,12 @@ function checkSpringMaven(/** @type {string[]} */ config, /** @type {string} */ 
     "Spring's Maven reaches Central other than through Google's mirror alone, or its settings declare more than its mirror");
 }
 
-function checkSpringInstall(/** @type {string[]} */ lines) {
+function checkSpringInstall(/** @type {string[]} */ lines, inputs = springInstallInputs) {
   const install = lines.findIndex((line) => line.startsWith("RUN ") && springImageMaven.exec(line.slice(4))?.[3] === "dependency:go-offline");
   assert.ok(install >= 0, "expected the exact bounded Spring dependency download with no RUN mount");
   assert.equal(lines.filter((line) => /^RUN .*\bdependency:go-offline\b/.test(line)).length, 1);
   assert.match(lines[0], /^FROM \S+ AS build$/);
-  assert.deepEqual(lines.slice(1, install), springInstallInputs, "expected only the Spring dependency inputs");
+  assert.deepEqual(lines.slice(1, install), inputs, "expected only the Spring dependency inputs");
 }
 
 /** Seconds the native Spring test step can spend in Maven: the test stage's image build, then its one bounded test run. */
@@ -581,7 +582,7 @@ function buildCallUses(/** @type {string} */ runner) {
  * @type {{ runner: string, call: string, builds: number, seconds: number, forward: string, shorter: [string, string] }[]}
  */
 const otherSpringBuilds = [
-  { runner: "bench/mixed-production/run.mjs", call: '"-t", tag, "-f", context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });',
+  { runner: "bench/mixed-production/run.mjs", call: '"-t", tag, "-f", deployment?.dockerfile ?? context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });',
     builds: 1, seconds: 20 * 60, forward: 'docker = (args, opts) => io.command("docker", args, opts);', shorter: ["20 * 60 * 1000", "15 * 60 * 1000"] },
   { runner: "bench/hardening/evidence.mjs", call: "await docker(args, { input: context.input, settleOnInterrupt: true, timeout: 20 * 60 * 1000, file: log, receipt: command });",
     builds: 2, seconds: 20 * 60, forward: "", shorter: ["20 * 60 * 1000", "15 * 60 * 1000"] },
@@ -805,8 +806,8 @@ test("Spring bounds each Maven run inside the image build or step that contains 
     launcher.replace(signature, `${signature}    timeout ??= 15 * 60_000;\n`),
     launcher.replace('timer = setTimeout(() => stop("deadline"), timeout);', 'timer = setTimeout(() => stop("deadline"), timeout);\n    setTimeout(() => stop("deadline"), 15 * 60_000);'),
   ]) assert.ok(!launcherForwards(clamped), "accepted a clamped launcher timeout or a second deadline");
-  // Mixed Production, the hardening evidence check and JSON API build the same image under their own
-  // deadlines: 20 minutes leaves a nominal 1m40s beside the image's Maven runs, 60 minutes half an hour.
+  // Mixed Production, the hardening evidence check and JSON API build the default image under their
+  // own deadlines. Mixed Production must also cover the WebFlux override under the same deadline.
   for (const build of otherSpringBuilds) {
     const source = readFileSync(join(repo, build.runner), "utf8");
     assert.ok(buildDeadlineIs(source, build), `${build.runner}: its image build deadline moved, is not passed on, or it builds another image`);
@@ -814,6 +815,18 @@ test("Spring bounds each Maven run inside the image build or step that contains 
     assert.ok(!buildDeadlineIs(source.replace(build.call, build.call.replace(...build.shorter)), build), `${build.runner}: accepted a shorter deadline`);
     assert.ok(!buildDeadlineIs(`${source}\nawait docker(["image", "build", "."]);`, build), `${build.runner}: accepted a second build`);
     if (build.forward) assert.ok(!buildDeadlineIs(source.replace(build.forward, build.forward.replace("opts", "{ ...opts, timeout: 15 * 60 * 1000 }").replace("${limit * 60} bash", "900 bash")), build), `${build.runner}: accepted a clamped deadline`);
+    if (build.runner === "bench/mixed-production/run.mjs") {
+      assert.equal(source.split("const deployment = nativeDeployment(options, app);").length, 2, "Mixed Production must select the native deployment for each app");
+      assert.ok(!buildDeadlineIs(source.replace("deployment?.dockerfile ?? context.dockerfile", "context.dockerfile"), build), "accepted a build that ignores the native Dockerfile override");
+      const override = nativeDeployment({ springDeployment: "spring-webflux" }, "spring")?.dockerfile;
+      assert.equal(override, "Dockerfile.mixed", "Mixed Production's Spring WebFlux deployment must select its own Dockerfile");
+      const mixedDockerfile = readFileSync(join(spring, override), "utf8");
+      const mixedLines = instructionsOf(mixedDockerfile);
+      const mixedInputs = springInstallInputs.with(1, "COPY mixed/pom.xml ./pom.xml");
+      checkSpringInstall(mixedLines, mixedInputs);
+      assert.throws(() => checkSpringInstall(mixedLines.filter((line) => line !== "COPY .mvn ./.mvn"), mixedInputs), /only the Spring dependency inputs/);
+      assert.ok(springMavenSeconds(mixedDockerfile) < build.seconds, "Spring WebFlux's bounded Maven runs outlast the Mixed Production build deadline");
+    }
   }
 
   const { testStep, proofStep } = springSteps(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));

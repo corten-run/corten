@@ -1,4 +1,4 @@
-// How often the idle rule reads a rise between two builds that are the same: a model, by
+// How often the former resident-memory rule reads a rise between two identical builds: a model, by
 // simulation. It is not a measurement and no check runs it; the kit's page (The hosted job) and
 // docs/design.md#choice-counted-or-measured give its figures and say what they are worth.
 //

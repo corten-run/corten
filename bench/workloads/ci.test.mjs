@@ -22,6 +22,9 @@ test("Evidence scopes the full diff on pull requests and main without fail-open 
   const manual = workflow.on.workflow_dispatch.inputs.native_only;
   assert.equal(manual.type, "boolean");
   assert.equal(manual.default, false);
+  const dockerExit = workflow.on.workflow_dispatch.inputs.docker_exit_control;
+  assert.equal(dockerExit.type, "boolean");
+  assert.equal(dockerExit.default, false);
   assert.deepEqual(workflow.permissions, { contents: "read" });
   const scope = workflow.jobs.scope;
   assert.equal(scope.if, undefined);
@@ -29,8 +32,8 @@ test("Evidence scopes the full diff on pull requests and main without fail-open 
   assert.equal(scope.outputs.run, "${{ steps.scope.outputs.run }}");
   assert.equal(scope.outputs.kernel, "${{ steps.scope.outputs.kernel }}");
   const selector = scope.steps.find((step) => step.id === "scope");
-  assert.equal(selector.run, "node scripts/benchmark-scope.mjs evidence");
-  assert.equal(selector.env.PUSH_BEFORE, "${{ github.event.before }}");
+  assert.equal(selector.run, "node scripts/benchmark-scope.mjs evidence-cumulative-v1");
+  assert.equal(selector.env.GITHUB_TOKEN, "${{ github.event_name == 'push' && github.token || '' }}");
   assert.equal(scope.steps.find((step) => step.uses?.startsWith("actions/checkout@")).with["fetch-depth"], 0);
   const job = workflow.jobs.evidence;
   assert.deepEqual(job.strategy.matrix.suite, ["core", "contracts", "browser"]);
@@ -85,7 +88,10 @@ test("real Linux controls have a required host job and cannot pass through fixtu
   const step = job.steps.find((s) => s.run?.includes("scripts/benchmark-kernel-ci.sh"));
   assert.equal(step.if, undefined);
   assert.equal(step["continue-on-error"], undefined);
-  assert.equal(step.run, 'sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"');
+  assert.deepEqual(step.env, {
+    CORTEN_NATIVE_DOCKER_EXIT: "${{ github.event_name == 'workflow_dispatch' && inputs.docker_exit_control && '1' || '0' }}",
+  });
+  assert.equal(step.run, 'sudo env CORTEN_NATIVE_DOCKER_EXIT="$CORTEN_NATIVE_DOCKER_EXIT" /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"');
   const driver = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
   assert.ok(driver.includes("bench/workloads/isolated/host-boundary.test.mjs"), "host boundary procfs controls must run on the native host");
   assert.ok(driver.includes("bench/workloads/isolated/host-lifetime-durability.test.mjs"), "durable storage controls must run without native filesystem skips");

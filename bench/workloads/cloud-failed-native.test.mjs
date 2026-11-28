@@ -3,8 +3,8 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { accountId, archive, context, harness, metadata } from "./cloud-fixtures.mjs";
 import { tags } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
@@ -207,9 +207,11 @@ test("interrupted receipt rehash spends no final proof window and recovery still
   for (const expire of [false, true]) {
     const flags = {}, r = await recoveryHarness(t, flags), originalOpen = fs.openSync;
     // Crash after receipt durability but before even opening the state-intent
-    // temporary file. No DELETE or durable intent exists to retry or clear.
+    // temporary file (its own fresh deletion-intent stage). No DELETE or durable
+    // intent exists to retry or clear.
     fs.openSync = (...args) => {
-      if (args[0] === `${r.h.statePath}.tmp`) throw new Error("synthetic pre-intent interruption");
+      if (typeof args[0] === "string" && args[0].startsWith(`${r.h.statePath}.deletion-intent-`) && args[0].endsWith(".tmp"))
+        throw new Error("synthetic pre-intent interruption");
       return originalOpen(...args);
     };
     syncBuiltinESMExports();
@@ -239,6 +241,56 @@ test("interrupted receipt rehash spends no final proof window and recovery still
       assert.deepEqual(readFileSync(join(r.h.local, `failed-native-host.interrupted-${digest(receipt)}.json`)), receipt);
     } finally { Date.now = realNow; fs.openSync = originalOpen; syncBuiltinESMExports(); }
   }
+});
+
+for (const key of ["deletionIntentAt", "destroyedAt"]) test(key === "deletionIntentAt"
+  ? "a torn failed-native intent save leaves its own stage and no intent, and the next retirement deletes once on a fresh proof"
+  : "a torn failed-native destroyedAt save leaves its own stage after the one DELETE, and the next retirement only confirms absence", async (t) => {
+  const r = await recoveryHarness(t), originalOpen = fs.openSync, originalWrite = fs.writeFileSync, fds = new Set();
+  let torn = false;
+  // The first exclusive state stage written with the key is torn: 80 bytes, then an error.
+  fs.openSync = (path, flags, ...rest) => {
+    const fd = originalOpen(path, flags, ...rest);
+    if (!torn && flags === "wx" && /^state\.json\..*tmp$/.test(basename(String(path)))) fds.add(fd);
+    return fd;
+  };
+  fs.writeFileSync = (target, data, ...rest) => {
+    if (!fds.has(target)) return originalWrite(target, data, ...rest);
+    fds.delete(target);
+    if (torn || !String(data).includes(`"${key}"`)) return originalWrite(target, data, ...rest);
+    torn = true; fs.writeSync(target, Buffer.from(data).subarray(0, 80));
+    throw new Error("injected torn write");
+  };
+  syncBuiltinESMExports();
+  try { await assert.rejects(r.task().retireFailedNative(), /injected torn write/); }
+  finally { fs.openSync = originalOpen; fs.writeFileSync = originalWrite; syncBuiltinESMExports(); }
+  assert.ok(torn);
+  // Neither save leaves the fixed-name stage every later ordinary save would refuse on.
+  assert.equal(existsSync(join(r.h.local, "state.json.tmp")), false);
+  const stages = readdirSync(r.h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+  assert.equal(stages.length, 1);
+  assert.match(stages[0], key === "deletionIntentAt" ? /^state\.json\.deletion-intent-[a-f0-9]{32}\.tmp$/ : /^state\.json\.destroyed-[a-f0-9]{32}\.tmp$/);
+  const tornBytes = readFileSync(join(r.h.local, stages[0]));
+  assert.equal(tornBytes.length, 80);
+  const receipt = readFileSync(join(r.h.local, "failed-native-host.json"));
+  if (key === "deletionIntentAt") {
+    // The previous state stays: no intent, no DELETE.
+    assert.equal(r.h.deletes, 0); assert.deepEqual(readFileSync(r.h.statePath), r.originalState);
+  } else {
+    // The one DELETE was sent; the intent stays without destroyedAt.
+    const s = r.h.saved();
+    assert.equal(r.h.deletes, 1); assert.equal(s.status, "retired"); assert.ok(s.deletionIntentAt); assert.equal(s.destroyedAt, undefined);
+  }
+  assert.equal(await r.task().retireFailedNative(), 1);
+  const s = r.h.saved();
+  assert.equal(r.h.deletes, 1); assert.ok(s.destroyedAt); assert.equal(s.retirement.kind, "native-failed");
+  if (key === "deletionIntentAt") {
+    // A fresh proof, with the interrupted receipt kept for archival.
+    assert.deepEqual(readFileSync(join(r.h.local, `failed-native-host.interrupted-${digest(receipt)}.json`)), receipt);
+  } else assert.deepEqual(readFileSync(join(r.h.local, "failed-native-host.json")), receipt);
+  assert.doesNotThrow(() => retirement.verifyFailedNativeRetirement(r.h.local, s));
+  // The torn stage is never read or removed; it stays for the operator.
+  assert.ok(readFileSync(join(r.h.local, stages[0])).equals(tornBytes));
 });
 
 test("explicit absent output is retained as absence, never a completed native result", async (t) => {

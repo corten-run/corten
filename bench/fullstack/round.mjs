@@ -261,7 +261,8 @@ export const calls = (round, browserRuns, names, urls, jsonOnly = [], passes = 1
 /**
  * Where a round goes on from, read from its progress file: "<time> boot" each time run-all.mjs
  * starts (before it does anything else), "<time> start <step>", "<time> end <step>", and
- * "<time> finished" or "<time> failed" at the end. `boots` counts the starts so far.
+ * "<time> finished" or "<time> failed" at the end. Boot and finish can carry a count identity.
+ * `boots` counts the starts so far.
  * `skip` is the step that was running when the round stopped (its host restarted: a lockup
  * panics the kernel, which reboots it, or it was power-cycled); it is not run again. `next` is the
  * step to run next, or null when only the summary is left.
@@ -764,6 +765,7 @@ export async function runSteps(list, all, { call, progress, skip, reset, build, 
         throw new Error(`${halt}; the round stopped in its count step`);
       }
       leftRunning(step, result, skip);
+      if (step === "count" && result.code !== 0) throw new Error(`count.mjs exited with ${result.code}; the round stopped in its count step`);
       if (result.stopped) {
         skip(step, result.stopped);
         reset();

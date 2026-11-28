@@ -32,7 +32,7 @@ Visit [corten.run](https://corten.run) for a page that demonstrates Corten.
   so a page works before its scripts load, and without them.
 - **Plain JavaScript where it is fastest.** Behavior is a function in a script next to its
   component, called from the markup by name. No WASM, no virtual DOM, no hydration.
-  A 16.3 KB (gzip) runtime.
+  A 16.5 KB (gzip) runtime.
 - **Partial updates from the same handler.** A form marked `data-patch` gets back only the
   elements that changed; without JavaScript the same handler answers with the whole page.
 - **Live data.** `<corten-live>` fragments and keyed feeds stream numbered patches over
@@ -117,7 +117,7 @@ fn home_page(req: &Req, name: &str) -> impl Document {
                 <input name={f.name} required>
                 <button>"Greet me"</button>
             </form>
-            <Greeting name={name} />
+            <p aria-live="polite"><Greeting name={name} /></p>
         </Layout>
     }
 }
@@ -148,11 +148,11 @@ struct GreetingId;
 #[component]
 fn Greeting(name: &str) -> impl Patch {
     html! {
-        <p id={GreetingId} aria-live="polite">
+        <span id={GreetingId}>
             if !name.is_empty() {
                 "Hello, " {name} "!"
             }
-        </p>
+        </span>
     }
 }
 ```

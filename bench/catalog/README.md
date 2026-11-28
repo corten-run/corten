@@ -362,11 +362,31 @@ node bench/catalog/report.mjs bench/catalog/results/c4/summary.json --commit FUL
 node --test bench/catalog/group.test.mjs bench/catalog/runner.test.mjs bench/catalog/report.test.mjs bench/catalog/contract.test.mjs
 ```
 
-`--group catalog-page` selects exactly the approved registry's seven apps: Corten, ASP.NET,
-Express, FastAPI, axum/Maud, Drogon and Gin. It cannot be combined with `--apps`; missing native
+`--group catalog-page` selects eight apps: Corten, ASP.NET,
+Express, FastAPI, axum/Maud, Drogon, Gin and Proa. It cannot be combined with `--apps`; missing native
 inventory entries fail selection rather than shrinking the group. No group is selected by
 default, and this does not change the scheduled benchmark or historical twenty-app results.
 The `json-api` group is not implemented by this option.
+Historical group results replay against their original roster. Use their measured
+checkout for strict qualification; they are not evidence for the expanded group.
+
+**Proa admission pilot, 2026-11-27 (not a baseline).** The Proa 0.4.1 release
+image passed the native checker in both modes: 120 page checks, 500 JSON
+records and eight browser profiles per mode. For a fixture-only timing smoke,
+the lean Corten build from `468264ace` and this Proa adapter each had one CPU
+(same pin) and 1 GiB. A loopback client rotated records 1, 17 and 250 over a
+single persistent connection, identity encoding, 60 warmup then 600 measured
+GETs per pass, alternating adapter order over three passes. No request failed.
+
+| Adapter | Successful requests/s, median [min, max] | p99 ms, median [min, max] | App CPU µs/success, median [min, max] |
+|---|---:|---:|---:|
+| Corten | 74 [51, 138] | 51 [24, 80] | 617 [482, 739] |
+| Proa | 76 [41, 77] | 62 [50, 73] | 656 [632, 813] |
+
+The shared host and serial client did not establish capacity: variation between
+passes was larger than the difference between medians. Include Proa as a native
+SSR peer, not a new speed leader. These checks do not qualify it for the localized
+marketplace; no marketplace port or extra scheduled case is proposed.
 
 Both fixture and API sources retain the full native **page AND JSON correctness gate** below,
 including all eight browser profiles and upstream error/uncached-read checks. Only **page**
@@ -383,7 +403,7 @@ phase artifacts remain unchanged. After cleanup, group runs also capture `commit
 clean tree before and after the run, plus the canonical fixture hash. An image ID identifies
 the image used, not proof of its source revision when reusing an image without `--build`.
 
-The report accepts a complete group comparison only with all seven apps, both sources, exact
+The report accepts a complete group comparison only with the full roster for that contract, both sources, exact
 qualification/timing identities, every requested pass, valid cold/warmup and all three load
 phases. Every saved phase aggregate must exactly match the native aggregation of its individual
 runs, including collected and requested pass counts; missing, altered or extra aggregate fields
@@ -583,7 +603,7 @@ The Nuxt parity job also checks that the built Home chunk is not requested after
 on cold or related catalog routes, but is prefetched after a client transition out of the
 catalog. The header opens Home with or without JavaScript and retains keyboard focus
 across in-app catalog transitions. Script and stylesheet failures still fail the checker.
-`styles.mjs --check` checks all twenty stylesheet copies byte-for-byte. After changing
+`styles.mjs --check` checks all twenty-one stylesheet copies byte-for-byte. After changing
 `catalog.css`, run `node bench/catalog/styles.mjs --write` and rebuild the images.
 
 On a quiet, dedicated Linux benchmark host, use a new round name and omit `--check-only`:
@@ -643,8 +663,9 @@ from the pull request's merge commit against its first parent, or a push to `mai
 previous tip of `main`: a change to the directory of an app the matrix lists selects that app
 and the apps that share a driver it changed (`aspnet-aot` runs the JSON jobs instead), a change
 to the framework's Rust inputs (`crates`, `Cargo.toml`, `Cargo.lock`, `.cargo`, the toolchain
-files) or to `bench/catalog/corten` selects Corten, one of the listed fleet-controller files
-selects Corten and both JSON jobs, and a change to the benchmark's other shared inputs, to an app
+files) or to `bench/catalog/corten` selects Corten. The standalone Corten Cargo locks under
+`bench/marketplace/corten` and `bench/live/apps/corten`, like the listed fleet-controller files,
+select Corten and both JSON jobs. A change to the benchmark's other shared inputs, to an app
 directory the matrix does not list yet, or to the workflow selects them all. A manual run, and a
 push whose earlier commit is unknown or not an ancestor, also select them all; a change to none of these builds none
 ([Checks](../../CONTRIBUTING.md#checks)).

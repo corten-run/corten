@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import fs, { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { accountId, commit, context, harness } from "./cloud-fixtures.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
@@ -28,6 +29,35 @@ test("collect retires a proved unused owned allocation without fabricating bench
   assert.equal(s.archiveSha256, undefined); assert.equal(s.validation, undefined); assert.equal(s.exitCode, undefined);
   assert.ok(existsSync(join(h.local, "unused-host.json")));
   assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1, "a later collection only observes absence");
+});
+
+for (const key of ["deletionIntentAt", "destroyedAt"]) test(key === "deletionIntentAt"
+  ? "a torn unused intent save leaves its own stage and no intent, and the next collect deletes once on a fresh proof"
+  : "a torn unused destroyedAt save leaves its own stage after the one DELETE, and the next collect only confirms absence", async (t) => {
+  const h = harness(t, { missingUnit: true }); h.seed(); h.change((s) => { s.status = "preparing"; });
+  const tear = tearStateSave(t, `"${key}"`);
+  await assert.rejects(h.task().collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(existsSync(join(h.local, "operation.lock")), false);
+  // Neither save leaves the fixed-name stage every later ordinary save would refuse on.
+  assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+  const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+  assert.equal(stages.length, 1);
+  assert.match(stages[0], key === "deletionIntentAt" ? /^state\.json\.deletion-intent-[a-f0-9]{32}\.tmp$/ : /^state\.json\.destroyed-[a-f0-9]{32}\.tmp$/);
+  const tornBytes = readFileSync(join(h.local, stages[0])), receipt = readFileSync(join(h.local, "unused-host.json"));
+  assert.equal(tornBytes.length, 80);
+  if (key === "deletionIntentAt") {
+    const s = h.saved();
+    assert.equal(h.deletes, 0); assert.equal(s.status, "preparing"); assert.equal(s.deletionIntentAt, undefined); assert.equal(s.retirement, undefined);
+  }
+  else { assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt); assert.equal(h.saved().destroyedAt, undefined); }
+  assert.equal(await h.task().collect(), 1);
+  const s = h.saved();
+  assert.equal(h.deletes, 1); assert.equal(s.retirement.kind, "unused"); assert.ok(s.destroyedAt);
+  // A torn intent is recovered on a fresh proof, keeping the interrupted receipt; a torn destroyedAt only on absence.
+  if (key === "deletionIntentAt") assert.ok(readFileSync(join(h.local, `unused-host.interrupted-${digest(receipt)}.json`)).equals(receipt));
+  else assert.ok(readFileSync(join(h.local, "unused-host.json")).equals(receipt));
+  assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
 });
 
 test("an operation lock replaced during the absence read after an unused retirement's DELETE writes no destroyedAt", async (t) => {
@@ -327,6 +357,118 @@ test("settled bootstrap uploads retire only with fresh pinned drainage and never
   assert.equal(await h.pinnedUnused({ run }).collect(), 1);
   assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
   assert.equal(h.calls.slice(calls).some(([binary]) => binary === "ssh" || binary === "scp"), false);
+});
+
+// The first exclusive state stage written with the key is torn: 80 bytes, then an error. Either
+// a fresh stage or the fixed state.json.tmp is torn, so the test sees which one the save used.
+const tearStateSave = (t, key) => {
+  const fds = new Set(); let torn = false;
+  t.mock.method(fs, "openSync", ((original) => (path, flags, ...rest) => {
+    const fd = original(path, flags, ...rest);
+    if (!torn && flags === "wx" && /^state\.json\..*tmp$/.test(basename(String(path)))) fds.add(fd);
+    return fd;
+  })(fs.openSync));
+  t.mock.method(fs, "writeFileSync", ((original) => (target, data, ...rest) => {
+    if (!fds.has(target)) return original(target, data, ...rest);
+    fds.delete(target);
+    if (torn || !String(data).includes(key)) return original(target, data, ...rest);
+    torn = true; fs.writeSync(target, Buffer.from(data).subarray(0, 80));
+    throw new Error("injected torn write");
+  })(fs.writeFileSync));
+  syncBuiltinESMExports();
+  const restore = () => { fs.openSync.mock?.restore(); fs.writeFileSync.mock?.restore(); syncBuiltinESMExports(); };
+  t.after(restore);
+  return { torn: () => torn, restore };
+};
+
+test("a torn destroyedAt save on a pinned unused restart leaves its own stage, never state.json.tmp, and the next collect refuses with no second DELETE", async (t) => {
+  const h = await stoppedUpload(t, { deleteLost: true });
+  const drainedReceipts = h.saved().control.ledger.map((row) => digest(row.request.invocation.id));
+  const run = (binary, args, timeout, allowFail, expiry) => {
+    if (binary === "ssh") {
+      const saved = h.saved();
+      h.flags.unusedProof = { schema: "benchmark-unused-host/v1", hostId: saved.id, unit: saved.unit,
+        unused: true, observedAtMs: Date.now(), drainedReceipts };
+    }
+    return h.run(binary, args, timeout, allowFail, expiry);
+  };
+  await assert.rejects(h.pinnedUnused({ run }).collect(), /deletion acknowledgement lost/);
+  const intent = h.saved();
+  assert.equal(h.deletes, 1); assert.ok(intent.deletionIntentAt); assert.equal(intent.destroyedAt, undefined);
+  // The restart only confirms absence and records destroyedAt; that save is torn.
+  const tear = tearStateSave(t, '"destroyedAt"');
+  await assert.rejects(h.pinnedUnused({ run }).collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(h.deletes, 1); assert.deepEqual(h.saved(), intent);
+  assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+  const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+  assert.equal(stages.length, 1); assert.match(stages[0], /^state\.json\.destroyed-[a-f0-9]{32}\.tmp$/);
+  const tornBytes = readFileSync(join(h.local, stages[0]));
+  assert.equal(tornBytes.length, 80); assert.equal(existsSync(join(h.local, "operation.lock")), false);
+  // Pinned unused custody admits only its closed list of names, so the unread stage refuses
+  // the next collect before any provider call: fail closed, with no second DELETE.
+  const calls = h.calls.length;
+  await assert.rejects(h.pinnedUnused({ run }).collect(), /unexpected local bootstrap custody/);
+  assert.equal(h.deletes, 1); assert.deepEqual(h.saved(), intent);
+  assert.equal(h.calls.slice(calls).some(([binary]) => binary === "doctl" || binary === "ssh"), false);
+  assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
+});
+
+// An ordinary collect saves its intent before the DELETE and destroyedAt after absence; a restart
+// that finds an intent without destroyedAt records it on absence alone. Each save is torn once.
+const ordinaryStage = (h, pattern) => {
+  // A torn save leaves only its own fresh stage, never the fixed-name state.json.tmp.
+  assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+  const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+  assert.equal(stages.length, 1); assert.match(stages[0], pattern);
+  const bytes = readFileSync(join(h.local, stages[0]));
+  assert.equal(bytes.length, 80); assert.equal(existsSync(join(h.local, "operation.lock")), false);
+  return { name: stages[0], bytes };
+};
+const intentStage = /^state\.json\.deletion-intent-[a-f0-9]{32}\.tmp$/, destroyedStage = /^state\.json\.destroyed-[a-f0-9]{32}\.tmp$/;
+
+test("a torn ordinary deletion intent save leaves its own stage and no intent, and the next collect deletes once", async (t) => {
+  const h = harness(t); h.seed();
+  const tear = tearStateSave(t, '"deletionIntentAt"');
+  await assert.rejects(h.task().collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(h.deletes, 0);
+  const stage = ordinaryStage(h, intentStage), interrupted = h.saved();
+  assert.equal(interrupted.deletionIntentAt, undefined); assert.equal(interrupted.destroyedAt, undefined);
+  assert.equal(await h.task().collect(), 1);
+  assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt); assert.ok(h.saved().destroyedAt);
+  assert.ok(readFileSync(join(h.local, stage.name)).equals(stage.bytes));
+});
+
+test("a torn ordinary destroyedAt save after the one DELETE leaves its own stage, and the next collect records absence with no second DELETE", async (t) => {
+  const h = harness(t); h.seed();
+  const tear = tearStateSave(t, '"destroyedAt"');
+  await assert.rejects(h.task().collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(h.deletes, 1);
+  const stage = ordinaryStage(h, destroyedStage), interrupted = h.saved();
+  assert.ok(interrupted.deletionIntentAt); assert.equal(interrupted.destroyedAt, undefined);
+  assert.equal(await h.task().collect(), 1);
+  const s = h.saved();
+  assert.equal(h.deletes, 1); assert.ok(s.destroyedAt); assert.equal(s.deletionIntentAt, interrupted.deletionIntentAt);
+  assert.ok(readFileSync(join(h.local, stage.name)).equals(stage.bytes));
+});
+
+test("a torn destroyedAt save on an ordinary restart after a lost DELETE acknowledgement leaves its own stage, and the next collect records absence with no second DELETE", async (t) => {
+  const h = harness(t, { deleteLost: true }); h.seed();
+  await assert.rejects(h.task().collect(), /acknowledgement/);
+  const intent = h.saved();
+  assert.equal(h.deletes, 1); assert.ok(intent.deletionIntentAt); assert.equal(intent.destroyedAt, undefined);
+  // The restart finds the intent and only confirms absence; its destroyedAt save is torn.
+  const tear = tearStateSave(t, '"destroyedAt"');
+  await assert.rejects(h.task().collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(h.deletes, 1); assert.deepEqual(h.saved(), intent);
+  const stage = ordinaryStage(h, destroyedStage);
+  assert.equal(await h.task().collect(), 1);
+  const s = h.saved();
+  assert.equal(h.deletes, 1); assert.ok(s.destroyedAt); assert.equal(s.deletionIntentAt, intent.deletionIntentAt);
+  assert.ok(readFileSync(join(h.local, stage.name)).equals(stage.bytes));
 });
 
 test("settled upload approval binds the exact measured checkout, reservation, host and key", async (t) => {

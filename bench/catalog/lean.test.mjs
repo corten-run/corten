@@ -12,7 +12,7 @@ test("catalog lean contenders follow the page registry and the runner records th
   assert.deepEqual(leanApps, groupDescriptor("catalog-page").apps);
   assert.equal(leanProfile, "catalog-lean");
   const runner = read("./run.mjs");
-  assert.ok(runner.includes("leanProfile: { name: leanProfile, apps: leanApps }"));
+  assert.ok(runner.includes("leanProfile: { name: leanProfile, apps: effectiveLeanApps }"));
   assert.ok(runner.includes('leanApps.includes(app) ? ["-e", `PROFILE=${leanProfile}`] : []'));
   assert.match(runner, /"\/results\/checks.json", \.\.\.\(leanApps.includes\(app\) \? \[app\] : \[\]\)/);
   assert.match(read("../../.github/workflows/catalog.yml"), /node bench\/catalog\/run.mjs c1 --apps .* --build --check-only/);

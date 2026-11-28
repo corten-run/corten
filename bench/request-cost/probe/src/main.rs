@@ -1,6 +1,6 @@
-// The probe bench/request-cost counts: two apps with Corten's defaults, one configuration each.
+// The probe bench/request-cost counts.
 //
-// Usage: <bin> <port> <api|pages>
+// Usage: <bin> <port> <api|pages|public-page>
 //   api, an app with an API and no pages:
 //     GET, POST /baseline11  typed query parameters in (and a number in the body), a short String out
 //     GET /unstaged11        the same answer from a route that says `unstaged`, which reads no body
@@ -8,9 +8,12 @@
 //   pages, an app without an API:
 //     GET /page              a page of about 12 KB
 //     GET /text              a short str out
+//   public-page, with the answer store off: GET /page renders the same document as a Public page.
 // PROBE_ALLOCATOR=jemalloc (or glibc) makes the probe refuse to start unless /proc/self/maps shows
 // that allocator.
 use corten::prelude::*;
+
+mod idle_memory;
 
 #[corten::routes(api = Root)]
 mod url {
@@ -36,6 +39,15 @@ mod url {
 #[corten::routes]
 mod pages {
     #[route("/page", get = crate::page)]
+    pub struct Page;
+
+    #[route("/text", get = crate::text)]
+    pub struct Text;
+}
+
+#[corten::routes]
+mod public_pages {
+    #[route("/page", get = crate::public_page)]
     pub struct Page;
 
     #[route("/text", get = crate::text)]
@@ -74,8 +86,16 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 }
 
 async fn page(req: Req) -> HtmlResult {
+    items(&req)
+}
+
+async fn public_page(req: Req) -> Public<HtmlResult> {
+    Public::new(std::time::Duration::from_secs(60), items(&req))
+}
+
+fn items<For>(req: &Req) -> corten::Result<corten::HtmlResponse<For>> {
     req.page(html! {
-        <Layout req={&req} title="Items">
+        <Layout req={req} title="Items">
             <h1>"Items"</h1>
             <table>
                 for n in 0..120u32 {
@@ -108,14 +128,18 @@ fn check_allocator() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: <port> <api|pages>";
+    let usage = "usage: <port> <api|pages|public-page>";
     let port: u16 = args.get(1).ok_or(usage)?.parse()?;
     let app = match args.get(2).map(String::as_str) {
         Some("api") => App::new(Routes::new()).api(url::api),
         Some("pages") => App::new(pages::router()),
+        Some("public-page") => App::new(public_pages::router()).kept_answers(0),
         _ => return Err(usage.into()),
     };
     check_allocator()?;
+    if std::env::var_os("PROBE_IDLE_MEMORY").is_some() {
+        idle_memory::start()?;
+    }
     // A queue as long as Linux allows by default: idle.mjs opens connections faster than one
     // runtime accepts them, and a connection the queue has no room for waits a second to retry.
     let socket = tokio::net::TcpSocket::new_v4()?;

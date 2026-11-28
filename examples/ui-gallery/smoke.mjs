@@ -23,6 +23,7 @@ import { relativeTime } from "./smoke/relative-time.mjs";
 import { localTime } from "./smoke/local-time.mjs";
 import { alert } from "./smoke/alert.mjs";
 import { fields } from "./smoke/fields.mjs";
+import { ratioForm } from "./smoke/ratio-form.mjs";
 import { badge } from "./smoke/badge.mjs";
 import { tableCells, responsiveTables } from "./smoke/table.mjs";
 import { segmentedLinks, segmentedRadios } from "./smoke/segmented.mjs";
@@ -67,6 +68,7 @@ await runSmoke(async (browser) => {
   await alert(orders);
   await rowMenus(orders, browser);
   await fields(orders);
+  await ratioForm(browser);
   await badge(orders, browser);
   await tableCells(orders);
   await segmentedLinks(orders);

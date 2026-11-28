@@ -1,0 +1,1 @@
+- The FastAPI benchmark app now exposes a liveness endpoint and serves an HTML error when a marketplace page's upstream read fails. [Benchmark parity: FastAPI in approved workload groups](https://github.com/corten-run/corten/issues/1298).

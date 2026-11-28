@@ -162,19 +162,19 @@ impl<const TELL: bool> Endpoint for Keeping<TELL> {
         // In a full store a URL not asked for before is the handler's as any other request.
         let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
-        // Under `corten dev`, a future of its own with the same watch and the same return before
-        // `Missed::keep`, so what it says of a drawn key is what a release build does. It watches
-        // the answer through a borrow, a type of its own: sharing the release build's copy of the
-        // watch made the compiler stop inlining it there (`tests/router_cost.rs`).
+        // Under `corten dev`, a future of its own with the same return before `Missed::keep`, so
+        // what it says of a drawn key is what a release build does, and the release build's future
+        // is left as it is (`tests/router_cost.rs`). The mark it reads is the one the release
+        // build reads (below).
         if TELL {
-            let mut answer = self.inner.call(req);
+            let answer = self.inner.call(req);
             return Box::pin(async move {
-                let (res, drew_key) = crate::form::watched(Pin::new(&mut answer)).await;
+                let res = answer.await;
                 let res = match here {
                     Some(here) => here.fill(res).await,
                     None => res,
                 };
-                if drew_key {
+                if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
                     missed.drew_key();
                     return res;
                 }
@@ -183,17 +183,18 @@ impl<const TELL: bool> Endpoint for Keeping<TELL> {
         }
         let answer = self.inner.call(req);
         Box::pin(async move {
-            // An answer with a form's new submit key is this request's alone. A page's render
-            // marks one it drew (`cache::Unrepeatable`); markup rendered any other way (into
-            // JSON, text or a file, or to a string the page then
-            // holds as markup) has no mark to carry, so the handler is watched for one being
-            // drawn.
-            let (res, drew_key) = crate::form::watched(answer).await;
+            let res = answer.await;
             let res = match here {
                 Some(here) => here.fill(res).await,
                 None => res,
             };
-            if drew_key {
+            // An answer with a form's new submit key is this request's alone: marked by the
+            // render that drew it (a page's, the layout's reads') or by the watch the handler of
+            // every route whose answer may be `Public` runs under (`answer::Made`), which sees one
+            // rendered any other way. A key `req.rendered` renders on a thread the watch does not
+            // poll (a blocking task) marks only the request's signal, which `Missed::keep` reads
+            // before it keeps anything; a bare `to_html()` there marks neither.
+            if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
                 return res;
             }
             missed.keep::<false>(res).await
@@ -1502,5 +1503,40 @@ mod tests {
                  {measured} measured: measure both profiles and lower the measurements, as this test's comment says"
             );
         }
+    }
+
+    #[test]
+    fn a_scope_s_layout() {
+        // A scope keeps what its lines say of an answer's tag (`beside_a_tag`, the Choice at
+        // docs/design.md#choice-fixed-stages) in a byte of room it had, in the word that holds
+        // `own`, which the last stage reads for every request before it reaches the tag. So a
+        // scope is as large as it was before it kept that, and a request that reads the byte
+        // reads no cache line it did not read.
+        //
+        // Measured on x86_64-unknown-linux-gnu with rustc 1.99.1, in a debug and a release
+        // build: with the `types` feature, 336 bytes, as before the byte was kept, `own` at 328
+        // and the byte at 329; without it (an API's `Mount` keeps no OpenAPI document), 328
+        // bytes, `own` at 320 and the byte at 321.
+        //
+        // The layout is the compiler's, so the test can fail in two ways:
+        // - a scope grew, or the byte left `own`'s word, after a change to `Scope`: that makes
+        //   the Choice's Revisit when true. Count `text-browser`, `page-browser` and the staged
+        //   cases with `bench/request-cost` again and decide there whether a scope still keeps
+        //   the byte; a scope that only shrank needs the measurement lowered and nothing else;
+        // - another toolchain moved the layout with no such change. Measure both profiles again
+        //   and move the measurement and the version above with it.
+        const MEASURED: usize = if cfg!(feature = "types") { 336 } else { 328 };
+        let size = std::mem::size_of::<crate::app::Scope>();
+        let (own, beside_a_tag) = crate::app::Scope::OWN_AND_BESIDE_A_TAG;
+        eprintln!("scope: {size} bytes; own at {own}; beside_a_tag at {beside_a_tag}");
+        assert_eq!(
+            size, MEASURED,
+            "a scope is {size} bytes, not the {MEASURED} measured: see this test's comment before moving the measurement"
+        );
+        assert_eq!(
+            own / 8,
+            beside_a_tag / 8,
+            "`beside_a_tag` at {beside_a_tag} is not in the word of `own` at {own}: see this test's comment"
+        );
     }
 }

@@ -7,10 +7,11 @@ import fs, { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkd
 import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
+import { readCount } from "./count-admission.mjs";
 import { EVERY_EVENT } from "./count-perf.mjs";
 import { k6Provenance } from "../load-tool.mjs";
 import { EventEmitter } from "node:events";
@@ -1211,6 +1212,20 @@ async function standInCountKit(/** @type {string} */ root) {
   return { kit, bin, k6Image };
 }
 
+function copyRoundScripts(/** @type {string} */ kit) {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const seen = new Set();
+  const copy = (/** @type {string} */ source) => {
+    if (seen.has(source)) return;
+    seen.add(source);
+    const target = join(kit, relative(here, source));
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(source, target);
+    for (const [, name] of readFileSync(source, "utf8").matchAll(/^\s*import\s+(?:[^"']*?\s+from\s+)?["'](\.{1,2}\/[^"']+)["']/gm)) copy(resolve(dirname(source), name));
+  };
+  for (const file of ["run-all.mjs", "summarize.mjs"]) copy(join(here, file));
+}
+
 test("the runner records each real count.mjs probe refusal before load and goes on to the next invocation", posixStandIns, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "count-pairs-probe-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -1261,9 +1276,7 @@ for (const value of ["0", "1", undefined]) {
     const root = mkdtempSync(join(tmpdir(), "count-round-mode-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const { kit, bin, k6Image } = await standInCountKit(root);
-    for (const name of ["run-all.mjs", "summarize.mjs", "edge.mjs", "mixed.mjs", "pack.mjs", "passes.mjs", "ssr.mjs"]) {
-      copyFileSync(join(import.meta.dirname, name), join(kit, name));
-    }
+    copyRoundScripts(kit);
     const dir = join(kit, "results", "r1");
     mkdirSync(dir, { recursive: true });
     const k6 = k6Provenance({ Id: fakeK6Id, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" }, fakeK6Version);
@@ -1277,6 +1290,7 @@ for (const value of ["0", "1", undefined]) {
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
     assert.deepEqual(summary.instructions["corten/json"], { failed: "docker run failed (1): " }, result.stderr || result.stdout);
+    assert.deepEqual(readCount(dir)?.rows?.["corten/json"], summary.instructions["corten/json"]);
     assert.match(readFileSync(join(dir, "count-kernel.txt"), "utf8"), /note: .*printed a row for "cpu\/L1-icache-load-misses\/"/);
     assert.match(result.stdout ?? "", /all done/);
     assert.doesNotMatch(result.stdout ?? "", /step failed with/);
@@ -1289,14 +1303,22 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
   const server = createServer((_, res) => res.end("{}")).listen(18410);
   try {
     const { kit, bin, k6Image } = await standInCountKit(root);
-    const count = async (/** @type {string} */ round, /** @type {string} */ replace, alias = "none", /** @type {Record<string, string>} */ extra = {}) => {
+    const seed = (/** @type {string} */ dir) => {
+      const k6 = k6Provenance({ Id: fakeK6Id, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" }, fakeK6Version);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "tools.json"), JSON.stringify({ k6 }));
+      writeFileSync(join(dir, "instructions.json"), JSON.stringify({ "gin/page": [{ userPerRequest: 123456 }] }));
+    };
+    const count = async (/** @type {string} */ round, /** @type {string} */ replace, alias = "none", /** @type {Record<string, string>} */ extra = {},
+      /** @type {string[] | null} */ managed = null) => {
       const dir = join(root, round);
       mkdirSync(dir);
       const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: replace, FAKE_ALIAS: alias, HOME: process.env.HOME ?? root, ...extra };
-      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "pipe", "ignore"] });
+      const child = spawn(process.execPath, managed ?? [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "pipe", "pipe"] });
       let log = "";
-      child.stdout.on("data", (d) => (log += d));
+      for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (log += d));
       const code = await new Promise((resolve) => child.on("close", resolve));
+      assert.ok(existsSync(join(kit, "results", round, "count-images.json")), log);
       const docker = JSON.parse(readFileSync(join(dir, "docker.json"), "utf8"));
       const perf = existsSync(join(dir, "perf.jsonl")) ? readFileSync(join(dir, "perf.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
       const row = JSON.parse(readFileSync(join(kit, "results", round, "instructions.json"), "utf8"))["corten/json"];
@@ -1305,9 +1327,26 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       return { code, docker, perf, probe, row, receipt, log };
     };
     const first = "0".repeat(63) + "1";
-    // Nothing replaced: perf counts that container's cgroup, the load is counted, and it is removed by its ID.
+    // A standalone recount still merges the one app/target into its existing file.
+    const keptDir = join(kit, "results", "kept");
+    const unrelated = [{ userPerRequest: 123456 }];
+    seed(keptDir);
     const kept = await count("kept", "none");
-    assert.equal(kept.code, 0);
+    assert.equal(kept.code, 0, kept.log);
+    assert.deepEqual(JSON.parse(readFileSync(join(keptDir, "instructions.json"), "utf8"))["gin/page"], unrelated);
+    assert.equal(readCount(keptDir), null);
+    // The managed driver instead starts from empty output, even with that row already present.
+    copyRoundScripts(kit);
+    const managedDir = join(kit, "results", "r999995");
+    seed(managedDir);
+    const managed = await count("r999995", "none", "none", { BENCH_APPS: "corten", BENCH_TIER: "defaults" },
+      [join(kit, "run-all.mjs"), "r999995", "10", "count", "count"]);
+    assert.equal(managed.code, 0, managed.log);
+    const proof = readCount(managedDir);
+    assert.deepEqual(Object.keys(proof?.rows ?? {}).sort(), ["corten/json", "corten/page"]);
+    assert.deepEqual(proof?.rows["corten/json"].map((r) => r.userPerRequest), [100000, 100000, 100000]);
+    assert.equal(JSON.parse(readFileSync(join(managedDir, "summary.json"), "utf8")).instructions["corten/json"].user, 100000);
+    // Nothing replaced: perf counts that container's cgroup, the load is counted, and it is removed by its ID.
     assert.equal(kept.receipt.container, first);
     assert.ok(kept.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)));
     assert.ok(Array.isArray(kept.row) && kept.row[0].requests === 5000 && kept.row[0].userPerRequest === 100000, JSON.stringify(kept.row));

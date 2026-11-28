@@ -10,7 +10,8 @@ import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleet
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, discardPublicationStage, durable, durableCopy, durableNew, evidenceFileIdentity, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
-import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full,
+  pendingCreate, providerAccount, providerFailure, sealedCollectionCandidate, sealedCollectionPolicy, unitQuery, unsentCreate, unsentDelete, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
 import { captureValidation, validationTask } from "./cloud-validation-snapshot.mjs";
@@ -26,6 +27,23 @@ import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardia
 import { controlCheckpoint, controlResultFailure, pinnedHostOptions } from "./cloud-transport.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const stateBytes = (value) => `${JSON.stringify(value, null, 2)}\n`;
+// Only a positive not-dispatched acknowledgement creates the proof. Bind the
+// exact intent in both the filename and contents, never just the restored state.
+const withdrawalProof = (local, intentBytes, restore) => {
+  const intentSha256 = digest(intentBytes);
+  return { path: join(local, `state.json.delete-unsent-${intentSha256}.tmp`), bytes: Buffer.from(stateBytes({ intentSha256, restore })) };
+};
+const matchesWithdrawal = ({ path, bytes }) => {
+  try { return regular(path, bytes.length).equals(bytes); } catch { return false; }
+};
+export function sealedWithdrawal(local, state, intentBytes) {
+  if (!state.deletionIntentAt) return { sha256: null };
+  const restore = { ...state };
+  delete restore.deletionIntentAt;
+  const proof = withdrawalProof(local, intentBytes, restore);
+  return { restore, proof, sha256: matchesWithdrawal(proof) ? digest(proof.bytes) : null };
+}
 export function command(binary, args, timeout = 60000, allowFail = false) {
   assert.equal(binary, "git", "provisional controller: real cloud transport disabled until full readiness/review");
   const r = spawnSync(binary, args, { cwd: checkout, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout, maxBuffer: 16 * 1024 ** 2,
@@ -62,7 +80,7 @@ function handoffStateSnapshot(path) {
 const createErroredStop = () => Object.assign(new Error("provider create errored; exact allocation verified absent; no DELETE or replacement create"),
   { providerDiagnostic: { code: "create-errored-absent" } });
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
+  inspect, captureReplay = captureValidation, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
   inspectPreCreateInventory, preCreateCensusTargets = [],
   renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now(),
@@ -90,14 +108,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
   const groupedExitOne = recoveryApproval?.policy === failedExitOnePolicy, pinnedRetirement = groupedHandoff || groupedExitOne;
   const absenceOnly = recoveryApproval?.policy === absentCollectionPolicy;
+  const sealedRecovery = recoveryApproval?.policy === sealedCollectionPolicy;
   assert.equal(options.absentMeasuredCheckout !== undefined, absenceOnly, "production absence approval required");
+  assert.equal(options.sealedMeasuredCheckout !== undefined, sealedRecovery, "production sealed replay approval required");
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
   // The lock this process's current locked() operation holds, while it holds it: its name
   // and a check that it is still the file this process created, unchanged. An ordinary
   // operation holds operation.lock; an invalid-monitor recovery holds stream-recovery.lock
   // and never takes the original operation.lock it finds.
-  let heldLock;
+  let heldLock, sealedStateBytes;
   let exitOneFenceFinishedAtMs;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -121,16 +141,23 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
   const stateStage = (kind) => kind ? `${statePath}.${kind}-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
-  const stateBytes = (value) => `${JSON.stringify(value, null, 2)}\n`;
+  const requireSealedState = () => {
+    if (!sealedStateBytes) return;
+    heldLock.own();
+    assert.ok(regular(statePath, 1024 * 1024).equals(sealedStateBytes), "sealed reservation changed; preserve custody");
+  };
   const writeState = (value, replace = renameSync, kind = value.control?.monitor?.phase === "invalid" ? "revoked" : undefined) => {
     controllerState(value, options.round);
     // An interrupted ordinary save can leave its exclusive staging file behind.
     // Never consume it or let it prevent a failure-only write under retained custody.
-    const staging = stateStage(kind);
+    const staging = stateStage(kind ?? (sealedStateBytes ? "sealed-replay" : undefined));
     const bytes = stateBytes(value);
     if (!pinnedRetirement) {
+      requireSealedState();
       durable(staging, bytes);
+      requireSealedState();
       replace(staging, statePath); syncDirectory(local);
+      if (sealedStateBytes) sealedStateBytes = Buffer.from(bytes);
       return;
     }
     // A terminal SSH acknowledgement still owns only the exact pending state
@@ -153,7 +180,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       throw error;
     }
   };
-  const save = () => { check(); writeState(state); };
+  // A deletion intent and destroyedAt each go through their own fresh exclusive stage
+  // (save("deletion-intent"), save("destroyed")), like the checkpoints below: a save torn
+  // there leaves an unread stage and the previous state.json, never a fixed-name
+  // state.json.tmp that would refuse every later collect with EEXIST.
+  const save = (kind) => { check(); writeState(state, renameSync, kind); };
   // The provider-errored outcome is published through its own fresh exclusive stage,
   // like the monitor-ending publications: a fixed-name state.json.tmp left by an
   // interrupted save is never read, promoted, removed or allowed to block it.
@@ -229,9 +260,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       } : undefined;
       // A transport may await between run() and the request (production crosses a
       // cancellation checkpoint), so the caller's last check runs again in the guard
-      // it calls after that await, refusing by throwing before any pinned outcome.
+      // it calls after that await. A proof-bound check can also refuse as unsent.
       const guardDispatch = beforeDispatch === undefined ? pinnedGuard
-        : () => { beforeDispatch(); return pinnedGuard?.(); };
+        : () => beforeDispatch() === false ? false : pinnedGuard?.();
       if (expiry !== undefined) {
         if (pinnedGuard && !prepareDelete?.publishIntent) checkHandoffDelete(false);
         fresh();
@@ -243,12 +274,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (prepareDelete.publishIntent) prepareDelete.publishIntent();
         else {
           prepareDelete.unchanged();
-          state.deletionIntentAt = new Date().toISOString(); save();
+          state.deletionIntentAt = new Date().toISOString(); save("deletion-intent");
         }
       }
       // After the account preflight and the proof's deadline, the last local check before run().
-      beforeDispatch?.();
-      try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
+      // The sealed intent checked its tree in the same turn. Only repeat the
+      // scan after the transport awaits; its other local checks still run here.
+      try {
+        r = beforeDispatch?.(false) === false ? unsentDelete
+          : await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch);
+      }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r === unsentCreate) {
         assert.equal(argv[2], "create");
@@ -274,8 +309,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (prepareDelete && expiry !== undefined && r.status === 1 && r.deleteNotDispatched === true) {
         // The worker positively acknowledged that its request was never sent.
         // A missing result, timeout, HTTP error or lost acknowledgement cannot clear intent.
+        // The withdrawal goes through its own fresh exclusive stage, like the intent it removes.
         if (prepareDelete.onUnsent) prepareDelete.onUnsent();
-        else { boundary(); delete state.deletionIntentAt; writeState(state); }
+        else { boundary(); delete state.deletionIntentAt; writeState(state, renameSync, "delete-unsent"); }
         assert.fail("DELETE not dispatched; fresh collection approval required");
       }
       check();
@@ -864,9 +900,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(terminal.campaign === report.campaign, "monitor campaign changed after replay");
       assert.ok(terminal.sealSha256 === report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
       original(); archiveUnchanged();
-      state.destroyedAt = new Date().toISOString(); save(); return 0;
+      state.destroyedAt = new Date().toISOString(); save("destroyed"); return 0;
     });
-  async function validateEvidence(confirmedAbsent = false, start) {
+  async function validateEvidence(confirmedAbsent = false, start, pinTree) {
     state.fullGroupQualified = false;
     let extracted, exitCode;
     try {
@@ -888,15 +924,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     } catch { throw collectRefusal("collect-native-report-refused"); }
     let replay;
     try {
+      if (sealedRecovery) start = (input) => {
+        const root = realpathSync(options.sealedMeasuredCheckout);
+        assert.equal(root, recoveryApproval.measuredRoot, "measured checkout changed");
+        return validationTask(input, { snapshot: captureReplay(input.commit, { root }) });
+      };
       replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect, start };
     } catch { throw collectRefusal("collect-native-replay-start"); }
     report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
-      ...replay, interrupted, confirmedAbsent, preserveLock: () => { preserveOperationLock = true; },
+      ...replay, interrupted, confirmedAbsent, sealedRecovery, preserveLock: () => { preserveOperationLock = true; },
     });
     try {
       check();
       assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
       outcome = campaignOutcome(report, state, exitCode);
+      if (sealedRecovery) {
+        assert.equal(report.status, "verified", "sealed recovery cannot retire an unverified result");
+        assert.equal(exitCode, 0);
+        assert.equal(report.campaign, recoveryApproval.campaign);
+        assert.equal(report.supervisedTerminal?.sealSha256, recoveryApproval.sealSha256);
+      }
       if (state.control?.monitor?.phase === "closed") {
         const terminal = JSON.parse(regular(join(local, "monitor-terminal.json")));
         assert.equal(terminal.id, state.control.monitor.id);
@@ -906,7 +953,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     } catch { throw collectRefusal("collect-native-report-refused"); }
     // Never retain/print native assertion messages: they may contain private raw values.
     try {
-      assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
+      if (pinTree) pinTree(pinEvidenceTree(extracted, state.evidenceSha256, "validator mutated evidence"));
+      else assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence");
+      verifyArchive();
     } catch (error) {
       throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
     }
@@ -966,6 +1015,45 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const bytes = regular(join(local, retirementFile(state.retirement.kind)), state.control && state.retirement.kind === "setup-failed" ? 8 * 1024 * 1024 : 4096);
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
     verifyRetirementRecord(bytes, state.retirement.kind, false, pins);
+  };
+  const publishWithdrawal = (proof, restore, fence) => {
+    const restoredBytes = Buffer.from(stateBytes(restore));
+    // The proof itself cannot be renamed over state.json. Save the canonical
+    // restoration durably; if that save fails, keep the proof for the next collect.
+    writeState(restore, (stage, target) => {
+      assert.ok(matchesWithdrawal(proof), "withdrawal proof changed; preserve deletion intent");
+      fence();
+      assert.ok(regular(stage, restoredBytes.length).equals(restoredBytes) && matchesWithdrawal(proof),
+        "withdrawal stage changed; preserve deletion intent");
+      renameSync(stage, target);
+    }, "delete-unsent-restore");
+    state = restore;
+    if (matchesWithdrawal(proof)) { unlinkSync(proof.path); syncDirectory(local); }
+  };
+  const resumeDrainWithdrawal = async () => {
+    if (state.status !== "retired" || state.retirement.kind !== "setup-failed" || state.destroyedAt) return;
+    const intent = regular(statePath, 1024 * 1024);
+    if (!intent.equals(Buffer.from(stateBytes(state)))) return;
+    // The pre-registration drain path can only have retired a starting state.
+    // Reconstruct it, rather than loading any state from the stage.
+    const restore = { ...state, status: "starting", pendingRetirement: state.retirement };
+    delete restore.retirement; delete restore.deletionIntentAt;
+    const proof = withdrawalProof(local, intent, restore);
+    if (!matchesWithdrawal(proof)) return;
+    const path = join(local, retirementFile("setup-failed")), limit = 8 * 1024 * 1024;
+    const receipt = regular(path, limit);
+    if (digest(receipt) !== state.retirement.evidenceSha256 || JSON.parse(receipt).schema !== "benchmark-failed-setup-retirement/v3") return;
+    // Keep the intent if the operator already removed this host. The retired path
+    // can then confirm absence; an inconclusive read throws without changing state.
+    if (await exactHost() === undefined) return;
+    verifyRetirementRecord(receipt, "setup-failed");
+    const fence = () => {
+      check();
+      assert.ok(regular(path, limit).equals(receipt), "retirement evidence changed during drain withdrawal");
+      heldLock.own();
+      assert.ok(regular(statePath, 1024 * 1024).equals(intent), "saved retirement reservation changed; preserve host");
+    };
+    fence(); publishWithdrawal(proof, restore, fence);
   };
   const requireUnusedBootstrapCustody = () => {
     const interrupted = interruptedFirstUpload(state, local), uploads = interrupted || settledBootstrap(state, local);
@@ -1152,8 +1240,24 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       state = intended;
       try { verifyRetirement(pins); verified = true; requireCustody(); }
       catch (error) { state = prior; verified = false; pins.length = 0; throw error; }
-      saveState();
-      trusted = Buffer.from(stateBytes(state)); intentSaved = true;
+      saveState("deletion-intent");
+      trusted = Buffer.from(stateBytes(state)); intentSaved = true; beforeIntent = prior;
+    };
+    let beforeIntent;
+    // A drain proof's DELETE is sent with allowFail, so the provider worker, the in-process
+    // engine or the production checkpoint can positively acknowledge that it never sent the
+    // request (its deadline or cancellation refused before dispatch; the acknowledgement does
+    // not say which, so the refusal names neither). Only then is the intent
+    // withdrawn. Record the exact intent and its restoration even under cancellation.
+    // A missing, failed or lost acknowledgement never creates that proof and keeps the
+    // intent, whose recovery is exact absence alone.
+    const withdrawUnsentIntent = () => {
+      assert.ok(intentSaved && beforeIntent && !dispatched, "no unsent deletion intent to withdraw; preserve host");
+      const fence = () => { boundary(); requireCustody(); };
+      const proof = withdrawalProof(local, trusted, beforeIntent);
+      fence(); durable(proof.path, proof.bytes);
+      publishWithdrawal(proof, beforeIntent, fence);
+      throw new Error("DELETE was not dispatched; the next collect retires on a fresh proof");
     };
     // Everything the DELETE relies on, as this process left it, through the same custody
     // check: the pinned evidence first, then the receipt, the lock and the saved reservation
@@ -1169,7 +1273,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       // the deadline check that follows it, so a proof that expires during that read leaves
       // the receipt and its digest with no intent, which the next collect recovers on a
       // fresh proof. The deadline still goes with the DELETE itself.
-      await execute("doctl", deletion, 120000, false, { expiresAt: () => deleteProofExpiresAtMs, publishIntent },
+      await execute("doctl", deletion, 120000, true, { expiresAt: () => deleteProofExpiresAtMs, publishIntent, onUnsent: withdrawUnsentIntent },
         undefined, undefined, requireRetirementCustody);
     } else {
       publishIntent();
@@ -1181,7 +1285,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // The absence read awaits too: destroyedAt is published only while this operation still
     // holds its lock and the saved reservation is still the intent it wrote.
     requireCustody();
-    state.destroyedAt = new Date().toISOString(); saveState(); return 1;
+    state.destroyedAt = new Date().toISOString(); saveState("destroyed"); return 1;
   };
   const retireUnused = async () => {
     assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");
@@ -1368,11 +1472,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       checkHandoffDelete(false);
       assert.ok(Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
     }
-    Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
+    Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save("deletion-intent");
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
     await confirmDeleted();
     if (handoff) checkHandoffDelete();
-    state.destroyedAt = new Date().toISOString(); save(); return 1;
+    state.destroyedAt = new Date().toISOString(); save("destroyed"); return 1;
   }
   async function retireFailedExitOne(controllerCommit, reservationSha256, original, recovery) {
     const assertLaunch = ({ launchIntentSha256, fleetManifestSha256 }) => {
@@ -1387,7 +1491,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         checkHandoffDelete();
         if (absenceConfirmedAt !== undefined && !state.destroyedAt) {
           state.destroyedAt = absenceConfirmedAt;
-          save();
+          save("destroyed");
         }
       };
     };
@@ -1461,7 +1565,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }, pendingDeleteSha256);
         checkHandoffDelete(false);
         Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: handoffReceiptSha256 }, deletionIntentAt });
-        writeState(state);
+        writeState(state, renameSync, "deletion-intent");
       },
       onUnsent() {
         const alreadyUncertain = preserveOperationLock;
@@ -1473,7 +1577,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         durable(join(local, "failed-native-unsent-" + pendingDeleteSha256 + ".json"), bytes);
         durable(join(local, "failed-native-unsent-reservation-" + pendingDeleteSha256 + ".json"), original);
         state.status = "running"; delete state.retirement; delete state.deletionIntentAt;
-        writeState(state);
+        writeState(state, renameSync, "delete-unsent");
         checkHandoffDelete(false);
         unlinkSync(receiptPath); unlinkSync(originalPath); syncDirectory(local);
         pin(custody.assertCustody);
@@ -1745,7 +1849,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "bootstrap uploads require the measured checkout");
         if (state.status === "preparing") return retireUnused();
         verifyRetirement(); await confirmDeleted();
-        state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+        state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return 1;
       });
       const observed = read();
       if (observed.createPending && observed.status === "creating" && !observed.id && !observed.createErrored) return settlePendingCreate(observed);
@@ -1804,6 +1908,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (failedMonitorRecovery) assert.equal(observed.control.monitor.phase, "invalid", "foreground monitor has not settled");
       }
       return locked(async () => {
+        let requireApprovedSeal;
+        if (sealedRecovery) {
+          assert.ok(sealedCollectionCandidate(state), "sealed recovery requires a saved terminal archive");
+          const saved = regular(statePath, 1024 * 1024);
+          assert.equal(digest(saved), recoveryApproval.reservationSha256, "locked sealed reservation changed");
+          assert.equal(stateBytes(JSON.parse(saved)), stateBytes(state), "locked sealed reservation differs from loaded state");
+          sealedStateBytes = saved;
+          assert.equal(state.commit, recoveryApproval.measuredCommit);
+          assert.equal(state.id, recoveryApproval.hostId);
+          assert.equal(state.archiveSha256, recoveryApproval.archiveSha256);
+          assert.equal(state.evidenceSha256, recoveryApproval.evidenceSha256);
+          const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+          requireApprovedSeal = () => {
+            const { terminal } = sealedMonitor(local, state);
+            assert.ok(terminal.campaign === recoveryApproval.campaign && terminal.sealSha256 === recoveryApproval.sealSha256,
+              "approved terminal seal changed; preserve host");
+          };
+          requireApprovedSeal();
+          assert.ok(regular(join(local, state.evidence, "exit-code"), 16).equals(Buffer.from("0\n")), "sealed recovery requires a successful exit marker");
+          verifyArchive();
+        }
         if (options.r21MeasuredCheckout) {
           ownedR21(state);
           full(recoveryApproval?.controllerCommit, /[a-f0-9]{40}/, "approved successor required");
@@ -1870,10 +1995,23 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           && state.control.ledger.length === 0), "unused bootstrap requires an approved pinned observation");
         assert.equal(!!state.preBootstrapTerminal, setupCandidate, "pre-bootstrap reservation changed; preserve host");
         if (setupCandidate) assert.ok(beforeRegistration(state), "ambiguous pre-bootstrap custody; preserve host");
+        // ownedR21 above already excludes retired and pre-bootstrap reservations; the r21
+        // test stays so the resume never runs for a measured checkout if that changes.
+        if (setupCandidate && !options.r21MeasuredCheckout) await resumeDrainWithdrawal();
+        if (sealedRecovery) {
+          const { restore, proof, sha256 } = sealedWithdrawal(local, state, sealedStateBytes);
+          assert.equal(sha256, recoveryApproval.withdrawalSha256, "approved withdrawal proof changed; preserve intent");
+          // An interrupted withdrawal may be finished only against the exact
+          // saved intent. Preserve the intent if that host is already absent.
+          if (sha256 && await exactHost() !== undefined) {
+            const fence = () => { check(); requireApprovedSeal(); requireSealedState(); };
+            fence(); publishWithdrawal(proof, restore, fence);
+          }
+        }
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();
-          state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+          state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return 1;
         }
         if (state.deletionIntentAt) {
           // A prior verified, monitored collection may have timed out after DELETE.
@@ -1891,7 +2029,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
           verifyArchive(); await validateEvidence();
           await confirmDeleted();
-          state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
+          state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return deletedCode();
         }
         if (setupCandidate && state.evidence) checkSetupCustody(setupExit());
         assert.ok(offlineAck || state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
@@ -1946,24 +2084,43 @@ else ${pack}; fi` : pack, 11 * 60000);
         }
         state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
         await withVerifiedArchive(archive, state.archiveSha256, async unchanged => {
-          await validateEvidence();
+          let treeUnchanged;
+          await validateEvidence(false, undefined, sealedRecovery ? pin => { treeUnchanged = pin; } : undefined);
           const deletion = ["compute", "droplet", "delete", state.id, "--force"];
           if (sealed) {
             const { hash, stamp } = await remoteHash(); assert.equal(hash, state.archiveSha256, "exit archive changed");
+            const requireDispatchCustody = (includeTree = true) => {
+              if (includeTree) treeUnchanged();
+              unchanged(); requireApprovedSeal(); requireSealedState();
+            };
             // Account check, then transport's exact ownership check, then one short
             // SSH fence. The hashes and provider reads are outside its freshness budget.
-            await execute("doctl", deletion, 120000, true, { unchanged, async expiresAt() {
+            await execute("doctl", deletion, 120000, true, { unchanged, ...(sealedRecovery ? {
+              publishIntent() {
+                requireDispatchCustody();
+                state.deletionIntentAt = new Date().toISOString(); save("deletion-intent");
+              },
+              onUnsent() {
+                const fence = () => { boundary(); requireSealedState(); };
+                const { restore, proof } = sealedWithdrawal(local, state, sealedStateBytes);
+                fence(); durable(proof.path, proof.bytes);
+                publishWithdrawal(proof, restore, fence);
+              },
+            } : {}), async expiresAt() {
               const proof = await ssh(idleScript(false, stamp) + "\n" + query, 60000, true);
               assert.ok(proof.status === 0 && !proof.error && sealedUnit(proof.stdout, state), "idle archive or terminal unit changed");
               return proof.startedAtMs + 60000;
-            } });
+            } }, undefined, undefined, sealedRecovery ? includeTree => {
+              try { requireDispatchCustody(includeTree); } catch { return false; }
+              return true;
+            } : undefined);
           } else {
             assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check(); unchanged();
-            state.deletionIntentAt = new Date().toISOString(); save(); await execute("doctl", deletion, 120000);
+            state.deletionIntentAt = new Date().toISOString(); save("deletion-intent"); await execute("doctl", deletion, 120000);
           }
         });
         await confirmDeleted();
-        verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
+        verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save("destroyed"); return deletedCode();
       }, failedMonitorRecovery);
     },
     async retireFailedNative() {
@@ -1994,7 +2151,7 @@ else ${pack}; fi` : pack, 11 * 60000);
             checkHandoffDelete(false);
             await confirmDeleted();
             checkHandoffDelete();
-            if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
+            if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save("destroyed"); }
             return 1;
           }
           grouped = groupedPreplanFailure(local, state);
@@ -2018,7 +2175,7 @@ else ${pack}; fi` : pack, 11 * 60000);
           if (groupedPreplan) assert.equal(record.capture.reservationSha256, recoveryApproval.preservedReservationSha256,
             "approved preserved reservation differs from retirement");
           await confirmDeleted();
-          state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+          state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return 1;
         }
         assert.ok(["starting", "running"].includes(state.status) && !state.deletionIntentAt && !state.collectedAt
           && !state.validation && !state.evidenceOutcome && state.createIntentAt, "only an unqualified failed native reservation can recover");
