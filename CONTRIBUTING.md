@@ -244,8 +244,10 @@ builds on the oldest supported Rust, `rust-version` in the root `Cargo.toml`. Th
 (`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`,
 side by side on runners of their own: the release tests apart from the other Rust checks, and the
 browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
-`rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
-supported Rust floor. A new smoke step names
+`rust` and `browser` pass only when every job under them ran and passed, `msrv` checks the
+supported Rust floor. `request-cost`, the one job of the `Request Cost` workflow
+(`.github/workflows/request-cost.yml`), is required too (Pull requests, item 2.1, Counted).
+A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
 The three example groups use the pinned Playwright image directly. Two more groups run the
 benchmark checks beside them: `benchmark-checks` runs the `npm-check` part, and
@@ -575,13 +577,17 @@ establish a general ranking.
       7. A change whose reason is a win in cycles, time or requests a second.
 
       **Counted.** The hosted `Request Cost` job takes these counts for a pull request that
-      changes what a request is built from, base and head on one runner, and writes every
-      figure and its verdict to its summary, to copy into the description, so the author
-      prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
+      changes what the probe is built from or counted with, base and head on one runner, and
+      writes every figure and its verdict to its summary, to copy into the description, so the
+      author prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
       green check is evidence for a reviewer to read, not an attestation: the counts are of
       the pull request's own tree, by its own workflow, scope, kit and comparison, so a pull
       request that changes any of those has that change reviewed for what it does to the
-      verdict. On a host of one's own, build base and head with
+      verdict. The check is required on `main` (Checks), and being required makes it no more
+      than that evidence: the way, its line and what the measured way then gives are still the
+      review's to accept. [The hosted job](bench/request-cost/README.md#the-hosted-job) says what
+      the job passes and fails, which run reads a line added later and decides, and when a run
+      may be run again. On a host of one's own, build base and head with
       [`bench/request-cost`](bench/request-cost/README.md) and take each count under
       [Running it](bench/request-cost/README.md#running-it) on both, as that page says: one
       directory, one checkout of the kit, the answers compared first. The change passes when no

@@ -2930,32 +2930,49 @@ impl Local {
     /// character or space a browser drops can turn it into one. Two more are refused because the
     /// browser would ask for another path than the one [`crate::Req::serves`] checks: a `.` or
     /// `..` segment, which it resolves away, and in the path a percent-escaped letter, digit or
-    /// `-._~` (`%61`, `%2e`), which Chromium sends as the plain character. Anything else, a full
-    /// URL included, is `None`: send the user to the fallback.
+    /// `-._~` (`%61`, `%2e`), which a browser may send as the plain character (WebKit does).
+    /// Anything else, a full URL included, is `None`: send the user to the fallback.
     pub fn parse(text: &str) -> Option<Local> {
         let bytes = text.as_bytes();
         let path = bytes.first() == Some(&b'/') && !matches!(bytes.get(1), Some(b'/' | b'\\'));
         let printable = bytes.iter().all(|&b| b.is_ascii_graphic() && b != b'\\');
         let route = text.split(['?', '#']).next().unwrap_or("");
         let dots = route.split('/').any(|segment| segment == "." || segment == "..");
-        let unreserved = |pair: &[u8]| {
-            let hex = |b: u8| (b as char).to_digit(16);
-            match (hex(pair[0]), hex(pair[1])) {
-                (Some(high), Some(low)) => {
-                    let b = (high * 16 + low) as u8;
-                    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
-                }
-                _ => false,
-            }
-        };
-        let escaped = route.as_bytes().split(|&b| b == b'%').skip(1).any(|after| after.len() >= 2 && unreserved(&after[..2]));
-        (path && printable && !dots && !escaped).then(|| Local(text.to_string()))
+        (path && printable && !dots && !escapes_unreserved(route)).then(|| Local(text.to_string()))
     }
 
     /// The path, without the query or fragment: what the app's routes are matched against.
     pub fn path(&self) -> &str {
         self.0.split(['?', '#']).next().unwrap_or("")
     }
+}
+
+/// Whether `path` has a percent escape of an unreserved character, a letter, a digit, `-`, `.`, `_`
+/// or `~` (`%61`, `%2e`), which a browser may ask for as the plain character while its
+/// `location.pathname` keeps the escape (WebKit does). No link Corten writes has one: a typed route
+/// writes those characters as they are, [`Local::parse`] refuses a path with one, and a nav entry's
+/// other address with one, once its `.` and `..` segments are resolved, is left out
+/// ([`crate::NavTo::also`]).
+#[inline(always)]
+pub(crate) fn escapes_unreserved(path: &str) -> bool {
+    // A loop over the bytes, always inlined, not `split` and `any`: shared, those adapters were left
+    // out of line and `Local::parse` measured about 18 instructions a call more than with them
+    // written in it, and this measured about 17 fewer than that.
+    let bytes = path.as_bytes();
+    let hex = |b: u8| (b as char).to_digit(16);
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            if let (Some(high), Some(low)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                let b = (high * 16 + low) as u8;
+                if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 impl std::fmt::Display for Local {
@@ -3323,6 +3340,10 @@ mod local_tests {
             "/a%2Db",
             "/a%5Fb",
             "/%31",
+            // An escape after a `%` without two hex digits is one still: WebKit asks for
+            // `/a/%7%33x` as `/a/%73x`.
+            "/a/%7%33x",
+            "/a/%%41",
         ] {
             assert!(Local::parse(bad).is_none(), "{bad:?}");
         }
@@ -3912,6 +3933,11 @@ pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &http::request::P
 }
 
 impl crate::response::IntoResponse for ParamsRejection {
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
+
     fn into_response(self) -> crate::response::Response {
         *self.0
     }
@@ -4568,9 +4594,11 @@ fn written_checked<R: Route + ?Sized>() {
 /// caching header, so no shared cache hands one visitor's cookie to another, and is marked as that
 /// visitor's, as a staged one is, for an app that relays it inline. A handler that panics
 /// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
-/// the connection. Under an API's prefix a failure after the host check is the API's JSON, as
-/// every failure there is. It wraps the handler's boxed future in one box of its own ([`laned`]);
-/// only a failure under an API boxes the JSON it writes.
+/// the connection. A handler whose answer may be `Public` is watched for a form's new submit key
+/// ([`Watched`]), and an answer whose handler drew one is shared with no cache either. Under an
+/// API's prefix a failure after the host check is the API's JSON, as every failure there is. It
+/// wraps the handler's boxed future in one box of its own ([`laned`]); only a failure under an API
+/// boxes the JSON it writes.
 pub(crate) struct Lane {
     pub(crate) hosts: crate::security::HostCheck,
     /// Under an API's prefix: how the API writes a failure, and whether the app runs under
@@ -4639,28 +4667,96 @@ fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Resp
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
     if kept_out || cookie {
-        let no_store = kept_out
-            || headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
-        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
-        // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a
-        // [`crate::Public`] answer may not set, and the others Corten names
-        // ([`crate::cache::CDN_CACHING`]).
-        let cdn: Vec<header::HeaderName> = headers
-            .keys()
-            .filter(|name| {
-                let name = name.as_str();
-                (name.ends_with("cache-control") && name != "cache-control") || crate::cache::CDN_CACHING.contains(&name)
-            })
-            .cloned()
-            .collect();
-        for name in cdn {
-            headers.remove(name);
-        }
+        unshared(headers, kept_out);
     }
     if cookie {
         res.extensions_mut().insert(crate::cache::Personal);
     }
     res
+}
+
+/// `headers` of an answer no shared cache may keep: `Cache-Control: private, no-cache`, or
+/// `private, no-store` when it names `no-store` or is kept out of every cache (`no_store`, a
+/// [`crate::NoStore`] answer whatever its header says), and none of the caching headers a CDN
+/// reads first.
+fn unshared(headers: &mut http::HeaderMap, no_store: bool) {
+    use http::header;
+    let no_store =
+        no_store || headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
+    headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
+    // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a [`crate::Public`]
+    // answer may not set, and the others Corten names ([`crate::cache::CDN_CACHING`]).
+    let cdn: Vec<header::HeaderName> = headers
+        .keys()
+        .filter(|name| {
+            let name = name.as_str();
+            (name.ends_with("cache-control") && name != "cache-control") || crate::cache::CDN_CACHING.contains(&name)
+        })
+        .cloned()
+        .collect();
+    for name in cdn {
+        headers.remove(name);
+    }
+}
+
+/// An unstaged route's handler whose answer may be `Public` (`IntoResponse::may_share`: a
+/// `Public` answer, or a type of the app's own, which may hold one), watched for a form's new
+/// submit key in its polls as a staged one is
+/// (`answer::Made`). No stage settles an unstaged answer's caching, so one whose handler drew a
+/// key is made private here: `private, no-cache` (`private, no-store` where it names `no-store`),
+/// with no caching header a CDN reads first and no tag. Chosen by the answer's type when the route is made,
+/// so the handler of any other unstaged route is the one it was, with nothing around it.
+#[derive(Clone)]
+pub(crate) struct Watched<H>(pub(crate) H);
+
+impl<H: crate::handler::Handler<T, S>, T, S> crate::handler::Handler<T, S> for Watched<H> {
+    #[inline]
+    fn call(
+        self,
+        req: crate::handler::Request,
+        state: S,
+    ) -> impl std::future::Future<Output = crate::response::Response> + Send + 'static {
+        WatchedAnswer { made: self.0.call(req, state), watch: crate::form::KeyWatch::default() }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// [`Watched`]'s answer as its handler makes it.
+    struct WatchedAnswer<F> {
+        #[pin]
+        made: F,
+        watch: crate::form::KeyWatch,
+    }
+}
+
+impl<F: std::future::Future<Output = crate::response::Response>> std::future::Future for WatchedAnswer<F> {
+    type Output = crate::response::Response;
+
+    #[inline]
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let this = self.project();
+        let mut polled = this.watch.poll(this.made, cx);
+        if let std::task::Poll::Ready(res) = &mut polled {
+            if this.watch.drew() {
+                drew_key(res);
+            }
+        }
+        polled
+    }
+}
+
+/// An unstaged answer whose handler drew a form's new submit key, made the browser's alone, with
+/// no tag it was given (`crate::cache::drop_keyed_reuse`), and marked so
+/// ([`crate::cache::Unrepeatable`]), as a staged one is, for an app that relays it inline: that
+/// app's stages keep it from shared caches whatever its middleware writes on it, as they do one
+/// that sets a cookie.
+#[cold]
+#[inline(never)]
+fn drew_key(res: &mut crate::response::Response) {
+    let headers = res.headers_mut();
+    unshared(headers, false);
+    headers.remove(http::header::ETAG);
+    crate::cache::unrepeatable(res);
 }
 
 /// The crate's tests build routes by hand, to test what `App` does with any response.
@@ -4776,17 +4872,25 @@ pub mod __private {
         }
     }
 
-    /// An unstaged route's `get`, its only method.
+    /// An unstaged route's `get`, its only method. A handler whose answer may be `Public` is
+    /// watched for a form's new submit key ([`super::Watched`]); any other is routed as it is.
     #[inline]
     pub fn unstaged_get<H, T, S, P, J>(handler: H) -> UnstagedMethods<S>
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
         <H as crate::answer::Signature<T>>::Args: crate::answer::AllUnstaged + crate::answer::Holds<P, J>,
+        <H as crate::answer::Signature<T>>::Out: crate::response::IntoResponse,
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        UnstagedMethods(crate::router::get(handler.into_handler()))
+        let handler = handler.into_handler();
+        // Known from the answer's type, folded in a release build.
+        if <<H as crate::answer::Signature<T>>::Out as crate::response::IntoResponse>::may_share().0 {
+            UnstagedMethods(crate::router::get(super::Watched(handler)))
+        } else {
+            UnstagedMethods(crate::router::get(handler))
+        }
     }
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names
@@ -6067,6 +6171,9 @@ mod tests {
                 let mut out = String::new();
                 Encode { out: &mut out, keep }.push(v);
                 assert_eq!(out, reference(v, rest), "{v:?}");
+                // So no link a typed route writes has an escaped unreserved character, which WebKit
+                // would ask for decoded (`NavTo::also` leaves out an address with one).
+                assert!(!super::escapes_unreserved(&out), "{v:?} as {out}");
             }
         }
     }
@@ -6158,6 +6265,7 @@ mod tests {
                     assert_eq!(href, *release);
                     let path = href.split('?').next().unwrap();
                     assert!(!path.split('/').any(dot), "{href} has no dot segment");
+                    assert!(!super::escapes_unreserved(path), "{href} has no escaped unreserved character");
                 }
                 (Err(panic), true) => {
                     let message = panic.downcast_ref::<String>().map(String::as_str).unwrap_or_default();

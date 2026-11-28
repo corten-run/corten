@@ -2209,6 +2209,80 @@ test("a bounded run never signals a group whose leader was reaped, and gives up 
   assert.deepEqual(quiet, []);
 });
 
+/**
+ * Whether process `pid` is gone: no such process, or one that has exited but that its parent has
+ * not reaped yet (a zombie, as in a container whose init does not reap) or is reaping now. Linux's
+ * /proc says which, and elsewhere ps's process state. On Linux that is the state of the process's
+ * main thread, so a process whose main thread exited while others run reads as gone; the processes
+ * this is asked about are single-threaded children or Node processes, which keep theirs. The
+ * process can be reaped between the signal check and the read, so a stat file that is no longer
+ * there (ENOENT, or ESRCH from a read of one just gone), and a ps that finds no such process, read
+ * as gone; any other failure is thrown.
+ * @param {number} pid
+ * @param {{ signal?: (pid: number, signal: 0) => unknown, read?: (path: string) => string, ps?: (pid: number) => { status: number | null, stdout?: string | null, stderr?: string | null, error?: Error }, platform?: string }} [steps]
+ */
+function processGone(pid, {
+  signal = (p, s) => process.kill(p, s),
+  read = (path) => readFileSync(path, "utf8"),
+  ps = (p) => spawnSync("ps", ["-o", "stat=", "-p", String(p)], { encoding: "utf8" }),
+  platform = process.platform,
+} = {}) {
+  try { signal(pid, 0); } catch (error) {
+    if (error?.code === "ESRCH") return true;
+    throw error;
+  }
+  if (platform === "linux") {
+    let stat;
+    try { stat = read(`/proc/${pid}/stat`); } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ESRCH") return true;
+      throw error;
+    }
+    // The state follows the command name's closing parenthesis; the name may hold ") Z" itself.
+    // Z is a zombie; X (x on old kernels) is one its parent is reaping, before its PID goes.
+    return "ZXx".includes(stat[stat.lastIndexOf(")") + 2]);
+  }
+  const answer = ps(pid);
+  if (answer.error) throw answer.error;
+  const state = (answer.stdout ?? "").trim();
+  // ps exits 1 and prints nothing when it finds no such process.
+  if (answer.status === 1 && state === "" && (answer.stderr ?? "").trim() === "") return true;
+  assert.equal(answer.status, 0, `ps -p ${pid} failed: ${answer.stderr ?? ""}`);
+  return /^Z/.test(state);
+}
+
+test("a process reaped between the signal check and the stat read reads as gone, and a live one does not", () => {
+  const failure = (code) => Object.assign(new Error(code), { code });
+  const alive = () => true;
+  const vanished = (code) => () => { throw failure(code); };
+  // The race: the signal finds the zombie, its parent reaps it, then the read finds no stat file.
+  assert.equal(processGone(4242, { signal: alive, read: vanished("ENOENT"), platform: "linux" }), true);
+  assert.equal(processGone(4242, { signal: alive, read: vanished("ESRCH"), platform: "linux" }), true);
+  // Any other read failure is not evidence the process is gone.
+  assert.throws(() => processGone(4242, { signal: alive, read: vanished("EACCES"), platform: "linux" }), /EACCES/);
+  // A zombie is gone; a running or sleeping process is not.
+  assert.equal(processGone(4242, { signal: alive, read: () => "4242 (node) Z 1 4242 4242 0 -1", platform: "linux" }), true);
+  // One its parent is reaping, between the zombie and the PID going, is gone too.
+  for (const state of ["X", "x"])
+    assert.equal(processGone(4242, { signal: alive, read: () => `4242 (sleep) ${state} 1 7 1 0 -1`, platform: "linux" }), true, state);
+  for (const state of ["R", "S", "D"])
+    assert.equal(processGone(4242, { signal: alive, read: () => `4242 (a (b) Z) ${state} 1 4242 4242 0 -1`, platform: "linux" }), false, state);
+  // No such process at the signal check is gone before any read.
+  assert.equal(processGone(4242, { signal: vanished("ESRCH"), read: () => assert.fail("no read"), platform: "linux" }), true);
+  // A process the test may not signal still exists: that is an error, not gone.
+  assert.throws(() => processGone(4242, { signal: vanished("EPERM"), read: () => assert.fail("no read"), platform: "linux" }), /EPERM/);
+  // Elsewhere: ps finding no such process is gone, a zombie is gone, a running process is not, and
+  // a ps that fails some other way is an error.
+  assert.equal(processGone(4242, { signal: alive, ps: () => ({ status: 1, stdout: "", stderr: "" }), platform: "darwin" }), true);
+  assert.equal(processGone(4242, { signal: alive, ps: () => ({ status: 0, stdout: "Z+\n" }), platform: "darwin" }), true);
+  assert.equal(processGone(4242, { signal: alive, ps: () => ({ status: 0, stdout: "Ss\n" }), platform: "darwin" }), false);
+  assert.throws(() => processGone(4242, { signal: alive, ps: () => ({ status: 1, stdout: "", stderr: "ps: illegal option\n" }), platform: "darwin" }), /illegal option/);
+  assert.throws(() => processGone(4242, { signal: alive, ps: () => ({ status: null, error: failure("ENOENT") }), platform: "darwin" }), /ENOENT/);
+});
+
+test("a running process, read through the real /proc or ps, is not gone", { skip: process.platform === "win32" && "reads /proc or ps" }, () => {
+  assert.equal(processGone(process.pid), false);
+});
+
 test("on POSIX a bounded run kills the probe's whole group at its bound, and does not wait out a descendant that holds its output after the leader exits", { skip: process.platform === "win32" && "process groups are POSIX" }, async () => {
   // A leader and the child it started, both in its group, both sleeping past the bound: both are killed.
   const killed = await runBounded(process.execPath, ["-e", "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: ['ignore', 'inherit', 'inherit'] }); console.log(c.pid); setTimeout(() => {}, 60000);"], { timeoutMs: 1000, graceMs: 3000 });
@@ -2216,13 +2290,17 @@ test("on POSIX a bounded run kills the probe's whole group at its bound, and doe
   assert.equal(killed.signal, "SIGKILL");
   const descendant = Number(killed.stdout.trim());
   assert.ok(descendant > 0, killed.stdout);
-  // Gone, or a zombie its new parent has not reaped yet (in a container whose init does not reap):
-  // Linux's /proc says so, and elsewhere ps's process state.
-  const zombie = () => process.platform === "linux"
-    ? /^\S+ \(.*\) Z/.test(readFileSync(`/proc/${descendant}/stat`, "utf8"))
-    : /^Z/.test((spawnSync("ps", ["-o", "stat=", "-p", String(descendant)], { encoding: "utf8" }).stdout ?? "").trim());
-  const gone = () => { try { process.kill(descendant, 0); } catch { return true; } return zombie(); };
-  assert.ok(gone(), `the leader's child ${descendant} still runs`);
+  // Gone, or a zombie its new parent has not reaped yet. The run settles when the last copy of its
+  // output closes, which a dying process does before it becomes a zombie, so the child is given 2 s
+  // to get there: far less than the minute it would sleep if the group kill had missed it.
+  // The first reading of it gone stands: a number reused after that is another process.
+  const until = performance.now() + 2000;
+  let gone = processGone(descendant);
+  while (!gone && performance.now() < until) {
+    await new Promise((done) => setTimeout(done, 10));
+    gone = processGone(descendant);
+  }
+  assert.ok(gone, `the leader's child ${descendant} still runs 2 s after the run settled`);
   // A leader that exits 0 at once while a self-bounded child holds its stdout: given up a grace after
   // the exit, not when the child ends, and the group is not signalled after the leader was reaped.
   const started = Date.now();

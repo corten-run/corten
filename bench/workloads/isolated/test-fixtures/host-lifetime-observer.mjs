@@ -30,8 +30,12 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     round, commit: "a".repeat(40) }, ...(json ? { execution: { invocation: jsonInvocation } } : {}) };
   const executable = join(temporary, "executable"), nextExecutable = join(temporary, "next-executable"), held = new Set();
   const deferred = browser || catalog || json === "prepare" || json === "check-only-no-build";
-  const executableFor = (path) => f.nextExecutable || path === `/proc/${f.nextPid}/exe` ? nextExecutable : executable;
-  if (deferred) { fs.writeFileSync(executable, "original executable"); fs.writeFileSync(nextExecutable, "next executable"); }
+  const inline = json === "timing";
+  const thirdExecutable = join(temporary, "third-executable");
+  const executableFor = (path) => f.thirdExecutable ? thirdExecutable
+    : f.nextExecutable || path === `/proc/${f.nextPid}/exe` ? nextExecutable : executable;
+  if (deferred || inline) { fs.writeFileSync(executable, "original executable"); fs.writeFileSync(nextExecutable, "next executable"); }
+  if (inline) fs.writeFileSync(thirdExecutable, "third executable");
   const invocation = json === "fixture" ? { executable: "node", argv: ["bench/catalog/fixtures.mjs", "c21"] }
     : json ? jsonInvocation : { executable: "node", argv: ["control"] };
   const result = { terminal: true, code: 0, signal: null, cancelled: false, forced: false, success: true, error: null };
@@ -54,7 +58,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   if (!nativePids.length) {
     t.mock.method(Date, "now", () => f.clock + f.wallOffset);
     t.mock.method(performance, "now", () => f.clock);
-    t.mock.method(Atomics, "wait", (_array, _index, _value, ms) => { f.clock += ms; return "timed-out"; });
+    t.mock.method(Atomics, "wait", (_array, _index, _value, ms) => { f.clock += ms + (f.retryOversleep ?? 0); return "timed-out"; });
   }
   t.mock.method(globalThis, "setInterval", (callback) => { f.capture = callback; return 1; });
   t.mock.method(globalThis, "clearInterval", () => {});
@@ -81,6 +85,8 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
       return JSON.stringify(JSON.parse(options.input).map((entry, i) => ({ ...entry,
         sha256: createHash("sha256").update(original.readFileSync(options.stdio[i + 3])).digest("hex") })));
     });
+  }
+  if (deferred || inline) {
     t.mock.method(fs, "openSync", (path, ...args) => {
       if (f.failProofWrite && path === join(directory, "executables.json") && args[0] === "wx") throw missing("ENOSPC");
       if (!/^\/proc\/\d+\/exe$/.test(String(path))) return original.openSync(path, ...args);
@@ -90,7 +96,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     t.mock.method(fs, "closeSync", (fd) => { held.delete(fd); return original.closeSync(fd); });
     f.held = held;
     f.proof = () => JSON.parse(original.readFileSync(join(directory, "executables.json")));
-    f.mutateImage = (which) => original.writeFileSync(which === "old" ? executable : nextExecutable, "modified executable");
+    f.mutateImage = (which, text = "modified executable") => original.writeFileSync(which === "old" ? executable : nextExecutable, text);
     f.hasTerminal = () => fs.existsSync(join(directory, "terminal.json"));
   }
   // Only the synthetic Linux platform needs this Windows directory-fsync shim.
@@ -132,11 +138,18 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     if (String(path).replaceAll("\\", "/") === `/sys/fs/cgroup${f.scope}/cgroup.procs`) { f.members = [Number(value)]; return; }
     return original.writeFileSync(path, value, ...args);
   });
-  t.mock.method(fs, "lstatSync", (path, ...args) => String(path).replaceAll("\\", "/").startsWith("/sys/fs/cgroup")
-    ? { isSymbolicLink: () => false } : original.lstatSync(path, ...args));
+  t.mock.method(fs, "lstatSync", (path, ...args) => {
+    const normalized = String(path).replaceAll("\\", "/");
+    if (!normalized.startsWith("/sys/fs/cgroup")) return original.lstatSync(path, ...args);
+    const result = f.cgroupStat?.(normalized, args[0], path);
+    return result === null ? undefined : result ?? {
+      isSymbolicLink: () => false, isDirectory: () => true, dev: 1, ino: 1,
+    };
+  });
   t.mock.method(fs, "statSync", (path, ...args) => {
     if (!/^\/proc\/\d+\/exe$/.test(String(path)) || nativePids.includes(Number(String(path).split("/")[2]))) return original.statSync(path, ...args);
-    if (!deferred) return { dev: 1, ino: 1, size: 10, mtimeMs: 1, ctimeMs: 1 };
+    if (!deferred && !inline) return { dev: 1, ino: 1, size: 10, mtimeMs: 1, ctimeMs: 1 };
+    if (inline) f.override(String(path), "stat");
     const info = original.statSync(executableFor(path), ...args);
     return f.executableStat?.(path, info) ?? info;
   });

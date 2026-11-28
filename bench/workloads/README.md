@@ -8,8 +8,8 @@ or remove Corten's features to manufacture parity.
 <!-- groups:start -->
 | Group | Popular challengers | Performance-oriented challengers | Required work |
 |---|---|---|---|
-| Catalog page (`catalog-page`) | ASP.NET Core, Express, FastAPI | axum + Maud, Drogon, Gin + templ | typed-record, escaped-fields-and-links, get-filter, request-time-source, no-output-cache |
-| JSON API (`json-api`) | ASP.NET Core, FastAPI, Express, Spring Boot | axum + Maud, Drogon, Gin + templ, ASP.NET Core Native AOT (JSON only) | typed-complete-schema, numeric-json, tested-errors, fetch-parse-reserialize, no-output-cache |
+| Catalog page (`catalog-page`) | ASP.NET Core, Express, FastAPI | axum + Maud, Drogon, Gin + templ, Proa | typed-record, escaped-fields-and-links, get-filter, request-time-source, no-output-cache |
+| JSON API (`json-api`) | ASP.NET Core, FastAPI, Express, Spring Boot | axum + Maud, Drogon, Gin + templ, ASP.NET Core Native AOT (JSON only), ntex | typed-complete-schema, numeric-json, tested-errors, fetch-parse-reserialize, no-output-cache |
 | Localized marketplace (`localized-marketplace`) | Next.js (Pages Router), ASP.NET Core, Django | Topcoat, Leptos, Gin + templ, Drogon | complete-marketplace, request-time-localization, filter-sort, valid-invalid-forms, js-and-no-js, bounded-production-http/v2 |
 | Mixed production traffic (`mixed-production`) | ASP.NET Core, Spring Boot, Django, Express, FastAPI | Topcoat, Gin + templ, Drogon | localized-reads, numeric-json, listings, accepted-rejected-writes, write-readback, slow-upstream, bounded-production-http/v2 |
 | Full-stack browser experience (`fullstack-browser`) | Next.js (Pages Router), Nuxt, React Router, Rails + Hotwire, Laravel + Livewire | SvelteKit, Astro, TanStack Start, Leptos | ssr, native-navigation, filter-sort, valid-invalid-forms, js-and-no-js, desktop-mobile, readiness-actions-bytes |
@@ -18,6 +18,13 @@ or remove Corten's features to manufacture parity.
 | Recoverable live application (`recoverable-live`) | Phoenix, Rails + Hotwire, Laravel + Livewire, ASP.NET Core | Leptos, Topcoat | equal-initial-state, disconnect, gap-detection, replay-or-resnapshot, no-duplicate-effects, final-keyed-state, bounded-slow-client, cleanup |
 | Resilience and hardening (`hardening`) | ASP.NET Core, Spring Boot, Next.js (Pages Router), Django, Express | Gin + templ, Drogon, Topcoat | equal-legitimate-traffic, declared-deployment-budget, bounded-client-deadline, bounded-request-limit, dependency-recovery, useful-service, recovery |
 <!-- groups:end -->
+
+Proa is selected only for its compiled catalog page, and ntex only for its native
+JSON API. Neither selection implies a measured advantage or admits a tuned deployment.
+Do not add a localized Proa or browser port on the strength of an HTTP throughput
+ranking. The [optional JSON comparison](../json-api/README.md#optional-transport-comparison)
+reuses the fixture-backed app to measure body compression and connection reuse. It
+is not a tenth group or a new phase multiplied across the official matrix.
 
 ## Implementation status
 

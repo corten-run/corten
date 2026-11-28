@@ -1,10 +1,11 @@
 .grid { display: grid; gap: 12px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; min-height: 36px; }
 .toolbar input[type="search"] { width: 17.5rem; max-width: 100%; }
-/* The filter is a GET form: its Filter button is for a page without scripts, where typing filters
-   nothing until it is sent; with them the rows filter as the seller types. */
+/* The filter is a GET form, and its Filter button the visible way to send it: the server filters
+   the page. It stays drawn with scripts on, since a browser that allows them may still not run
+   this grid's (a module that did not load); where the grid's script runs, the rows filter as the
+   seller types and the button keeps the page. */
 .filter { display: flex; gap: 8px; max-width: 100%; }
-@media (scripting: enabled) { .no-script { display: none; } }
 /* The bulk bar is a card, not the accent the kit's ghost and outline buttons turn on hover. */
 .toolbar [role="group"] { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
 .toolbar > output { color: var(--destructive); font-weight: 500; }

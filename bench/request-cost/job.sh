@@ -6,15 +6,18 @@
 #   In a checkout of a pull request's merge: builds the probe against the merge base of the
 #   merge's parents and then against its second parent, the head, both in <directory> (outside
 #   the checkout and any git repository, as build.sh requires). Leaves each build's commit at
-#   <directory>/<base|head>/commit and what the build printed at build.log beside it. A build
-#   that fails, or does not end in 420 seconds, leaves why at <directory>/<side>/unbuilt and
-#   fails nothing here. Exit status 1, with nothing built, when there is no merge base.
+#   <directory>/<base|head>/commit and what the build printed at build.log beside it, and for a
+#   build that built, its probe's SHA-256 at sha256, which compare.mjs reads to tell one binary
+#   from two. An unsuccessful build leaves its error or timeout's status and timing at
+#   <directory>/<side>/unbuilt (see compare.mjs's STOPPED) and fails nothing here.
+#   Exit status 1, with nothing built, when there is no merge base.
 # bash job.sh read <directory> <cpu>
 #   Each build's answers, then each run `compare.mjs --readings` names, on base and then on
 #   head, the probe held to <cpu>. A build with `unbuilt` is not run at all, whatever it left.
-#   A run ends in 120 seconds or is stopped (and killed 10 seconds later if it has not ended),
-#   and none starts once STOP_AT has come, which must be set: seconds since the epoch. A run that
-#   fails or is stopped gave no figure: what it printed is removed, why is added to
+#   Just before launching timeout, sample the clock and skip the run if it is at or past
+#   STOP_AT (seconds since the epoch, required); otherwise the limit is the time left at that
+#   sample, at most 120 seconds, with 10 seconds' grace before KILL. A run that fails or is
+#   stopped gave no figure: what it printed is removed, why is added to
 #   <file>.refused, a line an attempt, and it is taken again, once. No run is taken again for
 #   its figure.
 set -eo pipefail
@@ -22,6 +25,20 @@ set -eo pipefail
 usage() { echo "usage: bash job.sh build <directory> | bash job.sh read <directory> <cpu>" >&2; exit 2; }
 kit=$(cd "$(dirname "$0")" && pwd -P)
 builds=${2:-}
+
+run_timed() {
+  local limit=$1 start end status=0
+  shift
+  timeout_report=
+  read -r start _ < /proc/uptime
+  timeout -k 10 "$limit" "$@" || status=$?
+  if [ "$status" = 124 ] || [ "$status" = 137 ]; then
+    read -r end _ < /proc/uptime
+    # Uptime gives hundredths of a second. Neither the status nor the elapsed time proves a deadline fired.
+    timeout_report="status $status after $(((10#${end/./} - 10#${start/./}) / 100)) s (limit $limit s)"
+  fi
+  return "$status"
+}
 
 case "${1:-}" in
 build)
@@ -41,14 +58,20 @@ build)
     echo "$commit" > "$builds/$side/commit"
     began=$SECONDS
     status=0
-    timeout -k 10 420 sh "$kit/build.sh" "$commit" "$builds" > "$builds/$side/build.log" 2>&1 || status=$?
+    # Only the stand-in tests shorten the hosted job's 420-second build limit.
+    run_timed "${REQUEST_COST_BUILD_LIMIT:-420}" sh "$kit/build.sh" "$commit" "$builds" > "$builds/$side/build.log" 2>&1 || status=$?
     cat "$builds/$side/build.log"
-    if [ "$status" = 124 ]; then
-      echo "the build did not end in 420 s" > "$builds/$side/unbuilt"
+    if [ -n "$timeout_report" ]; then
+      echo "the build ended with $timeout_report" > "$builds/$side/unbuilt"
     elif [ "$status" != 0 ]; then
       echo "the build failed, $(tail -n 1 "$builds/$side/build.log")" > "$builds/$side/unbuilt"
     fi
-    if [ -e "$builds/$side/unbuilt" ]; then echo "::warning::the probe did not build against $side $commit"; fi
+    if [ -e "$builds/$side/unbuilt" ]; then
+      echo "::warning::the probe did not build against $side $commit"
+    elif [ -f "$builds/bin/$commit" ]; then
+      sha256sum < "$builds/bin/$commit" | cut -c 1-64 > "$builds/$side/sha256"
+      echo "the probe built against $side: sha256 $(cat "$builds/$side/sha256")"
+    fi
     echo "build $side $((SECONDS - began))" >> "$builds/seconds"
   done
   ;;
@@ -66,10 +89,14 @@ read)
   }
   within() {
     local left=$((STOP_AT - $(date +%s))) status=0
+    reading_end=
     if [ "$left" -le 0 ]; then echo "not attempted, the job's time for readings was spent" >&2; return 1; fi
     if [ "$left" -gt 120 ]; then left=120; fi
-    timeout -k 10 "$left" "$@" || status=$?
-    if [ "$status" = 124 ]; then echo "Error: did not end in $left s" >&2; fi
+    run_timed "$left" "$@" || status=$?
+    if [ -n "$timeout_report" ]; then
+      reading_end="Error: the reading ended with $timeout_report"
+      echo "$reading_end" >&2
+    fi
     return "$status"
   }
   began=$SECONDS
@@ -98,8 +125,8 @@ read)
           break
         fi
         cat "$out.said"
-        # Why, a line an attempt: the kit's error, else the last thing said, else the status alone.
-        why=$(grep -m 1 '^Error: ' "$out.said" || tail -n 1 "$out.said")
+        # A line an attempt: what timeout reported, else the kit's error, last line or status.
+        why=${reading_end:-$(grep -m 1 '^Error: ' "$out.said" || tail -n 1 "$out.said")}
         case "$why" in *[![:space:]]*) ;; *) why="exit status $status, with nothing said" ;; esac
         echo "$why" >> "$out.refused"
         rm -f "$out" "$out.said"

@@ -1130,12 +1130,24 @@ away. A page that draws a key with `SubmitKey::field` is also never shared, what
 says: a cache that gave one visitor's page to the next would have the second visitor's submit
 taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
 without the CDN caching headers a middleware wrote (`CDN-Cache-Control`, `Surrogate-Control` and
-the others [caching](app.md#caching) lists), so the browser asks again before reusing it, the
+the others [caching](app.md#caching) lists) and without a tag it was given, so the browser asks again before reusing it, the
 app does not keep it, and `corten dev` logs it; one that says `no-store` goes out `private,
 no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer it is drawn
-for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text carries no mark: a
+for: a page, a patch, the layout's reads, and a `Rendered` placed in one; one made with
+`req.rendered` marks its request's answer wherever it is placed. Text carries no mark: a
 live stream's fragment
-(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A live
+(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A `Public`
+route's handler (and an answer type of the app's own, a page or a JSON answer, whose response
+the handler may replace with a `Public` one it converted, `NoStore` or a tuple of headers around
+any of them, staged or `unstaged`) is watched for a key
+it draws as text too (in JSON, in text, in a file, or placed in a page with `raw`), and that
+answer is sent as a keyed page is. The watch sees only what the handler draws on its own thread
+before it returns: not a key a bare render (`to_html()`) draws in a task it spawned or on
+another thread, nor one drawn as a body is sent (`Media::stream`, a relay's body, a live
+stream's fragments), nor one in a feed's rows or snapshot, where a per-visitor key never goes
+([caching](app.md#caching)). A render that
+marks the answer itself (a page's, a patch's, one made with `req.rendered`) does not rely on the
+watch and is seen on whatever thread it runs. A live
 stream whose fragments may draw a key is never `Public`, says `Cache-Control: private` itself and
 carries no CDN caching header ([live data](live-data.md)). Under `corten dev`, a stream is logged
 when a fragment it gives draws a key and its settled answer has no bare `private` in

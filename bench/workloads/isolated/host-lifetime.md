@@ -31,6 +31,13 @@ preparation census, a failed closing procfs stat is `executable-recheck-renamed`
 otherwise it retains the `executable-recheck` operation and the existing
 process-read rules.
 
+An inline (unpinned) executable digest mismatch still reports
+`executable-recheck` and refuses the census. Its optional
+`executableRecheckReason` names the first differing lookup field class, in
+order: `device-or-inode`, `link` (legacy path only), or `metadata` (size/mtime/ctime).
+The label itself neither proves an exec nor admits a retry. Legacy receipts need
+not have it.
+
 If a catalog interval fails while reading the command's process census, its
 failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
 time from the last admitted sample timestamp to entry into the interval callback.
@@ -111,6 +118,16 @@ inspect must start before 75 ms too. Missing or contradictory population evidenc
 a census containing another process but not the entry PID, and an empty retry
 after a failed census all leave a gap.
 
+If the first census attempt's opening directory lookup reports `ENOENT`
+for the container's exact cgroup after the opening PID and membership
+reads, the same exact-ID check can confirm its stopped generation. A miss
+on a closing lookup or after retrying a failed census cannot confirm the
+stop. A second directory lookup must show the
+scope is still absent before the existing 75 ms bound. Its ancestor
+directories must still match the opening device and inode on both sides
+of the lookup. A missing ancestor or nested cgroup, a failed lookup, or
+a scope that still exists leaves the original gap.
+
 The closing Docker inspect can itself prove the same stopped transition after
 the kernel checks. The collector then discards the incomplete kernel census and
 its new executable pins, recording only the stopped row. There is no additional
@@ -168,8 +185,7 @@ executable remains unreadable exhausts the budget and blocks proof. Permission,
 I/O, non-process read failures and PID/start-tick changes still fail immediately.
 
 A child of a catalog command or the native JSON API preparation command can
-replace its image via exec between the two executable reads. JSON API fixture
-generation and timing still use their existing observer. A different device/inode
+replace its image via exec between the two executable reads. A different device/inode
 at the closing read alone is not enough to retry. The immediately preceding
 admitted sample must bind the same PID,
 start ticks and cgroup to the opening executable, or bind its parent as
@@ -191,6 +207,29 @@ same child on the expected new image, still naming that parent at both reads.
 This uses the parent's already-admitted descriptor and digest; the failed
 census adds no accounting or process records. Matching an unrelated process's
 image is not sufficient.
+
+The exact native JSON API timing invocation keeps inline digests, not pinned
+artifacts. Each executable bookend opens the live procfs image, binds its bytes
+and nano-resolution file identity to that descriptor, and checks that the procfs
+path still matches. The opening descriptor remains open through the closing
+bookend. An incoherent lookup cannot populate the admitted digest cache.
+Only an interval with a changed inode **and** digest, unchanged process name
+between those bookends, and an immediately preceding admitted image or parent
+can try the same single fresh census. Both candidate images are hashed from their
+own descriptors, and the fresh census independently opens and hashes the exact
+successor and any parent anchor. When the retry deadline expires, no new
+descriptor read starts; an in-flight read cannot qualify a late sample. Both
+process and directory membership are read afresh. No digest or accounting row
+from the rejected census is published. The
+temporary descriptors close before the sample is written. Fixture generation
+and other unpinned invocations keep their existing observer.
+
+Replay still checks the ordinary inline digest records and sample membership,
+continuity and accounting. It can read different accepted digests for the same
+PID and start ticks across samples; it does not reconstruct the failed census
+or certify a transition between samples. This repair does not introduce a new
+receipt, change qualification, or detect an image change invisible to the
+bookends.
 
 Unseen old images, same-inode metadata changes and unproven successors remain
 blocked. This is sampled image replacement, not a trace of exec syscalls or
@@ -369,6 +408,12 @@ The delegated Linux tests use real child PIDs and cgroups. Fault-injection cases
 both a real shell exec at the catalog closing read and a chmod of the same
 running inode, without substituting procfs stat results. The former requires
 both image digests in replay; the latter must not seal the mutated descriptor.
+The exact JSON API timing binding (without launching the benchmark) also tests
+a same-name exec between unpinned bookends and an unchanged child. The exec
+must verify through one fresh census, with both inline digests replayable and
+no executable-proof sidecar; the unchanged child takes no retry. Synthetic
+controls refuse missing or wrong images, changed process or parent identity,
+changed cgroup, split opens, ambiguous changes and exhausted deadlines.
 Other cases exercise
 repeated interval errors, deadline exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure
