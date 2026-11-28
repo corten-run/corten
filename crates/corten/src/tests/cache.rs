@@ -1012,7 +1012,7 @@ async fn a_boxed_answer_of_the_app_s_own_is_watched_for_a_submit_key() {
     // `dyn IntoResponse` is a type, as it was before the watch.
     let erased: Box<dyn IntoResponse + Send> = Box::new("erased");
     drop(erased);
-    assert!(<Box<dyn Boxed> as IntoResponse>::may_share().0, "a box of the app's own may be `Public`");
+    assert!(<Box<dyn Boxed> as IntoResponse>::__corten_may_share().0, "a box of the app's own may be `Public`");
 
     let minute = Duration::from_secs(60);
     let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
@@ -1182,7 +1182,7 @@ fn json_body_types_keep_the_submit_key_watch_through_wrappers() {
     use crate::response::IntoResponse;
 
     fn watched<T: IntoResponse>() {
-        assert!(T::may_share().0, "{} must be watched", std::any::type_name::<T>());
+        assert!(T::__corten_may_share().0, "{} must be watched", std::any::type_name::<T>());
     }
 
     type Body = Json<bool>;
@@ -1200,7 +1200,7 @@ fn json_body_types_keep_the_submit_key_watch_through_wrappers() {
     watched::<(Headers, Body)>();
     watched::<(StatusCode, Headers, NoStore<Body>)>();
     watched::<crate::upgrade::SwitchOr<Body>>();
-    assert!(!<(StatusCode, Headers, &'static str)>::may_share().0);
+    assert!(!<(StatusCode, Headers, &'static str)>::__corten_may_share().0);
 }
 
 #[cfg(feature = "json")]

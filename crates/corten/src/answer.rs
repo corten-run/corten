@@ -736,7 +736,7 @@ pub(crate) mod sealed {
     /// say yes.
     pub struct Whole(pub(crate) bool);
 
-    /// What `IntoResponse::may_share` says. Only Corten can name it, so only Corten's own types
+    /// What `IntoResponse::__corten_may_share` says. Only Corten can name it, so only Corten's own types
     /// say no.
     pub struct MayShare(pub(crate) bool);
 
@@ -907,7 +907,7 @@ impl<For, Kind> IntoResponse for HtmlResponse<For, Kind> {
     // Its `DerefMut` lets a handler put any response in its place, a `Public` one it converted
     // among them (`*page = Public::new(..).into_response()`): watched as that one is.
     #[inline]
-    fn may_share() -> sealed::MayShare {
+    fn __corten_may_share() -> sealed::MayShare {
         sealed::MayShare(true)
     }
 
@@ -1260,7 +1260,7 @@ impl IntoResponse for JsonResponse {
     // Its `DerefMut` lets a handler put any response in its place, a `Public` one it converted
     // among them (`*answer = Public::new(..).into_response()`): watched as that one is.
     #[inline]
-    fn may_share() -> sealed::MayShare {
+    fn __corten_may_share() -> sealed::MayShare {
         sealed::MayShare(true)
     }
 
@@ -1401,8 +1401,8 @@ impl From<crate::Errors> for JsonError {
 impl IntoResponse for JsonError {
     // A refusal of the app's own is a `JsonResponse` ([`JsonError::Own`]), which may hold anything.
     #[inline]
-    fn may_share() -> sealed::MayShare {
-        <JsonResponse as IntoResponse>::may_share()
+    fn __corten_may_share() -> sealed::MayShare {
+        <JsonResponse as IntoResponse>::__corten_may_share()
     }
 
     fn into_response(self) -> Response {
@@ -1539,7 +1539,7 @@ impl Relay {
 
 impl IntoResponse for Relay {
     #[inline]
-    fn may_share() -> sealed::MayShare {
+    fn __corten_may_share() -> sealed::MayShare {
         sealed::MayShare::NO
     }
 
@@ -1833,7 +1833,7 @@ impl std::error::Error for StreamFailed {}
 
 impl IntoResponse for Media {
     #[inline]
-    fn may_share() -> sealed::MayShare {
+    fn __corten_may_share() -> sealed::MayShare {
         sealed::MayShare::NO
     }
 
@@ -1954,8 +1954,8 @@ impl<For> From<Relay> for PageOr<Relay, For> {
 impl<A: FileAnswer, For> IntoResponse for PageOr<A, For> {
     // Its page is an `HtmlResponse`, which may hold anything.
     #[inline]
-    fn may_share() -> sealed::MayShare {
-        sealed::MayShare::either(<HtmlResponse<For> as IntoResponse>::may_share(), A::may_share())
+    fn __corten_may_share() -> sealed::MayShare {
+        sealed::MayShare::either(<HtmlResponse<For> as IntoResponse>::__corten_may_share(), A::__corten_may_share())
     }
 
     fn into_response(self) -> Response {
@@ -2011,7 +2011,7 @@ pub struct LiveResponse(pub(crate) Response);
 
 impl IntoResponse for LiveResponse {
     #[inline]
-    fn may_share() -> sealed::MayShare {
+    fn __corten_may_share() -> sealed::MayShare {
         sealed::MayShare::NO
     }
 
@@ -2039,7 +2039,7 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
 #[cfg(feature = "feed")]
 impl<T> IntoResponse for corten_feed::FeedResponse<T> {
     #[inline]
-    fn may_share() -> sealed::MayShare {
+    fn __corten_may_share() -> sealed::MayShare {
         sealed::MayShare::NO
     }
 
@@ -2403,7 +2403,7 @@ const fn shared_header(name: &str) -> bool {
 
 impl<A: Shareable> IntoResponse for Public<A> {
     #[inline]
-    fn may_share() -> sealed::MayShare {
+    fn __corten_may_share() -> sealed::MayShare {
         sealed::MayShare(true)
     }
 
@@ -2457,8 +2457,8 @@ impl<A: IntoResponse> IntoResponse for NoStore<A> {
     // What it holds may be `Public` (on an unstaged route, or on one branch of a type of the
     // app's own), with a CDN's caching header `no-store` does not replace: watched as that one is.
     #[inline]
-    fn may_share() -> sealed::MayShare {
-        A::may_share()
+    fn __corten_may_share() -> sealed::MayShare {
+        A::__corten_may_share()
     }
 
     fn into_response(self) -> Response {
@@ -2818,7 +2818,7 @@ fn mark<O: Answer>(res: &mut Response) {
 
 pin_project_lite::pin_project! {
     /// A route's answer as its handler makes it, [`mark`]ed. One that may be `Public`
-    /// (`IntoResponse::may_share`: a `Public` answer, a page or a JSON answer, whose response
+    /// (`IntoResponse::__corten_may_share`: a `Public` answer, a page or a JSON answer, whose response
     /// the app may supply or replace, or a type of the app's own, which may hold one; known from
     /// the answer's type, so a route of text, a status, a file, a relay, a live stream or a feed
     /// does none of this) is
@@ -2854,7 +2854,7 @@ impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O> {
     #[inline]
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
         let this = self.project();
-        let watched = <O as IntoResponse>::may_share().0;
+        let watched = <O as IntoResponse>::__corten_may_share().0;
         let mut polled = if watched { this.watch.poll(this.made, cx) } else { this.made.poll(cx) };
         if let std::task::Poll::Ready(res) = &mut polled {
             mark::<O>(res);

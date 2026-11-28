@@ -1492,7 +1492,7 @@ pub(crate) struct Failed(pub Arc<str>);
 
 impl IntoResponse for Error {
     #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
+    fn __corten_may_share() -> crate::answer::sealed::MayShare {
         crate::answer::sealed::MayShare::NO
     }
 

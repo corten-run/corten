@@ -64,6 +64,8 @@ pub trait IntoResponse {
     /// [`crate::Relay`] say no: what caching their headers say is the app's or the upstream's, and
     /// the stages settle it as any answer's ([`crate::cache`]). Not a public API: its type is one
     /// an app cannot name, so an app's own type cannot say no, nor say what one of Corten's does.
+    /// The `__corten_` prefix leaves ordinary app method names alone. `#[doc(hidden)]` does not
+    /// remove this method from Rust's name lookup, so reusing its exact name can still conflict.
     ///
     /// A function of the type, not a constant: an associated constant would make the trait one no
     /// `dyn IntoResponse` can be made of, and `Self: Sized` leaves this out of a trait object.
@@ -76,7 +78,7 @@ pub trait IntoResponse {
     /// struct Mine;
     ///
     /// impl IntoResponse for Mine {
-    ///     fn may_share() -> bool {
+    ///     fn __corten_may_share() -> bool {
     ///         false
     ///     }
     ///
@@ -92,8 +94,8 @@ pub trait IntoResponse {
     /// struct Mine;
     ///
     /// impl IntoResponse for Mine {
-    ///     fn may_share() -> impl Sized {
-    ///         <&'static str as IntoResponse>::may_share()
+    ///     fn __corten_may_share() -> impl Sized {
+    ///         <&'static str as IntoResponse>::__corten_may_share()
     ///     }
     ///
     ///     fn into_response(self) -> Response {
@@ -108,8 +110,8 @@ pub trait IntoResponse {
     /// struct Mine;
     ///
     /// impl IntoResponse for Mine {
-    ///     fn may_share() -> corten::answer::sealed::MayShare {
-    ///         <&'static str as IntoResponse>::may_share()
+    ///     fn __corten_may_share() -> corten::answer::sealed::MayShare {
+    ///         <&'static str as IntoResponse>::__corten_may_share()
     ///     }
     ///
     ///     fn into_response(self) -> Response {
@@ -119,7 +121,7 @@ pub trait IntoResponse {
     /// ```
     #[doc(hidden)]
     #[inline]
-    fn may_share() -> MayShare
+    fn __corten_may_share() -> MayShare
     where
         Self: Sized,
     {
@@ -175,7 +177,7 @@ where
     B::Error: Into<BoxError>,
 {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -187,7 +189,7 @@ where
 
 impl IntoResponse for http::response::Parts {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -198,7 +200,7 @@ impl IntoResponse for http::response::Parts {
 
 impl IntoResponse for Body {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -210,7 +212,7 @@ impl IntoResponse for Body {
 
 impl IntoResponse for () {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -222,7 +224,7 @@ impl IntoResponse for () {
 
 impl IntoResponse for Infallible {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -233,7 +235,7 @@ impl IntoResponse for Infallible {
 
 impl IntoResponse for StatusCode {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -247,8 +249,8 @@ impl IntoResponse for StatusCode {
 
 impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
     #[inline]
-    fn may_share() -> MayShare {
-        MayShare::either(T::may_share(), E::may_share())
+    fn __corten_may_share() -> MayShare {
+        MayShare::either(T::__corten_may_share(), E::__corten_may_share())
     }
 
     #[inline]
@@ -287,7 +289,7 @@ macro_rules! bodies {
     ($content_type:expr => $($ty:ty),*) => {$(
         impl IntoResponse for $ty {
             #[inline]
-            fn may_share() -> MayShare {
+            fn __corten_may_share() -> MayShare {
                 MayShare::NO
             }
 
@@ -303,7 +305,7 @@ bodies!(OCTETS => Bytes, Vec<u8>, &'static [u8], Box<[u8]>, Cow<'static, [u8]>);
 
 impl IntoResponse for BytesMut {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -314,7 +316,7 @@ impl IntoResponse for BytesMut {
 
 impl<const N: usize> IntoResponse for [u8; N] {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -325,7 +327,7 @@ impl<const N: usize> IntoResponse for [u8; N] {
 
 impl<const N: usize> IntoResponse for &'static [u8; N] {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -336,7 +338,7 @@ impl<const N: usize> IntoResponse for &'static [u8; N] {
 
 impl IntoResponse for HeaderMap {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -349,7 +351,7 @@ impl IntoResponse for HeaderMap {
 
 impl IntoResponse for Extensions {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -368,7 +370,7 @@ where
     V::Error: std::fmt::Display,
 {
     #[inline]
-    fn may_share() -> MayShare {
+    fn __corten_may_share() -> MayShare {
         MayShare::NO
     }
 
@@ -379,8 +381,8 @@ where
 
 impl<R: IntoResponse> IntoResponse for (StatusCode, R) {
     #[inline]
-    fn may_share() -> MayShare {
-        R::may_share()
+    fn __corten_may_share() -> MayShare {
+        R::__corten_may_share()
     }
 
     #[inline]
@@ -460,9 +462,9 @@ macro_rules! tuples {
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for ($($ty,)+ R) {
             // A part's refusal answers in the body's place.
             #[inline]
-            fn may_share() -> MayShare {
-                let may = R::may_share();
-                $(let may = MayShare::either(may, <$ty::Error as IntoResponse>::may_share());)+
+            fn __corten_may_share() -> MayShare {
+                let may = R::__corten_may_share();
+                $(let may = MayShare::either(may, <$ty::Error as IntoResponse>::__corten_may_share());)+
                 may
             }
 
@@ -485,8 +487,8 @@ macro_rules! tuples {
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for (StatusCode, $($ty,)+ R) {
             #[inline]
-            fn may_share() -> MayShare {
-                <($($ty,)+ R) as IntoResponse>::may_share()
+            fn __corten_may_share() -> MayShare {
+                <($($ty,)+ R) as IntoResponse>::__corten_may_share()
             }
 
             fn into_response(self) -> Response {

@@ -3913,7 +3913,7 @@ pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &http::request::P
 
 impl crate::response::IntoResponse for ParamsRejection {
     #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
+    fn __corten_may_share() -> crate::answer::sealed::MayShare {
         crate::answer::sealed::MayShare::NO
     }
 
@@ -4678,7 +4678,7 @@ fn unshared(headers: &mut http::HeaderMap, no_store: bool) {
     }
 }
 
-/// An unstaged route's handler whose answer may be `Public` (`IntoResponse::may_share`: a
+/// An unstaged route's handler whose answer may be `Public` (`IntoResponse::__corten_may_share`: a
 /// `Public` answer, or a type of the app's own, which may hold one), watched for a form's new
 /// submit key in its polls as a staged one is
 /// (`answer::Made`). No stage settles an unstaged answer's caching, so one whose handler drew a
@@ -4865,7 +4865,7 @@ pub mod __private {
     {
         let handler = handler.into_handler();
         // Known from the answer's type, folded in a release build.
-        if <<H as crate::answer::Signature<T>>::Out as crate::response::IntoResponse>::may_share().0 {
+        if <<H as crate::answer::Signature<T>>::Out as crate::response::IntoResponse>::__corten_may_share().0 {
             UnstagedMethods(crate::router::get(super::Watched(handler)))
         } else {
             UnstagedMethods(crate::router::get(handler))

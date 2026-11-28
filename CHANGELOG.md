@@ -15,6 +15,10 @@ Pending entries are in [changelog.d/](changelog.d/).
   rows is not seen
   ([#1895 Keep a Public answer whose handler rendered a submit key out of shared caches, however it was rendered](https://github.com/corten-run/corten/pull/1895)).
 
+  If a CDN or other shared cache could have stored these responses, invalidate the affected
+  entries, including all cached variants, after patching every origin that serves them. The
+  upgrade does not remove responses that a shared cache already holds.
+
 - An answer that drew a submit key is sent with `private, no-cache` or `private, no-store`,
   even when it had a private lifetime. This includes custom `Json<T>` responses; existing
   `ToJson` implementations need no change

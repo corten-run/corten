@@ -596,7 +596,7 @@ impl<S: Send + Sync, T: Identify<S>> FromRequestParts<S> for Caller<T> {
 /// API or a data client, with `WWW-Authenticate` on a 401 and `Retry-After` on a 429.
 impl IntoResponse for Refused {
     #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
+    fn __corten_may_share() -> crate::answer::sealed::MayShare {
         crate::answer::sealed::MayShare::NO
     }
 

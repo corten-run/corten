@@ -8548,7 +8548,7 @@ rules something out.
     page's render does. It cannot tell a key placed in the answer from one drawn and dropped, so
     either makes the answer private.
     Which answers may be `Public` is known from the answer's type when the crate compiles, by a
-    hidden function of `IntoResponse` with no arguments, `may_share`, whose body a release build
+    hidden function of `IntoResponse` with no arguments, `__corten_may_share`, whose body a release build
     folds where it is read: `Public` says yes, and so do a page and a JSON answer
     (`HtmlResponse`, `JsonResponse`), whose `DerefMut` lets a handler put any response in their
     place, a `Public` one it converted among them (`*answer = Public::new(..).into_response()`:
@@ -8570,6 +8570,9 @@ rules something out.
     constant: a constant would make `dyn IntoResponse` fail to compile, and with it an app's own
     trait over `IntoResponse` that answers from a box (`self: Box<Self>`), both of which compiled
     before the watch (a doctest); such a box is a type of the app's own, so it is watched.
+    The `__corten_` prefix leaves an app trait's `may_share` unambiguous (a downstream test).
+    The hook is hidden in rustdoc, not in Rust's name lookup: an app trait using the exact
+    prefixed name can still conflict.
     A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
     app's or the upstream's, as it was. The watch wraps such a route in every build and whatever
     the store does (none kept, `corten dev`, a body route that leaves the store out, a build
@@ -8693,7 +8696,7 @@ rules something out.
     keyed one (+1.94%); `7a7ac7aa8`, whose watch marked the request's signal as well, counted 34
     more than `9c8cd07e7` for the page made for each request, 20 for the JSON made for each and
     44 for the keyed page, the signal each watched route's future held, and the other cases
-    within about 1. No `may_share` is left in the release build's symbols, so saying whether an
+    within about 1. The measured build had no `may_share` symbol, so saying whether an
     answer may be `Public` is not a call. These are instruction counts, not cycles, and the
     shared byte's `or` and read are among them only as instructions: what they cost under load on
     a quiet host is not measured here. With

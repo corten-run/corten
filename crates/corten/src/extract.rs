@@ -359,7 +359,7 @@ impl std::error::Error for BodyRejection {}
 /// ([`crate::cache::Unshared`]).
 impl crate::http::IntoResponse for BodyRejection {
     #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
+    fn __corten_may_share() -> crate::answer::sealed::MayShare {
         crate::answer::sealed::MayShare::NO
     }
 

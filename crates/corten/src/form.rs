@@ -597,7 +597,7 @@ impl std::error::Error for FormRejection {}
 /// ([`crate::cache::Unshared`]); one the handler made ([`FormRejection::new`]) is its answer.
 impl IntoResponse for FormRejection {
     #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
+    fn __corten_may_share() -> crate::answer::sealed::MayShare {
         crate::answer::sealed::MayShare::NO
     }
 
@@ -2778,7 +2778,7 @@ impl serde::Serialize for Errors {
 #[cfg(feature = "json")]
 impl crate::response::IntoResponse for Errors {
     #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
+    fn __corten_may_share() -> crate::answer::sealed::MayShare {
         crate::answer::sealed::MayShare::NO
     }
 

@@ -51,7 +51,7 @@ pub struct File(Response);
 
 impl IntoResponse for File {
     #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
+    fn __corten_may_share() -> crate::answer::sealed::MayShare {
         crate::answer::sealed::MayShare::NO
     }
 
