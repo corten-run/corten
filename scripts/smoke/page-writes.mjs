@@ -343,46 +343,128 @@ export async function pageWrites(page, browser) {
       continue;
     }
     const { own, seen } = await writtenPage(brand, undefined, "/smoke/written/again");
-    seen.fail = true;
-    // The page says the write failed in its header, as a toaster in the layout shows it.
-    await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
-    await own.click("main form button");
-    const failed = await own
-      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-      .then(
-        () => true,
-        () => false,
-      );
-    let legacyDrew = true;
-    if (legacy) {
-      seen.fail = false;
-      seen.draws = false;
-      await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-      legacyDrew = (await writtenIn(own)) && "corten-page" in seen.answered;
+    const target = new URL("/smoke/written/again", base);
+    const button = own.locator("main form button");
+    /** @type {{ url: string, method: string, mode?: string, status?: number, error?: string } | undefined} */
+    let poll;
+    let failure = null;
+    let closeError = null;
+    let shown = null;
+    let drew = false;
+    const writeChecked = Promise.withResolvers();
+    const message = (/** @type {unknown} */ error) => (error instanceof Error ? error.message : String(error)).split("\n")[0];
+    try {
+      await within(5000, "poll route setup timed out", own.route((url) => url.origin === target.origin, async (route) => {
+        const req = route.request();
+        const headers = req.headers();
+        if (headers["x-smoke-written-read"] !== "1" || poll) return route.fallback();
+        const first = (poll = { url: req.url(), method: req.method(), mode: headers.corten });
+        if (first.url !== target.href || first.method !== "GET" || first.mode !== "nav") return route.abort("failed").catch(() => {});
+        delete headers["x-smoke-written-read"];
+        try {
+          // Keep the legacy page observable until the check has read it.
+          if (!(await writeChecked.promise)) return route.abort("aborted").catch(() => {});
+          const res = await route.fetch({ headers: { ...headers, "accept-encoding": "identity" }, timeout: 5000, maxRedirects: 0 });
+          first.status = res.status();
+          const answer = res.headers();
+          if (!res.ok() || !("corten-page" in answer)) throw new Error("the poll did not answer with a page fragment");
+          delete answer["content-encoding"];
+          delete answer["content-length"];
+          // This case needs one draw. Its answer stops polling so a later draw cannot erase the
+          // witness while the smoke is waiting to see it.
+          const body = (await res.text()).replace(' data-corten-read-again="1"', "").replace(">Write</button>", ">Write (read again)</button>");
+          await route.fulfill({ status: res.status(), headers: answer, body });
+        } catch (error) {
+          first.error = message(error);
+          await route.abort("failed").catch(() => {});
+        }
+      }));
+      seen.fail = true;
+      const lost = steps(5000, "the pressed form did not report its lost write");
+      await lost.step(() => button.evaluate((el, { legacy, url }) => {
+        const pressed = /** @type {HTMLButtonElement} */ (el);
+        const form = pressed.form;
+        // If a poll already on its way replaced the pressed form, its error goes to the document.
+        const failed = (/** @type {Event} */ event) => {
+          if (location.href !== url || (event.target !== form && !(event.target === document && !form?.isConnected)) ||
+              (/** @type {CustomEvent} */ (event)).detail?.status !== 0) return;
+          document.querySelector("header")?.setAttribute("data-failed", "");
+          removeEventListener("corten:error", failed);
+        };
+        addEventListener("corten:error", failed);
+        // Tag the first read at send time, not when Playwright receives or answers it. An
+        // earlier in-flight poll cannot inherit this tag. Only its answer changes the button.
+        const fetch_ = window.fetch;
+        window.fetch = function (input, init) {
+          const headers = new Headers(init?.headers);
+          if ((init?.method ?? "GET") === "GET" && headers.has("corten") && !headers.has("purpose") &&
+              document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]") &&
+              (!legacy || document.querySelector("main p")?.textContent === "Written by the form's own page.")) {
+            window.fetch = fetch_;
+            headers.set("x-smoke-written-read", "1");
+            return fetch_.call(this, input, { ...init, headers });
+          }
+          return fetch_.call(this, input, init);
+        };
+        pressed.click();
+      }, { legacy, url: target.href }));
+      await lost.poll(() => own.evaluate(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]")));
+      if (seen.writes !== 1 || !("corten-shell" in seen.answered) || "corten-page" in seen.answered)
+        throw new Error("the failed press did not reach the server for a whole action answer");
+      if (legacy) {
+        seen.fail = false;
+        seen.draws = false;
+        const old = steps(5000, "the legacy write did not draw its fragment");
+        await old.step(() => button.evaluate((el) => /** @type {HTMLButtonElement} */ (el).click()));
+        await old.poll(() => own.evaluate(() =>
+          document.querySelector("main p")?.textContent === "Written by the form's own page." && !document.querySelector("[aria-busy]")));
+        if (!("corten-page" in seen.answered)) old.end("the legacy write did not answer with a fragment");
+      }
+      const writes = seen.asked.filter((ask) => ask.startsWith("POST "));
+      if (writes.length !== (legacy ? 2 : 1) || writes.some((ask) => ask !== "POST /smoke/written/again action")) {
+        throw new Error("the presses did not send exactly the expected action writes");
+      }
+      const read = steps(5000, "the post-write read did not draw within 5 s");
+      writeChecked.resolve(true);
+      const asked = await read.poll(async () => poll);
+      if (asked.url !== target.href || asked.method !== "GET" || asked.mode !== "nav")
+        read.end("the post-write read did not ask this URL for a navigation fragment");
+      await read.poll(async () => {
+        if (asked.error) read.end(asked.error);
+        return own.evaluate((url) => document.querySelector("main form button")?.textContent === "Write (read again)" &&
+          document.title === "Write | Watchlist" && !!document.querySelector("header[data-failed]") &&
+          /** @type {any} */ (window).__marker === 1 && location.href === url, target.href);
+      });
+      drew = true;
+      const after = seen.asked.length;
+      const leave = steps(5000, "the next page did not draw within 5 s");
+      await leave.step(() => own.locator('main a[href="/smoke/quoted"]').evaluate((el) => /** @type {HTMLAnchorElement} */ (el).click()));
+      await leave.poll(() => own.evaluate(() =>
+        location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("[aria-busy]")));
+      shown = await leave.step(() => shownOf(own));
+      if (shown.path !== "/smoke/quoted" || shown.brand !== "Watchlist, written" || !shown.same || !seen.asked.slice(after).includes("GET /smoke/quoted page"))
+        throw new Error("the next page did not read and draw the changed layout in the same document");
+    } catch (error) {
+      failure = message(error);
+    } finally {
+      // A failed check can leave a poll in the fixture's route while its context is closing.
+      try {
+        await within(5000, "failed-write route cleanup timed out", own.unrouteAll({ behavior: "ignoreErrors" }));
+      } catch (error) {
+        closeError = message(error);
+      }
+      writeChecked.resolve(false);
+      try {
+        await within(5000, "failed-write context close timed out", own.context().close());
+      } catch (error) {
+        closeError ??= message(error);
+      }
     }
-    const after = seen.asked.length;
-    // The page's next read of itself, and a moment for it to be drawn.
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
-    const again = seen.asked.slice(after).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
-    await own.waitForTimeout(500);
-    const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && location.pathname === "/smoke/written/again");
-    await own.click('main a[href="/smoke/quoted"]');
-    const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
-      );
-    const shown = await shownOf(own);
     check(
       failedName,
-      failed && legacyDrew && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ failed, legacyDrew, again, kept, arrived, asked: seen.asked, shown }),
+      failure === null && closeError === null,
+      JSON.stringify({ failure, closeError, drew, poll, asked: seen.asked, shown }),
     );
-    await own.context().close();
   }
   /** Follows the link to /smoke/quoted, and whether that page came in. @param {import("@playwright/test").Page} own */
   const toQuoted = async (own) => {
