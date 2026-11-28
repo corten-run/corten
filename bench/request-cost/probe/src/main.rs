@@ -1,6 +1,6 @@
 // The probe bench/request-cost counts.
 //
-// Usage: <bin> <port> <api|pages|public-page>
+// Usage: <bin> <port> <api|pages|public-page|screen>
 //   api, an app with an API and no pages:
 //     GET, POST /baseline11  typed query parameters in (and a number in the body), a short String out
 //     GET /unstaged11        the same answer from a route that says `unstaged`, which reads no body
@@ -9,6 +9,7 @@
 //     GET /page              a page of about 12 KB
 //     GET /text              a short str out
 //   public-page, with the answer store off: GET /page renders the same document as a Public page.
+//   screen: GET /listing as a document or, with Accept: application/json, its title and data.
 // PROBE_ALLOCATOR=jemalloc (or glibc) makes the probe refuse to start unless /proc/self/maps shows
 // that allocator.
 use corten::prelude::*;
@@ -114,6 +115,22 @@ async fn text() -> &'static str {
     "ok"
 }
 
+#[corten::routes]
+mod screens {
+    #[route("/listing", get = crate::listing, data = crate::ShownListing)]
+    pub struct Listing;
+}
+
+#[derive(ToJson)]
+pub struct ShownListing {
+    name: &'static str,
+}
+
+async fn listing(req: Req) -> HtmlResult<corten::Screen<ShownListing>> {
+    let shown = ShownListing { name: "Ashen" };
+    req.screen(&shown, html! { <Layout req={&req} title="Listing">{shown.name}</Layout> })
+}
+
 /// Refuses to start unless the allocator PROBE_ALLOCATOR names is the one in use.
 fn check_allocator() -> Result<(), Box<dyn std::error::Error>> {
     let maps = std::fs::read_to_string("/proc/self/maps").unwrap_or_default();
@@ -128,12 +145,13 @@ fn check_allocator() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: <port> <api|pages|public-page>";
+    let usage = "usage: <port> <api|pages|public-page|screen>";
     let port: u16 = args.get(1).ok_or(usage)?.parse()?;
     let app = match args.get(2).map(String::as_str) {
         Some("api") => App::new(Routes::new()).api(url::api),
         Some("pages") => App::new(pages::router()),
         Some("public-page") => App::new(public_pages::router()).kept_answers(0),
+        Some("screen") => App::new(screens::router()),
         _ => return Err(usage.into()),
     };
     check_allocator()?;

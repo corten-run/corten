@@ -29,7 +29,7 @@ import { parseArgs } from "node:util";
 import { allocatorCalls } from "./allocations.mjs";
 import { COUNTED, WARM, each, median, sent } from "./figures.mjs";
 import { Connection, counted, send, start } from "./probe.mjs";
-import { cases, named } from "./requests.mjs";
+import { cases, named, screenDocument, unexpectedScreenDocument } from "./requests.mjs";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -107,11 +107,18 @@ async function allocations() {
 
 async function answers(/** @type {string} */ directory) {
   mkdirSync(directory, { recursive: true });
+  // If a probe refuses or stops early, no old answer may stand in for a selected case.
+  for (const name of names) rmSync(join(directory, `${name}.http`), { force: true });
   for (const name of names) {
     const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
     const probe = await start(binary, configuration, { cpu, port, hosts });
     try {
       const connection = await Connection.open(port);
+      if (name === "screen-json") {
+        connection.write(screenDocument(port));
+        const wrong = unexpectedScreenDocument(await connection.answer());
+        if (wrong) throw new Error(`screen-json document control: ${wrong}`);
+      }
       writeFileSync(join(directory, `${name}.http`), await send(connection, name, 3));
       await connection.close();
     } finally {

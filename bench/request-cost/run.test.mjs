@@ -17,7 +17,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as compare from "./compare.mjs";
 import { counted } from "./probe.mjs";
-import { cases } from "./requests.mjs";
+import { cases, unexpected } from "./requests.mjs";
 
 const kit = dirname(fileURLToPath(import.meta.url));
 const linux = process.platform === "linux" && spawnSync("sh", ["-c", "true"]).status === 0;
@@ -134,6 +134,31 @@ async function running(script, args, asked = {}, { preload = true } = {}) {
     stand.remove();
   }
 }
+
+test("reusing an answers directory cannot keep selected captures after a failed screen document control", { skip }, async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "request-cost-answers-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const options = ["--answers", directory, "--cases"];
+  const first = await running("count.mjs", [...options, "screen-json,text,get"]);
+  assert.equal(first.status, 0, first.stderr);
+  const file = (/** @type {string} */ name) => join(directory, `${name}.http`);
+  for (const name of ["screen-json", "text", "get"]) assert.equal(unexpected(name, readFileSync(file(name))), null);
+  const unselected = readFileSync(file("get"));
+
+  const fixed = { STAND_IN_FIXED_JSON: "1" };
+  const retry = await running("count.mjs", [...options, "screen-json,text"], fixed);
+  assert.equal(retry.status, 1, retry.stderr);
+  assert.match(retry.stderr, /screen-json document control: expected a single Content-Type of text\/html/);
+  assert.deepEqual(["screen-json", "text"].map((name) => existsSync(file(name))), [false, false]);
+  assert.deepEqual(readFileSync(file("get")), unselected);
+  // job.sh still attempts these independent readings: their requests have the JSON Accept.
+  for (const reading of compare.readings().filter(({ expect }) => expect.case === "screen-json")) {
+    const run = await running(reading.script, reading.options, fixed);
+    assert.equal(run.status, 0, run.stderr);
+    assert.ok(compare.figure(run.stdout, reading.expect));
+  }
+  assert.equal(existsSync(file("screen-json")), false);
+});
 
 test("probe startup leaves no readiness timer after READY or an early child exit", { skip }, () => {
   const stand = standIns();

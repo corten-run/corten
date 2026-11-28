@@ -38,13 +38,17 @@ const SUBDOMAIN = "seller-desk.localhost";
 /** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
 
+// Same URL, without Accept. Used only before recording the screen's answer, never counted.
+export const screenDocument = get("/listing");
+const LISTING = /^<!DOCTYPE html><html\b[^>]*><head>.*<title>Listing<\/title>.*<\/head><body><main>Ashen<\/main><\/body><\/html>$/s;
+
 /**
  * Each case: the probe's configuration that answers it, its request for a port, and the answer
  * it must get: the body (as Latin-1 text, the whole of it or what it matches) and the
  * `Content-Encoding`, none unless given. A body sent with an encoding is the case's once decoded.
  * `hosts` is the `HOSTS` the probe is started with (`*`: it answers to any host); without it
  * the probe answers to its own, `localhost` and IP addresses.
- * @type {Record<string, { configuration: "api" | "pages" | "public-page", hosts?: "*", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }>}
+ * @type {Record<string, { configuration: "api" | "pages" | "public-page" | "screen", hosts?: "*", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd", type?: string }>}
  */
 export const cases = {
   // A staged route in an API: typed query parameters in, a short String out.
@@ -82,6 +86,7 @@ export const cases = {
   // `unstaged` to an app that names its hosts, with a name under `localhost`: the part before
   // `.localhost`, `seller-desk`, is read as a name, where `localhost` itself is matched alone.
   "unstaged-subdomain": { configuration: "api", request: hosted("/unstaged11?a=1&b=2", SUBDOMAIN), body: "3" },
+  "screen-json": { configuration: "screen", request: get("/listing", ["Accept: application/json"]), type: "application/json", body: '{"title":"Listing","data":{"name":"Ashen"}}' },
 };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */
@@ -97,17 +102,43 @@ export function named(list) {
  * @param {string} name @param {Buffer} answer @returns {string | null}
  */
 export function unexpected(name, answer) {
-  const { body, encoding } = /** @type {typeof cases[string]} */ (cases[name]);
+  return checkAnswer(name, /** @type {typeof cases[string]} */ (cases[name]), answer);
+}
+
+/** @param {Buffer} answer */
+export function unexpectedScreenDocument(answer) {
+  return checkAnswer("screen document", { type: "text/html; charset=utf-8", body: LISTING }, answer);
+}
+
+/** Each occurrence, including empty values; continuations belong to the preceding field.
+ * @param {string} head @param {string} field lowercase field name with its colon */
+function fieldValues(head, field) {
+  return head.replace(/\r\n[ \t]+/g, " ").split("\r\n")
+    .filter((line) => line.slice(0, field.length).toLowerCase() === field)
+    .map((line) => line.slice(field.length).replace(/^[ \t]+|[ \t]+$/g, ""));
+}
+
+/** @param {string} name @param {{body: string | RegExp, encoding?: string, type?: string}} expected @param {Buffer} answer */
+function checkAnswer(name, { body, encoding, type }, answer) {
   const end = answer.indexOf("\r\n\r\n");
   const head = answer.latin1Slice(0, end);
   if (!head.startsWith("HTTP/1.1 200 ")) return `not a 200: ${head.split("\r\n")[0]}`;
+  if (type !== undefined) {
+    const types = fieldValues(head, "content-type:");
+    if (types.length !== 1 || types[0] !== type) return `expected a single Content-Type of ${type}`;
+  }
   if (name === "page-public") {
     if (/^age:/im.test(head)) return "a kept public page (Age header)";
     const policy = head.split("\r\n").filter((line) => /^cache-control:/i.test(line));
     if (policy.length !== 1 || !/^cache-control:[ \t]*public, max-age=60[ \t]*$/i.test(policy[0] ?? "")) return "not the public page's Cache-Control";
   }
-  const coded = /^content-encoding:[ \t]*(\S*)[ \t]*$/im.exec(head)?.[1];
-  if (coded !== encoding) return `Content-Encoding ${coded ?? "none"}, not ${encoding ?? "none"}`;
+  if (/^content-encoding:/im.test(head)) {
+    const codings = fieldValues(head, "content-encoding:");
+    if (codings.length !== 1) return "expected a single Content-Encoding field";
+    const [coding] = codings;
+    if (!coding || /[\s,]/.test(coding)) return "expected one Content-Encoding coding";
+    if (coding !== encoding) return `Content-Encoding ${coding}, not ${encoding ?? "none"}`;
+  } else if (encoding !== undefined) return `Content-Encoding none, not ${encoding}`;
   let bytes = answer.subarray(end + 4);
   if (encoding === "zstd") {
     // Node's zlib has zstd from 22.15; the repository's .node-version is later.
