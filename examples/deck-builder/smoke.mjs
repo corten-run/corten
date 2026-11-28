@@ -455,6 +455,50 @@ const typeBadNumber = async (field) => {
   await field.pressSequentially("1e");
 };
 
+/** A refusal can leave an unsaved row on screen until the player finishes its number. */
+async function refusedZeroRow() {
+  const context = await browser.newContext();
+  let release;
+  try {
+    context.setDefaultTimeout(8_000);
+    const page = await open(context);
+    const before = await deck(page);
+    const savedVersion = await version(page);
+    const id = await page.locator("tbody tr[data-key]").evaluateAll(
+      (rows, ids) => rows.find((row) => !ids.includes(row.getAttribute("data-key")))?.getAttribute("data-key"), Object.keys(before));
+    if (!id) throw new Error("refusal control needs a card not already in the deck");
+    let posts = 0;
+    page.on("request", (r) => { if (isSave(r)) posts++; });
+    release = await holdSave(page);
+    const gravel = countField(page, "gravel-sprite");
+    const [sent] = await Promise.all([page.waitForRequest(isSave), gravel.fill("99").then(() => gravel.press("Tab"))]);
+    await row(page, id).getByRole("button", { name: "Add", exact: true }).click();
+    const field = countField(page, id);
+    await field.press("ControlOrMeta+a");
+    await field.pressSequentially("-");
+    const answer = page.waitForResponse((r) => r.request() === sent);
+    release();
+    const refusal = await answer;
+    await settled(page, "Not saved:");
+    check("the refusal preserves the focused incomplete count on the unsaved row", refusal.status() === 422 &&
+      await field.evaluate((el) => el.validity.badInput && el === document.activeElement));
+
+    await field.fill("0");
+    await page.locator(saveButton).click();
+    const visibleDeck = await deck(page);
+    check("correcting the refused row to zero removes it without a write or history entry", sameDeck(visibleDeck, before) &&
+      posts === 1 && await version(page) === savedVersion && await page.locator('input[name=draft]').inputValue() === "1" &&
+      await page.getByRole("button", { name: "Undo", exact: true }).isDisabled() &&
+      await page.getByRole("button", { name: "Redo", exact: true }).isDisabled());
+    await page.reload();
+    check("reload shows the same deck after the zero correction", sameDeck(await deck(page), visibleDeck) &&
+      await version(page) === savedVersion && posts === 1);
+  } finally {
+    release?.();
+    await context.close();
+  }
+}
+
 /** An Add cannot turn an incomplete number into a valid draft by redrawing it first. */
 async function addCountValidity(selected) {
   const context = await browser.newContext();
@@ -1310,6 +1354,7 @@ try {
     await successiveAutosaves();
     await successiveAutosaves(true);
   } else if (process.argv.includes("--validity-only")) {
+    await refusedZeroRow();
     for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();
@@ -1325,6 +1370,7 @@ try {
     for (const selected of [false, true]) await nativeAddHandoff(selected);
     await nativeAddHandoff(false, true);
     for (const code of [409, 422]) await nativeRefusal(code);
+    await refusedZeroRow();
     for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();

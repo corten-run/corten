@@ -34,6 +34,8 @@ form. Editing another count leaves the incomplete number alone; once corrected, 
 go in one save. Each send takes the counts actually in the form, even if a previous save was
 still on its way when the player corrected a focused field. Add and Add selected also leave an
 incomplete number and any selection alone.
+If a refusal leaves an unsaved card's count mid-edit, finishing it at zero removes the row
+without an autosave or undo entry.
 An Add can save without touching the count fields. If autosave starts on that same form and reuses
 the native save's key, even with a count too large to parse, the server draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module

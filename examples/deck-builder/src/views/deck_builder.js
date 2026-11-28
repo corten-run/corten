@@ -261,9 +261,12 @@ function takeCounts(s, parts, extra) {
   }
   s.blocked = false;
   /** @type {Deck} */ const live = new Map();
-  for (const line of rows(parts.lines, DeckLine)) {
+  const lines = rows(parts.lines, DeckLine);
+  for (const line of lines) {
     const n = line.count;
     if (n > 0) live.set(line.id, n);
+    // A refusal kept this unfinished field. At zero it no longer needs a row or a deck change.
+    else if (!s.drawn.has(line.id)) lines.remove(line);
   }
   const next = extra ? applied(live, extra) : live;
   const did = diff(s.drawn, next);
