@@ -84,6 +84,8 @@ pub enum Outcome {
     Refused(u64, Refusal),
     /// A plain form reused a key that already saved a different deck.
     ChangedSubmit(u64),
+    /// Autosave reused a key that saved before the builder owned the form.
+    NativeSubmit,
     /// It was built on an older version: another tab saved first, or the server restarted since.
     /// `unsure`: a save made after that version has had its key forgotten, so if this key was
     /// sent before (its answer lost), that save may have been this one.
@@ -142,8 +144,8 @@ impl Builder {
 
     /// Saves `deck` (the page's send `draft`) if the saved deck is still at `version` of
     /// `generation` and the rules allow it. On replay, the original draft identifies which
-    /// scripted edit saved. A plain form has no draft to reconcile, so it only gets the original
-    /// success if it sends the same deck.
+    /// scripted edit saved, but a native receipt does not name any scripted edit. A plain form
+    /// only gets the original success if it sends the same deck.
     pub fn save(&self, generation: &str, version: u64, deck: Deck, key: &SubmitKey, draft: u64) -> Outcome {
         let mut saves = self.lock();
         let at = Instant::now();
@@ -155,6 +157,9 @@ impl Builder {
             }
         }
         if let Some(applied) = saves.by_key.get(key) {
+            if draft != 0 && applied.draft == 0 {
+                return Outcome::NativeSubmit;
+            }
             if draft == 0
                 && !applied.ordinary.as_ref().is_some_and(|original| {
                     deck.len() == original.len()
@@ -319,8 +324,9 @@ fn deck_page(req: &Req, builder: &Builder, view: &DeckQuery, answer: &Answer, st
     req.page_with_status(status, html! { <views::Layout req={req} title="Deck builder">{screen}</views::Layout> })
 }
 
-/// Scripted saves get a note. An ordinary form submit redirects after a save or draws the
-/// refusal, even if the runtime sent it because the builder module did not load.
+/// Scripted saves get a note, unless the key already belongs to a native save. That refusal
+/// draws the saved deck with a fresh key instead of asking the scripted queue to reconcile it.
+/// An ordinary form submit redirects after a save or draws the refusal.
 async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckInput>) -> HtmlResult {
     let outcome = match builder.posted(&input) {
         Ok(deck) => builder.save(&input.generation, input.version, deck, &input.submit, input.draft),
@@ -338,9 +344,11 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
             },
             StatusCode::CONFLICT,
         ),
+        Outcome::NativeSubmit => (Answer::NativeSubmit, StatusCode::CONFLICT),
         Outcome::Stale { version, unsure } => (Answer::Stale { version: *version, unsure: *unsure }, StatusCode::CONFLICT),
     };
     if input.draft != 0
+        && !matches!(outcome, Outcome::NativeSubmit)
         && let Some(action) = req.action()
     {
         return action.patch_with_status(status, SaveNote { answer: &answer });
@@ -480,6 +488,42 @@ mod tests {
         assert!(changed.text().contains("Not saved: This form already saved a different edit."));
         assert!(changed.text().contains(r#"name="version" value="2""#));
         assert_eq!((builder.saved().0, builder.saved().1.get("salt-oracle")), (2, Some(&1)));
+    }
+
+    #[tokio::test]
+    async fn autosave_cannot_acknowledge_a_native_save_as_its_own_draft() {
+        let f = DeckInput::FIELDS;
+        for submitter in ["Save", "Add", "Add selected"] {
+            let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+            let app = app(builder.clone()).test();
+            let key = submit_key();
+            let mut saved = starter();
+            saved.push(("pearl-diver", 1));
+            let native = match submitter {
+                "Save" => saving(&app, 0, &saved, &key),
+                "Add" => saving(&app, 0, &starter(), &key).field(f.add, "pearl-diver"),
+                _ => saving(&app, 0, &starter(), &key).field(f.add_picked, "1").field(f.pick, "pearl-diver"),
+            };
+            assert_eq!(native.await.status(), StatusCode::SEE_OTHER, "{submitter}");
+
+            let mut added_again = starter();
+            added_again.push(("pearl-diver", 2));
+            // A draft built before the feed arrived and one built after it both hold the old key.
+            for (version, deck) in [(0, &saved), (1, &added_again)] {
+                let res = saving(&app, version, deck, &key)
+                    .field(f.draft, 1)
+                    .mode(Mode::Action)
+                    .header(corten::http::header::HeaderName::from_static("prefer"), "corten-draws=whole")
+                    .await;
+                assert_eq!(res.status(), StatusCode::CONFLICT, "{submitter}, version {version}");
+                assert!(res.headers().contains_key("corten-shell"), "{submitter}");
+                assert!(!res.headers().contains_key("corten-patch") && !res.headers().contains_key("corten-page"), "{submitter}");
+                assert!(res.text().contains("<!DOCTYPE html>"), "{submitter}");
+                assert!(res.text().contains("This form already saved before autosave started."), "{submitter}");
+                assert!(res.text().contains(r#"name="version" value="1""#), "{submitter}");
+                assert_eq!((builder.saved().0, builder.saved().1.get("pearl-diver")), (1, Some(&1)), "{submitter}");
+            }
+        }
     }
 
     #[test]

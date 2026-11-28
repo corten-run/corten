@@ -135,6 +135,8 @@ const names = new Intl.Collator(document.documentElement.lang || undefined);
 /**
  * Starts on a clean form. A dirty form may already have been posted natively; its values
  * and original key stay with the browser until a native submission replaces the document.
+ * A native Add can leave even a clean form with a spent key. Keep that key so the server
+ * can refuse the handoff rather than acknowledge a scripted draft it never applied.
  * @param {Parts} parts @param {HTMLInputElement[]} copies
  * @param {FeedUrl<Slot>} feed @param {AbortSignal} signal
  */

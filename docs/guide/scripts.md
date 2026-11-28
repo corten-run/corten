@@ -213,8 +213,11 @@ If a native Save is still waiting after the server committed it, a different edi
 same form key gets a conflict, not a success for the first edit. If the module loads after the
 player has typed, a difference from `defaultValue` keeps that document native. Starting autosave
 would not know whether the native form had already saved. The count fields and focus stay put,
-and the next native Save uses the original key and version before opening a fresh page. Filter
-applies the current query even if its input handler was not there when the player typed it.
+and the next native Save uses the original key and version before opening a fresh page. Add and
+Add selected can save without changing any count input. If autosave starts on such a form and
+submits a key that already saved natively, the server draws a conflict page with the saved deck
+and a fresh key. It does not give the queue an acknowledgement for a draft it never saved.
+Filter applies the current query even if its input handler was not there when the player typed it.
 
 ### A value both sides compute
 

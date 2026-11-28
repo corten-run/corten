@@ -18,6 +18,9 @@ pub enum Answer {
         version: u64,
         message: String,
     },
+    /// A native key cannot acknowledge a scripted draft. Draw this on the replacement page
+    /// without notifying the autosave queue.
+    NativeSubmit,
     /// `unsure`: a save the server no longer remembers may have been this one (`Outcome::Stale`).
     Stale {
         version: u64,
@@ -40,7 +43,7 @@ impl Answer {
     /// What the script compares.
     fn outcome(&self) -> SaveOutcome {
         match self {
-            Answer::None => SaveOutcome::Loaded,
+            Answer::None | Answer::NativeSubmit => SaveOutcome::Loaded,
             Answer::Saved { .. } => SaveOutcome::Saved,
             Answer::Refused { .. } => SaveOutcome::Refused,
             Answer::Stale { .. } => SaveOutcome::Stale,
@@ -49,7 +52,7 @@ impl Answer {
 
     fn version(&self) -> u64 {
         match self {
-            Answer::None => 0,
+            Answer::None | Answer::NativeSubmit => 0,
             Answer::Saved { version, .. } | Answer::Refused { version, .. } | Answer::Stale { version, .. } => *version,
         }
     }
@@ -92,6 +95,9 @@ pub fn SaveNote<'a>(answer: &'a Answer) -> impl Patch {
                 Answer::None => {}
                 Answer::Saved { .. } => { "Saved." }
                 Answer::Refused { message, .. } => { "Not saved: "{message} }
+                Answer::NativeSubmit => {
+                    "Not saved: This form already saved before autosave started. Review the saved deck below before making another change."
+                }
                 Answer::Stale { .. } => { "Not saved: this deck was changed in another tab." }
             }
         </span>

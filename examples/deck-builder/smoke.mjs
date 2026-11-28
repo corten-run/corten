@@ -230,6 +230,36 @@ async function blockedBuilder(engine, name) {
   }
 }
 
+/** Let a native POST commit without navigating the document whose module is still loading. */
+async function withholdNativeRedirect(page, button) {
+  const context = page.context();
+  const form = page.locator("form[method=post]");
+  const [target] = await Promise.all([
+    page.waitForEvent("popup"),
+    form.evaluate((form) => {
+      if (!window.open("about:blank", "withheldSave")) throw new Error("Could not open the answer window");
+      form.target = "withheldSave";
+    }),
+  ]);
+  try {
+    let sent;
+    await context.route(deckUrl, async (route) => {
+      const actual = await route.fetch({ maxRedirects: 0, timeout: 5_000 });
+      sent = { status: actual.status(), request: route.request() };
+      await route.fulfill({ status: 204, body: "" });
+    }, { times: 1 });
+    await Promise.all([
+      context.waitForEvent("response", { predicate: (r) => isSave(r.request()) && r.status() === 204, timeout: 8_000 }),
+      button.evaluate((el) => el.click()),
+    ]);
+    if (!sent) throw new Error("No native save was captured");
+    return sent;
+  } finally {
+    await form.evaluate((form) => form.removeAttribute("target"));
+    await target.close();
+  }
+}
+
 /** Use the real module, but release it only after the player has edited the plain HTML. */
 async function delayedBuilder(scenario) {
   const context = await browser.newContext();
@@ -277,32 +307,10 @@ async function delayedBuilder(scenario) {
     const focused = incomplete || removing ? await count.elementHandle() : null;
     const beforeStart = await focused?.evaluate((el) => ({ value: el.value, focused: document.activeElement === el }));
     if (scenario === "lost answer") {
-      // Submit to a disposable window so the pending module request in this
-      // document survives. The server commits; only its redirect is withheld.
-      const form = page.locator("form[method=post]");
-      const [target] = await Promise.all([
-        page.waitForEvent("popup"),
-        form.evaluate((form) => {
-          if (!window.open("about:blank", "withheldSave")) throw new Error("Could not open the answer window");
-          form.target = "withheldSave";
-        }),
-      ]);
-      try {
-        await context.route(deckUrl, async (route) => {
-          const actual = await route.fetch({ maxRedirects: 0 });
-          check("the withheld native answer was a real 303 for count 2",
-            actual.status() === 303 && route.request().isNavigationRequest() && postedGravel(route.request()) === "2" &&
-            saveFields(route.request()).get("submit") === key);
-          await route.fulfill({ status: 204, body: "" });
-        }, { times: 1 });
-        await Promise.all([
-          context.waitForEvent("response", { predicate: (r) => isSave(r.request()) && r.status() === 204, timeout: 8_000 }),
-          page.locator(saveButton).evaluate((el) => el.click()),
-        ]);
-      } finally {
-        await form.evaluate((form) => form.removeAttribute("target"));
-        await target.close();
-      }
+      const sent = await withholdNativeRedirect(page, page.locator(saveButton));
+      check("the withheld native answer was a real 303 for count 2",
+        sent.status === 303 && sent.request.isNavigationRequest() && postedGravel(sent.request) === "2" &&
+        saveFields(sent.request).get("submit") === key);
       const saved = await context.newPage();
       try {
         await saved.goto(home, { waitUntil: "domcontentloaded" });
@@ -350,6 +358,86 @@ async function delayedBuilder(scenario) {
     await page.waitForSelector("form[data-patch]");
   } finally {
     resume.resolve(undefined);
+    await context.close();
+  }
+}
+
+/** Add can save before startup while all count controls still match the first draw. */
+async function nativeAddHandoff(selected) {
+  const name = selected ? "Add selected" : "Add";
+  const context = await browser.newContext();
+  const resumeModule = Promise.withResolvers();
+  const resumeFeed = Promise.withResolvers();
+  const snapshotUrl = new URL("feed/deck", home).href;
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await page.route(builderModule, async (route) => {
+      await resumeModule.promise;
+      await route.continue();
+    }, { times: 1 });
+    await page.route(snapshotUrl, async (route) => {
+      await resumeFeed.promise;
+      await route.continue().catch(() => {});
+    }, { times: 1 });
+    await Promise.all([
+      page.waitForRequest((request) => builderModule(new URL(request.url()))),
+      page.goto(home, { waitUntil: "commit" }),
+    ]);
+    const key = await page.locator("input[name=submit]").inputValue();
+    const previous = Number(await version(page));
+    const id = await page.locator("tbody tr[data-key]").evaluateAll((rows) => rows.find((row) => {
+      const [inDeck, owned] = row.querySelectorAll("td:nth-child(6) span");
+      return inDeck?.textContent === "0" && Number(owned?.textContent) >= 2;
+    })?.getAttribute("data-key"));
+    if (!id) throw new Error("No unplayed card with two owned copies");
+    const add = row(page, id).getByRole("button", { name: "Add", exact: true });
+    const pick = row(page, id).getByRole("checkbox");
+    const button = selected ? page.getByRole("button", { name, exact: true }) : add;
+    if (selected) await pick.check();
+    const sent = await withholdNativeRedirect(page, button);
+    const fields = saveFields(sent.request);
+    check(`${name}: native POST committed while the count controls stayed pristine`,
+      sent.status === 303 && sent.request.isNavigationRequest() && fields.get("submit") === key && fields.get("draft") === "0" &&
+      (selected ? fields.has("add_picked") && fields.getAll("pick").join() === id : fields.get("add") === id) &&
+      (await deck(page))[id] === undefined && await page.locator('input[name=count]').evaluateAll((inputs) =>
+        inputs.every((input) => input.value === input.defaultValue)));
+
+    const started = Promise.all([page.waitForRequest(snapshotUrl), page.waitForSelector("form[data-patch]")]);
+    resumeModule.resolve(undefined);
+    await started;
+    if (selected) {
+      await pick.uncheck();
+      await pick.check();
+    }
+    const [reply] = await Promise.all([
+      page.waitForResponse((r) => isSave(r.request())),
+      button.evaluate((el) => el.click()),
+    ]);
+    const retry = saveFields(reply.request());
+    resumeFeed.resolve(undefined);
+    const note = page.locator("#save-note").filter({ hasText: "This form already saved before autosave started." });
+    const keep = page.getByRole("button", { name: "Keep both changes" });
+    await note.or(keep).waitFor();
+    const nextKey = await page.locator("input[name=submit]").inputValue();
+    const headers = reply.headers();
+    const preserved = reply.status() === 409 && "corten-shell" in headers && !("corten-patch" in headers) && !("corten-page" in headers) &&
+      !reply.request().isNavigationRequest() && retry.get("draft") === "1" && retry.get("submit") === key &&
+      retry.get("version") === String(previous) && await drawn(note) && !(await keep.isVisible()) &&
+      (await deck(page))[id] === 1 && Number(await version(page)) === previous + 1 && nextKey !== key;
+    check(`${name}: autosave cannot acknowledge or merge the native write; the new form shows one copy`, preserved);
+    if (!preserved) return;
+
+    // An intentional new edit on the fresh form still uses the normal scripted queue.
+    await page.waitForSelector("form[data-patch]");
+    const [fresh] = await Promise.all([page.waitForResponse((r) => isSave(r.request())), add.evaluate((el) => el.click())]);
+    await settled(page);
+    check(`${name}: the fresh clean form saves a new edit by patch`,
+      fresh.status() === 200 && "corten-patch" in fresh.headers() && saveFields(fresh.request()).get("submit") === nextKey &&
+      (await deck(page))[id] === 2 && Number(await version(page)) === previous + 2);
+  } finally {
+    resumeModule.resolve(undefined);
+    resumeFeed.resolve(undefined);
     await context.close();
   }
 }
@@ -795,6 +883,7 @@ async function smoke() {
 try {
   if (!process.argv.includes("--handoff-only")) await smoke();
   for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
+  for (const selected of [false, true]) await nativeAddHandoff(selected);
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those
   // answers.

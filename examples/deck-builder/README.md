@@ -26,10 +26,12 @@ form and links the server answers.
 Filter and Save stay visible with scripting enabled. Until the builder starts, the browser
 submits the forms natively: successful writes redirect to the saved deck, and a refusal draws
 the page with its reason. If a first Save already committed, resending its key with different
-counts shows a conflict and asks the player to re-enter that edit on the saved deck. With the
-module running, Filter keeps the page. If a count was already edited when the module started,
-that document keeps its fields, focus, and native Save. A native submission opens a fresh document,
-which can start the autosave queue without guessing whether an earlier submission saved.
+counts shows a conflict and asks the player to re-enter that edit on the saved deck. An Add
+can save without touching the count fields. If autosave starts on that same form and reuses
+the native save's key, the server refuses the write and draws the saved deck with a fresh key
+instead of offering to merge the edit again. If a count was already edited when the module
+started, that document keeps its fields, focus, and native Save. With the module running,
+Filter keeps the page.
 
 ## Run it
 
