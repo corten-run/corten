@@ -99,7 +99,8 @@ export async function uploads(page, live, errors, signsIn) {
     const answer = await draw.step(() => posts[0].response());
     const errorPage = await draw.poll(() => page.evaluate(() => document.title === "Something went wrong | Watchlist" && document.querySelector("main h1")?.textContent === "Something went wrong"));
     const types = posts.map((r) => r.headers()["content-type"] ?? "");
-    check("a multipart form is posted as multipart/form-data", types.length === 1 && types[0].startsWith("multipart/form-data"), types.join());
+    const action = posts.length === 1 && !posts[0].isNavigationRequest() && posts[0].headers().corten === "action";
+    check("a multipart form is posted as multipart/form-data", action && types[0].startsWith("multipart/form-data"), `action=${action}, ${types.join()}`);
     check("a request the server rejects shows the app's error page, in its layout", answer?.status() === 415 && errorPage, "HTTP " + answer?.status());
   } finally {
     page.off("request", onRequest);
@@ -682,6 +683,7 @@ export async function uploads(page, live, errors, signsIn) {
   }
   {
     const noScript = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext({ javaScriptEnabled: false });
+    let failed = false;
     try {
       await noScript.addCookies(await page.context().cookies());
       const plainAccount = await noScript.newPage();
@@ -741,8 +743,16 @@ export async function uploads(page, live, errors, signsIn) {
         new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && (await plainAccount.textContent("#avatar-result")) === "Saved card.png as your picture.",
         `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${await plainAccount.textContent("#avatar-result")}`,
       );
+    } catch (error) {
+      failed = true;
+      throw error;
     } finally {
-      await within(30_000, "native account form: context did not close", noScript.close());
+      try {
+        await within(30_000, "native account form: context did not close", noScript.close());
+      } catch (error) {
+        if (!failed) throw error;
+        console.error("native account form cleanup:", error);
+      }
     }
   }
   errors.splice(failedOnPurpose, errors.length, ...errors.slice(failedOnPurpose).filter((e) => !/ERR_FAILED|ERR_ABORTED|NS_BINDING_ABORTED|cancelled/i.test(e)));
