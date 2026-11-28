@@ -1,0 +1,1 @@
+- A staged failure or refusal made for a caller now carries the caller mark consistently when relayed between Corten apps in process. [#2141 Private, no-store and failure answers cost 2% to 22% more instructions since #1890 settled them through the full cache stages](https://github.com/corten-run/corten/issues/2141)

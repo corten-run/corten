@@ -1610,7 +1610,9 @@ is a tool's answer from an MCP endpoint whose `Tools::auth` found its caller (wi
 answer carries that with it: another app
 of Corten's whose staged middleware asks it for an answer inline and relays it (as it is, or
 changed in place, its cookie taken off included) sends it the same way, though that app's own
-request read no caller, while an answer that middleware makes in its place, or a relayed answer
+request read no caller. When the stages settle a request that read a caller, the answer carries
+that mark even if Corten already marked it unshareable as a failure or refusal. An answer the
+relaying middleware makes in its place, or a relayed answer
 nothing made personal, keeps what it writes. An answer relayed over HTTP carries only its
 headers. A `no-store` on it goes out
 `private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private` answer. A

@@ -390,7 +390,7 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
     // An answer marked as no handler's own ([`Unshared`]): never shared, whatever it says and
     // whatever status it goes out with. The usual answer has no extensions, so this is a null check.
     if res.extensions().get::<Unshared>().is_some() {
-        settle_unshared(res, drew_key);
+        settle_unshared(res, drew_key, seen.caller);
         return;
     }
     // An answer that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
@@ -730,7 +730,11 @@ impl Marks {
 /// One that drew a submit key ([`Unrepeatable`], an error page with a form) loses a tag it was
 /// given too ([`drop_keyed_reuse`]).
 #[cold]
-fn settle_unshared(res: &mut Response, drew_key: bool) {
+fn settle_unshared(res: &mut Response, drew_key: bool, caller: bool) {
+    // Match `Applied::ready` for a bare unshared answer: still carry the caller mark.
+    if caller && res.extensions().get::<Personal>().is_none() {
+        res.extensions_mut().insert(Personal);
+    }
     let kept_out = Typed::is_no_store(res);
     let drew_key = drew_key || res.extensions().get::<Unrepeatable>().is_some();
     let headers = res.headers_mut();
@@ -747,7 +751,7 @@ fn settle_unshared(res: &mut Response, drew_key: bool) {
 /// an [`Unshared`] one: an app that relays it inline settles it the same way.
 pub(crate) fn settle_refused(res: &mut Response) {
     res.extensions_mut().insert(Unshared);
-    settle_unshared(res, false);
+    settle_unshared(res, false, false);
 }
 
 /// The empty answer sent in place of one whose exact-size body failed as it was read after the
