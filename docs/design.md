@@ -13129,7 +13129,10 @@ rules something out.
     or the platform gains a call that aborts a navigation on its way without beginning another,
     when a replace a page's listener holds could be ended rather than waited out.
 
-    Last checked: 2026-11-27, the runtime's default-zlib sizes at `e3b11c27b`, and a source retry
+    Last checked: 2026-11-27, the runtime's default-zlib sizes at `0bbc20a49` and a destination
+    press made during the abort of a source write, in Linux Playwright 1.65.1's Chromium, Firefox
+    and WebKit (the old write's patch draws over the destination at `e3b11c27b`);
+    2026-11-27, a source retry
     scheduled before commit, a source write sent after the draw, a destination press from an
     earlier commit listener, and nav-current with the commit event stopped, in Linux Playwright
     1.65.1's Chromium, Firefox and WebKit (each fails at `4465e4303`, where the draw's own new write
