@@ -670,6 +670,23 @@ async fn a_route_that_says_data_answers_its_data_in_its_module_and_mounted_by_ha
     assert_eq!(read.text(), r#"{"title":"Listing","data":{"name":"Borrowed"}}"#);
 }
 
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_page_serves_json_for_a_mixed_case_first_media_type_with_or_without_the_store() {
+    for app in [App::new(url_screen::router()), App::new(url_screen::router()).kept_answers(0)] {
+        let client = app.test();
+        for accept in ["Application/JSON", "application/JSON", "APPLICATION/JSON; q=1, text/html"] {
+            let answer = client.get(&url_screen::Listing).header(http::header::ACCEPT, accept).await;
+            assert_eq!(answer.headers()[http::header::CONTENT_TYPE], "application/json", "{accept}");
+            assert_eq!(answer.text(), r#"{"title":"Listing","data":{"name":"Ashen"}}"#, "{accept}");
+        }
+        for accept in ["Application/JSONx", "text/html, APPLICATION/JSON"] {
+            let answer = client.get(&url_screen::Listing).header(http::header::ACCEPT, accept).await;
+            assert!(answer.headers()[http::header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"), "{accept}");
+        }
+    }
+}
+
 /// Browsers keep a full load's `Refresh` after the runtime navigates away, then load it again.
 #[cfg(debug_assertions)]
 #[tokio::test]
