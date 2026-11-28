@@ -95,7 +95,7 @@ export async function pageWrites(page, browser) {
         delete headers["content-encoding"];
         delete headers["content-length"];
         const text = await res.text();
-        // A navigation's <main> is passed on as it is: it has no layout to change.
+        // A navigation's <main> has no layout to change; only the failed-write cases mark its draw.
         const body = mode === "nav" ? (seen.fragment ? await seen.fragment(text, req, res) : text)
           : write || seen.written ? edit(text, writes, write ? headers : undefined) : before(text);
         seen.written ||= write;
@@ -423,7 +423,7 @@ export async function pageWrites(page, browser) {
         if (!response?.ok() || await response.finished()) throw new Error("the browser did not receive the delayed pre-press poll");
       });
       await read.poll(() => own.evaluate((url) =>
-        location.href === url && document.title === "Write | Watchlist" && !!document.querySelector("header[data-failed]") &&
+        location.href === url && /** @type {any} */ (window).__marker === 1 && document.title === "Write | Watchlist" && !!document.querySelector("header[data-failed]") &&
         document.querySelector("main form button")?.textContent === "Write (read again)", target));
       const writes = seen.asked.filter((ask) => ask.startsWith("POST "));
       if (writes.length !== (legacy ? 2 : 1) || writes.some((ask) => ask !== "POST /smoke/written/again action"))
@@ -431,7 +431,7 @@ export async function pageWrites(page, browser) {
       const after = seen.asked.length;
       const leave = steps(5000, "the next page did not draw the changed layout");
       await leave.step(() => own.locator('main a[href="/smoke/quoted"]').evaluate((el) => /** @type {HTMLAnchorElement} */ (el).click()));
-      await leave.poll(() => own.evaluate(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form, main[aria-busy]") &&
+      await leave.poll(() => own.evaluate(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form, [aria-busy]") &&
         document.querySelector("header span")?.textContent === "Watchlist, written" && /** @type {any} */ (window).__marker === 1));
       if (!seen.asked.slice(after).includes("GET /smoke/quoted page")) throw new Error("the next page was not read whole");
     } catch (error) {
