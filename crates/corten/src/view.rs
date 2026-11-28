@@ -1877,6 +1877,11 @@ impl Rendered {
     pub fn into_string(self) -> String {
         self.html
     }
+
+    /// Whether its render drew a form's new submit key.
+    pub(crate) fn drew_key(&self) -> bool {
+        self.drew_key
+    }
 }
 
 impl Render for Rendered {

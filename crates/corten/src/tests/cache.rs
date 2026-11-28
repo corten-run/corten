@@ -649,8 +649,9 @@ const CDN_OTHERS: [&str; 3] = ["cache-status", "surrogate-key", "cache-tag"];
 
 /// A CDN reads its own caching header before `Cache-Control`, so a page that draws a submit key
 /// goes out with none of those Corten names, whoever wrote one (here staged middleware), and also
-/// when its `Cache-Control` already keeps it private or out of every cache. Other headers a CDN
-/// reads stay, and a page with no key keeps what the middleware wrote.
+/// when its `Cache-Control` already keeps it private or out of every cache; a private lifetime
+/// its handler gave it goes too, so the browser asks again. Other headers a CDN reads stay, and a
+/// page with no key keeps what the middleware wrote.
 #[tokio::test]
 async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     assert_eq!(crate::cache::CDN_CACHING, CDN_OVERRIDES, "the list the guide names");
@@ -694,7 +695,7 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     for (uri, cache) in [
         ("/keyed", "private, no-cache"),
         ("/keyed-default", "private, no-cache"),
-        ("/keyed-private", "private, max-age=60"),
+        ("/keyed-private", "private, no-cache"),
         ("/keyed-no-store", "private, no-store"),
     ] {
         let headers = get(uri).await;
@@ -713,6 +714,975 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     }
     for other in CDN_OTHERS {
         assert_eq!(headers[other], "x", "{other}");
+    }
+}
+
+/// A `Public` answer whose handler drew a form's new submit key is the browser's alone however
+/// the handler rendered it: to a string in JSON or text, through `req.rendered` with a wait
+/// after, or as markup placed in a page with `raw`, where the page's own render draws none. Each
+/// goes out `private, no-cache` without the CDN caching headers a middleware wrote, as a page
+/// whose render drew the key does, whatever the app's store does (the default, none kept, under
+/// `corten dev`), so no shared cache gives one visitor's key to the next. A `Public` answer with
+/// no key keeps its lifetime and the middleware's headers.
+#[tokio::test]
+async fn a_public_answer_whose_handler_drew_a_submit_key_is_the_browser_s_alone_however_rendered() {
+    use crate::route::get as typed;
+    struct CdnHeaders;
+
+    impl crate::Middleware for CdnHeaders {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    // Each body of a size the app keeps, so the key is what keeps it out of the store too.
+    let filler = || "keyed ".repeat(200);
+    let routes = || {
+        let routes = Table::new()
+            .route("/text", typed(move || async move { Public::new(minute, format!("{}{}", field().to_html(), filler())) }).0)
+            .route(
+                "/placed",
+                typed(move |req: Req| async move {
+                    let form = html! { <form method="post">{field()}</form> }.to_html();
+                    let main = html! {
+                        <div>
+                            {crate::view::raw(form)}
+                            <p>{filler()}</p>
+                        </div>
+                    };
+                    Public::new(minute, req.test_page_for("Placed", main))
+                })
+                .0,
+            )
+            // A file and a relay whose bytes the handler made before it returned.
+            .route(
+                "/media",
+                typed(move || async move {
+                    Public::new(minute, crate::Media::new("text/html", format!("{}{}", field().to_html(), filler())))
+                })
+                .0,
+            )
+            .route(
+                "/relay",
+                typed(move || async move {
+                    let body = Body::from(format!("{}{}", field().to_html(), filler()));
+                    Public::new(minute, crate::Relay::new(StatusCode::OK, HeaderMap::new(), body))
+                })
+                .0,
+            )
+            .route("/plain-text", typed(move || async move { Public::new(minute, filler()) }).0)
+            .route(
+                "/plain-page",
+                typed(
+                    move |req: Req| async move { Public::new(minute, req.test_page_for("Plain", html! { <p>{filler()}</p> })) },
+                )
+                .0,
+            );
+        #[cfg(feature = "json")]
+        let routes = routes
+            .route(
+                "/json",
+                typed(move || async move { Public::new(minute, Ok::<_, JsonError>(Json((field().to_html(), filler())))) }).0,
+            )
+            .route(
+                "/waited",
+                typed(move |req: Req| async move {
+                    let field = req.rendered(field()).into_string();
+                    tokio::task::yield_now().await;
+                    Public::new(minute, Ok::<_, JsonError>(Json((field, filler()))))
+                })
+                .0,
+            )
+            .route("/plain-json", typed(move || async move { Public::new(minute, Ok::<_, JsonError>(Json(filler()))) }).0);
+        Routes::from(routes)
+    };
+    let (keyed, plain): (&[&str], &[&str]) = if cfg!(feature = "json") {
+        (&["/text", "/placed", "/media", "/relay", "/json", "/waited"], &["/plain-text", "/plain-page", "/plain-json"])
+    } else {
+        (&["/text", "/placed", "/media", "/relay"], &["/plain-text", "/plain-page"])
+    };
+    let apps = [
+        ("the default store", App::new(routes()).middleware(CdnHeaders).router()),
+        ("none kept", App::new(routes()).kept_answers(0).middleware(CdnHeaders).router()),
+        ("corten dev", App::new(routes()).dev(true).middleware(CdnHeaders).router()),
+    ];
+    for (app, router) in &apps {
+        for path in keyed {
+            let (status, headers, body) = fetch(router, "GET", path, &[]).await;
+            let (_, again, other) = fetch(router, "GET", path, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{app}: {path}");
+            for headers in [&headers, &again] {
+                assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {path}: {headers:?}");
+                for cdn in CDN_OVERRIDES {
+                    assert!(!headers.contains_key(cdn), "{app}: {path}: {headers:?}");
+                }
+            }
+            assert!(
+                String::from_utf8_lossy(&body).contains("data-submit value=") && body != other,
+                "{app}: {path}: a key for each"
+            );
+        }
+        for path in plain {
+            for _ in 0..2 {
+                let (status, headers, _) = fetch(router, "GET", path, &[]).await;
+                assert_eq!(status, StatusCode::OK, "{app}: {path}");
+                assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}: {path}");
+                for cdn in CDN_OVERRIDES {
+                    assert_eq!(headers[cdn], "max-age=60", "{app}: {path}: the middleware's {cdn}");
+                }
+            }
+        }
+    }
+}
+
+/// A `Public` JSON answer whose handler rendered a form's new submit key with `req.rendered` on
+/// another thread (a blocking task) marks only the request's signal: the watch around the handler
+/// polls nothing that drew it. The app's store reads that mark before it keeps the answer, so the
+/// first answer is not kept to be given to the next visitor: both go out `private, no-cache`, as
+/// the handler made them (no `Age`), each with its own key. Under `corten dev` the log says so
+/// from the same mark (`Verdict::DrewKey`), not that a release build would keep it.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_public_answer_with_a_key_rendered_on_another_thread_is_not_kept() {
+    use crate::route::get as typed;
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    // Of a size the app keeps, so the key is what keeps it out of the store.
+    let filler = || "keyed ".repeat(200);
+    let routes = || {
+        Routes::from(
+            Table::new().route(
+                "/blocking",
+                typed(move |req: Req| async move {
+                    let field = tokio::task::spawn_blocking(move || req.rendered(field()).into_string()).await.unwrap();
+                    Public::new(minute, Ok::<_, JsonError>(Json((field, filler()))))
+                })
+                .0,
+            ),
+        )
+    };
+    let router = App::new(routes()).router();
+    let (status, first, body) = fetch(&router, "GET", "/blocking", &[]).await;
+    let (_, again, other) = fetch(&router, "GET", "/blocking", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    for headers in [&first, &again] {
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{headers:?}");
+        assert!(!headers.contains_key(header::AGE), "a kept answer: {headers:?}");
+    }
+    assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "a key for each");
+
+    // Under `corten dev`, which keeps nothing, the verdict is what tells: the answer's head alone
+    // is the same whether or not dev reads the signal.
+    #[cfg(feature = "log")]
+    {
+        let lines = Lines(std::sync::Arc::default());
+        let _logging = log_to(&lines);
+        let dev = App::new(routes()).dev(true).router();
+        let (status, headers, _) = fetch(&dev, "GET", "/blocking", &[]).await;
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{headers:?}");
+        assert!(
+            text.contains("WARN")
+                && text.contains(
+                    "corten: /blocking is Public, but a release build does not keep its answer: it draws a form's new submit key"
+                ),
+            "{text}"
+        );
+        assert!(!text.contains("a release build would keep its answer"), "{text}");
+    }
+}
+
+/// An answer type of the app's own that is `Public` on one branch and the visitor's on the other,
+/// as an app may write one (`Answer` and `IntoResponse` are open), says nothing of which it is, so
+/// its handler is watched as a `Public` one's is: a branch that drew a form's new submit key goes
+/// out `private, no-cache` without the CDN caching headers a middleware wrote, whichever branch it
+/// was, and a `Public` branch with no key keeps its lifetime and those headers.
+#[tokio::test]
+async fn an_answer_of_the_app_s_own_that_holds_a_public_one_is_watched_for_a_submit_key() {
+    use crate::answer::{AnyInputs, Format, NotAFeed};
+    use crate::route::get as typed;
+
+    enum Mixed {
+        Mine(String),
+        Shared(Public<String>),
+    }
+
+    impl crate::response::IntoResponse for Mixed {
+        fn into_response(self) -> crate::response::Response {
+            match self {
+                Mixed::Mine(mine) => mine.into_response(),
+                Mixed::Shared(shared) => shared.into_response(),
+            }
+        }
+    }
+
+    impl crate::Answer for Mixed {
+        const FORMAT: Format = Format::Html;
+        type Inputs = AnyInputs;
+        type Rows = NotAFeed;
+        type Kind = AnyAnswer;
+    }
+
+    struct CdnHeaders;
+
+    impl crate::Middleware for CdnHeaders {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/shared-keyed", typed(move || async move { Mixed::Shared(Public::new(minute, field())) }).0)
+                .route("/mine-keyed", typed(move || async move { Mixed::Mine(field()) }).0)
+                .route("/shared-plain", typed(move || async move { Mixed::Shared(Public::new(minute, "plain".to_string())) }).0),
+        )
+    };
+    for (app, router) in [
+        ("the default store", App::new(routes()).middleware(CdnHeaders).router()),
+        ("corten dev", App::new(routes()).dev(true).middleware(CdnHeaders).router()),
+    ] {
+        for path in ["/shared-keyed", "/mine-keyed"] {
+            let (status, headers, body) = fetch(&router, "GET", path, &[]).await;
+            let (_, _, other) = fetch(&router, "GET", path, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{app}: {path}");
+            assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {path}: {headers:?}");
+            for cdn in CDN_OVERRIDES {
+                assert!(!headers.contains_key(cdn), "{app}: {path}: {headers:?}");
+            }
+            assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{app}: {path}");
+        }
+        let (status, headers, _) = fetch(&router, "GET", "/shared-plain", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}");
+        for cdn in CDN_OVERRIDES {
+            assert_eq!(headers[cdn], "max-age=60", "{app}: the middleware's {cdn}");
+        }
+    }
+}
+
+/// An answer erased behind a box, as a trait of the app's own over `IntoResponse` (whose being
+/// one a `dyn IntoResponse` needs too), is an answer type of the app's own: its handler is
+/// watched, so a box that holds a `Public` answer whose handler drew a form's new submit key goes
+/// out `private, no-cache`, and one that drew none keeps its lifetime.
+#[tokio::test]
+async fn a_boxed_answer_of_the_app_s_own_is_watched_for_a_submit_key() {
+    use crate::answer::{AnyInputs, Format, NotAFeed};
+    use crate::response::IntoResponse;
+    use crate::route::get as typed;
+
+    trait Boxed: IntoResponse + Send {
+        fn respond(self: Box<Self>) -> crate::response::Response;
+    }
+
+    impl<T: IntoResponse + Send> Boxed for T {
+        fn respond(self: Box<Self>) -> crate::response::Response {
+            (*self).into_response()
+        }
+    }
+
+    impl IntoResponse for Box<dyn Boxed> {
+        fn into_response(self) -> crate::response::Response {
+            self.respond()
+        }
+    }
+
+    impl crate::Answer for Box<dyn Boxed> {
+        const FORMAT: Format = Format::Html;
+        type Inputs = AnyInputs;
+        type Rows = NotAFeed;
+        type Kind = AnyAnswer;
+    }
+
+    // `dyn IntoResponse` is a type, as it was before the watch.
+    let erased: Box<dyn IntoResponse + Send> = Box::new("erased");
+    drop(erased);
+    assert!(<Box<dyn Boxed> as IntoResponse>::may_share().0, "a box of the app's own may be `Public`");
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let boxed = |answer: Public<String>| -> Box<dyn Boxed> { Box::new(answer) };
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/keyed", typed(move || async move { boxed(Public::new(minute, field())) }).0)
+                .route("/plain", typed(move || async move { boxed(Public::new(minute, "plain".to_string())) }).0),
+        )
+    };
+    for (app, router) in [
+        ("the default store", App::new(routes()).router()),
+        ("none kept", App::new(routes()).kept_answers(0).router()),
+        ("corten dev", App::new(routes()).dev(true).router()),
+    ] {
+        let (status, headers, body) = fetch(&router, "GET", "/keyed", &[]).await;
+        let (_, _, other) = fetch(&router, "GET", "/keyed", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {headers:?}");
+        assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{app}");
+        let (status, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}");
+    }
+}
+
+/// A `Public` answer converted to a response and put in the place of a page's or a JSON
+/// answer's through its `DerefMut` (`*answer = Public::new(..).into_response()`), in an
+/// `App::api` route, a page route and a page route's file slot (`PageOr`), and in a JSON
+/// refusal of the app's own that holds one (`JsonError::Own`): those answer types say nothing of
+/// what their handler put in them, so the handler is watched as a `Public` one's is. One whose
+/// handler rendered a form's new submit key to a string goes out `private, no-cache` without the
+/// CDN caching headers a middleware wrote, whatever the app keeps; one with no key keeps its
+/// lifetime and those headers.
+#[tokio::test]
+async fn a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key() {
+    use crate::response::IntoResponse;
+    use crate::route::get as typed;
+
+    struct CdnHeaders;
+
+    impl crate::Middleware for CdnHeaders {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    fn shared(keyed: bool) -> crate::response::Response {
+        let key = if keyed { crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html() } else { String::new() };
+        Public::new(Duration::from_secs(60), format!("{key}{}", "kept ".repeat(200))).into_response()
+    }
+    async fn replaced_page(req: Req, keyed: bool) -> HtmlResult {
+        let mut page = req.test_page("Replaced", html! { <p>"mine"</p> })?;
+        *page = shared(keyed);
+        Ok(page)
+    }
+    async fn replaced_file(req: Req) -> crate::Result<crate::PageOr<crate::Media>> {
+        let mut page = req.test_page("Replaced", html! { <p>"mine"</p> })?;
+        *page = shared(true);
+        Ok(crate::PageOr::Page(page))
+    }
+
+    let routes = || {
+        let routes = Table::new()
+            .route("/keyed-page", typed(|req: Req| replaced_page(req, true)).0)
+            .route("/keyed-file", typed(replaced_file).0)
+            .route("/plain-page", typed(|req: Req| replaced_page(req, false)).0);
+        Routes::from(routes)
+    };
+    #[cfg(feature = "json")]
+    let app = |app: App| app.api(replaced_api::api);
+    #[cfg(not(feature = "json"))]
+    let app = |app: App| app;
+    let (keyed, plain): (&[&str], &[&str]) = if cfg!(feature = "json") {
+        (&["/keyed-page", "/keyed-file", "/v2/keyed", "/v2/refused"], &["/plain-page", "/v2/plain"])
+    } else {
+        (&["/keyed-page", "/keyed-file"], &["/plain-page"])
+    };
+    let mut wrong = Vec::new();
+    for (label, router) in [
+        ("the default store", app(App::new(routes())).middleware(CdnHeaders).router()),
+        ("none kept", app(App::new(routes())).kept_answers(0).middleware(CdnHeaders).router()),
+        ("corten dev", app(App::new(routes())).dev(true).middleware(CdnHeaders).router()),
+    ] {
+        for path in keyed {
+            let (status, headers, body) = fetch(&router, "GET", path, &[]).await;
+            let (_, again, other) = fetch(&router, "GET", path, &[]).await;
+            let expected = if *path == "/v2/refused" { StatusCode::CONFLICT } else { StatusCode::OK };
+            assert_eq!(status, expected, "{label}: {path}");
+            assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{label}: {path}");
+            for headers in [&headers, &again] {
+                let cdn = CDN_OVERRIDES.iter().filter(|cdn| headers.contains_key(**cdn)).count();
+                if headers[header::CACHE_CONTROL] != "private, no-cache" || cdn > 0 {
+                    wrong.push(format!("{label}: {path}: {:?} with {cdn} CDN headers", headers[header::CACHE_CONTROL]));
+                }
+            }
+        }
+        for path in plain {
+            for _ in 0..2 {
+                let (status, headers, _) = fetch(&router, "GET", path, &[]).await;
+                assert_eq!(status, StatusCode::OK, "{label}: {path}");
+                assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{label}: {path}");
+                for cdn in CDN_OVERRIDES {
+                    assert_eq!(headers[cdn], "max-age=60", "{label}: {path}: the middleware's {cdn}");
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "sent where a shared cache keeps it:\n{}", wrong.join("\n"));
+}
+
+/// An API whose handlers put a `Public` answer in the place of their own
+/// (`a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key`).
+#[cfg(feature = "json")]
+#[crate::routes(api = ReplacedRoot)]
+mod replaced_api {
+    #[route("/v2")]
+    pub struct ReplacedRoot;
+
+    #[route("/v2/keyed", get = replaced_keyed)]
+    pub struct Keyed;
+
+    #[route("/v2/refused", get = replaced_refused)]
+    pub struct Refused;
+
+    #[route("/v2/plain", get = replaced_plain)]
+    pub struct Plain;
+}
+
+/// A JSON answer whose response is a `Public` one the handler converted, with a form's new submit
+/// key rendered into it when `keyed`.
+#[cfg(feature = "json")]
+fn replaced_json(keyed: bool) -> crate::JsonResponse {
+    use crate::response::IntoResponse;
+    let key = if keyed { crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html() } else { String::new() };
+    let mut answer: crate::JsonResponse = Json(0u32).into();
+    *answer = Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json((key, "kept ".repeat(200))))).into_response();
+    answer
+}
+
+#[cfg(feature = "json")]
+async fn replaced_keyed() -> Result<crate::JsonResponse, JsonError> {
+    Ok(replaced_json(true))
+}
+
+/// A refusal that holds such a response, `409`, on a route whose success (`Json<T>`) is never
+/// `Public`: only the refusal's `JsonError` says its handler is watched.
+#[cfg(feature = "json")]
+async fn replaced_refused() -> crate::JsonResult<u32> {
+    let mut refusal = replaced_json(true);
+    *refusal.status_mut() = StatusCode::CONFLICT;
+    Err(JsonError::from(refusal))
+}
+
+#[cfg(feature = "json")]
+async fn replaced_plain() -> Result<crate::JsonResponse, JsonError> {
+    Ok(replaced_json(false))
+}
+
+/// An answer that drew a form's new submit key is asked about again before the browser shows it,
+/// whatever lifetime a middleware gave it: a `private, max-age=60` goes out `private, no-cache`
+/// (a `private, no-store` stays), without the CDN caching headers the middleware wrote. So does
+/// one whose key a render made with `req.rendered` drew, placed in an answer no watch is around
+/// (text, `Json<T>`): that render marks the request's answer as a page's render does. An answer
+/// with no key keeps the middleware's lifetime and headers.
+#[tokio::test]
+async fn an_answer_that_drew_a_submit_key_is_asked_about_again_whatever_lifetime_a_middleware_gave_it() {
+    use crate::route::get as typed;
+    struct Lifetime(&'static str);
+
+    impl crate::Middleware for Lifetime {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(self.0));
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    let routes = || {
+        let routes = Table::new()
+            .route(
+                "/page",
+                typed(move |req: Req| async move { req.test_page("Keyed", html! { <form method="post">{field()}</form> }) }).0,
+            )
+            .route("/text", typed(move |req: Req| async move { req.rendered(field()).into_string() }).0)
+            .route("/plain", typed(|req: Req| async move { req.test_page("Plain", html! { <p>"plain"</p> }) }).0);
+        #[cfg(feature = "json")]
+        let routes = routes.route("/json", typed(move |req: Req| async move { Json(req.rendered(field()).into_string()) }).0);
+        Routes::from(routes)
+    };
+    let keyed: &[&str] = if cfg!(feature = "json") { &["/page", "/text", "/json"] } else { &["/page", "/text"] };
+    let mut wrong = Vec::new();
+    for (written, keyed_goes_out) in [("private, max-age=60", "private, no-cache"), ("private, no-store", "private, no-store")] {
+        for (label, router) in [
+            ("the default store", App::new(routes()).middleware(Lifetime(written)).router()),
+            ("corten dev", App::new(routes()).dev(true).middleware(Lifetime(written)).router()),
+        ] {
+            for path in keyed {
+                let (status, headers, body) = fetch(&router, "GET", path, &[]).await;
+                assert_eq!(status, StatusCode::OK, "{label}: {path}");
+                assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{label}: {path}");
+                let cdn = CDN_OVERRIDES.iter().filter(|cdn| headers.contains_key(**cdn)).count();
+                if headers[header::CACHE_CONTROL] != keyed_goes_out || cdn > 0 || headers.contains_key(header::ETAG) {
+                    wrong.push(format!(
+                        "{label}: {path} given {written:?}: {:?} with {cdn} CDN headers and tag {:?}",
+                        headers[header::CACHE_CONTROL],
+                        headers.get(header::ETAG)
+                    ));
+                }
+            }
+            let (status, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+            assert_eq!(status, StatusCode::OK, "{label}");
+            assert_eq!(headers[header::CACHE_CONTROL], written, "{label}: the middleware's own lifetime");
+            for cdn in CDN_OVERRIDES {
+                assert_eq!(headers[cdn], "max-age=60", "{label}: the middleware's {cdn}");
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "reusable without asking:\n{}", wrong.join("\n"));
+}
+
+/// A middleware may rebuild both sides: give `next` a request made from the method, URI, version,
+/// headers and body of the one it was given, with none of its extensions or with a signal of its
+/// own ([`Rebuilds`]), and make a new response of the answer it gets back, without its extensions
+/// either. The route then marks no signal the stages read, and the answer's own mark is gone, but
+/// the stages hold their signal past the middleware, and the end of the chain carries the mark of
+/// the signal the route's request had (the middleware's, or one made for it) as the answer comes
+/// back: an answer whose handler or page drew a form's new submit key, or that holds one a
+/// `req.rendered` render drew (text and `Json<T>`, which no watch is around), still goes out the
+/// browser's alone, without the CDN caching headers the middleware wrote and without a tag,
+/// whatever the app keeps. One with no key keeps its lifetime, those headers and its tag.
+#[tokio::test]
+async fn an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches() {
+    let mut wrong = Vec::new();
+    for how in [Rebuilds::Fresh, Rebuilds::Replaced] {
+        wrong.extend(rebuilt_keyed_answers_open_to_a_cdn(&format!("{how:?}"), || (RebuiltAnswer, how)).await);
+    }
+    assert!(wrong.is_empty(), "a keyed answer behind a rebuilt request and response, open to a CDN: {wrong:#?}");
+}
+
+/// As [`an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches`],
+/// with the rest of the chain run on a scoped thread of the middleware's own ([`OnAThread`]):
+/// `next` called there, or called on the request's thread and its future only polled there. The
+/// route's answer comes back on that thread and still marks the stages' signal, which they hold
+/// past the middleware.
+#[tokio::test]
+async fn an_answer_a_middleware_rebuilt_on_a_thread_of_its_own_keeps_its_submit_key_from_shared_caches() {
+    let mut wrong = Vec::new();
+    for hop in [Hop::Called, Hop::Polled] {
+        for how in [Rebuilds::Fresh, Rebuilds::Replaced] {
+            let label = format!("{hop:?} {how:?}");
+            wrong.extend(rebuilt_keyed_answers_open_to_a_cdn(&label, || (RebuiltAnswer, how, OnAThread(hop))).await);
+        }
+    }
+    assert!(wrong.is_empty(), "a keyed answer that came back on a middleware's own thread, open to a CDN: {wrong:#?}");
+}
+
+/// A middleware that holds a keyed answer from `next`, then answers a request of its own in
+/// process (with stages of its own) whose handler panics, then waits a turn and makes a new
+/// response of the keyed answer, without its extensions: that answer still goes out the browser's
+/// alone. The nested request's panic and the turn take no mark away, nor leave one behind: a
+/// `Public` answer with no key, answered next on the same thread through the same middleware, keeps
+/// its lifetime.
+#[tokio::test]
+async fn a_keyed_answer_held_across_a_nested_request_that_panics_and_a_wait_stays_private() {
+    use crate::route::get as typed;
+
+    /// Answers `/panics` from the same router, waits a turn, then rebuilds the answer `next` gave.
+    struct Nests(Arc<std::sync::OnceLock<Router>>);
+
+    impl crate::Middleware for Nests {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            if req.uri().path() == "/panics" {
+                return next.run(req).await;
+            }
+            let answer = next.run(req).await;
+            let router = self.0.get().expect("the router").clone();
+            let nested = router.oneshot(Request::builder().uri("/panics").body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(nested.status(), StatusCode::INTERNAL_SERVER_ERROR, "the nested request's handler panicked");
+            tokio::task::yield_now().await;
+            let (parts, body) = answer.into_parts();
+            let mut res = crate::response::Response::new(body);
+            *res.status_mut() = parts.status;
+            *res.headers_mut() = parts.headers;
+            res
+        }
+    }
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/keyed", typed(move || async move { Public::new(minute, field()) }).0)
+                .route("/plain", typed(move || async move { Public::new(minute, "plain".to_string()) }).0)
+                .route(
+                    "/panics",
+                    typed(move || async move {
+                        if minute > Duration::ZERO {
+                            panic!("the nested request's handler");
+                        }
+                        Public::new(minute, "never".to_string())
+                    })
+                    .0,
+                ),
+        )
+    };
+    for (app, kept) in [("the default store", None), ("none kept", Some(0))] {
+        let slot = Arc::new(std::sync::OnceLock::new());
+        let mut built = App::new(routes()).middleware(Nests(slot.clone()));
+        if let Some(kept) = kept {
+            built = built.kept_answers(kept);
+        }
+        let router = built.router();
+        assert!(slot.set(router.clone()).is_ok());
+        let (status, headers, body) = fetch(&router, "GET", "/keyed", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {headers:?}");
+        assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{app}");
+        let (status, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}: {headers:?}");
+    }
+}
+
+/// Staged middleware that makes a new response of the one `next` gave, with its status, headers
+/// and body and none of its extensions, and writes every caching header a CDN reads first on it.
+struct RebuiltAnswer;
+
+impl crate::Middleware for RebuiltAnswer {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let (parts, body) = next.run(req).await.into_parts();
+        let mut res = crate::response::Response::new(body);
+        *res.status_mut() = parts.status;
+        *res.headers_mut() = parts.headers;
+        for name in CDN_OVERRIDES {
+            res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+        }
+        res
+    }
+}
+
+/// Where [`OnAThread`] makes the rest of the chain's future: on the request's thread, polled on
+/// its own (`Polled`), or on its own thread too (`Called`).
+#[derive(Clone, Copy, Debug)]
+enum Hop {
+    Called,
+    Polled,
+}
+
+/// Staged middleware that runs the rest of the chain on a scoped thread of its own and waits for
+/// it there: a `Next` and the future it gives are `Send`, and need not be `'static` for a scoped
+/// thread.
+struct OnAThread(Hop);
+
+impl crate::Middleware for OnAThread {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let runtime = tokio::runtime::Handle::current();
+        let thread = std::thread::current().id();
+        let (res, ran) = match self.0 {
+            Hop::Called => std::thread::scope(|scope| {
+                scope.spawn(|| (runtime.block_on(next.run(req)), std::thread::current().id())).join().unwrap()
+            }),
+            Hop::Polled => {
+                let answer = next.run(req);
+                std::thread::scope(|scope| {
+                    scope.spawn(|| (runtime.block_on(answer), std::thread::current().id())).join().unwrap()
+                })
+            }
+        };
+        assert_ne!(ran, thread, "the route's answer came back on the middleware's thread");
+        res
+    }
+}
+
+/// The keyed answers `steps()`'s middleware sends open to a CDN (`private, no-cache` is the only
+/// right `Cache-Control`; no CDN caching header the middleware wrote, no tag), for `/text`, a
+/// `Public` text whose handler drew a form's new submit key, `/page`, a `Public` page with such
+/// a form, and `/rendered-text` and `/rendered-json`, text and `Json<T>`, which no watch is
+/// around, with a key made with `req.rendered`, which marks the signal of the request the route
+/// was given, with the default store and with none kept. `/plain`, with no key, must keep its
+/// lifetime, those headers and its tag.
+async fn rebuilt_keyed_answers_open_to_a_cdn<M: crate::Middleware>(label: &str, steps: impl Fn() -> M) -> Vec<String> {
+    use crate::route::get as typed;
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    let filler = || "keyed ".repeat(200);
+    let routes = || {
+        let routes = Table::new()
+            .route("/text", typed(move || async move { Public::new(minute, format!("{}{}", field().to_html(), filler())) }).0)
+            .route(
+                "/page",
+                typed(move |req: Req| async move {
+                    let form = html! {
+                        <form method="post">
+                            {field()}
+                            <p>{filler()}</p>
+                        </form>
+                    };
+                    Public::new(minute, req.test_page_for("Keyed", form))
+                })
+                .0,
+            )
+            .route("/plain", typed(move || async move { Public::new(minute, filler()) }).0)
+            .route(
+                "/rendered-text",
+                typed(move |req: Req| async move { format!("{}{}", req.rendered(field()).into_string(), filler()) }).0,
+            );
+        #[cfg(feature = "json")]
+        let routes = routes.route(
+            "/rendered-json",
+            typed(move |req: Req| async move { Json(format!("{}{}", req.rendered(field()).into_string(), filler())) }).0,
+        );
+        Routes::from(routes)
+    };
+    let keyed: &[&str] = if cfg!(feature = "json") {
+        &["/text", "/page", "/rendered-text", "/rendered-json"]
+    } else {
+        &["/text", "/page", "/rendered-text"]
+    };
+    // A tag is made for a request that names one.
+    let asks = [("if-none-match", "\"other\"")];
+    let mut wrong = Vec::new();
+    for (app, router) in [
+        ("the default store", App::new(routes()).middleware(steps()).router()),
+        ("none kept", App::new(routes()).kept_answers(0).middleware(steps()).router()),
+    ] {
+        for path in keyed {
+            let (status, headers, body) = fetch(&router, "GET", path, &asks).await;
+            let (_, _, other) = fetch(&router, "GET", path, &asks).await;
+            assert_eq!(status, StatusCode::OK, "{label} {app}: {path}");
+            assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{label} {app}: {path}");
+            if headers[header::CACHE_CONTROL] != "private, no-cache" {
+                wrong.push(format!("{label} {app}: {path}: Cache-Control {:?}", headers[header::CACHE_CONTROL]));
+            }
+            let kept: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| headers.contains_key(*name)).collect();
+            if !kept.is_empty() {
+                wrong.push(format!("{label} {app}: {path}: still sends {kept:?}"));
+            }
+            if headers.contains_key(header::ETAG) {
+                wrong.push(format!("{label} {app}: {path}: still sends its tag"));
+            }
+        }
+        let (status, headers, _) = fetch(&router, "GET", "/plain", &asks).await;
+        assert_eq!(status, StatusCode::OK, "{label} {app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{label} {app}");
+        assert!(headers.contains_key(header::ETAG), "{label} {app}: {headers:?}");
+        for cdn in CDN_OVERRIDES {
+            assert_eq!(headers[cdn], "max-age=60", "{label} {app}: the middleware's {cdn}");
+        }
+    }
+    wrong
+}
+
+/// `NoStore` is watched as the answer it holds is: around an answer type of the app's own that
+/// is `Public` on one branch, a relay that kept the upstream's `Surrogate-Control` drew a form's
+/// new submit key, and goes out `private, no-store` without that header, which `no-store` does not
+/// replace, rather than with the CDN still told to keep it, and without the upstream's tag. With no
+/// key it goes out `private, no-store` without that header too, as every `NoStore` answer does, and
+/// keeps its tag: only the watch takes the tag away.
+#[tokio::test]
+async fn a_no_store_answer_that_holds_a_public_one_whose_handler_drew_a_submit_key_keeps_no_cdn_header() {
+    use crate::answer::{AnyInputs, Format, NotAFeed};
+    use crate::route::get as typed;
+
+    enum Mixed {
+        Mine(String),
+        Shared(Public<crate::Relay>),
+    }
+
+    impl crate::response::IntoResponse for Mixed {
+        fn into_response(self) -> crate::response::Response {
+            match self {
+                Mixed::Mine(mine) => mine.into_response(),
+                Mixed::Shared(shared) => shared.into_response(),
+            }
+        }
+    }
+
+    impl crate::Answer for Mixed {
+        const FORMAT: Format = Format::Html;
+        type Inputs = AnyInputs;
+        type Rows = NotAFeed;
+        type Kind = AnyAnswer;
+    }
+
+    let minute = Duration::from_secs(60);
+    let relay = move |body: String| {
+        let mut headers = HeaderMap::new();
+        headers.insert("surrogate-control", HeaderValue::from_static("max-age=3600"));
+        headers.insert(header::ETAG, HeaderValue::from_static("\"upstream\""));
+        Public::new(minute, crate::Relay::new(StatusCode::OK, headers, Body::from(body)))
+    };
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/keyed", typed(move || async move { NoStore(Mixed::Shared(relay(field()))) }).0)
+                .route("/plain", typed(move || async move { NoStore(Mixed::Shared(relay("plain".into()))) }).0)
+                .route("/mine", typed(move || async move { NoStore(Mixed::Mine("mine".into())) }).0),
+        )
+    };
+    for (app, router) in
+        [("the default store", App::new(routes()).router()), ("corten dev", App::new(routes()).dev(true).router())]
+    {
+        let (status, headers, body) = fetch(&router, "GET", "/keyed", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-store", "{app}: {headers:?}");
+        for cdn in CDN_OVERRIDES {
+            assert!(!headers.contains_key(cdn), "{app}: {headers:?}");
+        }
+        assert!(!headers.contains_key(header::ETAG), "{app}: {headers:?}");
+        assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{app}");
+        for path in ["/plain", "/mine"] {
+            let (status, headers, _) = fetch(&router, "GET", path, &[]).await;
+            assert_eq!(
+                (status, &headers[header::CACHE_CONTROL]),
+                (StatusCode::OK, &HeaderValue::from_static("private, no-store")),
+                "{app}: {path}"
+            );
+            for cdn in CDN_OVERRIDES {
+                assert!(!headers.contains_key(cdn), "{app}: {path}: {headers:?}");
+            }
+        }
+        let (_, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+        assert_eq!(headers[header::ETAG], "\"upstream\"", "{app}: {headers:?}");
+    }
+}
+
+/// An answer whose handler drew a form's new submit key goes out without a tag, not only without
+/// the one Corten would make: one the app gave it (`Public::header`) or one a relayed upstream
+/// sent names a body whose key a browser may already have sent. A `Public` answer without a key
+/// keeps the tag it was given.
+#[tokio::test]
+async fn an_answer_whose_handler_drew_a_submit_key_keeps_no_tag_it_was_given() {
+    use crate::route::get as typed;
+
+    struct ETag;
+    impl crate::answer::Header for ETag {
+        const NAME: &'static str = "etag";
+    }
+
+    let minute = Duration::from_secs(60);
+    let tagged = || HeaderValue::from_static("\"given\"");
+    let relay = move |body: String| {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ETAG, tagged());
+        Public::new(minute, crate::Relay::new(StatusCode::OK, headers, Body::from(body)))
+    };
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/text", typed(move || async move { Public::new(minute, field()).header::<ETag>(tagged()) }).0)
+                .route("/relay", typed(move || async move { relay(field()) }).0)
+                .route(
+                    "/plain-text",
+                    typed(move || async move { Public::new(minute, "plain".to_string()).header::<ETag>(tagged()) }).0,
+                )
+                .route("/plain-relay", typed(move || async move { relay("plain".into()) }).0),
+        )
+    };
+    for (app, router) in
+        [("the default store", App::new(routes()).router()), ("corten dev", App::new(routes()).dev(true).router())]
+    {
+        for path in ["/text", "/relay"] {
+            // A browser revalidating the copy it was given asks with that copy's tag.
+            for asked in [&[][..], &[("if-none-match", "\"given\"")][..]] {
+                let (status, headers, body) = fetch(&router, "GET", path, asked).await;
+                assert_eq!(status, StatusCode::OK, "{app}: {path}: {asked:?}");
+                assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {path}: {headers:?}");
+                assert!(!headers.contains_key(header::ETAG), "{app}: {path}: {headers:?}");
+                assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{app}: {path}");
+            }
+        }
+        for path in ["/plain-text", "/plain-relay"] {
+            let (status, headers, _) = fetch(&router, "GET", path, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{app}: {path}");
+            assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}: {path}");
+            assert_eq!(headers[header::ETAG], "\"given\"", "{app}: {path}");
+        }
+    }
+}
+
+/// A middleware may make a new response of the one its `next` gave, with that one's status,
+/// headers and body and nothing else (its extensions gone). That takes no mark away: an answer
+/// whose handler or page drew a form's new submit key is still the browser's alone, without the
+/// CDN caching headers the middleware wrote and without a tag, whatever the app keeps; one with no
+/// key keeps its lifetime, those headers and its tag.
+#[tokio::test]
+async fn an_answer_a_middleware_rebuilt_keeps_a_submit_key_its_handler_drew_from_shared_caches() {
+    use crate::route::get as typed;
+
+    struct Rebuilt;
+
+    impl crate::Middleware for Rebuilt {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (parts, body) = next.run(req).await.into_parts();
+            let mut res = crate::response::Response::new(body);
+            *res.status_mut() = parts.status;
+            *res.headers_mut() = parts.headers;
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    let filler = || "keyed ".repeat(200);
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/text", typed(move || async move { Public::new(minute, format!("{}{}", field().to_html(), filler())) }).0)
+                .route(
+                    "/page",
+                    typed(move |req: Req| async move {
+                        let form = html! {
+                            <form method="post">
+                                {field()}
+                                <p>{filler()}</p>
+                            </form>
+                        };
+                        Public::new(minute, req.test_page_for("Keyed", form))
+                    })
+                    .0,
+                )
+                .route(
+                    "/default-page",
+                    typed(move |req: Req| async move { req.test_page("Keyed", html! { <form method="post">{field()}</form> }) })
+                        .0,
+                )
+                .route("/plain", typed(move || async move { Public::new(minute, filler()) }).0),
+        )
+    };
+    // A tag is made for a request that names one.
+    let asks = [("if-none-match", "\"other\"")];
+    for (app, router) in [
+        ("the default store", App::new(routes()).middleware(Rebuilt).router()),
+        ("none kept", App::new(routes()).kept_answers(0).middleware(Rebuilt).router()),
+    ] {
+        for path in ["/text", "/page", "/default-page"] {
+            let (status, headers, body) = fetch(&router, "GET", path, &asks).await;
+            let (_, _, other) = fetch(&router, "GET", path, &asks).await;
+            assert_eq!(status, StatusCode::OK, "{app}: {path}");
+            assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {path}: {headers:?}");
+            for cdn in CDN_OVERRIDES {
+                assert!(!headers.contains_key(cdn), "{app}: {path}: {headers:?}");
+            }
+            assert!(!headers.contains_key(header::ETAG), "{app}: {path}: {headers:?}");
+            assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{app}: {path}");
+        }
+        let (status, headers, _) = fetch(&router, "GET", "/plain", &asks).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}");
+        assert!(headers.contains_key(header::ETAG), "{app}: {headers:?}");
+        for cdn in CDN_OVERRIDES {
+            assert_eq!(headers[cdn], "max-age=60", "{app}: the middleware's {cdn}");
+        }
     }
 }
 
@@ -1178,7 +2148,8 @@ async fn a_cookie_a_middleware_sets_on_the_usual_page_takes_its_cdn_caching_head
 /// run, private whatever it said, and with none of the CDN caching headers it wrote: the page may
 /// show who is asking, and a CDN that read its own header would keep it for the next visitor. A
 /// `no-store` it says goes out `private, no-store`, whether or not it draws a submit key; anything
-/// else is sent `private, no-cache`.
+/// else is sent `private, no-cache`. One that draws a submit key loses the tag it was given too, as
+/// any answer that draws one does; one that draws none keeps it.
 #[tokio::test]
 async fn a_refused_write_s_page_is_not_shared() {
     let refused = |keyed: bool, cache: &'static str| {
@@ -1191,6 +2162,7 @@ async fn a_refused_write_s_page_is_not_shared() {
                     req.test_page("Not allowed", form).map(|mut page| {
                         let headers = page.headers_mut();
                         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                        headers.insert(header::ETAG, HeaderValue::from_static("\"given\""));
                         for name in CDN_OVERRIDES {
                             headers.insert(name, HeaderValue::from_static("max-age=60"));
                         }
@@ -1220,6 +2192,11 @@ async fn a_refused_write_s_page_is_not_shared() {
     ] {
         let headers = refused(keyed, cache).await;
         assert_eq!(headers[header::CACHE_CONTROL], sent, "keyed {keyed}, {cache}");
+        if keyed {
+            assert!(!headers.contains_key(header::ETAG), "a keyed refusal sends no tag ({cache}): {headers:?}");
+        } else {
+            assert_eq!(headers[header::ETAG], "\"given\"", "a refusal with no key keeps its tag ({cache})");
+        }
         for name in CDN_OVERRIDES {
             assert!(!headers.contains_key(name), "a refusal sends no {name} (keyed {keyed}, {cache})");
         }
@@ -1863,7 +2840,7 @@ async fn a_refusal_made_around_another_app_s_answer_is_still_not_shared() {
 /// method, URI and headers), asked inline on the same poll, as one that consults a second router of
 /// the app's own does: as it is, turned into a `200` with `x-ok`, or discarded for the route's own
 /// answer with `x-discard`.
-struct RelaysAnotherApp(Router);
+pub(super) struct RelaysAnotherApp(pub(super) Router);
 
 impl crate::Middleware for RelaysAnotherApp {
     async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
@@ -6371,6 +7348,28 @@ async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
     }
 }
 
+/// The unstaged routes of `what_settling_a_page_costs`: a `Public` answer, which is watched for
+/// a submit key, and text, which is not.
+#[crate::routes]
+mod settle_unstaged_url {
+    #[route("/", get = settle_unstaged_public, unstaged)]
+    pub struct SharedText;
+}
+
+#[crate::routes]
+mod settle_unstaged_private_url {
+    #[route("/", get = settle_unstaged_private, unstaged)]
+    pub struct PlainText;
+}
+
+async fn settle_unstaged_public() -> Public<String> {
+    Public::new(Duration::from_secs(60), "<form method=\"post\">".repeat(80))
+}
+
+async fn settle_unstaged_private() -> String {
+    "<form method=\"post\">".repeat(80)
+}
+
 /// What settling a page's caching costs a request: `SETTLE_REQUESTS` (200) `GET`s in process, one
 /// at a time. `SETTLE_CASE` is the page: `keyed`, a `Public` page that draws a submit key (sent
 /// `private, no-cache`); `public` (the default), the same page without the key, which the app
@@ -6391,7 +7390,13 @@ async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
 /// `asset`, a stylesheet no version of the app's static files has (`RefusedStatic`, an old
 /// version's URL) asked for as HTML: the static files' `404` with the error page in its place;
 /// `fill`, a page with a layout read's place ([`SettleCount`]) whose body fails as it is read to be
-/// filled, asked for as HTML: Corten's `500` with the error page in its place. With
+/// filled, asked for as HTML: Corten's `500` with the error page in its place. `json` is a `Public`
+/// JSON body with no key, and `json-private` the same body as a plain `JsonResult<T>`, whose handler
+/// is watched since its `JsonError` may hold a `JsonResponse`; `unstaged-public` a `Public` text body from a route that says `unstaged`,
+/// with no key, which is watched for one; `unstaged-private` text from such a route, which says no
+/// caching. The pages are made as an app's routes are (`corten::get`), where an answer is known to
+/// be `Public`. `SETTLE_KEPT=0` keeps none (`App::kept_answers(0)`), so a `Public` answer's handler
+/// runs, and is watched for a key, on every request. With
 /// `SETTLE_CDN` set, a staged middleware writes the six caching headers
 /// a CDN reads first on every answer, and each answer is checked to keep them (`kept`) or not
 /// (`dropped`), so the count includes their removal. Counting it under callgrind at two numbers of
@@ -6469,7 +7474,9 @@ fn what_settling_a_page_costs() {
     let minute = Duration::from_secs(60);
     let keyed = case == "keyed" || case == "private";
     let form = move || html! { <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> };
-    let routes =
+    // Made as an app's routes are (`corten::get`), where an answer is known to be `Public`.
+    #[allow(unused_mut)]
+    let mut routes =
         if ["private", "plain", "caller", "data", "missing", "custom", "refused", "turned", "asset"].contains(&case.as_str()) {
             Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
         } else if case == "fill" {
@@ -6491,9 +7498,27 @@ fn what_settling_a_page_costs() {
                 }),
             )
         } else {
-            Table::new().route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Form", form())) }))
+            Table::new().route(
+                "/",
+                crate::route::get(move |req: Req| async move { Public::new(minute, req.test_page_for("Form", form())) }).0,
+            )
         };
-    let app = App::new(Routes::from(routes));
+    #[cfg(feature = "json")]
+    if case == "json" {
+        let body = move || async move { Public::new(minute, Ok::<_, JsonError>(Json("<form method=\"post\">".repeat(80)))) };
+        routes = Table::new().route("/", crate::route::get(body).0);
+    }
+    #[cfg(feature = "json")]
+    if case == "json-private" {
+        let body = || async { Ok::<_, JsonError>(Json("<form method=\"post\">".repeat(80))) };
+        routes = Table::new().route("/", crate::route::get(body).0);
+    }
+    let app = match case.as_str() {
+        "unstaged-public" => App::new(settle_unstaged_url::router()),
+        "unstaged-private" => App::new(settle_unstaged_private_url::router()),
+        _ => App::new(Routes::from(routes)),
+    };
+    let app = if std::env::var("SETTLE_KEPT").is_ok_and(|kept| kept == "0") { app.kept_answers(0) } else { app };
     let app = if case == "custom" { app.error_page(settle_error_page, ()) } else { app };
     let app = if case == "asset" { app.assets(super::RefusedStatic) } else { app };
     let app = if case == "fill" { app.layout_read(SettleCount) } else { app };
@@ -6504,7 +7529,7 @@ fn what_settling_a_page_costs() {
         app.router()
     };
     let expected = match case.as_str() {
-        "public" => "public, max-age=60",
+        "public" | "json" | "unstaged-public" => "public, max-age=60",
         "partial" => "private, max-age=60",
         _ => "private, no-cache",
     };
@@ -6554,6 +7579,10 @@ fn what_settling_a_page_costs() {
                 "unnamed" => {
                     assert!(parts.status == StatusCode::BAD_REQUEST && body.contains("no post named"), "{}: {body}", parts.status)
                 }
+                // JSON writes the markup's quotes escaped.
+                "json" | "json-private" => {
+                    assert!(parts.status == StatusCode::OK && body.contains("<form method="), "{}: {body}", parts.status)
+                }
                 _ => {
                     assert!(parts.status == StatusCode::OK && body.contains("<form method=\"post\">"), "{}: {body}", parts.status)
                 }
@@ -6563,6 +7592,8 @@ fn what_settling_a_page_costs() {
             // (`private, no-store`, or a bare `no-store`).
             if case == "nostore" {
                 assert!(parts.headers[header::CACHE_CONTROL].to_str().unwrap().ends_with("no-store"), "{:?}", parts.headers);
+            } else if case == "unstaged-private" {
+                assert!(!parts.headers.contains_key(header::CACHE_CONTROL), "{:?}", parts.headers);
             } else if !["unnamed", "asset", "fill"].contains(&case.as_str()) {
                 assert_eq!(parts.headers[header::CACHE_CONTROL], expected);
             }

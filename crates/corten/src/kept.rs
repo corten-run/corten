@@ -57,8 +57,10 @@
 //! asked (`req.mode`). What an API adds for the site that asks (`Access-Control-Allow-Origin`,
 //! `Vary: origin`) is written after the handler for each request, and is no part of what is
 //! kept. An answer with markup its handler rendered that holds a form's new submit key is that
-//! request's alone: a page's render marks one, and the handler is watched for one drawn any
-//! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
+//! request's alone: a page's render marks one, and the handler of every route whose answer may be
+//! `Public` is watched for one drawn any other way, on the thread that runs it (`form::KeyWatch`),
+//! which marks the answer too (`cache::Unrepeatable`), so no cache in front shares it either. JSON
+//! the app holds as bytes
 //! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
 //! not replay, so it is its handler's for every request, which costs it no writing and no
 //! compression. A file is kept as text is, whatever its type: a picture no build compresses
@@ -1415,6 +1417,12 @@ impl Missed {
                 }
                 return res;
             }};
+        }
+        // A form's new submit key the handler rendered where its watch did not poll (`req.rendered`
+        // in a blocking task) marks only the request's signal, not the answer: it is this request's
+        // alone too, and goes out as one (`crate::cache::Unrepeatable`).
+        if signal.key_drawn() {
+            unkept!(Verdict::DrewKey);
         }
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else {
             unkept!(Verdict::NoLifetime { status: res.status().as_u16() })

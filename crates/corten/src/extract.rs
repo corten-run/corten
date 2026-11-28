@@ -358,6 +358,11 @@ impl std::error::Error for BodyRejection {}
 /// Corten's refusal of the request's body, never shared wherever it is answered
 /// ([`crate::cache::Unshared`]).
 impl crate::http::IntoResponse for BodyRejection {
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
+
     fn into_response(self) -> crate::http::Response {
         crate::cache::unshared(crate::http::IntoResponse::into_response((self.status, self.text)))
     }
