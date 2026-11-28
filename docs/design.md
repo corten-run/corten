@@ -12219,7 +12219,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     it skips the hash in any answer of a staged route, text and a bare `Json<T>` included, when the
     key was made with `req.rendered`, which marks the request; a key rendered bare with
     `to_html()` is seen only in an answer that may be `Public`, whose handler is watched for one:
-    `Public`, a page or JSON answer (`HtmlResponse`, `JsonResponse`) or an answer type of the app's
+    `Public`, a page or JSON answer (`HtmlResponse`, `JsonResponse`, `Json<T>`) or an answer type of the app's
     own, which the handler may replace with a `Public` one it converted, and `NoStore` or a tuple of
     headers around any of them, as the [forms guide](guide/requests-and-forms.md) lists them.
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
