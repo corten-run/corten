@@ -48,6 +48,7 @@
 // either side ends with status 124 or 137 (`STOPPED`), the job fails and reports that nothing
 // was compared, without attributing a cause. An ordinary head build failure takes precedence.
 // Exit status 0 for one binary. Exit status 2 for arguments that are not these.
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -188,12 +189,27 @@ const lines = (at) => (existsSync(at) ? readFileSync(at, "utf8").split("\n").map
  * What a run left in a build's directory: its figure, or why there is none, and why each attempt
  * that gave none did not.
  * @param {string} directory @param {ReturnType<typeof readings>[number]} reading
+ * @param {string} [digest] the diagnostic completion record's digest, or "-" for no receipt
  */
-function taken(directory, { file, expect }) {
+function taken(directory, { file, expect }, digest) {
   const at = join(directory, file);
   const refused = lines(`${at}.refused`);
   if (!existsSync(at)) return { figure: null, why: refused.at(-1) ?? "the run left no output", refused };
-  const text = readFileSync(at, "utf8");
+  let text;
+  if (expect.kind === "idle-allocator") {
+    let bytes;
+    try {
+      bytes = readFileSync(at);
+    } catch {
+      return { figure: null, why: "the receipt could not be read", refused };
+    }
+    if (createHash("sha256").update(bytes).digest("hex") !== digest) {
+      return { figure: null, why: "the receipt does not match the collection completion record", refused };
+    }
+    text = bytes.toString("utf8");
+  } else {
+    text = readFileSync(at, "utf8");
+  }
   const found = figure(text, expect);
   const why = expect.kind === "idle-allocator" ? "the run did not give a whole observer-on reading with all allocator counters and sweep times"
     : expect.kind === "idle" && unpaged(text) ? "the run gives no page size or growth, as idle.mjs printed before them, and its growth is not guessed from its figure"
@@ -229,20 +245,29 @@ const table = (/** @type {string[]} */ head, /** @type {string[][]} */ rows) =>
  * @param {string} directory
  */
 export function allocatorReport(directory) {
-  let commits;
+  /** @type {string[]} */
+  let record = [];
   try {
-    commits = /^([0-9a-f]{40})\n([0-9a-f]{40})\n$/.exec(readFileSync(join(directory, "complete"), "utf8"));
+    record = readFileSync(join(directory, "complete"), "utf8").split("\n");
   } catch { /* missing or unreadable completion record */ }
-  if (!commits) {
+  const [base, head, ...entries] = record;
+  const plan = idleReadings(true);
+  const digests = plan.map(({ file }, run) => SIDES.map((side, at) => {
+    const prefix = `${side} ${file} `;
+    const entry = entries[run * SIDES.length + at];
+    return entry?.startsWith(prefix) ? entry.slice(prefix.length) : "";
+  }));
+  if (![base, head].every((commit) => /^[0-9a-f]{40}$/.test(commit)) ||
+      entries.length !== plan.length * SIDES.length + 1 || entries.at(-1) !== "" ||
+      !digests.flat().every((digest) => /^(?:[0-9a-f]{64}|-)$/.test(digest))) {
     return { markdown: "**Incomplete diagnostic match.** No valid completion record from job.sh diagnose.\n", status: 1 };
   }
-  const [, base, head] = commits;
   const rows = [];
   const refused = [];
   let missing = false;
-  for (const reading of idleReadings(true)) {
-    const pair = SIDES.map((side) => {
-      const { figure: run, why, refused: attempts } = taken(join(directory, side), reading);
+  for (const [runIndex, reading] of plan.entries()) {
+    const pair = SIDES.map((side, at) => {
+      const { figure: run, why, refused: attempts } = taken(join(directory, side), reading, digests[runIndex][at]);
       for (const attempt of attempts) refused.push(`- ${code(reading.file)} on ${side}: ${code(attempt)}`);
       if (!run) {
         missing = true;

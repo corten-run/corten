@@ -131,6 +131,7 @@ read|diagnose)
       diagnostic_probes[$side]=$binary
     done
     mkdir -- "$output/base" "$output/head"
+    printf '%s\n' "${diagnostic_probes[base]##*/}" "${diagnostic_probes[head]##*/}" > "$output/complete.tmp"
     plan=allocator-readings
     options=(--allocator)
   fi
@@ -163,13 +164,19 @@ read|diagnose)
         rm -f "$out" "$out.said"
         [ "$(date +%s)" -lt "$STOP_AT" ] || break
       done
+      if [ "$mode" = diagnose ]; then
+        digest=-
+        if [ "$status" = 0 ]; then
+          digest=$(sha256sum < "$out")
+          digest=${digest%% *}
+        fi
+        printf '%s %s %s\n' "$side" "$file" "$digest" >> "$output/complete.tmp"
+      fi
     done
   done < "$output/$plan"
   echo "$plan $((SECONDS - began))" >> "$output/seconds"
   if [ "$mode" = diagnose ]; then
-    # Publish the collected probes' commits only after the plan finishes. A partial run
-    # cannot look complete even if it printed its final JSON before it was interrupted.
-    printf '%s\n' "${diagnostic_probes[base]##*/}" "${diagnostic_probes[head]##*/}" > "$output/complete.tmp"
+    # Publish the commits and receipt digests only once the plan finishes.
     mv -- "$output/complete.tmp" "$output/complete"
   fi
   ;;

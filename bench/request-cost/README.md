@@ -176,10 +176,12 @@ node bench/request-cost/compare.mjs <new-diagnostic-directory> --allocator
 The diagnostic directory must not exist: use a fresh path for every collection, including
 retries. Both probes must be executable. Do not rebuild them while a collection runs.
 This runs the same three idle cases three times per build, without capturing answers
-or repeating the instruction or allocation counts. The report uses the commits recorded by
-that collection once its plan finishes. An interrupted collection, or a missing or mismatched
-diagnostic pair, leaves the report incomplete and it exits 1. An older complete directory
-still reports only its own pair, not the current contents of the build directory.
+or repeating the instruction or allocation counts. The completion record holds the commits
+and the SHA-256 of each receipt in its base or head run slot. The report checks the exact bytes
+it reads, so moving or substituting a receipt with different bytes refuses the match even if it
+describes the same case. An interrupted collection, a record without the digests, or a missing
+or mismatched diagnostic pair leaves the report incomplete and it exits 1. An older complete
+directory still reports only its own pair, not the current contents of the build directory.
 The report shows resident growth alongside all three allocator growths for each run. Neither
 the observed RSS nor missing diagnostics can change the verdict from the required observer-off
 runs. The hosted job does not run this optional plan.

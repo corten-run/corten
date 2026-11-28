@@ -5,7 +5,8 @@
 // prints against the reader here.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -35,7 +36,14 @@ function diagnostics(runs) {
     const rss = JSON.parse(readFileSync(join(runs[side], file.replace("idle-allocator-", "idle-")), "utf8"));
     writeFileSync(join(directory, side, file), JSON.stringify({ ...rss, kind: "idle-allocator", ...observed, ...changes }));
   };
-  const complete = () => writeFileSync(join(directory, "complete"), `${"a".repeat(40)}\n${"b".repeat(40)}\n`);
+  const complete = () => {
+    const entries = diagnosticPlan.flatMap(({ file }) => sides.map((side) => {
+      const at = join(directory, side, file);
+      const digest = existsSync(at) ? createHash("sha256").update(readFileSync(at)).digest("hex") : "-";
+      return `${side} ${file} ${digest}`;
+    }));
+    writeFileSync(join(directory, "complete"), ["a".repeat(40), "b".repeat(40), ...entries, ""].join("\n"));
+  };
   const seed = () => {
     for (const side of sides) for (const { file } of diagnosticPlan) observer(side, file);
   };
@@ -299,6 +307,34 @@ test("the explicit allocator report shows both builds' matching diagnostic runs;
   assert.equal(cli.stdout, read.markdown);
 });
 
+test("allocator diagnostics refuse valid same-case receipts moved between the base and head slots", (t) => {
+  const { directory, observer, complete, seed } = diagnostics(builds(t));
+  const file = "idle-allocator-request-1.json";
+  seed();
+  observer("head", file, { allocator: { ...observed.allocator, live: 17 } });
+  complete();
+  assert.equal(allocatorReport(directory).status, 0);
+
+  const base = join(directory, "base", file);
+  const head = join(directory, "head", file);
+  const originalBase = readFileSync(base);
+  const originalHead = readFileSync(head);
+  writeFileSync(base, originalHead);
+  writeFileSync(head, originalBase);
+  const swapped = allocatorReport(directory);
+  assert.equal(swapped.status, 1);
+  for (const side of ["base", "head"]) {
+    assert.ok(swapped.markdown.includes(`${file}\` on ${side}: \`the receipt does not match`));
+  }
+
+  // Even a byte change that leaves the parsed figure identical fails readback.
+  writeFileSync(base, originalBase);
+  writeFileSync(head, Buffer.concat([originalHead, Buffer.from("\n")]));
+  assert.equal(allocatorReport(directory).status, 1);
+  writeFileSync(head, originalHead);
+  assert.equal(allocatorReport(directory).status, 0);
+});
+
 test("observer-on receipts never decide the observer-off gate, even if all are observer-on", (t) => {
   const { base, head } = builds(t);
   const write = (/** @type {string} */ run, /** @type {object} */ fields) => {
@@ -347,12 +383,15 @@ test("requested diagnostics refuse missing, wrong-mode, mismatched or incomplete
     { sweepNanos: [123, -1] },
   ]) {
     observer("head", file, fields);
+    complete();
     check(/whole observer-on reading/);
   }
   observer("head", file, { page: 2048 });
+  complete();
   check(/different page sizes/);
   unlinkSync(join(directory, "head", file));
   writeFileSync(join(directory, "head", `${file}.refused`), "Error: no allocator sample\n");
+  complete();
   check(/head: `no allocator sample`/);
   const cli = spawnSync(process.execPath, [join(kit, "compare.mjs"), directory, "--allocator"], { encoding: "utf8" });
   assert.equal(cli.status, 1, cli.stderr);
