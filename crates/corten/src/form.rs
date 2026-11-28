@@ -596,6 +596,11 @@ impl std::error::Error for FormRejection {}
 /// The extractor's refusal of the request's form, never shared wherever it is answered
 /// ([`crate::cache::Unshared`]); one the handler made ([`FormRejection::new`]) is its answer.
 impl IntoResponse for FormRejection {
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         match self {
             FormRejection::Body(rejection) => rejection.into_response(),
@@ -2637,7 +2642,7 @@ thread_local! {
 
 /// A render that reads for itself whether it drew a submit key: the thread's mark is cleared as
 /// it starts and, as it ends, left set where it was before or a key was drawn since. So a watch
-/// around the handler ([`watched`]) still sees a key the handler drew before this render (one
+/// around the handler ([`KeyWatch`]) still sees a key the handler drew before this render (one
 /// rendered to a string and placed in a page as markup), also when the render fails or panics.
 #[must_use = "the mark is put back where this is dropped"]
 pub(crate) struct Drawing {
@@ -2666,32 +2671,38 @@ impl Drop for Drawing {
     }
 }
 
-/// `work` run to its end, and whether a submit key was drawn in any of its polls. A handler may
-/// move between threads where it waits, and one poll runs on one thread from start to end, so
-/// the mark is cleared before each poll and read after it, also when the poll panics, and then
-/// left set where it was before or a key was drawn: a watch around this one sees that key too,
-/// and a mark another request left on the thread counts for no one, since every reader clears
-/// it first. A key drawn outside the polls of `work`, or on another thread during one (by a task
-/// the handler spawned, a render it handed to a blocking task, a thread of its own), is not seen.
-pub(crate) async fn watched<F: std::future::Future + Unpin>(mut work: F) -> (F::Output, bool) {
-    struct Poll<'a> {
-        drawing: Drawing,
-        drew: &'a mut bool,
+/// Whether a submit key was drawn in any poll of the work it polls. A handler may move between
+/// threads where it waits, and one poll runs on one thread from start to end, so the mark is
+/// cleared before each poll and read after it, also when the poll panics, and then left set where
+/// it was before or a key was drawn: a watch around this one sees that key too, and a mark another
+/// request left on the thread counts for no one, since every reader clears it first. A key drawn
+/// outside the polls it makes, or on another thread during one (by a task the handler spawned, a
+/// render it handed to a blocking task, a thread of its own), is not seen. It is held beside the
+/// work rather than around it, so the work is not moved again and its output is not carried
+/// beside what was seen.
+#[derive(Default)]
+pub(crate) struct KeyWatch(bool);
+
+impl KeyWatch {
+    /// One poll of `work`, noting a key drawn in it.
+    #[inline]
+    pub(crate) fn poll<F: std::future::Future>(
+        &mut self,
+        work: std::pin::Pin<&mut F>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<F::Output> {
+        // Dropped as the poll unwinds too, which puts back the mark the thread had before.
+        let drawing = Drawing::start();
+        let polled = work.poll(cx);
+        self.0 |= drawing.drew();
+        polled
     }
 
-    impl Drop for Poll<'_> {
-        fn drop(&mut self) {
-            *self.drew |= self.drawing.drew();
-        }
+    /// Whether a key was drawn in any poll so far.
+    #[inline]
+    pub(crate) fn drew(&self) -> bool {
+        self.0
     }
-
-    let mut drew = false;
-    let out = std::future::poll_fn(|cx| {
-        let _poll = Poll { drawing: Drawing::start(), drew: &mut drew };
-        std::pin::Pin::new(&mut work).poll(cx)
-    })
-    .await;
-    (out, drew)
 }
 
 impl Render for SubmitField {
@@ -2766,6 +2777,11 @@ impl serde::Serialize for Errors {
 /// [`crate::JsonError`]); pages use [`crate::Req::invalid`], which answers this way to data clients.
 #[cfg(feature = "json")]
 impl crate::response::IntoResponse for Errors {
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
+
     fn into_response(self) -> crate::response::Response {
         self.response()
     }
@@ -3046,6 +3062,29 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     struct MaybeKeyed {
         submit: Option<SubmitKey>,
+    }
+
+    /// `work` run to its end, and whether a submit key was drawn in any of its polls, as a
+    /// route's watch ([`KeyWatch`]) sees it.
+    fn watched<F: std::future::Future>(work: F) -> Watched<F> {
+        Watched { work, watch: KeyWatch::default() }
+    }
+
+    pin_project_lite::pin_project! {
+        struct Watched<F> {
+            #[pin]
+            work: F,
+            watch: KeyWatch,
+        }
+    }
+
+    impl<F: std::future::Future> std::future::Future for Watched<F> {
+        type Output = (F::Output, bool);
+
+        fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+            let this = self.project();
+            this.watch.poll(this.work, cx).map(|out| (out, this.watch.drew()))
+        }
     }
 
     /// Watching work for a submit key sees one drawn in any of its polls and no other: what the
