@@ -21,7 +21,7 @@ mod preview_export;
 mod save_note;
 
 pub use collection_row::CollectionRow;
-pub use deck_builder::{DeckBuilder, DeckFormId};
+pub use deck_builder::{DeckBuilder, DeckBuilderRefs, DeckFormId, DeckVersion};
 pub use deck_line::DeckLine;
 pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
 pub use draft_notes::DraftNotes;

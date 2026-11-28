@@ -23,7 +23,7 @@ use serde::Serialize;
 use crate::{
     cards::{self, Card, Refusal},
     text::Msg,
-    views::{self, Answer, SaveNote},
+    views::{self, Answer, DeckBuilderRefs, DeckVersion, SaveNote},
 };
 
 /// A card in the saved deck and its copies: the rows of the deck's feed.
@@ -275,7 +275,7 @@ pub struct DeckInput {
     /// This submit, so one sent again is saved once.
     pub submit: SubmitKey,
     /// Which of the page's sends this is: the script counts them, so an answer to one sent again
-    /// says which deck was saved. 0 without JavaScript.
+    /// says which deck was saved. 0 when the form is submitted without that script.
     #[serde(default)]
     pub draft: u64,
     /// The page's filter and order, to come back to after a save without JavaScript.
@@ -302,9 +302,9 @@ fn deck_page(req: &Req, builder: &Builder, view: &DeckQuery, answer: &Answer, st
     req.page_with_status(status, html! { <views::Layout req={req} title="Deck builder">{screen}</views::Layout> })
 }
 
-/// Saves the deck. With JavaScript the answer is the save note, which tells the page's script what
-/// became of the save; without, a saved deck goes back to the page and a refused one is the page
-/// with the reason.
+/// Saves the deck. An action answers with the save note and, for a successful form submit without
+/// the builder script, the next version. Without the runtime a saved deck goes back to the page
+/// and a refused one is the page with the reason.
 async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckInput>) -> HtmlResult {
     let outcome = match builder.posted(&input) {
         Ok(deck) => builder.save(&input.generation, input.version, deck, &input.submit, input.draft),
@@ -318,6 +318,17 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
         Outcome::Stale { version, unsure } => (Answer::Stale { version: *version, unsure: *unsure }, StatusCode::CONFLICT),
     };
     if let Some(action) = req.action() {
+        // The script supplies a nonzero draft and takes the version from the note, which also
+        // lets it reconcile a retried answer with its feed. The plain form needs its own field.
+        if let Answer::Saved { version, draft: 0 } = answer {
+            return action.patch_with_status(
+                status,
+                html! {
+                    <DeckVersion bundle={DeckBuilderRefs} version={version} />
+                    <SaveNote answer={&answer} />
+                },
+            );
+        }
         return action.patch_with_status(status, SaveNote { answer: &answer });
     }
     let view = DeckQuery { q: input.q, sort: input.sort };
@@ -386,6 +397,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(note.contains(r#"<span id="save-note""#) && note.contains("Saved."), "{note}");
         assert!(note.contains(r#"save_note.answered($t,"Saved",1,1,false)"#), "{note}");
+        assert!(!note.contains("deck-version"), "{note}");
         assert_eq!(builder.saved().1.get("salt-oracle"), Some(&1));
         // Sent again (its answer lost): the same answer, no second write.
         let res = saving(&app, 0, &deck, &key).field(f.draft, 1).mode(Mode::Action).await;
@@ -403,6 +415,28 @@ mod tests {
         let res = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
         let (status, note) = read(&res);
         assert!(status == StatusCode::CONFLICT && note.contains(r#""Stale",1,0,false)"#), "{note}");
+    }
+
+    #[tokio::test]
+    async fn a_form_save_patches_the_version_for_the_next_submit() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let mut deck = starter();
+        let gravel = deck.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap();
+        gravel.1 = 2;
+        let first = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
+        let (status, patch) = read(&first);
+        assert_eq!(status, StatusCode::OK);
+        assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="1""#), "{patch}");
+        assert!(patch.contains(r#""Saved",1,0,false)"#), "{patch}");
+
+        let gravel = deck.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap();
+        gravel.1 = 1;
+        let second = saving(&app, 1, &deck, &submit_key()).mode(Mode::Action).await;
+        let (status, patch) = read(&second);
+        assert_eq!(status, StatusCode::OK);
+        assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="2""#), "{patch}");
+        assert_eq!((builder.deck.seq(), builder.saved().1.get("gravel-sprite")), (2, Some(&1)));
     }
 
     #[test]

@@ -174,30 +174,18 @@ user types sit in a `GET` form that filters them on the server without JavaScrip
 ### A control only the script makes work
 
 A control that does nothing without its handler (a `type="button"` that steps a count, clears a
-selection) is not drawn when scripts are off, and one only a page without them needs (the
-`Filter` button of a form a handler filters as the user types) is not drawn when they are on.
-Both are rules in the component's stylesheet, beside its other rules:
+selection) can start `hidden` and be shown by its `on:connect` handler when the script runs.
+corten-ui's `CopyButton` does this and also checks for the clipboard before it shows the button.
+A rule such as `@media (scripting: none) { .clear { display: none; } }` hides a script-only
+control when scripts are off, but it cannot tell whether that control's handler loaded. The
+browser still matches `scripting: enabled` if a module fails to load or an extension blocks it.
 
-```css
-@media (scripting: none) { .clear { display: none; } }
-@media (scripting: enabled) { .filter { display: none; } }
-```
-
-The browser decides before it draws, so nothing moves as the script loads and no handler runs
-to do it. A control that also needs something the browser may lack (the clipboard) is drawn
-`hidden` and shown by its `on:connect` handler once it knows, as corten-ui's `CopyButton` is.
-Not `<noscript>`: it can only add markup when scripts are off, not leave out a control that needs
-them, and the media query does both in the component's stylesheet. `examples/deck-builder`'s
-stylesheet has the first rule; its Filter and Save buttons stay drawn with scripts on, since a
-module that did not load still matches `enabled`, and [its smoke](../../examples/deck-builder/smoke.mjs)
-filters the collection and saves the deck with one card's count cleared, with the builder's module
-blocked, in Chromium, Firefox and WebKit. `examples/seller-desk`'s grid keeps both its controls without scripts:
-its filter is a `GET` form whose Filter button is not drawn with them, and its sort headers are
-links to the sorted page, which the handlers sort in place instead of following. The query
-follows whether scripts are on, not whether this one ran: with JavaScript off for the site it matches `none`, but a script an extension blocks or that
-fails to load still matches `enabled`, so its controls are drawn and do nothing. A browser
-without the `scripting` media feature (before Chromium 120, Firefox 113, Safari 17) draws both, as
-it did.
+If a control submits a working server form, keep it drawn even when scripts are enabled. The
+handler can filter as the user types or save as they edit, but the button still works if the
+handler does not load. [The deck-builder smoke](../../examples/deck-builder/smoke.mjs) blocks the
+builder's module in Chromium, Firefox and WebKit, then uses the Filter button and saves twice
+on the same page using the Save button. Each successful fallback save patches the form's hidden
+version as well as the note.
 
 ### A value both sides compute
 

@@ -13,6 +13,16 @@ use crate::{
 #[derive(Id)]
 pub struct DeckFormId;
 
+/// The hidden version a successful action replaces when the builder's script did not submit it.
+#[derive(Id)]
+struct DeckVersionId;
+
+#[component]
+pub fn DeckVersion(bundle: DeckBuilderRefs, version: u64) -> impl Patch {
+    let field = DeckInput::FIELDS.version;
+    html! { <input ref={bundle.version_ref()} id={DeckVersionId} type="hidden" name={field} value={version}> }
+}
+
 /// What a grip's keys do, which every grip names (`aria-describedby`).
 #[derive(Id)]
 pub struct MoveHelpId;
@@ -62,7 +72,8 @@ pub fn DeckBuilder<'a>(
     answer: &'a Answer,
 ) -> impl Render {
     let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
-    let (lines_ref, template, lift, copies, form, version_ref, total, bars, tallies, kinds) = refs();
+    let (lines_ref, template, lift, copies, form, total, bars, tallies, kinds) = refs();
+    let version_ref: Ref<el::HTMLInputElement> = refs();
     let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
     let (unsure, previews) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
@@ -300,7 +311,7 @@ pub fn DeckBuilder<'a>(
                 </dl>
                 <form ref={form} id={DeckFormId} method="post" action={url::Save} data-patch novalidate>
                     <input ref={generation_ref} type="hidden" name={f.generation} value={generation}>
-                    <input ref={version_ref} type="hidden" name={f.version} value={version}>
+                    <DeckVersion bundle={DeckBuilderRefs} version={version} />
                     {SubmitKey::field(f.submit)}
                     <input ref={draft} type="hidden" name={f.draft} value="0">
                     <input type="hidden" name={f.q} value={filter}>
