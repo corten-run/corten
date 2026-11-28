@@ -8,7 +8,7 @@
 //! | `POST /deck` | the deck as its form holds it, with the version it was built on: saved once per submit key, refused by the rules (422) or when another tab saved first, or the server restarted (409) |
 //! | `GET /feed/deck`, `/feed/deck/live` | the saved deck, which the page follows to notice another tab's save |
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -24,8 +24,8 @@ use crate::{
     cards::{self, Card, Refusal},
     text::Msg,
     views::{
-        self, Answer, DeckBuilderRefs, DeckEmpty, DeckExport, DeckGeneration, DeckLines, DeckLinesId, DeckTotal, DeckVersion,
-        SaveNote, SavedLine,
+        self, Answer, CostCurve, DeckBuilderRefs, DeckEmpty, DeckExport, DeckGeneration, DeckLines, DeckLinesId, DeckTotal,
+        DeckVersion, InDeck, KindCounts, SaveNote, SavedLine,
     },
 };
 
@@ -48,7 +48,7 @@ pub struct Builder {
     pub deck: Feed<Slot>,
     /// How long an applied save's key is remembered (`KEPT_FOR`).
     kept_for: Duration,
-    /// The saves applied in the last day, so an identical retry answers as it did.
+    /// The saves applied in the last day, so an identical retry can identify the original write.
     /// Every save holds this lock, so the version it checks is the one it writes after.
     /// A real store keeps the keys next to the deck, in its transaction.
     saves: Arc<Mutex<Saves>>,
@@ -360,8 +360,9 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
 
 /// A successful Save already has the submitted fields, including cleared rows: keep their
 /// controls so an edit made after sending still reaches a queued submit. Only Add changes
-/// fields on the server. A newer snapshot cannot be reconciled by advancing the version:
-/// draw it as a conflict, which also stops the runtime from sending any queued submit.
+/// fields on the server. If a successful write (including an identical retry) has already been
+/// superseded, say it committed and draw the newer snapshot as a conflict to stop any queued
+/// submit. A changed retry under the same key is also a conflict, but it did not commit.
 fn fallback(
     action: corten::Action<'_>,
     t: Msg,
@@ -394,6 +395,10 @@ fn fallback(
     let lines = lines.as_slice();
     let total = lines.iter().map(|line| line.count).sum();
     let text = views::deck_list(lines);
+    let saved = &saved;
+    // A submitted line can have been removed; a saved line can be new. Leave the rest
+    // of the collection (including the checkboxes and current filter) alone.
+    let counts = input.card.iter().filter(|id| builder.card(id).is_some()).chain(saved.keys()).collect::<BTreeSet<_>>();
     let mut appended = Vec::new();
     let mut updated = Vec::new();
     if status.is_success() {
@@ -424,7 +429,12 @@ fn fallback(
             }
             <DeckVersion bundle={bundle} version={version} />
             <DeckTotal bundle={bundle} total={total} t={t} />
-            <DeckExport bundle={bundle} text={&text} />
+            <CostCurve bundle={bundle} lines={lines} t={t} />
+            <KindCounts bundle={bundle} lines={lines} t={t} />
+            for id in counts {
+                <InDeck id={id} count={saved.get(id).copied().unwrap_or(0)} />
+            }
+            <DeckExport bundle={bundle} text={&text} preview_total={Some(total)} />
             <SaveNote answer={&answer} />
         },
     )

@@ -25,9 +25,10 @@ form and links the server answers.
 
 If only the builder module fails to load, the runtime still enhances the form. Save keeps
 the submitted rows in place, including cleared counts that can be edited again before a reload.
-Add appends new rows or replaces just the rows it changes. The total and main text export show
-what was committed. An identical retry cannot add cards twice; a changed retry with the same
-key gets a conflict instead of a misleading Saved note.
+Add appends new lines or replaces just the lines it changes. The total, cost curve, kind counts,
+collection counts, main text export and both plan previews reflect the same saved snapshot.
+An identical retry cannot add cards twice. If the deck has moved on, the conflict says the
+original write saved and shows the newer deck. A changed retry under the same key did not save.
 
 ## Run it
 

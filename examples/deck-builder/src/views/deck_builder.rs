@@ -1,6 +1,6 @@
 use corten::{
     prelude::*,
-    script::{RowsOf, view_id},
+    script::{Keyed, NoRows, NoValue, RowsOf, view_id},
 };
 use corten_ui::CopyButton;
 
@@ -111,13 +111,83 @@ pub fn DeckTotal(bundle: DeckBuilderRefs, total: u32, t: Msg) -> impl Patch {
     html! { <output id={DeckTotalId} ref={bundle.total()}>{t.number(total)}</output> }
 }
 
-#[component]
-pub fn DeckExport(bundle: DeckBuilderRefs, text: &str) -> impl Patch {
-    html! { <textarea ref={bundle.list()} id={DeckListId} readonly rows="8" aria-label="Deck list">{text}</textarea> }
+#[component(js = super::deck_preview::DeckPreview)]
+pub fn DeckExport(bundle: DeckBuilderRefs, text: &str, preview_total: Option<u32>) -> impl Patch {
+    let refresh = preview_total.is_some();
+    let total = preview_total.unwrap_or_default();
+    html! {
+        <textarea
+            ref={bundle.list()}
+            id={DeckListId}
+            readonly
+            rows="8"
+            aria-label="Deck list"
+            on:connect={js::refresh(target, bundle.previews(), total, refresh)}
+        >
+            {text}
+        </textarea>
+    }
 }
+
+#[derive(Id)]
+struct CostCurveId;
+
+#[derive(Id)]
+struct KindCountsId;
 
 /// The curve's height, in the chart's units: the tallest bar's.
 const BAR: u32 = 48;
+
+#[component(css = DeckBuilder)]
+pub fn CostCurve(bundle: DeckBuilderRefs, lines: &[Line<'_>], t: Msg) -> impl Patch {
+    let mut curve = [0u32; TOP_COST as usize + 1];
+    for line in lines {
+        curve[curve_cost(line.card.cost) as usize] += line.count;
+    }
+    let tallest = curve.iter().copied().max().unwrap_or(0).max(4);
+    html! {
+        <figure class={Curve} id={CostCurveId}>
+            <figcaption>"Cost curve"</figcaption>
+            <svg viewBox="0 0 160 52" aria-hidden="true">
+                for (cost, n) in curve.iter().enumerate() {
+                    let height = n * BAR / tallest;
+                    <rect
+                        ref={bundle.bars()}
+                        key={cost}
+                        x={cost * 20 + 3}
+                        y={BAR + 2 - height}
+                        width="14"
+                        height={height}
+                        rx="2"
+                    ></rect>
+                }
+            </svg>
+            <ol>
+                for (cost, n) in curve.iter().enumerate() {
+                    <li>
+                        <span ref={bundle.tallies()} key={cost}>{t.number(*n)}</span>
+                        <small>if cost == TOP_COST as usize { {cost}"+" } else { {cost} }</small>
+                    </li>
+                }
+            </ol>
+        </figure>
+    }
+}
+
+#[component(css = DeckBuilder)]
+pub fn KindCounts(bundle: DeckBuilderRefs, lines: &[Line<'_>], t: Msg) -> impl Patch {
+    html! {
+        <dl class={Kinds} id={KindCountsId}>
+            for kind in Kind::ALL {
+                let count: u32 = lines.iter().filter(|line| line.card.kind == kind).map(|line| line.count).sum();
+                <div data-kind={kind.as_str()}>
+                    <dt>{kind.as_str()}"s"</dt>
+                    <dd><output ref={bundle.kinds()} key={kind.as_str()}>{t.number(count)}</output></dd>
+                </div>
+            }
+        </dl>
+    }
+}
 
 /// The builder: the collection on one side, the deck on the other.
 ///
@@ -151,7 +221,10 @@ pub fn DeckBuilder<'a>(
     answer: &'a Answer,
 ) -> impl Render {
     let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
-    let (template, form, bars, tallies, kinds) = refs();
+    let (template, form) = refs();
+    let bars: Ref<el::SVGElement, NoRows, NoValue, Keyed> = refs();
+    let tallies: Ref<el::HTMLSpanElement, NoRows, NoValue, Keyed> = refs();
+    let kinds: Ref<el::HTMLOutputElement, NoRows, NoValue, Keyed> = refs();
     let lines_ref: Ref<el::HTMLUListElement, RowsOf<{ view_id("DeckLine") }>> = refs();
     let lift: Ref<el::HTMLButtonElement> = refs();
     let copies: Ref<el::HTMLInputElement> = refs();
@@ -161,7 +234,8 @@ pub fn DeckBuilder<'a>(
     let total: Ref<el::HTMLOutputElement> = refs();
     let list: Ref<el::HTMLTextAreaElement> = refs();
     let generation_ref: Ref<el::HTMLInputElement> = refs();
-    let (unsure, previews) = refs();
+    let unsure = refs();
+    let previews: Ref<el::HTMLElement> = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
     let parts = js::Parts {
@@ -205,12 +279,6 @@ pub fn DeckBuilder<'a>(
     let filter = view.q.as_deref().unwrap_or("");
     let sorted = |by: Sort| view.sort == Some(by);
     let size: u32 = lines.iter().map(|l| l.count).sum();
-    let mut curve = [0u32; TOP_COST as usize + 1];
-    for line in lines.iter() {
-        curve[curve_cost(line.card.cost) as usize] += line.count;
-    }
-    let tallest = curve.iter().copied().max().unwrap_or(0).max(4);
-    let by_kind = Kind::ALL.map(|kind| (kind, lines.iter().filter(|l| l.card.kind == kind).map(|l| l.count).sum::<u32>()));
     let text = deck_list(lines);
     html! {
         <div
@@ -373,31 +441,8 @@ pub fn DeckBuilder<'a>(
                     <button ref={keep} type="button" on:click={js::merge(parts)}>"Keep both changes"</button>
                     <button type="button" on:click={js::reload(parts)}>"Use the other tab's deck"</button>
                 </div>
-                <figure class={Curve}>
-                    <figcaption>"Cost curve"</figcaption>
-                    <svg viewBox="0 0 160 52" aria-hidden="true">
-                        for (cost, n) in curve.iter().enumerate() {
-                            let height = n * BAR / tallest;
-                            <rect ref={bars} key={cost} x={cost * 20 + 3} y={BAR + 2 - height} width="14" height={height} rx="2"></rect>
-                        }
-                    </svg>
-                    <ol>
-                        for (cost, n) in curve.iter().enumerate() {
-                            <li>
-                                <span ref={tallies} key={cost}>{t.number(*n)}</span>
-                                <small>if cost == TOP_COST as usize { {cost}"+" } else { {cost} }</small>
-                            </li>
-                        }
-                    </ol>
-                </figure>
-                <dl class={Kinds}>
-                    for (kind, n) in by_kind {
-                        <div data-kind={kind.as_str()}>
-                            <dt>{kind.as_str()}"s"</dt>
-                            <dd><output ref={kinds} key={kind.as_str()}>{t.number(n)}</output></dd>
-                        </div>
-                    }
-                </dl>
+                <CostCurve bundle={DeckBuilderRefs} lines={lines} t={t} />
+                <KindCounts bundle={DeckBuilderRefs} lines={lines} t={t} />
                 <form ref={form} id={DeckFormId} method="post" action={url::Save} data-patch novalidate>
                     <DeckGeneration bundle={DeckBuilderRefs} generation={generation} />
                     <DeckVersion bundle={DeckBuilderRefs} version={version} />
@@ -421,10 +466,10 @@ pub fn DeckBuilder<'a>(
                 </template>
                 <details class={Export}>
                     <summary>"Deck list"</summary>
-                    <DeckExport bundle={DeckBuilderRefs} text={&text} />
+                    <DeckExport bundle={DeckBuilderRefs} text={&text} preview_total={None} />
                     <CopyButton text={DeckListId} label="Copy" copied="Copied" class={()} />
-                    <DeckPreview root={previews} instance="a" label="Plan A" total={size} text={&text} />
-                    <DeckPreview root={previews} instance="b" label="Plan B" total={size} text={&text} />
+                    <DeckPreview bundle={DeckBuilderRefs} instance="a" label="Plan A" total={size} text={&text} />
+                    <DeckPreview bundle={DeckBuilderRefs} instance="b" label="Plan B" total={size} text={&text} />
                 </details>
             </section>
             <p id={MoveHelpId} hidden>

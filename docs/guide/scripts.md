@@ -187,9 +187,15 @@ builder's module in Chromium, Firefox and WebKit, then filters, saves, and check
 followed by Save keeps the added card. A fallback Save leaves the submitted rows in place so
 edits made while it was pending can still be sent. Add changes only the affected rows, with a
 typed ID per card so the runtime can match its count in a replacement. The answer draws the
-version and note, and refreshes the total and text export when the saved deck changes. A stale
-form or a changed retry with an already-used submit key gets a conflict drawing the saved deck,
-not a success that lets the next queued edit overwrite it.
+version and note, and refreshes the total, cost curve, kind counts, collection counts and plan
+previews from the saved deck. The smoke compares those readouts and the text export to a fresh
+GET after Add. An identical retry does not write twice. If its write committed but the deck
+has moved on, the fallback returns 409 "Saved, but the deck has since changed" and draws the
+newer deck. A changed retry under the same key also gets a conflict and the saved deck, but
+the changed submission did not commit. A stale form likewise draws the current deck.
+The app compares the payload:
+`corten_cluster::begin` checks which feed used the key, not what the write contained. A conflict
+stops the next queued edit from overwriting the saved deck.
 
 ### A value both sides compute
 

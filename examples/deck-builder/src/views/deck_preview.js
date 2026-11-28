@@ -1,8 +1,9 @@
 // @ts-check
 import { keep } from "corten";
 import { DeckEditor, DeckSummary, view } from "corten/views";
+import { DeckPreviewChanged } from "corten/events";
 /** @import { Holds } from "corten/views" */
-/** @import { DeckPreviewChanged, DraftEdited, DraftOpened, ExportOpened } from "corten/events" */
+/** @import { DraftEdited, DraftOpened, ExportOpened } from "corten/events" */
 
 /**
  * @typedef {object} Parts
@@ -57,6 +58,15 @@ export function changed(event, parts) {
   s.loaded = true;
   draw(parts);
   for (const field of parts.exports) field.value = s.text;
+}
+
+/** A fallback patch already carries the export text; use it for both previews without
+ * replacing either preview or sending the text again.
+ * @param {HTMLTextAreaElement} field @param {HTMLElement[]} previews @param {number} total @param {boolean} refresh
+ */
+export function refresh(field, previews, total, refresh) {
+  if (!refresh) return;
+  for (const preview of previews) preview.dispatchEvent(new DeckPreviewChanged({ total, text: field.value }));
 }
 
 /** @param {DraftEdited} event */

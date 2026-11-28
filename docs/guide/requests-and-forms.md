@@ -1092,14 +1092,19 @@ posts it again, and the runtime sends a `data-patch` form again with it after a 
 5xx, an abort (a navigation) or an answer whose body was cut off on the way. Once a whole answer
 arrives, any status below 500, the runtime gives the form a new key, so the next submit is a new
 one. A patch never sets the key: the runtime keeps the form's own over the one the patch drew, so
-a 5xx patch (`Refusal::Upstream`) cannot swap in a fresh key before the retry. A form sent again before the first had an answer (a
-browser without JavaScript, a data client) can replay the same submission: compare its effective
-write with the one recorded under the key and return the first outcome for a match. If the
-write differs, refuse it explicitly; the key does not mean the new edit was saved. A `data-patch` form's
-change made while its write is out waits for the answer instead, and goes under the new key
-(below). The key is the app's to store, next to the write (Corten keeps
-no store); `corten_cluster::begin` takes it as its idempotency key. It answers a write sent again
-as the one before only while the store keeps the key: `corten_cluster::prune` drops keys older than
+a 5xx patch (`Refusal::Upstream`) cannot swap in a fresh key before the retry. Compare the
+retry's effective write with the one recorded under the key. A match identifies the original
+commit and does not write again. If the current state has moved on, the response can still be
+a conflict: deck-builder's fallback returns 409 "Saved, but the deck has since changed" and
+draws the newer deck. A changed retry is different: it did not commit, even though the first
+write under that key did. A `data-patch` form's change made while its write is out waits for the
+answer instead, and goes under the new key (below).
+
+The key is the app's to store, next to the write (Corten keeps no store).
+`corten_cluster::begin` takes it as its idempotency key and checks the recorded feed, not the
+payload. The app must record and compare the effective write if changed retries must be
+distinguished from identical ones. The store remembers a key only until
+`corten_cluster::prune` drops keys older than
 the age it is given, and a key sent after that is a new write. Its keys are unique across the whole
 cluster store, not per feed: while it is kept, a key a write to one feed used is refused on another
 (`corten_cluster::IdempotencyKeyReused`, which the app answers with a 422), never replayed there. A field that is not a UUID v4

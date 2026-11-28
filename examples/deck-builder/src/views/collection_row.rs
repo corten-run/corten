@@ -3,6 +3,14 @@ use corten::prelude::*;
 use super::{DeckFormId, deck_builder::MoveHelpId};
 use crate::app::DeckInput;
 
+#[derive(Id)]
+struct InDeckId<'a>(&'a str);
+
+#[component]
+pub fn InDeck(id: &str, count: u32) -> impl Patch {
+    html! { <span id={InDeckId(id)}>{count}</span> }
+}
+
 /// A card of the collection. `view` makes `CollectionRow` in `corten/views`, whose holes the
 /// builder's script reads and writes by name: `selected` (the checkbox and the row's mark),
 /// `hidden` (the filter), `name`, `set` and `kind` (the filter and the sort), `cost` and `owned`
@@ -31,6 +39,8 @@ pub fn CollectionRow<'a>(
     add: Ref<el::HTMLButtonElement>,
 ) -> impl Render {
     let f = DeckInput::FIELDS;
+    // Keep the card's id a writable view hole while the count's patch anchor stays fixed.
+    let count_id = InDeckId(id);
     html! {
         <tr key={id} data-selected={selected} data-rarity={rarity} hidden={hidden}>
             <td>
@@ -58,7 +68,7 @@ pub fn CollectionRow<'a>(
             <th scope="row"><span>{name}</span><small>{set}</small></th>
             <td><span>{cost}</span></td>
             <td>{kind}</td>
-            <td><span>{in_deck}</span>" / "<span>{owned}</span></td>
+            <td><span id={count_id}>{in_deck}</span>" / "<span>{owned}</span></td>
             <td><button ref={add} form={DeckFormId} name={f.add} value={id}>"Add"</button></td>
         </tr>
     }

@@ -671,14 +671,39 @@ try {
         const beforeAdd = await deck(blocked);
         const addedCard = (await drawnKeys(blocked, "tbody tr", "data-key")).find((id) => id && beforeAdd[id] === undefined);
         if (!addedCard) throw new Error("no collection card outside the saved deck");
+        await blocked.getByText("Deck list", { exact: true }).click();
+        const plan = blocked.getByRole("region", { name: "Plan A" });
+        await plan.getByRole("textbox", { name: "Notes" }).fill("Keep this draft");
+        await plan.getByRole("button", { name: "Summary" }).click();
         const add = await submit(row(blocked, addedCard).getByRole("button", { name: "Add", exact: true }));
         const shownAfterAdd = await deck(blocked);
         await fresh.reload();
         const storedAfterAdd = await deck(fresh);
-        const exportOf = (page) => page.locator("#deck-list").evaluate((field) => /** @type {HTMLTextAreaElement} */ (field).value);
-        check(`${name} fallback Add updates the total and export without reloading`,
-          (await total(blocked)) === (await total(fresh)) && (await exportOf(blocked)) === (await exportOf(fresh)),
-          `total ${await total(blocked)}, saved total ${await total(fresh)}`);
+        const readouts = (page) => page.evaluate(() => ({
+          total: document.querySelector("p[class$=__total] output")?.textContent,
+          export: /** @type {HTMLTextAreaElement} */ (document.querySelector("#deck-list")).value,
+          curve: [...document.querySelectorAll("figure ol li span")].map((el) => el.textContent),
+          bars: [...document.querySelectorAll("figure svg rect")].map((el) => [el.getAttribute("y"), el.getAttribute("height")]),
+          kinds: [...document.querySelectorAll("dl[class$=__kinds] output")].map((el) => el.textContent),
+          collection: Object.fromEntries([...document.querySelectorAll("tbody tr[data-key]")].map((el) =>
+            [el.getAttribute("data-key"), el.querySelector("td:nth-child(6) span")?.textContent])),
+          previews: ["Plan A", "Plan B"].map((label) => {
+            const plan = document.querySelector(`section[aria-label="${label}"]`);
+            return [plan?.querySelector("p strong")?.textContent, plan?.querySelector("textarea[readonly]")?.value];
+          }),
+        }));
+        const [shownReadouts, savedReadouts] = await Promise.all([readouts(blocked), readouts(fresh)]);
+        const stale = Object.keys(savedReadouts).filter((key) => JSON.stringify(shownReadouts[key]) !== JSON.stringify(savedReadouts[key]));
+        const total = savedReadouts.total;
+        const complete = !!total && !!savedReadouts.export && savedReadouts.curve.length === 8 && savedReadouts.bars.length === 8 &&
+          savedReadouts.kinds.length === 3 && savedReadouts.collection[addedCard] === "1" &&
+          savedReadouts.previews.every(([count, text]) => count === total && text === savedReadouts.export);
+        check(`${name} fallback Add draws the same deck readouts as a fresh GET`, complete && stale.length === 0,
+          `In deck for ${addedCard}: ${shownReadouts.collection[addedCard]} vs ${savedReadouts.collection[addedCard]}; stale: ${stale.join(", ") || "none"}`);
+        const summaryKept = await plan.getByRole("button", { name: "Summary" }).getAttribute("aria-pressed");
+        await plan.getByRole("button", { name: "Edit draft" }).click();
+        check(`${name} fallback Add keeps the preview's mode and draft note`,
+          summaryKept === "true" && (await plan.getByRole("textbox", { name: "Notes" }).inputValue()) === "Keep this draft");
         const save = await submit(blocked.locator(saveButton));
         const cards = save.fields.getAll("card");
         const savedCount = save.fields.getAll("count")[cards.indexOf(addedCard)];
