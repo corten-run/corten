@@ -1,5 +1,117 @@
 use super::*;
 
+async fn render_error_with_policy(page: Box<crate::page::ErrorPage>, failure: Failure) -> crate::response::Response {
+    use crate::page::{Asked, RequestPage, Shared};
+    let shared = std::sync::Arc::new(Shared::new(page, None, String::new()));
+    let signal = crate::Signal::for_app(shared.clone(), crate::extract::BODY_LIMIT);
+    let req = Request::new(Body::empty());
+    let mut page = RequestPage::read(req.headers(), true);
+    let asked = Asked::new(&req, &shared, &mut page, None, &signal);
+    crate::page::error_page(&shared, asked, failure).await
+}
+
+#[tokio::test]
+async fn error_page_policy_uses_only_its_own_observation() {
+    use crate::cache::{self, Seen, Unrepeatable};
+    use crate::form::DREW_KEY;
+    use crate::http::header;
+
+    for (observed, control, expected) in [
+        (false, "public, max-age=60", "public, max-age=60"),
+        (true, "public, max-age=60", "private, no-cache"),
+        (true, "private, no-store, max-age=60", "private, no-store"),
+    ] {
+        let page = crate::page::error_page_fn(
+            move |_: Failure, req: Req| async move {
+                if observed {
+                    // Observe a marker in a nonfinal poll without making a key or rendering any
+                    // per-request data.
+                    DREW_KEY.set(true);
+                    tokio::task::yield_now().await;
+                }
+                let mut res = req.test_page("Missing", "Constant error content")?;
+                let headers = res.headers_mut();
+                headers.insert(header::CACHE_CONTROL, http::HeaderValue::from_static(control));
+                headers.insert("cdn-cache-control", http::HeaderValue::from_static("max-age=60"));
+                headers.insert(header::ETAG, http::HeaderValue::from_static("\"constant\""));
+                Ok(res)
+            },
+            (),
+        );
+        let before = DREW_KEY.replace(true);
+        let mut res = render_error_with_policy(page, Failure::NotFound).await;
+        assert!(DREW_KEY.replace(before));
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.headers()["x-robots-tag"], "noindex");
+        assert_eq!(res.extensions().get::<Unrepeatable>().is_some(), observed);
+
+        cache::settle(&mut res, Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }, "");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], expected);
+        for name in [header::ETAG.as_str(), "cdn-cache-control"] {
+            assert_eq!(res.headers().contains_key(name), !observed, "{name}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_router_settles_the_error_pages_own_observation() {
+    use crate::http::header;
+
+    for observed in [false, true] {
+        let table = Table::new().route("/busy", get(|| async { StatusCode::TOO_MANY_REQUESTS }));
+        let router = App::new(Routes::from(table))
+            .error_page(
+                move |_: Failure, req: Req| async move {
+                    let mut res = req.test_page("Busy", "Constant error content")?;
+                    if observed {
+                        crate::form::DREW_KEY.set(true);
+                    }
+                    res.headers_mut().insert(header::CACHE_CONTROL, http::HeaderValue::from_static("private, no-cache"));
+                    res.headers_mut().insert("cdn-cache-control", http::HeaderValue::from_static("max-age=60"));
+                    res.headers_mut().insert(header::ETAG, http::HeaderValue::from_static("\"constant\""));
+                    Ok(res)
+                },
+                (),
+            )
+            .router();
+        let req = Request::get("/busy").header("accept", "text/html").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache");
+        assert_eq!(res.headers().contains_key(header::ETAG), !observed);
+        assert_eq!(res.headers().contains_key("cdn-cache-control"), !observed);
+    }
+}
+
+#[tokio::test]
+async fn error_page_refusal_keeps_the_observation_on_its_fallback() {
+    use crate::cache::{self, Unrepeatable, Unshared};
+    use crate::form::DREW_KEY;
+    use crate::http::header;
+
+    struct Refuses;
+    impl crate::extract::FromRequestParts<()> for Refuses {
+        type Rejection = StatusCode;
+
+        async fn from_request_parts(_: &mut http::request::Parts, _: &()) -> Result<Self, Self::Rejection> {
+            DREW_KEY.set(true);
+            Err(StatusCode::FORBIDDEN)
+        }
+    }
+
+    let page = crate::page::error_page_fn(|_: Failure, _: Refuses| async { unreachable!() }, ());
+    let before = DREW_KEY.get();
+    let mut res = render_error_with_policy(page, Failure::CrossSite).await;
+    DREW_KEY.set(before);
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(res.headers()["x-robots-tag"], "noindex");
+    assert!(res.extensions().get::<Unshared>().is_some());
+    assert!(res.extensions().get::<Unrepeatable>().is_some());
+    cache::settle_refused(&mut res);
+    assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache");
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "The page could not be shown.");
+}
+
 /// A failure that becomes the error page keeps what the handler and the middleware said besides
 /// the body (a request id, `Retry-After`, every `Server-Timing` value, what it varies on beside
 /// what the error page does), in every mode; the error page's own type and `Cache-Control` win.
