@@ -22,6 +22,9 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
     { move: "press as main connects", visits: "nav /dest", connect: "main" },
     { move: "press as a layout part connects", visits: "nav /dest", connect: "part" },
     { move: "press as a whole page connects", visits: "action /go, page /dest", connect: "whole" },
+    ...["partial", "whole"].flatMap((swap) => ["outgoing", "outgoing shared action", "outgoing failure", "retained"].map((mixed) => ({
+      move: `${swap} swap presses the ${mixed} form`, visits: swap === "partial" ? "nav /dest" : "action /go, page /dest", swap, mixed,
+    }))),
     { move: "same-address visit", visits: "nav /redirect, nav /home", retry: true, redraw: true },
     { move: "patch", retry: true, redraw: true },
     { move: "fragment", retry: true },
@@ -55,6 +58,7 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
           posts.push(`${request.method()} ${url.pathname} ${request.postData()}`);
           if (posts.length === 1) {
             await hold;
+            if (test.mixed === "outgoing failure") return route.fulfill({ status: 409 });
             if (move === "patch") return route.fulfill({ contentType: "text/html", headers: { "corten-patch": "1" }, body: form("home", "home2") });
           }
           return route.fulfill({ status: 204 });
@@ -64,10 +68,16 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
         if (url.pathname === "/redirect") return route.fulfill({ status: 204, headers: { "corten-location": move === "same-address visit" ? "/home" : "/dest" } });
         const side = url.pathname === "/dest" || url.search ? "dest" : "home";
         const value = mode && move === "same-address visit" ? "home2" : side;
-        const save = test.connect && side === "dest" ? `<press-twice>${form(side, "B1")}</press-twice>` : form(side, value);
-        const part = test.connect === "part" ? `<aside data-corten-page id="panel">${save}</aside>` : "";
-        const body = `<h1>${side}</h1>${test.layout || part ? "" : save}<a id="home" href="/home">Home</a><a id="dest" href="/dest">Destination</a><a id="query" href="/home?view=other">Other view</a><a id="redirect" href="/redirect">Redirect</a><a id="fragment" href="#save">Fragment</a><form id="go" data-patch method="post" action="/go"><button>Go</button></form>`;
-        const document = `<!doctype html><title>Submit queue fixture</title><meta name="corten-shell" content="fixture"><script type="module" src="/runtime.js"></script>${test.layout ? form("home") : part}<main>${body}</main>`;
+        const shared = test.mixed === "outgoing failure" || test.mixed === "outgoing shared action";
+        const save = test.connect && side === "dest" ? `<press-twice>${form(side, "B1")}</press-twice>` : form(shared ? "home" : side, value);
+        const callback = side === "dest" ? "<press-twice></press-twice>" : "";
+        // Partial: the part connects before main is replaced. Whole: main connects before the
+        // changed layout sibling is replaced. An unchanged sibling keeps the original form.
+        const part = test.swap === "partial" ? `<aside data-corten-page id="panel">${callback}</aside>` : test.connect === "part" ? `<aside data-corten-page id="panel">${save}</aside>` : "";
+        const outside = test.layout || test.mixed === "retained" ? form("home") : test.swap === "whole" ? save : "";
+        const inside = test.swap === "whole" ? callback : outside || test.connect === "part" ? "" : save;
+        const body = `<h1>${side}</h1>${inside}<a id="home" href="/home">Home</a><a id="dest" href="/dest">Destination</a><a id="query" href="/home?view=other">Other view</a><a id="redirect" href="/redirect">Redirect</a><a id="fragment" href="#save">Fragment</a><form id="go" data-patch method="post" action="/go"><button>Go</button></form>`;
+        const document = `<!doctype html><title>Submit queue fixture</title><meta name="corten-shell" content="fixture"><script type="module" src="/runtime.js"></script>${outside}${part}<main>${body}</main>`;
         return route.fulfill({
           contentType: "text/html",
           headers: mode === "page" ? { "corten-shell": "fixture" } : mode ? { "corten-page": "1" } : {},
@@ -124,6 +134,40 @@ export async function queuedPage(/** @type {import("@playwright/test").Browser} 
         };
         w.formBefore = document.getElementById("save");
       });
+      if (test.mixed) {
+        await p.evaluate(() => {
+          const w = /** @type {any} */ (window);
+          document.addEventListener("corten:error", (e) => {
+            w.errorAt = [e.detail.status, e.target === document ? "document" : e.target === document.getElementById("save") ? "current form" : "other"];
+          });
+          customElements.define("press-twice", class extends HTMLElement {
+            connectedCallback() {
+              const form = document.getElementById("save");
+              w.pressedOriginal = form === w.formBefore && form.isConnected;
+              form.requestSubmit();
+              form.elements.n.value = "home2";
+              form.requestSubmit();
+            }
+          });
+        });
+        await Promise.all([p.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/save-home", { timeout: 6000 }), click(test.swap === "whole" ? "#go button" : "#dest")]);
+        await drawn("dest");
+        answerFirst();
+        const failed = test.mixed === "outgoing failure", retained = test.mixed === "retained";
+        if (failed) await p.waitForFunction(() => window.errorAt, undefined, { timeout: 6000 });
+        else {
+          await p.waitForFunction(() => typeof window.releaseRetry === "function", undefined, { timeout: 6000 });
+          await p.evaluate(() => window.releaseRetry());
+        }
+        const state = await p.evaluate(() => {
+          const w = /** @type {any} */ (window), form = document.getElementById("save");
+          return [w.pressedOriginal, w.presses, form === w.formBefore, location.pathname, form.getAttribute("action"), w.errorAt ?? null];
+        });
+        const expected = [true, 2, retained, "/dest", test.mixed === "outgoing" ? "/save-dest" : "/save-home", failed ? [409, "document"] : null];
+        report(name, JSON.stringify(state) === JSON.stringify(expected) && visits.join(", ") === test.visits &&
+          posts.join(", ") === (retained ? `${original}, ${retry}` : original), `state: ${JSON.stringify(state)}; visits: ${visits.join(", ")}; posts: ${posts.join(", ")}`);
+        continue;
+      }
       if (test.connect) {
         await p.evaluate(() => customElements.define("press-twice", class extends HTMLElement {
           connectedCallback() {

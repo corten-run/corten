@@ -1615,55 +1615,68 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       parts.push([old, part]);
     }
   }
-  // Commit the address the navigation drew (not location, which can change before the answer).
-  // All refusal checks have passed. Inserting head tags, a layout part or main can synchronously
-  // connect a component that submits: its waiting press and any failure belong to the new page.
-  if (drew !== undefined && drew !== shownAt) (shownAt = drew), (turns += 1);
-  const title = content.querySelector("title");
-  if (title) {
-    document.title = textOf(title) ?? "";
-    title.remove();
+  const draw = () => {
+    const title = content.querySelector("title");
+    if (title) {
+      document.title = textOf(title) ?? "";
+      title.remove();
+    }
+    const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
+    for (const old of Array.from(document.head.querySelectorAll("[data-corten-head]"))) old.remove();
+    document.head.append(...tags);
+    const view = stay ? viewOf(main, content) : null;
+    // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
+    // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
+    // Back or forward records it too when it is the entry's own (Back before a link's page came).
+    const traverse = navigation?.transition?.navigationType === "traverse";
+    const key = navigation?.currentEntry?.key;
+    if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
+    if (key) drawnFor = key;
+    typedFields.clear();
+    // Back or forward to an entry: what the user typed there and had not sent, put in before the
+    // page joins, so a component that reads its fields as it connects reads them.
+    const typed = traverse ? typedIn.get(key ?? "") : undefined;
+    if (typed) putTyped(content, typed);
+    serve(content);
+    const [x, y] = [scrollX, scrollY];
+    for (const [old, part] of parts) {
+      // One inside an element the layout drew changes what a write's page is compared with, as a
+      // patch there does; one that is such an element takes its place (`replaceKeeping`).
+      const parent = parentElementOf(old);
+      if (!drawn.has(old) && parent) changedIn(parent, ["r", /** @type {string} */ (idOf(part)), [part]]);
+      // A link followed moves the focus as one in the header does; a read again keeps it.
+      replaceKeeping(old, part, null, false, !!stay);
+    }
+    main.replaceChildren(content);
+    // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
+    if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
+    layout?.apply();
+    scrolledIn.clear();
+    sideways.clear();
+    const kept = view?.() ?? [];
+    if (stay) scrollTo(x, y);
+    swapped = html;
+    swappedWhole = "";
+    shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
+    markCurrent(kept);
+    readAgainLater();
+    readPartsAgain(main);
+  };
+  if (drew === undefined || drew === shownAt) draw();
+  else {
+    // A connecting component can press an arriving form, a retained form, or one that another
+    // part of this same draw is about to replace. Send immediately; settle just these presses
+    // by element identity once the whole synchronous draw has finished.
+    const presses = drawingPresses = /** @type {[HTMLFormElement, Turn][]} */ ([]);
+    try {
+      draw();
+      shownAt = drew;
+      pageTurn = { n: pageTurn.n + 1 };
+      for (const [form, turn] of presses) if (holds(document, form)) turn.n = pageTurn.n;
+    } finally {
+      drawingPresses = null;
+    }
   }
-  const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
-  for (const old of Array.from(document.head.querySelectorAll("[data-corten-head]"))) old.remove();
-  document.head.append(...tags);
-  const view = stay ? viewOf(main, content) : null;
-  // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
-  // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
-  // Back or forward records it too when it is the entry's own (Back before a link's page came).
-  const traverse = navigation?.transition?.navigationType === "traverse";
-  const key = navigation?.currentEntry?.key;
-  if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
-  if (key) drawnFor = key;
-  typedFields.clear();
-  // Back or forward to an entry: what the user typed there and had not sent, put in before the
-  // page joins, so a component that reads its fields as it connects reads them.
-  const typed = traverse ? typedIn.get(key ?? "") : undefined;
-  if (typed) putTyped(content, typed);
-  serve(content);
-  const [x, y] = [scrollX, scrollY];
-  for (const [old, part] of parts) {
-    // One inside an element the layout drew changes what a write's page is compared with, as a
-    // patch there does; one that is such an element takes its place (`replaceKeeping`).
-    const parent = parentElementOf(old);
-    if (!drawn.has(old) && parent) changedIn(parent, ["r", /** @type {string} */ (idOf(part)), [part]]);
-    // A link followed moves the focus as one in the header does; a read again keeps it.
-    replaceKeeping(old, part, null, false, !!stay);
-  }
-  main.replaceChildren(content);
-  // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
-  if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
-  layout?.apply();
-  scrolledIn.clear();
-  sideways.clear();
-  const kept = view?.() ?? [];
-  if (stay) scrollTo(x, y);
-  swapped = html;
-  swappedWhole = "";
-  shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
-  markCurrent(kept);
-  readAgainLater();
-  readPartsAgain(main);
   return true;
 }
 
@@ -3031,7 +3044,10 @@ let drawnFor = navigation?.currentEntry?.key ?? "";
  * put it in the address since, and how many times a navigation changed it.
  */
 let shownAt = pageKey(new URL(location.href));
-let turns = 0;
+/** @typedef {{n: number}} Turn */
+let pageTurn = { n: 0 };
+/** Only during a synchronous draw at another address. @type {[HTMLFormElement, Turn][] | null} */
+let drawingPresses = null;
 // An entry the runtime did not go to (a link to a fragment, a script's `pushState` or
 // `replaceState`, as a sort in place does) shows the page that was there, at that address: a read
 // of it again is not a turn.
@@ -3248,7 +3264,7 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextTurn?: number, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextTurn?: Turn, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
@@ -3317,7 +3333,8 @@ function asking(form, submitter) {
  */
 async function send(form, submitter, sends, within = asking(form, submitter)) {
   sentFrom.add(form);
-  const turn = turns;
+  const turn = drawingPresses ? { n: pageTurn.n } : pageTurn;
+  drawingPresses?.push([form, turn]);
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
@@ -3523,7 +3540,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       const { next, nextWithin } = current;
       if (next !== undefined && !signal.aborted) {
         const { nextTurn } = current;
-        setTimeout(() => left === leftAt && nextTurn === turns && sendAgain(form, next, nextWithin));
+        setTimeout(() => left === leftAt && nextTurn?.n === pageTurn.n && sendAgain(form, next, nextWithin));
       }
     }
   }
@@ -3549,7 +3566,7 @@ function inPlaceOf(form) {
  * address since the press (`turn`), that has sent no submit itself. Else on the document: an
  * event on a form no longer in the page reaches no handler, and a form of another page, or one
  * used since, did not send this write.
- * @param {HTMLFormElement} form @param {{ status: number, error?: unknown }} detail @param {number} turn
+ * @param {HTMLFormElement} form @param {{ status: number, error?: unknown }} detail @param {Turn} turn
  */
 function sayFailed(form, detail, turn) {
   // A navigation draws `<main>` and the layout's elements that are the page's, and the whole
@@ -3565,7 +3582,7 @@ function sayFailed(form, detail, turn) {
   const event = new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail });
   const successor =
     at instanceof HTMLFormElement &&
-    turn === turns &&
+    turn.n === pageTurn.n &&
     hasAttr(at, "data-patch") &&
     !sentFrom.has(at) &&
     /** @type {const} */ (["action", "method"]).every((name) => formProperty(at, name) === formProperty(form, name));

@@ -1201,6 +1201,8 @@ elsewhere (Corten's own redirect, `corten-location`, or a reload), or removed th
 pressed button. A navigation aborts in-flight submits, so a late answer never patches a page
 it was not meant for. If a navigation draws a page at another address between the waiting press
 and its retry, the runtime drops that submit too, even if the new page has a form with the same `id`.
+If a connecting component presses a form while the navigation is drawing, its waiting press
+belongs to the new page only if that same form element is still there when the draw finishes.
 A screen whose every press is a step of its own (a count's + and -, each a delta the server adds)
 keeps its own ordered queue in its script: the form sends where the user ended up, not each step.
 
