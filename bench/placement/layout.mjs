@@ -20,8 +20,8 @@
 // object, local or global, gives its input section that name's place, as LLD does, read from the
 // symbols each link's map lists (written with --no-demangle, as build.sh asks for in a shuffled
 // run, so they match the symbol table byte for byte); a listed name the map also has outside
-// .text is refused, since LLD orders that output section too. Other output sections must keep
-// the unpadded map's input order, not its absolute addresses. A function is of .text by its ELF
+// .text is refused, since LLD orders that output section too. Outside .text, distinct input IDs
+// are compared by ID and position only (outsideOrder()). A function is of .text by its ELF
 // symbol table entry's section index (readelf -sW's .symtab, type FUNC), and of the input section
 // its own link's map gives it (map.mjs owner()). It passes when the first input section of .text
 // is the first pad's, exactly the declared pad's size; the rest are the unpadded map's (map.mjs
@@ -137,9 +137,10 @@ const unique = (es) => { const seen = new Map(); for (const e of es) seen.set(e.
 const some = (xs) => xs.slice(0, 3).join(", ");
 const sameSymbols = (a, b) => a.symbols.length === b.symbols.length && a.symbols.every((y, k) => y.name === b.symbols[k].name && y.at - a.at === b.symbols[k].at - b.at);
 
-// The ordering file is for .text alone. Outside it, compare the named input rows in map order.
-// Repeated IDs can come from different inputs; use their size, alignment and relative symbols
-// to tell them apart when the map can. Neither check uses the output's absolute addresses.
+// The ordering file is for .text alone. Outside it, compare output sections with inputs in map
+// order and distinct inputs by ID and position only. Repeated IDs can come from different inputs;
+// also compare their size, alignment and symbol names at relative offsets to tell them apart
+// when the map can. Absolute addresses are not compared.
 function outsideOrder(unpadded, placed) {
   const a = unpadded.filter((o) => o.inputs.length), b = placed.filter((o) => o.inputs.length);
   if (a.length !== b.length || a.some((o, i) => o.name !== b[i].name)) return ["the output sections with inputs outside .text differ from the unpadded map"];
@@ -169,7 +170,8 @@ function outsideOrder(unpadded, placed) {
  * sections of one key (llvm::sort, not a stable sort), and the sections it places nowhere follow
  * in their own order (x86-64, where LLD inserts no thunks). A name the file lists that the
  * placement's map also has in another output section can order that section too and is refused.
- * Outside .text the input order must stay fixed. Within .text the unpadded sections are taken in
+ * Outside .text, compare distinct input IDs by ID and position only, with additional checks
+ * for repeated IDs (outsideOrder()). Within .text the unpadded sections are taken in
  * groups, one a key (each section the file places nowhere a group of its own), and the placement passes when it holds,
  * besides the pads, the unpadded map's input sections (map.mjs pair()), each listing the same
  * symbols as far from its start, with each group's sections together, in any order among

@@ -10348,8 +10348,10 @@ rules something out.
     gives any symbol defined in it, whatever its type (a function, a label, an object) and
     binding, so the run reads a section's place from every symbol its link's map lists in it,
     and refuses a placement whose file names a symbol the map also has in another output
-    section, which LLD can order as well. Outside `.text` the input order must match the
-    unpadded map, not its absolute addresses. The order is partial where
+    section, which LLD can order as well. Outside `.text` the output sections with inputs and
+    their ordered input IDs must match the unpadded map. Distinct IDs are compared by ID and
+    position only; repeated IDs also compare size, alignment and symbol names at relative offsets.
+    Absolute addresses are not compared. The order is partial where
     neither the draw nor LLD gives one: input sections the file gives one place (local copies
     of one function in several objects) lie in any order among themselves, since LLD sorts by
     the place alone, not stably. The run checks each placement holds the unpadded functions and

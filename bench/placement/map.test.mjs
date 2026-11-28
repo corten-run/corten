@@ -1093,6 +1093,55 @@ test("a real shuffled link must keep the unpadded relative input order outside .
   });
 });
 
+test("a captured Rust ThinLTO link keeps the outside-.text input order when shuffled", {
+  skip: process.platform === "linux" && process.arch === "x64" &&
+    spawnSync("sh", ["-c", "test -x /usr/bin/cc && command -v rustc && command -v readelf"]).status === 0
+    ? false : "needs x86-64 Linux with rustc, cc and readelf",
+}, (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "placement-rust-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const kit = fileURLToPath(new URL(".", import.meta.url)), target = join(dir, "target"), capture = join(dir, "capture");
+  const probe = join(target, "probe"), cc = join(dir, "cc"), pad = join(dir, "pad.o"), orderFile = join(dir, "shuffled.order");
+  const unpadded = join(dir, "unpadded"), shuffled = join(dir, "shuffled"), plainMap = unpadded + ".map", placedMap = shuffled + ".map";
+  const env = { ...process.env, PLACEMENT_KIT: kit, CARGO_TARGET_DIR: target, LINK_CAPTURE: capture };
+  const run = (cmd, ...args) => {
+    const r = spawnSync(cmd, args, { cwd: dir, env, encoding: "utf8", timeout: 60_000 });
+    assert.ifError(r.error);
+    assert.equal(r.status, 0, `${cmd} ${args.join(" ")}:\n${r.stderr}`);
+    return r.stdout;
+  };
+  const node = (script, ...args) => run(process.execPath, join(kit, script), ...args);
+  const hash = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
+  mkdirSync(target);
+  writeFileSync(cc, readFileSync(join(kit, "wrap", "cc")), { mode: 0o755 });
+  writeFileSync(join(dir, "probe.rs"), 'fn main() { println!("{}", std::hint::black_box(123)); }\n');
+  writeFileSync(join(dir, "pad.s"), [
+    '.section .text.corten_layout_pad,"axR",@progbits', ".p2align 4", ".globl corten_layout_pad",
+    ".type corten_layout_pad,@function", "corten_layout_pad:", ".skip 320, 0xcc",
+    '.section .note.GNU-stack,"",@progbits', "",
+  ].join("\n"));
+  run("/usr/bin/cc", "-c", "pad.s", "-o", pad);
+  run("rustc", "-Copt-level=3", "-Clto=thin", "-Ccodegen-units=1", "-Cdebuginfo=1", `-Clinker=${cc}`, "-Clink-arg=-fuse-ld=lld", "probe.rs", "-o", probe);
+  // Both maps must come from the same captured objects, as in build.sh.
+  node("relink.mjs", capture, unpadded, "--map", plainMap, "--no-demangle");
+  assert.equal(hash(unpadded), hash(probe));
+  const functions = join(dir, "functions.txt");
+  writeFileSync(functions, node("order.mjs", "functions", unpadded));
+  writeFileSync(orderFile, node("order.mjs", "order", functions, "123", "1"));
+  node("relink.mjs", capture, shuffled, "--map", placedMap, "--no-demangle", "--pad", pad, "--order", orderFile, "--every-name");
+
+  const [a, b] = [plainMap, placedMap].map((file) => readMap(readFileSync(file, "utf8")));
+  for (const name of [".eh_frame", ".gcc_except_table", ".data.rel.ro", ".debug_info"]) {
+    assert.ok(a.find((o) => o.name === name)?.inputs.length > 1, `unpadded Rust map lacks multiple ${name} inputs`);
+  }
+  const symtab = (map) => map.find((o) => o.name === ".symtab").inputs[0];
+  assert.equal(symtab(a).id, symtab(b).id);
+  assert.ok(symtab(b).size > symtab(a).size, "the generated symbol table grows to describe the pad");
+  assert.match(node("layout.mjs", unpadded, shuffled, "320", "--order", orderFile, "--map", plainMap, "--placed-map", placedMap), /^JSON \{"ok":true,/m);
+  const side = [unpadded, shuffled, orderFile, plainMap, placedMap];
+  assert.match(node("layout.mjs", "--alike", ...side, ...side, "320"), /^JSON \{"ok":true,/m);
+});
+
 // An object of one section [name, size, byte] with the file symbol source and its functions
 // [name, offset, global] (local unless global).
 const sixth = (t) => {
