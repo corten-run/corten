@@ -673,16 +673,32 @@ async fn a_route_that_says_data_answers_its_data_in_its_module_and_mounted_by_ha
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn a_page_serves_json_for_a_mixed_case_first_media_type_with_or_without_the_store() {
-    for app in [App::new(url_screen::router()), App::new(url_screen::router()).kept_answers(0)] {
+    let app = || {
+        let screen = |req: Req| async move {
+            let data = ShownListing { name: "Ashen" };
+            Public::new(std::time::Duration::from_secs(60), req.screen::<_, AnyAnswer, _>(&data, listing_page(data.name)))
+        };
+        App::new(Routes::from(Table::new().route("/listing", crate::route::get(screen).0)))
+    };
+    for (app, keeps) in [(app(), true), (app().kept_answers(0), false)] {
         let client = app.test();
+        for hit in [false, keeps] {
+            let html = client.get(&url_screen::Listing).header(http::header::ACCEPT, "text/html").await;
+            assert_eq!(html.status(), StatusCode::OK);
+            assert!(html.text().contains("<title>Listing</title>") && html.text().contains("Ashen</main>"), "{}", html.text());
+            assert_eq!(html.headers().contains_key(http::header::AGE), hit);
+        }
+        // A page's kept document never answers a data request, regardless of its spelling.
         for accept in ["Application/JSON", "application/JSON", "APPLICATION/JSON; q=1, text/html"] {
             let answer = client.get(&url_screen::Listing).header(http::header::ACCEPT, accept).await;
             assert_eq!(answer.headers()[http::header::CONTENT_TYPE], "application/json", "{accept}");
             assert_eq!(answer.text(), r#"{"title":"Listing","data":{"name":"Ashen"}}"#, "{accept}");
+            assert!(!answer.headers().contains_key(http::header::AGE), "{accept}");
         }
         for accept in ["Application/JSONx", "text/html, APPLICATION/JSON"] {
             let answer = client.get(&url_screen::Listing).header(http::header::ACCEPT, accept).await;
             assert!(answer.headers()[http::header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"), "{accept}");
+            assert_eq!(answer.headers().contains_key(http::header::AGE), keeps, "{accept}");
         }
     }
 }
