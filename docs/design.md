@@ -3303,7 +3303,11 @@ rules something out.
     on short answers above: the full stages now preserve the same mark and the parity test
     checks it as well as the headers. An early refused write that renders an HTML error page
     has its own signal. A separate router test checks that it too carries the caller read,
-    but a refusal that read no caller is not marked personal;
+    but a refusal that read no caller is not marked personal. At `9c5180887` against
+    `929f7b891`, the constant HTML denial cost 142 more instructions when its error page
+    read the caller and 3 more when it did not. The ordinary page control changed by less
+    than one (release, jemalloc, Callgrind 3.19.0, two in-process comparisons). These count
+    the refusal repair, not the saving from the one pass;
     2026-11-26, the tag of an answer that took the pass at `10bfc8a21` against
     `e87ad02da`, instructions and allocations a request and idle memory by
     `bench/request-cost` (valgrind 3.24.0, rustc 1.100.0; no cycles), a scope's size and
