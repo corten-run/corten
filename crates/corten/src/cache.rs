@@ -390,7 +390,7 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
     // An answer marked as no handler's own ([`Unshared`]): never shared, whatever it says and
     // whatever status it goes out with. The usual answer has no extensions, so this is a null check.
     if res.extensions().get::<Unshared>().is_some() {
-        settle_unshared(res, drew_key);
+        settle_unshared(res, drew_key, seen.caller);
         return;
     }
     // An answer that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
@@ -404,6 +404,12 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
     // it: it is that visitor's still, as if this request had read the caller.
     let marked = res.extensions().get::<Personal>().is_some();
     let caller = seen.caller || marked;
+    // A kept answer given again carries its mark with what was kept, not as an extension.
+    let typed = res.extensions().get::<Typed>().copied().or_else(|| crate::kept::Kept::typed(res.extensions()));
+    if let Some(typed) = typed.filter(|typed| typed.no_store) {
+        settle_typed_no_store(res, seen, typed, drew_key, marked);
+        return;
+    }
     // The directives of every line count, as HTTP joins them (a second line is rare: only a header
     // written by hand has one). Only a plain `private` makes the answer private:
     // `private="set-cookie"` still lets a shared cache keep the rest. A `no-store` or `private` is
@@ -416,8 +422,6 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
     // answer is personal, and a `private` beside them is not trusted.
     let (mut no_store, mut is_private, mut must_understand) = (false, false, false);
     let (mut lines, mut quoted, mut text) = (0, false, true);
-    // A kept answer given again carries its mark with what was kept, not as an extension.
-    let typed = res.extensions().get::<Typed>().copied().or_else(|| crate::kept::Kept::typed(res.extensions()));
     // For a partial (below), whether any reader could find a `no-store` in its header
     // (`no-store=1`, beside `must-understand`), read with the rest rather than looked up again.
     let mut mentioned = false;
@@ -483,21 +487,14 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
     if !marked && (seen.nonce || cookie || seen.caller || asked_by) {
         res.extensions_mut().insert(Personal);
     }
-    // `NoStore`, whatever a middleware made of its header since.
-    let kept_out = typed.is_some_and(|typed| typed.no_store);
     // A page route's answer asked for as anything but its full document is the browser's alone:
     // a CDN that read its own header would keep this form at the page's URL.
     let partial = seen.partial && typed.is_some();
     let headers = res.headers_mut();
     // A CDN reads its own caching header before `Cache-Control`, so none of those Corten names stays
     // on any of these, whatever `Cache-Control` says (a page that drew a key lost them above).
-    if !drew_key && (personal || kept_out || partial) {
+    if !drew_key && (personal || partial) {
         drop_cdn_caching(headers);
-    }
-    if kept_out {
-        // As `NoStore` writes it: `private` too, for a CDN that ignores a bare `no-store`.
-        headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
-        return;
     }
     if no_store && !must_understand {
         // A personal answer, and one sent as the browser's alone, says `private` too, for a CDN
@@ -571,6 +568,20 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
     if !typed.named {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
     }
+}
+
+/// The typed policy replaces every cache-control line regardless of its directives. The
+/// caller, nonce, credentials and cookie still count for a relay's [`Personal`] mark.
+#[cold]
+fn settle_typed_no_store(res: &mut Response, seen: Seen, typed: Typed, drew_key: bool, marked: bool) {
+    if !marked && (seen.caller || seen.nonce || (seen.credentials && !typed.named) || sets_cookie(res.headers())) {
+        res.extensions_mut().insert(Personal);
+    }
+    let headers = res.headers_mut();
+    if !drew_key {
+        drop_cdn_caching(headers);
+    }
+    headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
 }
 
 /// The mark of an answer [`settle`] found to be one visitor's: it sets a cookie, read a caller,
@@ -730,7 +741,11 @@ impl Marks {
 /// One that drew a submit key ([`Unrepeatable`], an error page with a form) loses a tag it was
 /// given too ([`drop_keyed_reuse`]).
 #[cold]
-fn settle_unshared(res: &mut Response, drew_key: bool) {
+fn settle_unshared(res: &mut Response, drew_key: bool, caller: bool) {
+    // Match `Applied::ready` for a bare unshared answer: still carry the caller mark.
+    if caller && res.extensions().get::<Personal>().is_none() {
+        res.extensions_mut().insert(Personal);
+    }
     let kept_out = Typed::is_no_store(res);
     let drew_key = drew_key || res.extensions().get::<Unrepeatable>().is_some();
     let headers = res.headers_mut();
@@ -747,7 +762,7 @@ fn settle_unshared(res: &mut Response, drew_key: bool) {
 /// an [`Unshared`] one: an app that relays it inline settles it the same way.
 pub(crate) fn settle_refused(res: &mut Response) {
     res.extensions_mut().insert(Unshared);
-    settle_unshared(res, false);
+    settle_unshared(res, false, false);
 }
 
 /// The empty answer sent in place of one whose exact-size body failed as it was read after the

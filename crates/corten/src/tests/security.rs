@@ -1918,6 +1918,7 @@ fn lines_answer(kind: &str) -> Response {
         "svg" => crate::Media::new("image/svg+xml", "<svg/>".repeat(300)).into_response(),
         "html" => ([("content-type", "text/html; charset=utf-8")], "<!doctype html><title>A</title>").into_response(),
         "nothing" => ().into_response(),
+        "unshared-bare" => crate::cache::unshared(Response::new(Body::empty())),
         "no-content" => StatusCode::NO_CONTENT.into_response(),
         "teapot" => (StatusCode::IM_A_TEAPOT, "short and stout").into_response(),
         "two" => own("x-own", "1"),
@@ -2160,8 +2161,17 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 if page {
                     applied.document(&mut each, csp, swap);
                 }
+                let caller = seen.caller;
                 crate::cache::settle(&mut each, seen, "/a/path");
                 assert_eq!(lines_of(one.headers()), lines_of(each.headers()), "{said}");
+                let personal = |res: &Response| res.extensions().get::<crate::cache::Personal>().is_some();
+                assert_eq!(personal(&one), personal(&each), "{said}, caller {caller}: Personal mark");
+                if kind == "unshared-bare" {
+                    assert_eq!(personal(&each), caller, "{said}: keep the caller mark");
+                    for answer in [&one, &each] {
+                        assert!(answer.extensions().get::<crate::cache::Unshared>().is_some(), "{said}: keep Unshared");
+                    }
+                }
                 assert_eq!(one.extensions().len(), each.extensions().len(), "{said}: what is left on it");
                 // Room is left for one more line (`Vary`, where the answer is compressed), as the
                 // stages leave it, so the map does not grow again for it.
@@ -2169,7 +2179,7 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 given += 1;
                 true
             };
-            for kind in LINES_KINDS {
+            for kind in LINES_KINDS.into_iter().chain(["unshared-bare"]) {
                 for (taken, swap) in [(false, false), (false, true), (true, false), (true, true)] {
                     let personal = Seen { credentials: true, caller: true, partial: true, nonce: false, dev: true };
                     let was = ready(kind, taken, swap, anyone());
@@ -2177,7 +2187,9 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 }
             }
             // The answers the pass is for are given their lines, so it cannot quietly stop.
-            for kind in ["text", "created", "missing", "failed", "long", "json", "png", "nothing", "teapot", "keyed"] {
+            for kind in
+                ["text", "created", "missing", "failed", "long", "json", "png", "nothing", "teapot", "keyed", "unshared-bare"]
+            {
                 assert!(ready(kind, false, false, anyone()), "{name}, {scope}: {kind}");
                 // A page's request that took its nonce names it in the policy.
                 assert_eq!(ready(kind, true, false, anyone()), !page, "{name}, {scope}: {kind}, its nonce taken");
