@@ -29,6 +29,8 @@ contenders at **25,709** and **8,688 pages/s**, respectively. Express and FastAP
 64-user phases but recorded timeouts at 256 users. Their numbers remain visible in the
 report and are not used to rank them. The [evidence record](r24/catalog-page/provenance.json)
 includes the exact per-pass timeout counts and the source archive checksum.
+The current catalog definition also lists Proa, which was not part of r24 and is
+not measured or ranked here.
 The compact export keeps each contender's cold probes and timed phases by origin
 and pass, including the numeric inputs for throughput, latency, CPU and memory,
 failures and comparison eligibility. Recompute the report within each source and
