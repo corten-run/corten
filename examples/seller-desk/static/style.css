@@ -21,5 +21,5 @@ h2 { font-size: 1rem; margin: 0 0 8px; }
 button, input { font: inherit; color: inherit; }
 input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
-[role="status"]:empty { display: none; }
-[role="status"] { margin: 0 0 12px; padding: 8px 12px; border-radius: var(--radius); background: var(--accent); color: var(--accent-foreground); }
+[role="status"] > p:empty { display: none; }
+[role="status"] > p { margin: 0 0 12px; padding: 8px 12px; border-radius: var(--radius); background: var(--accent); color: var(--accent-foreground); }

@@ -111,7 +111,7 @@ pub fn ItemDetail<'a>(page: ItemPage<'a>) -> impl Render {
             <section class={Panel}>
                 <h2>{t.alert_title()}</h2>
                 <AlertForm t={t} form={page.form.clone()} />
-                <AlertMessage message={message} />
+                <div aria-live="polite"><AlertMessage message={message} /></div>
             </section>
             <section class={Panel}>
                 <h2>{t.item_details()}</h2>

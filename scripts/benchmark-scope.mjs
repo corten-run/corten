@@ -30,6 +30,10 @@ const requestCostInputs = [".node-version", ".github/workflows/request-cost.yml"
   "Cargo.toml", "Cargo.lock", "crates/corten", "crates/corten-macros", "crates/corten-feed", "crates/corten-protocol",
   "bench/request-cost"];
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
+const sha = /^[0-9a-f]{40}$/;
+const scopeWorkflows = { catalog: "catalog.yml", evidence: "benchmark-evidence.yml", "ci-base": "ci.yml" };
+const cumulativeVersion = "-cumulative-v1";
+const mainRunLimit = 100;
 
 export function selectScope(allApps, paths) {
   if (paths === undefined) return { apps: allApps, json: true };
@@ -38,8 +42,9 @@ export function selectScope(allApps, paths) {
   for (const path of paths) {
     if (matches(path, rustInputs) || matches(path, ["bench/catalog/corten"])) {
       selected.add("corten");
-    } else if (fleetControllerFiles.has(path)) {
-      // Only the Corten Dockerfiles copy the root context. Keep the harness and both JSON jobs.
+    } else if (fleetControllerFiles.has(path) || path === "bench/live/apps/corten/Cargo.lock" || path === "bench/marketplace/corten/Cargo.lock") {
+      // Only Corten builds from the root context and uses the two Rust locks. Other files beside
+      // the locks can be shared parity drivers. Keep the harness and both JSON jobs.
       selected.add("corten");
       json = true;
     } else if (matches(path, catalogShared)) {
@@ -74,49 +79,127 @@ export function selectRequestCost(paths) {
   return paths === undefined || paths.some(path => matches(path, requestCostInputs) || /(^|\/)\.gitattributes$/.test(path));
 }
 
-function changedPaths(base, head, cwd, env) {
+function changedPaths(base, head, cwd, env, everyCommit = false) {
+  const diffFlags = ["--name-only", "--no-renames", "--ignore-submodules=none", "-z"];
   // Keep both sides of a move and don't hide gitlinks from source-custody checks.
-  return execFileSync("git", ["diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", base, head, "--"], {
+  const read = args => execFileSync("git", args, {
     cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env,
   }).split("\0").filter(Boolean);
+  if (!everyCommit) return read(["diff", ...diffFlags, base, head, "--"]);
+  // Main can fast-forward to a merge that took the checked tree as its second parent.
+  // The first-parent changes then describe another branch. Don't narrow the jobs from them.
+  // Exclude the checked commit's parents so an ordinary push walks only the new interval.
+  const mainline = execFileSync("git", ["rev-list", "--first-parent", head, "--not", `${base}^@`], { cwd, env, encoding: "utf8" });
+  if (!mainline.trimEnd().split(/\r?\n/).includes(base)) return undefined;
+  const range = [...diffFlags, `${base}..${head}`, "--"];
+  // Topic commits count, but a topic merge importing an already checked parent does not
+  // introduce that parent's paths. Count its own resolutions, plus all mainline merge changes
+  // against the previous main tree (including a resolution that takes a parent's version).
+  return [...new Set([
+    ...read(["log", "--format=", "--diff-merges=combined", ...range]),
+    ...read(["log", "--format=", "--first-parent", "--merges", "--diff-merges=first-parent", ...range]),
+  ])].sort();
 }
 
-// Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR to
-// read its own repository.
-export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd, env = process.env) {
-  const sha = /^[0-9a-f]{40}$/;
+function checkedAncestor(base, head, workflow, cwd, env) {
+  if (typeof base !== "string" || !sha.test(base) || base === head) return false;
+  if (spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd, stdio: "ignore", env }).status !== 0) return false;
+  // A green legacy workflow covered only its own push. Recognize the active versioned
+  // command in the candidate's workflow, not the date or ancestry of the rollout commit.
+  const command = `node scripts/benchmark-scope.mjs ${workflow}${cumulativeVersion}`;
+  const invocation = workflow === "ci-base" ? `base=$(${command}) || exit 1` : `run: ${command}`;
+  const source = spawnSync("git", ["show", `${base}:.github/workflows/${scopeWorkflows[workflow]}`], {
+    cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  });
+  return source.status === 0 && source.stdout.split(/\r?\n/).some(line => line.trim() === invocation);
+}
+
+async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN }, workflow, fetchRuns, checked) {
+  const url = new URL(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs`);
+  const allowsDispatch = workflow === "ci.yml";
+  url.search = new URLSearchParams({ branch: "main", status: "success", per_page: String(mainRunLimit) });
+  if (!allowsDispatch) url.searchParams.set("event", "push");
+  const response = await fetchRuns(url, {
+    headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${GITHUB_TOKEN}` },
+    redirect: "error", signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return { reason: `the GitHub Actions API returned HTTP ${response.status}` };
+  const runs = (await response.json().catch(() => null))?.workflow_runs;
+  if (!Array.isArray(runs)) return { reason: "the GitHub Actions API returned an invalid workflow-runs response" };
+  // The API lists newest runs first. CI's manual run validates its explicit base and runs all
+  // checks. Other workflows keep using push results (Evidence's manual run can be native-only).
+  for (const run of runs.slice(0, mainRunLimit)) {
+    if ((run?.event === "push" || (allowsDispatch && run?.event === "workflow_dispatch")) &&
+        run.head_branch === "main" && run.status === "completed" && run.conclusion === "success" &&
+        checked(run.head_sha)) return { base: run.head_sha };
+  }
+  return { reason: `none of the most recent ${mainRunLimit} successful main runs is an available earlier ancestor with cumulative coverage` };
+}
+
+// Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR.
+export async function mainPushBase(event, cwd, env = process.env, { workflow, fetchRuns = fetch } = {}) {
+  const { GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REF, GITHUB_REPOSITORY, GITHUB_WORKFLOW_REF, GITHUB_TOKEN } = event;
+  // Called workflows see the caller's event and workflow_ref, not their own.
+  const file = scopeWorkflows[workflow];
+  if (!file || GITHUB_EVENT_NAME !== "push" || GITHUB_REF !== "refs/heads/main"
+      || GITHUB_WORKFLOW_REF !== `${GITHUB_REPOSITORY}/.github/workflows/${file}@${GITHUB_REF}`) return undefined;
+  if (!GITHUB_TOKEN) return { reason: "the GitHub Actions API token is missing" };
+  if (!sha.test(GITHUB_SHA ?? "")) return { reason: "the pushed commit SHA is invalid" };
+  // A usable success proves coverage through its commit even if the previous tip was rewritten.
+  // The previous tip itself proves no coverage: that run may have stopped or failed.
+  try {
+    return await successfulMainBase(event, file, fetchRuns, base => checkedAncestor(base, GITHUB_SHA, workflow, cwd, env));
+  } catch {
+    // Do not print the response or error from an authenticated request.
+    return { reason: "the GitHub Actions workflow-runs request failed or timed out" };
+  }
+}
+
+export async function eventPaths(event, cwd, env = process.env, options) {
+  const { GITHUB_EVENT_NAME, GITHUB_SHA } = event;
   if (GITHUB_EVENT_NAME === "pull_request") {
     assert.match(GITHUB_SHA ?? "", sha);
     // Actions tests the synthetic merge, including any base-side path moves.
     return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd, env);
   }
-  if (GITHUB_EVENT_NAME === "push") {
-    assert.match(GITHUB_SHA ?? "", sha);
-    if (sha.test(PUSH_BEFORE ?? "") && PUSH_BEFORE !== "0".repeat(40)) {
-      const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore", env });
-      if (base.error) throw base.error;
-      // A force-push's old tip is not an ancestor; its tree diff can hide changes.
-      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore", env });
-      if (ancestor?.error) throw ancestor.error;
-      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd, env);
+  const result = await mainPushBase(event, cwd, env, options);
+  if (result?.reason) console.warn(`Successful main push base unavailable: ${result.reason}; selecting every benchmark job.`);
+  if (result?.base) {
+    try {
+      return changedPaths(result.base, GITHUB_SHA, cwd, env, true);
+    } catch {
+      console.warn("Main push diff unavailable; selecting every benchmark job.");
     }
-    console.warn("Push base unavailable; selecting every benchmark job.");
   }
   return undefined;
 }
 
 if (import.meta.main) {
   const { GITHUB_OUTPUT, PARITY_APPS } = process.env;
-  const workflow = process.argv[2];
-  if (workflow === "catalog") {
-    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), eventPaths(process.env));
-    appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
-  } else if (workflow === "evidence") {
-    const paths = eventPaths(process.env);
-    appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
-  } else if (workflow === "request-cost") {
-    appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(eventPaths(process.env))}\n`);
+  const command = process.argv[2];
+  const workflow = command?.endsWith(cumulativeVersion) ? command.slice(0, -cumulativeVersion.length) : command;
+  if (command !== "request-cost" && !(Object.hasOwn(scopeWorkflows, workflow) && command === workflow + cumulativeVersion)) {
+    throw new Error("Expected catalog-cumulative-v1, evidence-cumulative-v1, request-cost or ci-base-cumulative-v1");
+  }
+  const options = { workflow };
+  if (workflow === "ci-base") {
+    const result = await mainPushBase(process.env, undefined, process.env, options);
+    if (result?.base) {
+      console.log(result.base);
+    } else {
+      const reason = result?.reason ?? "this is not a direct push to main";
+      console.error(`::error::Could not find a cumulative main CI base: ${reason}. Rerun after a transient lookup failure, or dispatch CI on main with an explicitly verified ancestor as base.`);
+      process.exitCode = 1;
+    }
   } else {
-    throw new Error("Expected catalog, evidence or request-cost scope");
+    const paths = await eventPaths(process.env, undefined, process.env, options);
+    if (workflow === "catalog") {
+      const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
+      appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
+    } else if (workflow === "evidence") {
+      appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
+    } else if (workflow === "request-cost") {
+      appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(paths)}\n`);
+    }
   }
 }

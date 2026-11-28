@@ -1,4 +1,108 @@
-import { base, engine, skip, check } from "./helpers.mjs";
+import { base, engine, skip, check, steps, within } from "./helpers.mjs";
+
+/** @param {unknown} error */
+const firstLine = (error) => (error instanceof Error ? error.message : String(error)).split("\n")[0];
+
+/**
+ * Follow the failed read's real link, with no earlier navigation or pointer activity in its context.
+ * @param {import("@playwright/test").Browser} browser
+ */
+export async function failedPartLink(browser) {
+  const home = new URL("/", base).href;
+  const target = new URL("/?picks=true", base).href;
+  /** @type {Promise<import("@playwright/test").BrowserContext> | undefined} */
+  let opening;
+  /** @type {import("@playwright/test").BrowserContext | undefined} */
+  let context;
+  /** @type {import("@playwright/test").Page | undefined} */
+  let page;
+  let step = "set up the failed part";
+  let failure = "";
+  /** @param {import("@playwright/test").BrowserContext} owned */
+  const close = async (owned) => within(5000, "context close timed out", owned.close());
+  try {
+    const setup = steps(10_000, "failed-part setup timed out");
+    const owned = await setup.step(() => (opening = browser.newContext()));
+    context = owned;
+    const follow = await setup.step(() => owned.newPage());
+    page = follow;
+    // Neither the initial read nor any unexpected read at the destination can supply the picks.
+    await setup.step(() => follow.route((url) => url.href === home || url.href === target, (route) =>
+      route.request().headers().corten === "action" ? route.abort("internetdisconnected") : route.continue(),
+    ));
+    // The runtime does not intercept links until load, even if the part has already failed.
+    await setup.step(() => follow.goto(home, { waitUntil: "load", timeout: 10_000 }));
+    const link = follow.locator("#picks[data-corten-read-failed] a:visible");
+    await setup.step(() => link.waitFor({ state: "visible", timeout: 10_000 }));
+    const { href, enhanced } = await setup.step(() => link.evaluate((a) => ({
+      href: /** @type {HTMLAnchorElement} */ (a).href,
+      enhanced: !!window.navigation,
+    })));
+    if (href !== target) throw new Error("link points to " + href + ", expected " + target);
+
+    // Arm before pressing Enter, so even a fast answer is seen. This fresh page has never
+    // hovered the link; the separate prefetch smoke still exercises real pointer hover and reuse.
+    const answered = follow.waitForResponse((response) => {
+      const request = response.request();
+      const { corten, purpose } = request.headers();
+      return response.url() === target && request.method() === "GET" && purpose !== "prefetch" &&
+        (request.isNavigationRequest() || corten === "nav" || corten === "page");
+    }, { timeout: 25_000 }).catch(firstLine);
+    step = "activate the failed-part link";
+    await within(12_000, "keyboard activation did not settle within 12 s", link.press("Enter", { noWaitAfter: true, timeout: 10_000 }));
+
+    step = "navigate to " + target;
+    const navigation = steps(10_000, "navigation timed out");
+    const response = await navigation.step(() => answered);
+    if (typeof response === "string") throw new Error(response);
+    const fullLoad = response.request().isNavigationRequest();
+    if (enhanced && fullLoad) throw new Error("expected a Corten navigation, got a document load");
+    if (!enhanced && !fullLoad) throw new Error("expected a document load without the Navigation API");
+    if (!response.ok()) throw new Error("HTTP " + response.status());
+    await navigation.step(() => follow.waitForURL((url) => url.href === target, { waitUntil: "commit", timeout: 10_000 }));
+
+    step = "draw the picks";
+    const items = steps(10_000, "picks timed out");
+    const body = await items.step(() => response.text());
+    const expected = await items.step(() => follow.evaluate((html) => {
+      const doc = new DOMParser().parseFromString(__html(html), "text/html");
+      return {
+        rows: Array.from(doc.querySelectorAll("ul#picks > li"), (li) => li.textContent),
+        readNow: !!doc.querySelector("template[data-corten-read-now]"),
+      };
+    }, body));
+    if (expected.rows.length !== 2 || expected.readNow) {
+      throw new Error("the answer has " + expected.rows.length + " picks, read template " + expected.readNow);
+    }
+    let lastDraw = "no rendered picks observed";
+    await items.poll(async () => {
+      const drawn = await follow.evaluate(() => ({
+        at: location.href,
+        rows: Array.from(document.querySelectorAll("ul#picks > li"), (li) => li.textContent),
+        waiting: !!document.querySelector("#picks[data-corten-read-failed], template[data-corten-read-now]"),
+      }));
+      lastDraw = JSON.stringify(drawn);
+      return drawn.at === target && !drawn.waiting && JSON.stringify(drawn.rows) === JSON.stringify(expected.rows);
+    }).catch((error) => {
+      throw new Error(firstLine(error) + "; last draw: " + lastDraw);
+    });
+    await items.step(() => follow.locator("ul#picks").waitFor({ state: "visible", timeout: 10_000 }));
+  } catch (error) {
+    failure = step + ": " + firstLine(error) + " (at " + (page?.url() ?? "no page") + ")";
+  } finally {
+    if (context) {
+      await close(context).catch((error) => {
+        failure += (failure ? "; " : "") + "close the failed-part context: " + firstLine(error);
+      });
+    } else if (opening) {
+      // Setup has already failed; do not wait for acquisition, but close its context if it arrives.
+      void opening.then(close, () => {}).catch((error) => {
+        console.error("close the late failed-part context: " + firstLine(error));
+      });
+    }
+  }
+  return failure;
+}
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -81,19 +185,12 @@ export async function partReads(page, browser, swaps, noSwaps) {
     await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
     const failed = await placeholder();
     check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
-    // Followed only when shown, so a link that is not fails the checks, not the run.
-    if (failed.link) {
-      await held.click("#picks a", { timeout: 3000 }).catch(() => {});
-      await held.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
-    }
-    check(
-      "the page it links to has the slow part read in, with JavaScript too",
-      new URL(held.url()).search === "?picks=true" && (await held.$$("ul#picks li")).length === 2 && (await held.$("template[data-corten-read-now]")) === null,
-      held.url(),
-    );
     await held.unrouteAll({ behavior: "ignoreErrors" });
     await held.context().close();
   }
+  const followed = await failedPartLink(browser);
+  check("the page it links to has the slow part read in, with JavaScript too", followed === "", followed);
+
   // The part module does not load (a 503), though the page and the runtime do: no read starts, and
   // the waiting part shows its link, as without JavaScript: nothing marked it busy, which alone
   // hides the link (#1400).

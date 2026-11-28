@@ -56,5 +56,5 @@ pub fn AlertForm<'a>(t: Msg, form: AlertFormView<'a>) -> impl Patch {
 /// form's stylesheet.
 #[component(css = AlertForm)]
 pub fn AlertMessage(message: &str) -> impl Patch {
-    html! { <p class={Message} id={AlertMessageId} aria-live="polite">{message}</p> }
+    html! { <p class={Message} id={AlertMessageId}>{message}</p> }
 }

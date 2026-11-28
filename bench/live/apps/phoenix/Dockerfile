@@ -1,4 +1,4 @@
-FROM elixir:1.20.5-otp-29@sha256:1b850191faeaae55678b782cd8b34d391f793672f3175b1956d024f794ca321b AS tools
+FROM elixir:1.20.5-otp-29@sha256:028a755eef5692f4f64b06c68104b7a326e0f610646e9d8faa8d3a651f1060f3 AS tools
 WORKDIR /app
 ENV ERL_FLAGS="+S 2:2 +SDcpu 1 +SDio 1" MIX_ENV=prod
 RUN mix local.hex --force && mix local.rebar --force
@@ -13,7 +13,7 @@ COPY client.js ./
 RUN mix compile --warnings-as-errors && mix esbuild.install --if-missing && mix esbuild native_live --minify && mix release
 COPY test test
 
-FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+FROM debian:trixie-20261123-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libstdc++6 openssl libncurses6 ca-certificates >/dev/null && rm -rf /var/lib/apt/lists/* \
   && useradd --system --uid 10001 app
 ENV ERL_FLAGS="+S 2:2 +SDcpu 1 +SDio 1" LANG=C.UTF-8 MIX_ENV=prod PHX_SERVER=true PORT=8080

@@ -203,11 +203,14 @@ impl Mode {
             return ((mode, true), "");
         }
         let accept = accept().and_then(|accept| accept.to_str().ok()).unwrap_or("");
-        let mode = if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
-            Mode::Data
-        } else {
-            Mode::Document
-        };
+        // The first item's media type, without its parameters and the whitespace around it, is
+        // JSON: the line starts with it after whitespace, and whitespace then ends the item or
+        // starts its parameters. Read so, a line that starts otherwise is not looked at further.
+        let json = accept
+            .trim_ascii_start()
+            .strip_prefix(crate::api::JSON)
+            .is_some_and(|rest| matches!(rest.trim_ascii_start().as_bytes().first(), None | Some(b',' | b';')));
+        let mode = if json { Mode::Data } else { Mode::Document };
         ((mode, false), accept)
     }
 
@@ -782,6 +785,13 @@ pub struct NavLink<'a> {
     prefetch: bool,
 }
 
+impl NavLink<'_> {
+    /// Whether this link writes `aria-current="page"` for this request.
+    pub fn is_current(&self) -> bool {
+        self.current
+    }
+}
+
 impl crate::view::__private::Writes for NavLink<'_> {
     type Static = NavLink<'static>;
     const WRITES: &'static [&'static str] =
@@ -1029,11 +1039,6 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
 #[cfg(test)]
 pub(crate) fn is_current_for_tests(path: &str, href: &str, section: bool) -> bool {
     is_current(path, href, section)
-}
-
-/// The page's key, printed as 16 hex digits.
-pub(crate) fn key_header(key: u64) -> HeaderValue {
-    HeaderValue::from_str(crate::ascii::hex(key, &mut [0; 16])).expect("hex is a valid header")
 }
 
 /// Every way a request can fail, given to the app's error page ([`crate::App::error_page`]) for a
@@ -1794,7 +1799,7 @@ impl Action<'_> {
         }
         #[cfg(debug_assertions)]
         self.0.parses_whole(&body)?;
-        let mut res = html_response(status, body, Some(PATCH_HEADER));
+        let mut res = html_response(status, body, Some(PATCH_HEADER), HeaderValue::from_static(VARY));
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
             self.0.signal.mark_key_drawn();
@@ -2348,7 +2353,9 @@ impl Req {
         if self.shared.dev && !swap {
             unruled_vars(&out, &vars)?;
         }
-        let key = self.key(crate::view::SHELL.get());
+        // Its 16 hex digits, written once for the head and the header.
+        let mut digits = [0; 16];
+        let key = crate::ascii::hex(self.key(crate::view::SHELL.get()), &mut digits);
         let mut tags = String::new();
         if swap {
             self.section_links(&mut tags);
@@ -2394,7 +2401,7 @@ impl Req {
         size.store(out.len() + out.len() / 8, Ordering::Relaxed);
         // Only a swap says it is one: a document a cache gave to a navigation fetch by mistake
         // makes the runtime load the URL in full.
-        let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
+        let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER), self.vary()), key);
         if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
             // Looked for only when there is one: a page with places is otherwise every `GET`'s.
@@ -2864,9 +2871,9 @@ impl Req {
     }
 
     /// Adds the shell key, which tells the runtime whether the page around `<main>` is still current.
-    fn finish(&self, mut res: Response, key: u64) -> Response {
-        res.headers_mut().insert(SHELL_HEADER, key_header(key));
-        res.headers_mut().insert(header::VARY, self.vary());
+    /// `res` already varies as [`Req::vary`] says; `key` is the key's 16 hex digits.
+    fn finish(&self, mut res: Response, key: &str) -> Response {
+        res.headers_mut().insert(SHELL_HEADER, HeaderValue::from_str(key).expect("hex is a valid header"));
         self.content_language(&mut res);
         if let Some(notice) = &self.notice {
             // Shown once: this page is the one it was for, drawn here or by the runtime.
@@ -2930,11 +2937,11 @@ impl Req {
 
     /// The tags Corten needs in `<head>` after the page's own: script settings, the shell key,
     /// the app's configured tags, section stylesheets, the import map, the runtime and modules.
-    fn head_tags(&self, modules: &[&'static str], key: u64, out: &mut String) {
+    fn head_tags(&self, modules: &[&'static str], key: &str, out: &mut String) {
         out.push_str(r#"<meta name="corten-scripts" content=""#);
         out.push_str(&self.shared.scripts_dir);
         out.push_str(r#""><meta name="corten-shell" content=""#);
-        out.push_str(crate::ascii::hex(key, &mut [0; 16]));
+        out.push_str(key);
         out.push_str(r#"">"#);
         // The page's CSP lets scripts load from other hosts: the `default` Trusted Types policy
         // that lets a script set such a URL, made before any script after it runs.
@@ -3532,7 +3539,7 @@ impl Req {
         match self.mode {
             Mode::Action => {
                 let DrawnPatch(body) = form(FormPatch(self)).await?;
-                Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))
+                Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER), HeaderValue::from_static(VARY))))
             }
             #[cfg(feature = "json")]
             Mode::Data => Ok(HtmlResponse::new(errors.response())),
@@ -5004,7 +5011,8 @@ fn unruled_vars(page: &str, rules: &str) -> Result<()> {
     }
 }
 
-pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<HeaderName>) -> Response {
+/// An HTML answer, which varies as `vary` says: [`VARY`] for a patch, [`Req::vary`] for a page.
+pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<HeaderName>, vary: HeaderValue) -> Response {
     let mut res = Response::new(Body::from(body));
     *res.status_mut() = status;
     let headers = res.headers_mut();
@@ -5015,7 +5023,7 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
     // instructions than 12 in every case, the ranges apart.
     headers.reserve(13);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
-    headers.insert(header::VARY, HeaderValue::from_static(VARY));
+    headers.insert(header::VARY, vary);
     if let Some(kind) = kind {
         headers.insert(kind, HeaderValue::from_static("1"));
     }
@@ -5165,6 +5173,70 @@ mod carried_tests {
             let said = format!("corten {:?}, accept {:?}", text(corten), text(accept));
             assert_eq!(read(corten, accept, true), ((mode, fetched), html), "{said}");
             assert_eq!(read(corten, accept, false), ((mode, fetched), false), "{said}");
+        }
+    }
+
+    /// `Mode::said` stops at the first item's start, and decides as reading that whole item does:
+    /// its media type, cut at the first `;` and trimmed, is JSON. Every line made of these parts
+    /// is decided both ways, and with a runtime's header, which `Accept` never overrides.
+    #[test]
+    fn the_first_accept_item_is_json_as_reading_the_whole_item_says() {
+        let whole = |line: &str| crate::api::media_type(line.split(',').next().unwrap_or("")) == crate::api::JSON;
+        let before = ["", " ", "\t", " \t "];
+        let types = [
+            "application/json",
+            "application/jsonx",
+            "application/json+x",
+            "application/json/",
+            "application/jso",
+            "Application/JSON",
+            "application/problem+json",
+            "text/html",
+            "*/*",
+            "application/*",
+            "",
+        ];
+        let after = ["", " ", "\t", " \t"];
+        let then = ["", ",", ";", ";q=0", "; q=0.5", ", text/html", ",application/json", "x", " x", ";,", ",;"];
+        let rest = ["", ", */*;q=0.8", ", application/json", "  "];
+        let mut decided = [0; 2];
+        for before in before {
+            for ty in types {
+                for after in after {
+                    for then in then {
+                        for rest in rest {
+                            let line = format!("{before}{ty}{after}{then}{rest}");
+                            let value = HeaderValue::from_str(&line).unwrap();
+                            let ((mode, fetched), accept) = Mode::said(None, || Some(&value));
+                            assert_eq!(mode == Mode::Data, whole(&line), "{line:?}");
+                            assert_eq!((fetched, accept), (false, line.as_str()), "{line:?}");
+                            decided[usize::from(mode == Mode::Data)] += 1;
+                            for runtime in ["nav", "action", "page"] {
+                                let runtime = HeaderValue::from_static(runtime);
+                                let ((mode, fetched), accept) = Mode::said(Some(&runtime), || Some(&value));
+                                assert!(mode != Mode::Data && fetched && accept.is_empty(), "{line:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Both answers are among the lines, so neither reading is the same for all of them.
+        assert!(decided.iter().all(|&n| n > 100), "{decided:?}");
+        // The quoted comma follows the semicolon, so neither reading lets it affect the media type.
+        for line in
+            [r#"application/json; p="a,b", text/html"#, r#"text/html; p="a,b", application/json"#, r#"application/json;p="a,b""#]
+        {
+            let value = HeaderValue::from_static(line);
+            let ((mode, _), _) = Mode::said(None, || Some(&value));
+            assert_eq!(mode == Mode::Data, whole(line), "{line:?}");
+        }
+        // No line, and one that is not text, are no JSON.
+        assert_eq!(Mode::said(None, || None).0, (Mode::Document, false));
+        // Even bytes after the item's media type invalidate the entire line.
+        for line in [&b"application/json\xff"[..], b"application/json; q=\xff", b"application/json, text/\xff"] {
+            let not_text = HeaderValue::from_bytes(line).unwrap();
+            assert_eq!(Mode::said(None, || Some(&not_text)), ((Mode::Document, false), ""));
         }
     }
 }

@@ -716,6 +716,8 @@ journal with an expired peer lease, the matching audit delivery and no terminal
 or close record, collection evidence or recovery lock. It rechecks those bytes
 and the same census before create. This records the failed attempt without
 trying to recover or qualify it.
+Replay checks the roster in the original digest-bound subject. A newly listed
+adapter is required for new deliveries, not for a previously sealed audit.
 
 The same receipt can record external cleanup of a monitored attempt that stopped
 after an accepted create but before binding the droplet. The original reservation
@@ -2359,7 +2361,7 @@ DELETE intent, no recorded destruction and a previously verified, monitored
 result, a fresh collect may use up to 25 minutes for replay only after a
 same-account exact 404. It checks absence again and rechecks the archive,
 extracted evidence and terminal campaign and seal before recording cleanup.
-It never sends another DELETE. Other replay deadlines are unchanged.
+It never sends another DELETE.
 If ordinary collection at the measured commit cannot finish that replay, a
 reviewed merged successor can reconcile an already verified, successfully
 collected child with closed monitoring and a saved DELETE intent. Run the child
@@ -2372,6 +2374,35 @@ account and host may be read; a present host, changed reservation, or different
 replay result refuses. This route records only `destroyedAt`; it cannot connect
 to the guest or send another DELETE. Other collection paths keep their source
 requirements.
+
+If a completed monitored child already has a saved archive and extraction but
+ordinary replay exceeded its deadline, run the
+`cloud-production.mjs ROUND --state-dir PATH --collect --sealed-measured-checkout CHECKOUT --print-approval`
+preview from the reviewed controller. Use the clean original measured checkout
+for `CHECKOUT`. The preview checks that it can capture the measured replay
+sources. A closed terminal seal and a successful saved exit marker are
+required. The approval names `collect-saved-sealed-archive-with-measured-replay`
+and binds the measured commit, reservation, host, archive, extraction and
+terminal seal. Each replay may take up to 45 minutes; the measured source
+snapshot and all archive and native checks are unchanged. The ordinary
+ownership, remote idle and archive checks still precede any DELETE. A timeout,
+interruption or unverified replay does not authorize a DELETE. Once custody is
+clear, a retry after a recorded deletion intent confirms absence without
+sending another DELETE, unless it has proof that the earlier DELETE was never
+sent. The recovery checks its extraction, saved reservation,
+operation lock and approved terminal seal again before recording intent and
+before handing the request to the private provider worker. The worker does not
+repeat those local custody checks. A positive not-dispatched acknowledgement
+withdraws the saved intent only under the same operation lock and with the exact
+saved state still present. If the state save is interrupted, a fresh approved
+collect can finish the withdrawal from the complete proof for that exact intent
+while the host still exists, then obtain a new idle proof. Approval includes
+the matching proof's digest (or its absence), checked again under the operation
+lock; a proof that appears after preview requires a new approval. A missing, partial,
+or mismatched proof, or a host that is already absent, keeps absence-only
+recovery. Uncertain dispatch never writes the withdrawal proof.
+This mode does not pack, download or start a job. Other replay budgets are unchanged.
+
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider

@@ -20,9 +20,12 @@
 #   stopped gave no figure: what it printed is removed, why is added to
 #   <file>.refused, a line an attempt, and it is taken again, once. No run is taken again for
 #   its figure.
+# bash job.sh diagnose <directory> <cpu> <new-diagnostic-directory>
+#   The separate observer-on idle plan, with the same bounds and both builds, but no
+#   answer captures, request counts or allocation profiles. Never reuses a diagnostic directory.
 set -eo pipefail
 
-usage() { echo "usage: bash job.sh build <directory> | bash job.sh read <directory> <cpu>" >&2; exit 2; }
+usage() { echo "usage: bash job.sh build <directory> | bash job.sh read <directory> <cpu> | bash job.sh diagnose <directory> <cpu> <new-diagnostic-directory>" >&2; exit 2; }
 kit=$(cd "$(dirname "$0")" && pwd -P)
 builds=${2:-}
 
@@ -75,10 +78,11 @@ build)
     echo "build $side $((SECONDS - began))" >> "$builds/seconds"
   done
   ;;
-read)
-  [ $# -eq 3 ] || usage
+read|diagnose)
+  mode=$1
+  if [ "$mode" = read ]; then [ $# -eq 3 ] || usage; else [ $# -eq 4 ] || usage; fi
   cpu=$3
-  : "${STOP_AT:?job.sh read: STOP_AT is not set}"
+  : "${STOP_AT:?job.sh $mode: STOP_AT is not set}"
   # A build's probe, or nothing: for a build with `unbuilt`, though a build that was stopped
   # may have left a binary.
   probe() {
@@ -99,21 +103,58 @@ read)
     fi
     return "$status"
   }
-  began=$SECONDS
-  for side in base head; do
-    binary=$(probe "$side")
-    [ -n "$binary" ] || continue
-    within node "$kit/count.mjs" "$binary" --cpu "$cpu" --answers "$builds/$side/answers" < /dev/null || echo "::warning::not every answer from $side"
-  done
-  if diff -r "$builds/base/answers" "$builds/head/answers"; then echo "the two builds answer the same"; fi
-  echo "answers $((SECONDS - began))" >> "$builds/seconds"
-  began=$SECONDS
-  node "$kit/compare.mjs" --readings > "$builds/readings"
-  while read -r file script options; do
+  output=$builds
+  if [ "$mode" = read ]; then
+    began=$SECONDS
     for side in base head; do
       binary=$(probe "$side")
       [ -n "$binary" ] || continue
-      out=$builds/$side/$file
+      within node "$kit/count.mjs" "$binary" --cpu "$cpu" --answers "$builds/$side/answers" < /dev/null || echo "::warning::not every answer from $side"
+    done
+    if diff -r "$builds/base/answers" "$builds/head/answers"; then echo "the two builds answer the same"; fi
+    echo "answers $((SECONDS - began))" >> "$builds/seconds"
+    plan=readings
+    options=()
+  else
+    output=$4
+    if ! mkdir -- "$output"; then
+      echo "job.sh diagnose: give a new diagnostic directory" >&2
+      exit 1
+    fi
+    declare -A diagnostic_probes
+    for side in base head; do
+      binary=$(probe "$side")
+      if [ -z "$binary" ]; then
+        echo "job.sh diagnose: no executable probe for $side" >&2
+        exit 1
+      fi
+      checksum=$builds/$side/sha256
+      if [ ! -f "$checksum" ]; then
+        echo "job.sh diagnose: no build checksum for $side" >&2
+        exit 1
+      fi
+      if ! sha256sum < "$binary" | cut -c 1-64 | cmp -s -- - "$checksum"; then
+        echo "job.sh diagnose: probe checksum does not match the build for $side" >&2
+        exit 1
+      fi
+      diagnostic_probes[$side]=$binary
+    done
+    mkdir -- "$output/base" "$output/head"
+    printf '%s\n' "${diagnostic_probes[base]##*/}" "${diagnostic_probes[head]##*/}" > "$output/complete.tmp"
+    plan=allocator-readings
+    options=(--allocator)
+  fi
+  began=$SECONDS
+  node "$kit/compare.mjs" --readings "${options[@]}" > "$output/$plan"
+  while read -r file script options; do
+    for side in base head; do
+      if [ "$mode" = diagnose ]; then
+        binary=${diagnostic_probes[$side]}
+      else
+        binary=$(probe "$side")
+        [ -n "$binary" ] || continue
+      fi
+      out=$output/$side/$file
       for attempt in 1 2; do
         echo "$(date +%T) $side $file, attempt $attempt"
         status=0
@@ -132,9 +173,21 @@ read)
         rm -f "$out" "$out.said"
         [ "$(date +%s)" -lt "$STOP_AT" ] || break
       done
+      if [ "$mode" = diagnose ]; then
+        digest=-
+        if [ "$status" = 0 ]; then
+          digest=$(sha256sum < "$out")
+          digest=${digest%% *}
+        fi
+        printf '%s %s %s\n' "$side" "$file" "$digest" >> "$output/complete.tmp"
+      fi
     done
-  done < "$builds/readings"
-  echo "readings $((SECONDS - began))" >> "$builds/seconds"
+  done < "$output/$plan"
+  echo "$plan $((SECONDS - began))" >> "$output/seconds"
+  if [ "$mode" = diagnose ]; then
+    # Publish the commits and receipt digests only once the plan finishes.
+    mv -- "$output/complete.tmp" "$output/complete"
+  fi
   ;;
 *) usage ;;
 esac

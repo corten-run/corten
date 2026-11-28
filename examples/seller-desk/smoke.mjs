@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { chromium, expect, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
+import { liveRegion } from "../../scripts/smoke/live-region.mjs";
 
 const base = process.argv[2];
 if (!base) throw new Error("usage: node examples/seller-desk/smoke.mjs <base url>");
@@ -269,6 +270,8 @@ try {
   const ids = await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).slice(0, 2).map((r) => r.id));
   await page.click(`#${ids[0]} input[type=checkbox]`);
   await page.click(`#${ids[1]} input[type=checkbox]`);
+  // Capture before opening: the modal makes the surrounding page and its live region inert.
+  const { stayed: regionStayed } = await liveRegion(page, "desk-status");
   await page.click("[role=group] button:nth-of-type(1)");
   check("Archive opens the dialog", await page.isVisible("dialog[open]"));
   const itemCount = () => page.textContent("#item-count");
@@ -276,6 +279,7 @@ try {
   await page.click("dialog button[value=confirm]");
   await page.waitForFunction(() => /Archived/.test(document.getElementById("desk-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
   check("confirming archives the rows", (await page.textContent("#desk-status")) === "Archived 2 items.", await page.textContent("#desk-status"));
+  check("the archive patch replaces only the live message after the modal closes", await regionStayed());
   const left = await page.$$eval(ids.map((id) => `#${id}`).join(","), (rows) => rows.length);
   check("the patch removed the archived rows and the selection is clear", left === 0 && (await count()) === "0", `${left} left`);
   check(

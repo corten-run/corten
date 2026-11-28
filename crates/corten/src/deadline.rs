@@ -56,6 +56,8 @@ thread_local! {
     pub(crate) static LIVE: Cell<isize> = const { Cell::new(0) };
     /// How many deadlines have taken a connection's timer on this thread.
     pub(crate) static TAKEN: Cell<usize> = const { Cell::new(0) };
+    /// Releases a test request once its deadline's wait has counted towards making the timer.
+    pub(crate) static WAITED_POLL: Cell<Option<tokio::sync::oneshot::Sender<()>>> = const { Cell::new(None) };
 }
 
 /// The least of [`NAMES`] as each connection that made a timer found it, which is the first
@@ -168,8 +170,14 @@ impl<C: Future> Future for Keeps<C> {
             swap(&mut polling.mine.timer);
         }
         let polled = this.conn.poll(cx);
+        #[cfg(test)]
+        let waited = WAITED_POLL.try_with(Cell::take).ok().flatten();
         if BY.get() == ASKED && polled.is_pending() {
             *polling.mine = asked(polling.mine.id);
+            #[cfg(test)]
+            if let Some(waited) = waited {
+                let _ = waited.send(());
+            }
         }
         polled
     }

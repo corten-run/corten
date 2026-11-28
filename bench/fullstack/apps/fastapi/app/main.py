@@ -55,6 +55,11 @@ async def upstream_failed(request: Request, exc: Exception):
     return PlainTextResponse("Bad Gateway", status_code=502)
 
 
+@app.get("/health/live")
+async def live_health():
+    return PlainTextResponse("ok", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     # Corten's home page: cards for the first 50 items with items in memory, links by id from the
@@ -113,7 +118,12 @@ async def marketplace(request: Request, locale: str, record_id: str):
     traceparent = request.headers.get("traceparent")
     # Finish the native form read before a disconnect listener consumes receive().
     form = await request.form() if request.method == "POST" else {}
-    record = await read_page_record(request, marketplace_source, record_id, traceparent)
+    try:
+        record = await read_page_record(request, marketplace_source, record_id, traceparent)
+    except (httpx.HTTPError, ValidationError):
+        return HTMLResponse(
+            '<!doctype html><html lang="en"><meta charset="utf-8"><title>Bad Gateway</title><h1>Bad Gateway</h1></html>',
+            status_code=502, headers={"Cache-Control": "private, no-store"})
     if record is None:
         raise HTTPException(status_code=404)
     if request.method == "POST":

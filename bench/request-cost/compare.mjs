@@ -3,11 +3,14 @@
 // The hosted job runs it (.github/workflows/request-cost.yml); nothing here is that job's, so it
 // reads two builds counted on a host of one's own as well (README.md, The hosted job).
 //
-// Usage: node compare.mjs --readings
+// Usage: node compare.mjs --readings [--allocator]
 //          the runs to take on each build, a line each: the file a run's output goes to, then
 //          the kit's script and its options (all but the probe's binary, --cpu and --port)
 //        node compare.mjs <base's directory> <head's directory> [--description <file>] [--base <name>] [--head <name>]
 //          the table and the verdict, in Markdown
+//        node compare.mjs <diagnostic directory from job.sh diagnose> --allocator
+//          only the matched observer-on diagnostic report; an unfinished collection or missing
+//          figures fail this command; the separate collection does not replace the gate's readings
 //
 // A build's directory holds what the kit printed with `--json`, a file a run, named as
 // `--readings` names it; `answers/`, as `count.mjs --answers` wrote it; beside a run that was
@@ -27,8 +30,8 @@
 //
 // The rule: no case's instructions a request rise by more than +0.5% of base's, by the medians
 // the kit gives; no case's allocations rise, by the calls themselves; and no idle reading rises,
-// by `idleRise` (figures.mjs): the median of head's three growths of resident memory, in bytes
-// (each run's after less its before), is not above base's by more than the larger of base's
+// by `idleRise` (figures.mjs): the median of head's three growths of allocator live bytes
+// is not above base's by more than the larger of base's
 // three span and four pages, over at least as many connections as the page has bytes. The figures a
 // connection are rounded and decide nothing. A reading with no figure on either build, an idle
 // reading `idleRise` cannot decide (its six runs not of one page size, or 5,000 connections
@@ -45,6 +48,7 @@
 // either side ends with status 124 or 137 (`STOPPED`), the job fails and reports that nothing
 // was compared, without attributing a cause. An ordinary head build failure takes precedence.
 // Exit status 0 for one binary. Exit status 2 for arguments that are not these.
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +69,16 @@ const IDLE = [
 const SIDES = /** @type {const} */ (["base", "head"]);
 /** What job.sh leaves in `unbuilt` when timeout returns an ambiguous status. */
 export const STOPPED = /^the build ended with status (124|137) after \d+ s \(limit \d+ s\)$/;
+
+/** The same observer-on readings in both commands, with distinct diagnostic files. @param {boolean} diagnostic */
+function idleReadings(diagnostic) {
+  return Array.from({ length: RUNS }, (_, at) => IDLE.map(({ name, what, options, of }) => ({
+    file: `${diagnostic ? "idle-allocator" : "idle"}-${name}-${at + 1}.json`, script: /** @type {const} */ ("idle.mjs"),
+    options: ["--json", "--allocator", ...options],
+    expect: { kind: "idle-allocator", ...of, connections: 5000, addresses: 1 },
+    what, run: at + 1,
+  }))).flat();
+}
 
 /**
  * A built build's probe's SHA-256, as job.sh writes it, or undefined: anything other than a
@@ -87,9 +101,13 @@ function checksum(directory) {
  * depth of 16, every case's allocations, and each idle reading `RUNS` times, a reading's runs
  * apart from each other. Each is one run of a kit's script for one case, so a run the kit
  * refuses costs that case's figure alone. `expect` is what the run's JSON must say it is of.
+ * With `allocator`, only the separate observer-on idle runs, with no request-count work.
+ * @param {{ allocator?: boolean }} [options]
  * @returns {{ file: string, script: "count.mjs" | "idle.mjs", options: string[], expect: Record<string, string | number> }[]}
  */
-export function readings() {
+export function readings({ allocator = false } = {}) {
+  const idle = idleReadings(allocator).map(({ file, script, options, expect }) => ({ file, script, options, expect }));
+  if (allocator) return idle;
   const names = Object.keys(cases);
   const count = (/** @type {string} */ kind, /** @type {string} */ name, /** @type {number} */ depth) => ({ kind, case: name, depth, requests: sent(COUNTED, depth) });
   /** @type {ReturnType<typeof readings>} */
@@ -97,8 +115,7 @@ export function readings() {
   for (const name of names) all.push({ file: `count-${name}.json`, script: "count.mjs", options: ["--json", "--cases", name], expect: count("instructions", name, 1) });
   for (const name of DEEP) all.push({ file: `count-16-${name}.json`, script: "count.mjs", options: ["--json", "--depth", "16", "--cases", name], expect: count("instructions", name, 16) });
   for (const name of names) all.push({ file: `allocations-${name}.json`, script: "count.mjs", options: ["--json", "--allocations", "--cases", name], expect: count("allocations", name, 1) });
-  for (let run = 1; run <= RUNS; run += 1) for (const { name, options, of } of IDLE) all.push({ file: `idle-${name}-${run}.json`, script: "idle.mjs", options: ["--json", ...options], expect: { kind: "idle", ...of, connections: 5000, addresses: 1 } });
-  return all;
+  return [...all, ...idle];
 }
 
 /**
@@ -121,11 +138,19 @@ export function figure(text, expect) {
   // An idle run's growth is its after less its before, stated as `grown` too, with the page size
   // it was read in: a run printed before they were has no figure, its growth not guessed from its
   // rounded `bytes`.
-  if (expect.kind === "idle") {
+  if (expect.kind === "idle" || expect.kind === "idle-allocator") {
     // Resident memory is whole pages, so each reading of it is too, not only their difference.
     const paged = Number.isSafeInteger(found.page) && found.page > 0 && found.before % found.page === 0 && found.after % found.page === 0;
     const sound = Number.isSafeInteger(found.bytes) && whole(found.before) && whole(found.after) && found.grown === found.after - found.before && paged;
-    return sound && found.bytes === Math.round(found.grown / found.connections) ? found : null;
+    if (!sound || found.bytes !== Math.round(found.grown / found.connections)) return null;
+    if (expect.kind === "idle") {
+      // Early observer-on receipts used "idle" too. They must never count as observer-off.
+      return Object.hasOwn(found, "allocator") || Object.hasOwn(found, "sweepNanos") ? null : found;
+    }
+    const growth = found.allocator;
+    const times = found.sweepNanos;
+    return [growth?.live, growth?.threadNet, growth?.active].every(Number.isSafeInteger) &&
+      Array.isArray(times) && times.length === 2 && times.every(whole) ? found : null;
   }
   const { counts, windows } = found;
   if (!Array.isArray(counts) || !Array.isArray(windows) || counts.length !== RUNS || windows.length !== RUNS || found.median !== median(counts)) return null;
@@ -163,21 +188,39 @@ const lines = (at) => (existsSync(at) ? readFileSync(at, "utf8").split("\n").map
  * What a run left in a build's directory: its figure, or why there is none, and why each attempt
  * that gave none did not.
  * @param {string} directory @param {ReturnType<typeof readings>[number]} reading
+ * @param {string} [digest] the diagnostic completion record's digest, or "-" for no receipt
  */
-function taken(directory, { file, expect }) {
+function taken(directory, { file, expect }, digest) {
   const at = join(directory, file);
   const refused = lines(`${at}.refused`);
   if (!existsSync(at)) return { figure: null, why: refused.at(-1) ?? "the run left no output", refused };
-  const text = readFileSync(at, "utf8");
+  let text;
+  if (expect.kind === "idle-allocator") {
+    let bytes;
+    try {
+      bytes = readFileSync(at);
+    } catch {
+      return { figure: null, why: "the receipt could not be read", refused };
+    }
+    if (digest !== undefined && createHash("sha256").update(bytes).digest("hex") !== digest) {
+      return { figure: null, why: "the receipt does not match the collection completion record", refused };
+    }
+    text = bytes.toString("utf8");
+  } else {
+    text = readFileSync(at, "utf8");
+  }
   const found = figure(text, expect);
-  return { figure: found, why: found === null ? (expect.kind === "idle" && unpaged(text) ? "the run gives no page size or growth, as idle.mjs printed before them, and its growth is not guessed from its figure" : "the run's output is not the whole of the run asked for") : "", refused };
+  const why = expect.kind === "idle-allocator" && digest !== undefined ? "the run did not give a whole observer-on reading with all allocator counters and sweep times"
+    : expect.kind === "idle-allocator" && unpaged(text) ? "the run gives no page size or growth, as idle.mjs printed before them, and its growth is not guessed from its figure"
+    : "the run's output is not the whole of the run asked for";
+  return { figure: found, why: found === null ? why : "", refused };
 }
 
 /** Whether a run's output is an idle run's JSON without a page size or a growth. @param {string} text */
 function unpaged(text) {
   try {
     const found = JSON.parse(text);
-    return found !== null && typeof found === "object" && found.kind === "idle" && (!("page" in found) || !("grown" in found));
+    return found !== null && typeof found === "object" && ["idle", "idle-allocator"].includes(found.kind) && (!("page" in found) || !("grown" in found));
   } catch {
     return false;
   }
@@ -195,6 +238,59 @@ const code = (text) => `\`${text.replaceAll("`", "'").replaceAll("|", "/")}\``;
 const short = (/** @type {string} */ name) => (/^[0-9a-f]{40}$/.test(name) ? name.slice(0, 9) : name);
 const table = (/** @type {string[]} */ head, /** @type {string[][]} */ rows) =>
   [`| ${head.join(" | ")} |`, `| ${head.map((_, column) => (column === 0 || column >= head.length - 3 ? "---" : "---:")).join(" | ")} |`, ...rows.map((row) => `| ${row.join(" | ")} |`)].join("\n");
+
+/**
+ * Report one finished collection of observer-on runs, without reading the gate's runs.
+ * @param {string} directory
+ */
+export function allocatorReport(directory) {
+  /** @type {string[]} */
+  let record = [];
+  try {
+    record = readFileSync(join(directory, "complete"), "utf8").split("\n");
+  } catch { /* missing or unreadable completion record */ }
+  const [base, head, ...entries] = record;
+  const plan = idleReadings(true);
+  const digests = plan.map(({ file }, run) => SIDES.map((side, at) => {
+    const prefix = `${side} ${file} `;
+    const entry = entries[run * SIDES.length + at];
+    return entry?.startsWith(prefix) ? entry.slice(prefix.length) : "";
+  }));
+  if (![base, head].every((commit) => /^[0-9a-f]{40}$/.test(commit)) ||
+      entries.length !== plan.length * SIDES.length + 1 || entries.at(-1) !== "" ||
+      !digests.flat().every((digest) => /^(?:[0-9a-f]{64}|-)$/.test(digest))) {
+    return { markdown: "**Incomplete diagnostic match.** No valid completion record from job.sh diagnose.\n", status: 1 };
+  }
+  const rows = [];
+  const refused = [];
+  let missing = false;
+  for (const [runIndex, reading] of plan.entries()) {
+    const pair = SIDES.map((side, at) => {
+      const { figure: run, why, refused: attempts } = taken(join(directory, side), reading, digests[runIndex][at]);
+      for (const attempt of attempts) refused.push(`- ${code(reading.file)} on ${side}: ${code(attempt)}`);
+      if (!run) {
+        missing = true;
+        if (attempts.at(-1) !== why) refused.push(`- ${code(reading.file)} on ${side}: ${code(why)}`);
+      }
+      const growth = run?.allocator;
+      rows.push([side, reading.what, String(reading.run), ...(run ? [run.page, run.grown, growth.live, growth.threadNet, growth.active].map(whole)
+        : ["unavailable", "unavailable", "unavailable", "unavailable", "unavailable"])]);
+      return run;
+    });
+    if (pair[0] && pair[1] && pair[0].page !== pair[1].page) {
+      missing = true;
+      refused.push(`- ${code(reading.file)}: base and head have different page sizes`);
+    }
+  }
+  const markdown = [
+    `## Idle allocator diagnostics: ${code(short(head))} and ${code(short(base))}`,
+    missing ? "**Incomplete diagnostic match.**" : "**Every diagnostic pair is present.**",
+    "Observer on. Each run used 5,000 connections from one address. The gate uses its own runs, not this diagnostic collection.",
+    table(["Build", "Reading", "Run", "Page size", "Resident", "Jemalloc live", "Serving-thread net", "Jemalloc active"], rows),
+    ...(refused.length ? ["### Diagnostic refusals", refused.join("\n")] : []),
+  ].join("\n\n");
+  return { markdown: `${markdown}\n`, status: missing ? 1 : 0 };
+}
 
 /**
  * The table and the verdict for two builds' directories.
@@ -270,13 +366,13 @@ export function compare(base, head, { description = "", names = { base: "base", 
       found.forEach((run, at) => {
         if (run === null) return;
         const did = run.requests === 0 ? `sent nothing to the probe for ${run.case}` : `answered ${run.requests} ${run.case}`;
-        records.push(`${side}, ${what}, run ${at + 1}: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
+        records.push(`${side}, ${what}, run ${at + 1}: ${run.allocator.live} live bytes; resident ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
       });
     /** A build's runs of the reading, when every run gave a figure: a median of fewer is not the rule's. */
     const all = (/** @type {any[]} */ found) => (found.every((run) => run !== null) ? found : null);
-    const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
+    const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.allocator.live)} (${whole(run.grown)})`)).join(" ");
     const [bases, heads] = [all(/** @type {any[]} */ (b)), all(/** @type {any[]} */ (h))];
-    const grown = (/** @type {any[]} */ found) => found.map((run) => /** @type {number} */ (run.grown));
+    const grown = (/** @type {any[]} */ found) => found.map((run) => /** @type {number} */ (run.allocator.live));
     if (!bases || !heads) return [what, bases ? whole(median(grown(bases))) : "none", heads ? whole(median(grown(heads))) : "none", "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "no figure"];
     const [low, high] = [median(grown(bases)), median(grown(heads))];
     const pages = [...new Set([...bases, ...heads].map((run) => /** @type {number} */ (run.page)))];
@@ -380,7 +476,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Allocations a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
     "### Memory idle connections hold",
-    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
+    `Each run's growth in allocator live bytes over its ${whole(connections)} connections, with resident growth in bytes in parentheses. Only live growth decides: a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
     "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
     ["```text", ...records, "```"].join("\n"),
@@ -392,24 +488,29 @@ export function compare(base, head, { description = "", names = { base: "base", 
 function main() {
   let parsed;
   try {
-    parsed = parseArgs({ allowPositionals: true, options: { readings: { type: "boolean", default: false }, description: { type: "string" }, base: { type: "string" }, head: { type: "string" } } });
+    parsed = parseArgs({ allowPositionals: true, options: { readings: { type: "boolean", default: false }, allocator: { type: "boolean", default: false }, description: { type: "string" }, base: { type: "string" }, head: { type: "string" } } });
   } catch (error) {
     parsed = null;
     console.error(/** @type {Error} */ (error).message);
   }
-  const usage = "usage: node compare.mjs --readings | node compare.mjs <base's directory> <head's directory> [--description <file>] [--base <name>] [--head <name>]";
+  const usage = "usage: node compare.mjs --readings [--allocator] | node compare.mjs <base's directory> <head's directory> [--description <file>] [--base <name>] [--head <name>] | node compare.mjs <diagnostic directory> --allocator";
   if (parsed?.values.readings && parsed.positionals.length === 0) {
-    for (const { file, script, options } of readings()) console.log([file, script, ...options].join(" "));
+    for (const { file, script, options } of readings({ allocator: parsed.values.allocator })) console.log([file, script, ...options].join(" "));
     return;
   }
   const [base, head] = parsed?.positionals ?? [];
-  if (!parsed || !base || !head || parsed.positionals.length !== 2 || parsed.values.readings) {
+  const valid = parsed?.values.allocator
+    ? parsed.positionals.length === 1 && [parsed.values.description, parsed.values.base, parsed.values.head].every((value) => value === undefined)
+    : head && parsed?.positionals.length === 2;
+  if (!parsed || !base || !valid || parsed.values.readings) {
     console.error(usage);
     process.exitCode = 2;
     return;
   }
-  const { description, base: baseName, head: headName } = parsed.values;
-  const { markdown, status } = compare(base, head, { description: description === undefined ? "" : readFileSync(description, "utf8"), names: { base: baseName ?? "base", head: headName ?? "head" } });
+  const { description, allocator, base: baseName, head: headName } = parsed.values;
+  const names = { base: baseName ?? "base", head: headName ?? "head" };
+  const { markdown, status } = allocator ? allocatorReport(base)
+    : compare(base, head, { description: description === undefined ? "" : readFileSync(description, "utf8"), names });
   process.stdout.write(markdown);
   process.exitCode = status;
 }

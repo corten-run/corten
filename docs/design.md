@@ -7061,7 +7061,9 @@ rules something out.
     four-mode/GET/await/status test and release wire-guard regressions, and a callgrind
     comparison then, on `b77577301` against `2292cd604`; 2026-11-17, the checked Action,
     `patch_or_with` part token and the callgrind comparison above, on `abbdf9831` against
-    `bbd9d7432`.
+    `bbd9d7432`; 2026-11-27, `html_response`'s callers read again on `754397356`, where each began
+    to give it the answer's `Vary`: the two patch makers still set `corten-patch` through it, and
+    a page is its only other caller.
 
 59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
@@ -11943,9 +11945,23 @@ rules something out.
     rise inside the budget costs under +1% is a bet too. Idle memory has a statistic of its
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
     2,645 bytes a connection between runs: three runs a build, and a rise only when the median
-    of head's growths of resident memory, in bytes, is above base's by more than the larger of
-    base's three span and four pages. Resident memory is reported a page at a time, so base's
-    three can agree exactly and one page is the least step a run can show. One page was the
+    of head's growths in allocator live bytes is above base's by more than the larger of
+    base's three-run span and four pages. On 2026-11-27 the maintainer was asked whether
+    allocator live bytes should decide, with resident memory reported, conditional on hosted
+    readings of one binary agreeing within the existing floor. The answer was “Option one is
+    approved” ([#2271 Decide the counted lane's idle-memory rule on the allocator's live bytes, with resident growth reported (the maintainer's ruling of 2026-11-27)](https://github.com/corten-run/corten/issues/2271)).
+    The [hosted self-comparison](https://github.com/corten-run/corten/actions/runs/46129076580/job/140930069470)
+    on 2026-11-28 gave six readings per case: live bytes spanned 0 after one request, 0 after
+    three browser requests, and 2,048 before any byte, all within 16,384. Keep that floor
+    initially to tolerate variation in the live reading, not to round it to whole pages.
+    The same run supplies the resident reading for context; it cannot stand in for missing live bytes.
+    A [separate matched diagnostic](../bench/request-cost/README.md#allocator-diagnostics)
+    prints each of its runs' growth in jemalloc live bytes (allocated less thread-cache bytes),
+    the serving thread's net allocated bytes and jemalloc active bytes, alongside RSS from
+    that same run. Its optional collection does not replace any required reading.
+    Before this ruling, observer-off resident growth decided:
+    Resident memory is reported a page at a time, so base's three can agree exactly and one
+    page is the least step a run can show. One page was the
     least allowed, the step of the reading and not a measured bound on its accuracy, from
     [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
     until 2026-11-27, when the maintainer raised it to four (The idle floor, below): four pages
@@ -12202,11 +12218,12 @@ rules something out.
     handler add up to, though two requests to one probe do not take every path a counted change
     can cost on, and the release and `main` answer one of them differently, by a difference a
     run records and nobody reviews, so part of what a run reads there is the answer and not
-    the path to it; and a rise of up to four pages over base's three, 16,384 bytes and under
-    3.3 bytes a connection at the gate's settings, is where the allocator put things or a cost
-    too small to refuse a change for, and not memory a connection holds, which the
-    maintainer's ruling of 2026-11-27 takes on three sizes of reading whose cause no run
-    established); measured (the kit's
+    the path to it; the former resident-memory rule allowed four pages because a small RSS
+    rise might reflect allocator placement, though no run established the cause. The
+    live-byte rule keeps four pages as an initial tolerance, not as evidence that a live
+    allocation is only placement); measured (one hosted self-comparison on 2026-11-28:
+    across six readings per case on one runner, live growth spanned 0, 0 and 2,048 bytes,
+    all within 16,384 bytes; this does not bound variation on other runners; the kit's
     repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
@@ -12241,12 +12258,13 @@ rules something out.
     record them, whose count is the baseline, the changes before it not having been counted,
     or cannot be taken because the
     probe does not build against that tag, so nothing bounds what counted costs add up to;
+    further hosted same-binary readings across runner and allocator versions establish a
+    tighter floor for live bytes; do not use the historical resident-span model to set it;
     a change shown to hold memory a connection keeps passes the idle rule under the four
-    pages, so the floor hides a real cost; the hosted job fails a change on idle memory alone
-    at four pages, with no memory a connection keeps shown, so four pages are still under
-    what a run reads of where things were put (since the first of the required check's
-    rulings, of two binaries alone: one binary fails nothing); a run shows what the pages of
-    the readings the floor rests on are, either way;
+    pages, so the floor hides a real cost; a comparison of two binaries fails on live
+    bytes alone with no retained memory accounted for: check what the counter and workload
+    measured before changing the floor; a run explains the page-sized differences in the
+    historical resident readings, whose cause was not established;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
@@ -12349,7 +12367,15 @@ rules something out.
     46060985339 on `969ac34e4`, whose two probes printed one checksum and whose reading before
     any byte was 16,384 bytes over base's with 16,384 allowed, and `job.sh` and `build.sh` read
     at `969ac34e4` for what a checksum covers: the probe's binary alone, built from each side's
-    crates in one directory, the scripts that run it being the checkout's for both sides.
+    crates in one directory, the scripts that run it being the checkout's for both sides;
+    2026-11-27, for the allocator observer, the kit's page at `cb6cce8d3` and the control reported in
+    [#2272 Report allocator live bytes beside resident growth in the request-cost idle reading](https://github.com/corten-run/corten/pull/2272):
+    six alternating local runs of one release binary over 5,000 connections, three per mode.
+    Resident growth with the observer off was 62,820,352, 62,816,256 and 62,828,544 bytes.
+    With it on, it was 62,812,160, 62,812,160 and 62,816,256 bytes. That is 1 to 3 pages lower
+    (8,192 bytes by the medians), not evidence that the shift is equal across builds;
+    2026-11-28, for the live-byte floor, the [hosted calibration log](https://github.com/corten-run/corten/actions/runs/46129076580/job/140930069470) at `60f95c44b`:
+    both builds had the same binary checksum and the job recorded all 18 readings.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits
@@ -12357,17 +12383,24 @@ rules something out.
     one and dropped it, and in tokio 1.54.1 a timer made and a timer dropped each take the one
     lock of the runtime's timer wheel, so on the multi-threaded runtime every thread serving such
     requests queued there twice a request. A connection `corten::serve` accepts now keeps one
-    (`crates/corten/src/deadline.rs`) once two of its requests have waited: the connection's
-    first two deadlines to wait make their own, as before, and at the second the connection makes
-    one; each deadline after them moves that timer later (`Sleep::reset`, a compare-and-swap with
-    no lock while the timer is still set and the new time is not earlier) and gives it back still
-    set; the timer is dropped with the connection. A connection whose only request waits makes
-    none. The connection's task owns the timer and lends it to the thread only while the
-    connection is polled, under a number of the connection's own, so a deadline finds it there
-    and gives it back only to the connection that made it. A deadline that finds none makes its
-    own and drops it: the connection's first two to wait, a second deadline in one request, and a
-    request polled anywhere else (`app.router()` served another way, a call a layer moved to
-    another task).
+    (`crates/corten/src/deadline.rs`) once two distinct polls of the connection have each
+    returned pending after a deadline of its made a timer of its own during that poll (the
+    deadline need not still be waiting when the poll returns). Until then those deadlines make
+    their own, as before; where the connection's runtime has no clock the connection makes
+    none, and its later deadlines go on trying to make their own. A deadline that borrows the
+    connection's timer sets it to its own time (`Sleep::reset`, a compare-and-swap with no lock
+    while the timer is still set and the new time is not earlier). When that deadline is
+    dropped, it returns the timer if its own connection is the one being polled and the
+    thread's place for a timer is still there, without clearing it if it is still set;
+    otherwise it drops the timer, and later deadlines cannot borrow it. A timer the connection
+    still holds is dropped with the connection. A
+    connection only one of whose polls ends so makes none. The connection's task
+    owns the timer and lends it to the thread only while the connection is polled, under a number
+    of the connection's own, so a deadline finds it there and gives it back only to the
+    connection that made it. A deadline that finds none tries to make its own on the runtime it
+    is polled on, as every deadline did, and drops it, whether the
+    connection has not made a timer, another deadline is using it, or the request is polled
+    anywhere else (`app.router()` served another way, a call a layer moved to another task).
 
     What it gave is requests a second where threads queued on that lock, measured on this form
     (`bf13f4822` against `main` at `e2d0c464e`; every run, with its scripts, under the tag
@@ -12568,15 +12601,20 @@ rules something out.
        on a runtime of its own, or a layer polls through a `FuturesUnordered`): then that waker,
        and what it holds (an inner runtime's handle, after that runtime is dropped), stays for up
        to the deadline, an hour under an area's long one.
-    6. A handler that serves a request on a runtime of its own inside a connection's poll
-       (`block_in_place` and `block_on`, which a test here treats as supported) has that request's
-       deadline wait on the connection's timer, the outer runtime's, once two deadlines of the
-       connection have waited, whichever requests they were. It fires on time while the outer
-       runtime runs. If the outer runtime shuts down first, the deadline's next poll panics
-       inside the handler's catch ("it is being shutdown", tokio's check) and the inner request
-       is answered 500, where its own timer would have gone on waiting (a test serves such a
-       request, shuts the outer runtime down and sees the 500). Whether the current runtime is
-       the timer's is not checked: the way to a runtime's identity is `Handle::current()`, which
+    6. A handler can serve a request on a runtime of its own inside a connection's poll
+       (`block_in_place` and `block_on`, which a test here treats as supported). If the inner
+       deadline borrows the connection's timer, it waits on the outer runtime's timer: the
+       borrowed timer is set to the deadline instant the inner runtime would use, and the outer
+       driver runs it, so the clocks must agree for it to follow the inner runtime's deadline.
+       Once that driver has shut down, a poll of the timer that reaches tokio's check of its
+       driver panics inside the handler's catch, and the inner request is answered 500. If the
+       deadline instead made a timer on its
+       own runtime, the outer runtime's shutdown does not stop that timer; if the deadline
+       fires, the request is answered as any whose deadline fires
+       ([design Choice 30](#choice-deadline-body)). The test waits for the borrow and the
+       timer's first pending poll before shutting the outer runtime down. Whether the current
+       runtime is the timer's is not checked: the way to a runtime's identity is
+       `Handle::current()`, which
        clones the runtime's `Arc`, two atomic operations on a count every thread shares. Making
        a timer and registering it cloned it twice, and `Sleep::reset` clones it once itself
        (read in tokio 1.54.1), so a deadline on the kept timer does that pair once where it did
@@ -12939,7 +12977,8 @@ rules something out.
     hosted job's runs 45880658451 and 45901199943 read for cost 3 and for the kit's counts,
     and `Cargo.toml`, `Cargo.lock` and the crate's own manifest read as the same git objects
     in `cbca34579` and `49e9a3a1f`, with `app.rs` differing in one line, of the request's
-    layer.
+    layer; 2026-11-27, for cost 6, `Keeps::poll` and the inner-request shutdown test read on
+    `aff499aa7`, and tokio 1.54.1 read for a timer's shutdown error.
 
 ## Rules
 

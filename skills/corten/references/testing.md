@@ -20,7 +20,7 @@ mod tests {
             .field(GreetForm::FIELDS.name, "Ada")
             .await;
         assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(res.text(), r#"<p id="greeting" aria-live="polite">Hello, Ada!</p>"#);
+        assert_eq!(res.text(), r#"<span id="greeting">Hello, Ada!</span>"#);
     }
 }
 ```

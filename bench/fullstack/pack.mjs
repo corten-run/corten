@@ -17,6 +17,7 @@ import { closeSync, existsSync, mkdtempSync, openSync, readSync, readdirSync, rm
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { COUNT_OUTPUT, COUNT_RECEIPT } from "./count-admission.mjs";
 
 /** What stays a file: what summarize.mjs writes, what the README and tests read, the log, and a
  * committed round's note of where its raw output is. */
@@ -32,7 +33,8 @@ export const KEPT = new Set([
   "rust-analyzer.json",
   "bytes.json",
   "cold-start.json",
-  "instructions.json",
+  COUNT_OUTPUT,
+  COUNT_RECEIPT,
   "browser.json",
   "conformance.json",
   "hardening.json",
