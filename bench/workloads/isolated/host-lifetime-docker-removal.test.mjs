@@ -437,7 +437,7 @@ for (const mode of ["healthy", "late", "contended", "exhausted"]) {
       }
     };
     let proof;
-    try { proof = await f.finish(!healthy, () => { settled++; }); }
+    try { proof = await f.finish(true, () => { settled++; }); }
     finally { unlock?.(); delete f.flock; }
     const attempt = (ms) => [["-s", "-E", "75", "-w", String(ms / 1000), "0"], ms];
     assert.deepEqual(attempts, healthy ? [attempt(800)] : contended ? [attempt(250), attempt(1000)] : [attempt(1000)]);
@@ -447,7 +447,13 @@ for (const mode of ["healthy", "late", "contended", "exhausted"]) {
     assert.equal(f.terminal.command.success, true);
     assert.equal(faults, 0); assert.equal(stop.signal.aborted, false);
     assert.equal(proof.status, healthy ? "verified" : "blocked");
-    if (healthy) { assert.equal(f.terminal.observerFailures.count, 0); return; }
+    if (healthy) {
+      assert.equal(f.terminal.observerFailures.count, 0);
+      assert.deepEqual(f.terminal.terminalClock, { bootId: "boot", uptime: "10.20 0.00\n",
+        ticksPerSecond: 100, monoNs: "10200000000" });
+      assert.deepEqual(proof.terminalClock, f.terminal.terminalClock);
+      return;
+    }
     assert.equal(f.terminal.observerError, "host-observation-gap");
     assert.equal(f.terminal.observerFailures.count, exhausted ? 2 : 1);
     assert.deepEqual(f.terminal.observerFailures.first, {
@@ -534,6 +540,81 @@ test("cgroup capture cannot spend past the deadline after acquiring a free gate"
   const proof = await f.finish();
   assert.equal(proof.status, "blocked"); assert.equal(proof.checks.empty, true);
   assert.equal(f.terminal.observerFailures.first.operation, "snapshot");
+});
+
+for (const phase of ["interval", "finish"]) {
+  test(`Browser ${phase} discards a Docker census that finishes after the sample deadline`, linux, async (t) => {
+    const { gate } = anchor(t);
+    let faults = 0, settled = 0;
+    const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate);
+    f.clock += 100; await f.tick();
+    const previous = f.samples().at(-1).at;
+    const commands = [];
+    f.docker = (argv, options) => {
+      const command = argv[3]; commands.push([command, options?.timeout]);
+      if (commands.length === 1) {
+        assert.equal(command, "ls");
+        if (phase === "finish") { f.clock += 950; return ""; }
+        f.clock += 200; return id;
+      }
+      if (command === "inspect") {
+        assert.equal(argv[4], id);
+        f.clock += 750;
+        return JSON.stringify([{ Id: id, Image: "sha256:" + "b".repeat(64), RestartCount: 0,
+          State: { Status: "created", Pid: 0, Running: false } }]);
+      }
+      return ""; // Only the terminal drain can now observe the empty scope.
+    };
+    f.clock += 100;
+    if (phase === "interval") await f.tick();
+    const proof = await f.finish(true, () => { settled++; });
+
+    assert.equal(proof.status, "blocked", "the early cgroup timestamp cannot qualify a late census");
+    assert.equal(proof.cleanupComplete, false);
+    assert.equal(proof.checks.terminal, true); assert.equal(proof.checks.empty, true);
+    assert.equal(proof.checks.observer, false);
+    assert.equal(f.terminal.observerFailures.count, 1);
+    assert.deepEqual(f.terminal.observerFailures.first, { phase, operation: "docker-inventory", code: "unknown",
+      at: previous + 1050, samples: 3, lastSampleAt: previous });
+    assert.deepEqual(f.samples().slice(-2).map(({ at }) => at), [previous, previous + 1050]);
+    assert.deepEqual(f.samples().at(-1).docker, { inventory: [], participants: [], gaps: [] });
+    assert.equal(f.removed, true); assert.equal(settled, 1);
+    assert.equal(faults, phase === "interval" ? 1 : 0);
+    assert.equal(Object.hasOwn(f.terminal, "terminalClock"), false);
+    assert.deepEqual(commands, phase === "interval" ? [["ls", 900], ["inspect", 700], ["ls", 1000]]
+      : [["ls", 900], ["ls", 1000]]);
+  });
+}
+
+test("Browser finish does not renew a terminal drain that also misses its deadline", linux, async (t) => {
+  const { gate } = anchor(t);
+  let faults = 0, settled = 0;
+  const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate);
+  f.clock += 100; await f.tick();
+  const previous = f.samples().at(-1).at, commands = [];
+  f.docker = (argv, options) => {
+    const command = argv[3]; commands.push([command, options.timeout, options.killSignal]);
+    if (commands.length === 1) return id;
+    if (command === "inspect") {
+      f.clock += options.timeout;
+      throw Object.assign(new Error("PRIVATE_DOCKER_TIMEOUT"), { code: "ETIMEDOUT" });
+    }
+    f.clock += 1001;
+    return "";
+  };
+  f.clock += 100;
+  const proof = await f.finish(true, () => { settled++; });
+
+  assert.deepEqual(commands, [["ls", 900, "SIGKILL"], ["inspect", 900, "SIGKILL"], ["ls", 1000, "SIGKILL"]]);
+  assert.equal(f.samples().at(-1).at, previous);
+  assert.equal(f.terminal.observerFailures.count, 2);
+  assert.deepEqual(f.terminal.observerFailures.first, { phase: "finish", operation: "docker-inventory", code: "unknown",
+    at: previous + 1000, samples: 3, lastSampleAt: previous });
+  assert.equal(f.terminal.observerFailures.last.at, previous + 2001);
+  assert.equal(proof.status, "blocked"); assert.equal(proof.cleanupComplete, false);
+  assert.equal(proof.checks.terminal, false); assert.equal(proof.checks.empty, false);
+  assert.equal(f.removed, undefined); assert.equal(settled, 0); assert.equal(faults, 0);
+  assert.equal(Object.hasOwn(f.terminal, "terminalClock"), false);
 });
 
 test("a lock returned at the monotonic deadline is released without listing", linux, async (t) => {
