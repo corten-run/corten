@@ -10385,7 +10385,9 @@ rules something out.
     and 3,433 compared. That is not the pinned layout turned away below, which gates one layout;
     it samples many. Each placement is a link no app builds. Its cost against the default order
     has not been measured; the two sides use the same draw for shared names, with the order
-    partial within the ties.
+    partial within the ties. A shuffled run retains each unpadded and placement map with the
+    SHA-256 of its uncompressed bytes. Replay requires the same digests in the live layout
+    receipts, including both maps in each second-pad check and all four in each cross-side check.
     Whether shuffled placements spread
     wider or narrower than unshuffled ones has not been measured, so a shuffled plan is sized
     from a shuffled A/A alone.

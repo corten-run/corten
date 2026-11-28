@@ -411,18 +411,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const elsewhere = other.flatMap((o) => o.inputs.flatMap((s) => s.symbols.map((y) => ({ name: y.name, at: y.at, output: o.name }))));
     return { inputs: t.inputs, other, elsewhere, sha: createHash("sha256").update(bytes).digest("hex") };
   };
-  const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
-  const lines = (file) => readFileSync(file).toString("utf8").replace(/\n$/, "").split("\n");
   if (both) {
-    const maps = [rest[4], rest[9]].map(mapOf);
-    const side = ([unpadded, placement, order, map], m) => {
-      const u = mapOf(map);
-      return { ea: elf(unpadded), eb: elf(placement), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: lines(order), sections: u.inputs, placedSections: m.inputs, elsewhere: m.elsewhere, otherMaps: [u.other, m.other] };
+    const side = ([unpadded, placement, order, map, placedMap]) => {
+      const u = mapOf(map), m = mapOf(placedMap), bytes = readFileSync(order);
+      return { ea: elf(unpadded), eb: elf(placement), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: bytes.toString("utf8").replace(/\n$/, "").split("\n"), sections: u.inputs, placedSections: m.inputs, elsewhere: m.elsewhere, otherMaps: [u.other, m.other], orderSha: createHash("sha256").update(bytes).digest("hex"), unpaddedSha: u.sha, placedSha: m.sha };
     };
-    let r;
-    try { r = alike(side(rest.slice(0, 5), maps[0]), side(rest.slice(5, 10), maps[1]), pad, second); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
+    let r, base, head;
+    try { base = side(rest.slice(0, 5)); head = side(rest.slice(5, 10)); r = alike(base, head, pad, second); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
     console.log(`${r.compared} shared names compared, ${r.leftOut} left out as ambiguous (defined more than once, or read otherwise by the symbol table or the map, on a side); names one side alone has: ${r.onlyBase} in base, ${r.onlyHead} in head; places holding the compared names: ${r.places}, in one order: ${r.same}`);
-    console.log("JSON " + JSON.stringify({ ...r, baseOrder: sha(rest[2]), headOrder: sha(rest[7]), baseMap: maps[0].sha, headMap: maps[1].sha }));
+    console.log("JSON " + JSON.stringify({ ...r, baseOrder: base.orderSha, headOrder: head.orderSha, baseMap: base.placedSha, headMap: head.placedSha, baseUnpaddedMap: base.unpaddedSha, headUnpaddedMap: head.unpaddedSha }));
     for (const w of r.why) console.error(`layout.mjs: ${w}`);
     process.exit(r.ok ? 0 : 1);
   }
@@ -432,7 +429,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     try { ra = ordered(elf(a), elf(b), textRange(readelf(a)), textRange(readelf(b)), bytes.toString("utf8").replace(/\n$/, "").split("\n"), unpaddedMap.inputs, placedMap.inputs, pad, second, placedMap.elsewhere, [unpaddedMap.other, placedMap.other]); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
     const { defs, ...r } = ra;
     console.log(`definitions of functions in the unpadded .text: ${r.functions}, in ${r.sections} input sections, ${r.groups} groups of one key, ${r.tied} sections in groups of more than one; names defined more than once there, checked by their sections: ${r.repeated}; names the ordering file lists after the pad: ${r.listed}; definitions where the ordering file puts them: ${r.matched} of ${r.functions}, in ${r.placedSections} of ${r.sections} input sections; functions in their unpadded section's pair, as far from its start: ${r.together}; sections after the pad and the one before: ${r.follow}; only in the placement: ${r.onlyB.join(", ")}`);
-    console.log("JSON " + JSON.stringify({ ...r, order: createHash("sha256").update(bytes).digest("hex"), placedMap: placedMap.sha, onlyA: r.onlyA.length }));
+    console.log("JSON " + JSON.stringify({ ...r, order: createHash("sha256").update(bytes).digest("hex"), unpaddedMap: unpaddedMap.sha, placedMap: placedMap.sha, onlyA: r.onlyA.length }));
     for (const w of r.why) console.error(`layout.mjs: ${w}`);
     process.exit(r.ok ? 0 : 1);
   }

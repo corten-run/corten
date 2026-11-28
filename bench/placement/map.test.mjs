@@ -1081,6 +1081,12 @@ test("a real shuffled link must keep the unpadded relative input order outside .
   const good = shuffled("plain", "good"), same = alikeOf("plain", "good", "plain", "good");
   assert.equal(good.status, 0, good.stderr);
   assert.equal(same.status, 0, same.stderr);
+  const sha = (file) => createHash("sha256").update(readFileSync(join(dir, file))).digest("hex");
+  const receipt = (r) => JSON.parse(r.stdout.split("\n").find((l) => l.startsWith("JSON ")).slice(5));
+  assert.equal(receipt(good).unpaddedMap, sha("plain.map"));
+  assert.equal(receipt(good).placedMap, sha("good.map"));
+  assert.equal(receipt(same).baseUnpaddedMap, sha("plain.map"));
+  assert.equal(receipt(same).headUnpaddedMap, sha("plain.map"));
   await t.test("--order", () => {
     const bad = shuffled("plain", "bad");
     assert.equal(bad.status, 1, bad.stdout + bad.stderr);
@@ -1314,18 +1320,22 @@ test("the map check of a shuffled placement: the unpadded sections between the p
   assert.deepEqual(check(map("head"), map("head-p320-l48"), 320, 48, true).why, []);
 });
 
-test("a shuffled second-pad receipt hashes the same map bytes before and after gzip", (t) => {
+test("a shuffled second-pad receipt hashes both maps' bytes before and after gzip", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "placement-map-receipt-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const gz = blob(TAG, "placement-replay/results/head-p320-l48.map.gz"), bytes = gunzipSync(gz);
-  writeFileSync(join(dir, "head.map.gz"), blob(TAG, "placement-replay/results/head.map.gz"));
+  const original = blob(TAG, "placement-replay/results/head.map.gz");
+  writeFileSync(join(dir, "head.map"), gunzipSync(original));
+  writeFileSync(join(dir, "head.map.gz"), original);
   writeFileSync(join(dir, "placed.map"), bytes);
   writeFileSync(join(dir, "placed.map.gz"), gz);
   const kit = fileURLToPath(new URL("./map.mjs", import.meta.url));
-  for (const file of ["placed.map", "placed.map.gz"]) {
-    const r = spawnSync(process.execPath, [kit, "check", "head.map.gz", file, "320", "48", "--shuffled"], { cwd: dir, encoding: "utf8" });
+  for (const ext of ["", ".gz"]) {
+    const r = spawnSync(process.execPath, [kit, "check", `head.map${ext}`, `placed.map${ext}`, "320", "48", "--shuffled"], { cwd: dir, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(JSON.parse(r.stdout.split("\n").find((l) => l.startsWith("JSON ")).slice(5)).placedMap, createHash("sha256").update(bytes).digest("hex"));
+    const { unpaddedMap, placedMap } = JSON.parse(r.stdout.split("\n").find((l) => l.startsWith("JSON ")).slice(5));
+    assert.equal(unpaddedMap, createHash("sha256").update(gunzipSync(original)).digest("hex"));
+    assert.equal(placedMap, createHash("sha256").update(bytes).digest("hex"));
   }
 });
 

@@ -17,12 +17,12 @@
 //     no passing layout check or, where either side has a section of .text aligned beyond 16
 //     bytes, no second pad's line and map check;
 //   - for a workload the plan shuffles (README.md, workloads[].shuffle), a missing or unreadable
-//     list of functions (functions-<side>.txt.gz), a missing or altered placement map, or a binary whose
+//     list of functions (functions-<side>.txt.gz), a missing or altered unpadded or placement map, or a binary whose
 //     layout check (and map check, with a second pad) is not a shuffled one for the ordering file
-//     order.mjs draws from that list, the seed and the binary's index, and for the placement map
+//     order.mjs draws from that list, the seed and the binary's index, and for both maps
 //     maps/placements.sha256 lists for it, or a head binary without a passing check that the
 //     names it compares with base's binary at its index lie in the same order
-//     (layout/head-p<n>-alike.txt) that names both ordering files so drawn and both placement maps
+//     (layout/head-p<n>-alike.txt) that names both ordering files so drawn and all four maps
 //     so listed and gives how many names both sides have it compared and left out, whole numbers
 //     that add up to the saved lists' shared name count and meet the live check's minimum; for one
 //     it does not, a layout or map check that is shuffled;
@@ -123,12 +123,17 @@ export function read(dir) {
   if (text("schedule.txt") !== scheduleLines(r.schedule)) refused.push(`schedule.txt is not the seeded order of ${r.part} ${r.workload}, K = ${r.K}, seed ${r.seed}`);
   const { part, workload: W, K, R, P, Q } = r;
 
+  const used = new Set(), alike = [];
+  for (const c of r.comparisons) for (let i = 1; i <= K; i++) for (const b of sides(c, i, P, Q)) used.add(b);
+  const maps = r.shuffle ? placementMaps(join(dir, "maps"), [...r.sides, ...used]) : null;
+  if (maps?.why.length) return { refused: [...refused, ...maps.why] };
+
   // Each side's record of code aligned beyond 16 bytes, from its unpadded link's map.
   const records = {};
   for (const side of r.sides) {
     const m = join(dir, "maps", `${side}.map.gz`), rec = join(dir, `record-${side}.json`);
     if (!existsSync(m) || !existsSync(rec)) { refused.push(`${side}: no unpadded map or no record from it; a run without that record has no reading across placements`); continue; }
-    const map = readMap(mapText(readFileSync(m)));
+    const map = readMap(maps ? maps.unpadded.get(side).toString("utf8") : mapText(readFileSync(m)));
     records[side] = record(map);
     if (!same(records[side], JSON.parse(readFileSync(rec, "utf8")))) refused.push(`${side}: record-${side}.json is not what its map gives`);
     for (const why of refusals(map)) refused.push(`${side} has no reading across placements: ${why}`);
@@ -168,14 +173,6 @@ export function read(dir) {
     const i = P.includes(pad) ? P.indexOf(pad) + 1 : Q.indexOf(pad) + 1;
     try { return createHash("sha256").update(order(lists.get(side), r.seed, i)).digest("hex"); } catch { return null; }
   };
-  const used = new Set(), alike = [];
-  for (const c of r.comparisons) for (let i = 1; i <= K; i++) for (const b of sides(c, i, P, Q)) used.add(b);
-  let placedMaps;
-  if (r.shuffle) {
-    const { digests, why } = placementMaps(join(dir, "maps"), used);
-    if (why.length) return { refused: [...refused, ...why] };
-    placedMaps = digests;
-  }
   const namesOf = (side) => new Set(lists.get(side)?.map(thinName).filter((n) => !PADS.includes(n)));
   const shared = r.shuffle && part === "gated" ? namesOf("base").intersection(namesOf("head")).size : 0;
   for (const b of used) {
@@ -183,20 +180,20 @@ export function read(dir) {
     if (!shas.has(b)) { refused.push(`${b}: not in sha256.txt`); continue; }
     if (verified.get(b) !== side) refused.push(`${b}: not verified to answer as its unpadded binary (verify/verdicts.txt)`);
     if (r.shuffle && !lists.has(side)) continue;
-    const map = placedMaps?.get(b);
-    const shuffled = r.shuffle ? { shuffled: true, placedMap: map } : { shuffled: undefined };
+    const map = maps?.digests.get(b), unpaddedMap = maps?.digests.get(side);
+    const shuffled = r.shuffle ? { shuffled: true, unpaddedMap, placedMap: map } : { shuffled: undefined };
     const sha = r.shuffle ? orderSha(side, pad) : undefined;
     if (r.shuffle && sha === null) refused.push(`${b}: its side's list of functions makes no ordering file (functions-${side}.txt.gz)`);
-    else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes and the ordering file drawn from its side's list of functions, seed ${r.seed} and its index (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
-    if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second, ...shuffled }))) refused.push(`${b}: no second pad's line with a passing map check (second-pads.txt, layout/${b}-map.txt)`);
+    else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes, the ordering file drawn from its side's list of functions, seed ${r.seed} and its index, and the saved unpadded and placement maps (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
+    if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second, ...shuffled }))) refused.push(`${b}: no second pad's line with a passing map check${r.shuffle ? " for the saved unpadded and placement maps" : ""} (second-pads.txt, layout/${b}-map.txt)`);
     // The check against base's placement at its index names the two ordering files and the two
-    // placement maps it read, each the one this run drew or kept for that placement.
+    // unpadded and two placement maps it read, each the one this run drew or kept.
     // It also gives how many of the names both sides have it compared and how many it left out,
     // which the report states for each index.
     if (r.shuffle && side === "head") {
-      const baseMap = placedMaps.get(`base-p${pad}`), baseOrder = orderSha("base", pad);
-      const a = baseMap && baseOrder && sha && check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder, headOrder: sha, baseMap, headMap: map });
-      if (!a) refused.push(`${b}: no passing check that the names it compares with base-p${pad} lie in the same order, using the ordering files drawn for both and the placement maps kept for both (layout/${b}-alike.txt, maps/placements.sha256)`);
+      const baseMap = maps.digests.get(`base-p${pad}`), baseOrder = orderSha("base", pad);
+      const a = baseMap && baseOrder && sha && check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder, headOrder: sha, baseMap, headMap: map, baseUnpaddedMap: maps.digests.get("base"), headUnpaddedMap: unpaddedMap });
+      if (!a) refused.push(`${b}: no passing check that the names it compares with base-p${pad} lie in the same order, using the ordering files drawn for both and the unpadded and placement maps kept for both (layout/${b}-alike.txt, maps/placements.sha256)`);
       else if (![a.shared, a.compared, a.leftOut].every((n) => Number.isInteger(n) && n >= 0) || a.compared + a.leftOut !== a.shared) refused.push(`${b}: its check against base-p${pad} does not say how many of the names both have it compared and left out (layout/${b}-alike.txt)`);
       else if (a.shared !== shared) refused.push(`${b}: its check against base-p${pad} counts ${a.shared} shared names, not the ${shared} shared names in the saved function lists (layout/${b}-alike.txt)`);
       else if (a.compared < FEWEST) refused.push(`${b}: its check against base-p${pad} compared fewer than ${FEWEST} names (layout/${b}-alike.txt)`);

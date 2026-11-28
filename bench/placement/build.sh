@@ -130,6 +130,10 @@ build() { # <side> <commit>
     node "$KIT/relink.mjs" "$WORK/capture/$side" "$B/$side-relink" --map "$M/$side.map" $MANGLED
     cmp -s "$B/$side" "$B/$side-relink" || fail "$side: the captured link run again without a pad differs from the build's own binary"
     rm "$B/$side-relink"
+    if [ "$SHUFFLE" = 1 ]; then
+        shas=$(sha256sum "$M/$side.map") || fail "$side: cannot hash its unpadded map"
+        printf '%s  %s.map\n' "${shas%% *}" "$side" >>"$M/placements.sha256"
+    fi
     echo "$side: the captured link run again without a pad, with its map, is byte-identical to the build's own binary"
     node "$KIT/map.mjs" record "$M/$side.map" >"$B/record-$side.json"
     node "$KIT/map.mjs" refuse "$M/$side.map" >"$B/refuse-$side.txt" 2>&1 || refused "$side has no reading across placements: $(sed 's/^map.mjs: //' "$B/refuse-$side.txt" | paste -sd';' -)"

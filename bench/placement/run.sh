@@ -95,16 +95,17 @@ done
 cp "$B/sha256.txt" "$B/built-for.txt" "$RES/"
 mkdir -p "$RES/layout" "$RES/maps" && cp "$B"/layout/*.txt "$RES/layout/"
 for s in $SIDES; do
-    cp "$B/record-$s.json" "$RES/"; cp "$WORK/maps/$s.map.gz" "$RES/maps/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
+    cp "$B/record-$s.json" "$RES/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
+    [ "$SHUFFLE" = 1 ] || cp "$WORK/maps/$s.map.gz" "$RES/maps/"
 done
 [ ! -f "$B/second-pads.txt" ] || cp "$B/second-pads.txt" "$RES/"
 if [ "$SHUFFLE" = 1 ]; then
     (
-        set --
+        set -- $SIDES
         for n in $PADS_P $PADS_Q; do set -- "$@" "base-p$n"; done
         case " $SIDES " in *" head "*) for n in $PADS_P; do set -- "$@" "head-p$n"; done ;; esac
         node "$KIT/map.mjs" keep-placements "$WORK/maps" "$RES/maps" "$@"
-    ) || finish 1 "refused: the shuffled placement maps could not be kept and verified (results/maps/)"
+    ) || finish 1 "refused: the shuffled run's unpadded and placement maps could not be kept and verified (results/maps/)"
 elif [ -f "$B/second-pads.txt" ]; then
     cp "$WORK/maps/placements.sha256" "$RES/maps/"
 fi
