@@ -258,8 +258,10 @@ four bytes a connection: over 40, four 4,096-byte pages are 410 bytes a connecti
 gate would let pass unseen.
 
 At the two resident readings, a kit-only signal asks the probe's serving thread for an allocator
-snapshot, with no extra connection or HTTP request. The observer is warmed once before the warm
-connections and is off for instruction and allocation counts. Each snapshot advances jemalloc's
+snapshot, with no extra connection or HTTP request. The reply starts with `IDLE_ALLOCATOR` and
+a space on the probe's stdout. The kit skips ordinary stdout logs and refuses a malformed
+observer reply. The observer is warmed once before the warm connections and is off for
+instruction and allocation counts. Each snapshot advances jemalloc's
 `epoch` and reads process-wide live bytes (`stats.allocated` less
 `stats.arenas.4096.tcache_bytes`, the cache bytes across all arenas), the serving thread's net
 bytes (`thread.allocated` less `thread.deallocated`), and bytes in active pages (`stats.active`).
@@ -711,5 +713,22 @@ the preload and reads the stand-in's own status in `/proc`, as a host does, and 
 a growth that is its after less its before, a figure that is that growth over the connections and
 a before that is not the stand-in's; the `--json` run with a 65,536-byte page is checked only for
 the page size it carries. The stand-in replies to the idle-only signal with known counters;
-the test checks their growth, the two measured sweep times, and refusal of a malformed sample or
-a connection closed before the final reply.
+the tests check their growth, the two sweep times, that ordinary stdout lines are ignored, and
+refusal of a malformed observer frame or a connection closed before the final reply.
+
+The probe is outside the workspace's test suite. On Linux, after `build.sh` has built the probe
+against a named commit in `<directory>`, run the Rust counter test against that same copied
+source and resolved lock. Set `build_dir` to the absolute path passed to `build.sh`:
+
+```sh
+build_dir=/tmp/request-cost
+(cd "$build_dir/probe" && CARGO_TARGET_DIR="$build_dir/target" ZSTD_SYS_USE_PKG_CONFIG=1 \
+  cargo test --locked --release --bin probe -- idle_memory::tests)
+```
+
+For a real observer check, run
+`node bench/request-cost/idle.mjs <directory>/bin/<commit> --cpu <cpu> --connections 40 --json`
+and verify that the receipt has integer `allocator` growths and two `sweepNanos` values.
+This is a smoke check of the actual jemalloc and signal path, not a counted idle reading.
+For a kit change, inspect the hosted observer-on receipts too: a same-binary verdict can
+pass without comparing any readings.

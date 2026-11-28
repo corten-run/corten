@@ -594,8 +594,10 @@ establish a general ranking.
       case's instructions a request rise by more than +0.5% of base's (the budget, by the
       medians the kit prints), no case's allocations a request rise, and idle memory does not
       rise: each idle reading is taken three times on each build, all six with the same
-      connections, case, requests and page size (each run prints them) and the same `--addresses`
-      (which it does not print, so the description names it), over at least as many connections as
+      connections, case, requests and page size (each run prints them), the same `--addresses`
+      (which it does not print, so the description names it), and the same known
+      [allocator observer mode](bench/request-cost/README.md#how-a-number-is-read) across all idle
+      runs for both builds, over at least as many connections as
       the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
       pages, over `--addresses 3`), so four pages are at most four bytes a connection, since a reading over
       fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of

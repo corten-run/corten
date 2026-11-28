@@ -1,6 +1,6 @@
 // Starts the probe held to one CPU, under callgrind or not, and talks HTTP/1.1 to it.
 import { execFileSync, spawn } from "node:child_process";
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { Answers, cases, masked, unexpected } from "./requests.mjs";
  * a count reads.
  */
 const ALLOCATOR = { LD_PRELOAD: "libjemalloc.so.2", MALLOC_CONF: "background_thread:false,tcache_max:524288", PROBE_ALLOCATOR: "jemalloc" };
+const IDLE_FRAME = "IDLE_ALLOCATOR";
 
 /**
  * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`, with `HOSTS` set to
@@ -65,11 +66,22 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
     async memory() {
       if (!samples) throw new Error("the probe was not started for idle memory");
       const signal = AbortSignal.any([closed.signal, AbortSignal.timeout(5000)]);
-      const next = once(samples, "line", { signal });
-      if (!signal.aborted && !child.kill("SIGUSR1")) closed.abort();
-      const [line] = await next.catch(() => { throw new Error(`the probe did not give an idle allocator sample:\n${said}`); });
+      let payload;
+      try {
+        const lines = on(samples, "line", { signal });
+        if (!signal.aborted && !child.kill("SIGUSR1")) closed.abort();
+        for await (const [line] of lines) {
+          // Corten's ordinary logs use the same stdout. Only observer frames answer the signal.
+          if (line === IDLE_FRAME || line.startsWith(`${IDLE_FRAME} `)) {
+            payload = line.slice(IDLE_FRAME.length + 1);
+            break;
+          }
+        }
+      } catch {
+        throw new Error(`the probe did not give an idle allocator sample:\n${said}`);
+      }
       let sample;
-      try { sample = JSON.parse(line); } catch { /* refused below */ }
+      try { sample = JSON.parse(payload); } catch { /* refused below */ }
       if (!sample || !Number.isSafeInteger(sample.live) || sample.live < 0 || !Number.isSafeInteger(sample.threadNet) ||
           !Number.isSafeInteger(sample.active) || sample.active < 0 || !Number.isSafeInteger(sample.nanos) || sample.nanos < 0) {
         throw new Error(`the probe gave an invalid idle allocator sample:\n${said}`);

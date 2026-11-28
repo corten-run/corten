@@ -28,6 +28,8 @@
 //   STAND_IN_NOT_FOUND_FROM=<n>  the server's nth request and those after it are answered 404
 //   STAND_IN_DEAF_AFTER=<n>      after its nth run the control exits 0 and asks for nothing
 //   STAND_IN_CLOSE_ON_SWEEP=<n>  close one held connection before replying to the nth sweep
+//   STAND_IN_SWEEP_LOG=1         emit ordinary stdout lines before the allocator reply
+//   STAND_IN_BAD_SWEEP=<n>        write an invalid observer frame before the nth valid reply
 import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -175,12 +177,15 @@ function serve() {
         socket.destroy();
         await closed;
       }
-      if (String(sweeps) === process.env.STAND_IN_BAD_SWEEP) {
-        process.stdout.write('{"live":5,"threadNet":0,"active":"123","nanos":246000}\n');
-      } else {
-        const open = sockets.size;
-        process.stdout.write(`${JSON.stringify({ live: 50_000 + 123 * open, threadNet: 60_000 - 3 * open, active: 65_536 + 4096 * open, nanos: 246_000 + sweeps })}\n`);
+      if (process.env.STAND_IN_SWEEP_LOG === "1") {
+        process.stdout.write('INFO probe fixture is serving\n{"live":5,"threadNet":0,"active":123,"nanos":0}\n');
       }
+      if (String(sweeps) === process.env.STAND_IN_BAD_SWEEP) {
+        process.stdout.write('IDLE_ALLOCATOR {"live":5,"threadNet":0,"active":"123","nanos":246000}\n');
+      }
+      const open = sockets.size;
+      const sample = { live: 50_000 + 123 * open, threadNet: 60_000 - 3 * open, active: 65_536 + 4096 * open, nanos: 246_000 + sweeps };
+      process.stdout.write(`IDLE_ALLOCATOR ${JSON.stringify(sample)}\n`);
     });
   }
   process.on("SIGTERM", () => {

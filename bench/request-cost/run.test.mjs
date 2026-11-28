@@ -332,8 +332,16 @@ test("idle.mjs prints no figure when a connection's answer is not the case's", {
   assert.doesNotMatch(run.stdout, /bytes a connection/);
 });
 
-test("idle.mjs prints no figure when an allocator sample is invalid", { skip }, async () => {
-  const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_BAD_SWEEP: "3" });
+test("idle.mjs skips ordinary stdout lines, even JSON, before the observer frame", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_SWEEP_LOG: "1" });
+  assert.equal(run.status, 0, run.stderr);
+  const { allocator, sweepNanos } = JSON.parse(run.stdout);
+  assert.deepEqual(allocator, { live: 4920, threadNet: -120, active: 163840 });
+  assert.deepEqual(sweepNanos, [246_002, 246_003]);
+});
+
+test("idle.mjs refuses an invalid observer frame even when a valid frame follows", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_SWEEP_LOG: "1", STAND_IN_BAD_SWEEP: "3" });
   assert.equal(run.status, 1, run.stderr);
   assert.match(run.stderr, /the probe gave an invalid idle allocator sample/);
   assert.equal(run.stdout, "");

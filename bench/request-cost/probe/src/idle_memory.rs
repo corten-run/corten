@@ -7,6 +7,7 @@ use std::time::Instant;
 use tokio::signal::unix::{SignalKind, signal};
 
 type Mallctl = unsafe extern "C" fn(*const c_char, *mut c_void, *mut usize, *mut c_void, usize) -> c_int;
+const IDLE_FRAME: &str = "IDLE_ALLOCATOR";
 
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
@@ -61,7 +62,7 @@ fn sample(ctl: Mallctl, mut output: impl Write) -> io::Result<()> {
     let live = allocated.checked_sub(cached).ok_or_else(|| io::Error::other("jemalloc cached bytes exceed allocated bytes"))?;
     let thread_net = i128::from(thread_allocated) - i128::from(thread_deallocated);
     let nanos = began.elapsed().as_nanos();
-    writeln!(output, "{{\"live\":{live},\"threadNet\":{thread_net},\"active\":{active},\"nanos\":{nanos}}}")
+    writeln!(output, "{IDLE_FRAME} {{\"live\":{live},\"threadNet\":{thread_net},\"active\":{active},\"nanos\":{nanos}}}")
 }
 
 pub fn start() -> io::Result<()> {
@@ -73,7 +74,7 @@ pub fn start() -> io::Result<()> {
             if let Err(error) = sample(ctl, io::stdout().lock()) {
                 eprintln!("idle memory: {error}");
                 // Signal failure to the reader without giving the run a partial sample.
-                let _ = writeln!(io::stdout().lock(), "null");
+                let _ = writeln!(io::stdout().lock(), "{IDLE_FRAME} null");
                 break;
             }
         }
@@ -123,7 +124,7 @@ mod tests {
         sample(counters, &mut line).unwrap();
         let line = std::str::from_utf8(&line).unwrap();
         let nanos = line
-            .strip_prefix("{\"live\":7871,\"threadNet\":-9,\"active\":12288,\"nanos\":")
+            .strip_prefix("IDLE_ALLOCATOR {\"live\":7871,\"threadNet\":-9,\"active\":12288,\"nanos\":")
             .unwrap()
             .strip_suffix("}\n")
             .unwrap();
