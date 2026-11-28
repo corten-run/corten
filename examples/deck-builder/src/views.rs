@@ -26,20 +26,21 @@ pub use deck_line::DeckLine;
 pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
 pub use draft_notes::DraftNotes;
 pub use preview_export::PreviewExport;
-pub use save_note::{Answer, DeckAnswered, SaveNote};
+use save_note::SaveNote;
+pub use save_note::{Answer, DeckAnswered};
 
 /// What the app lists in `App::components`: the scripts, the stylesheet and the rows' views.
 pub const COMPONENTS: &[Component] = &[
     DeckBuilder,
     CollectionRow,
     DeckLine,
-    SaveNote,
     DeckPreview,
     DeckEditor,
     DeckSummary,
     DraftNotes,
     PreviewExport,
     PreviewHelp,
+    SaveNote,
 ];
 
 /// The document around the page.
@@ -129,10 +130,14 @@ pub fn screen<'a>(
             in_deck: saved.get(&card.id).copied().unwrap_or(0),
         })
         .collect();
+    use std::cmp::Reverse;
     match view.sort {
         Some(Sort::Name) => cards.sort_by_cached_key(|s| s.card.name.to_lowercase()),
+        Some(Sort::NameDesc) => cards.sort_by_cached_key(|s| Reverse(s.card.name.to_lowercase())),
         Some(Sort::Cost) => cards.sort_by_cached_key(|s| (s.card.cost, s.card.name.to_lowercase())),
-        Some(Sort::Owned) => cards.sort_by_cached_key(|s| (std::cmp::Reverse(s.card.owned), s.card.name.to_lowercase())),
+        Some(Sort::CostDesc) => cards.sort_by_cached_key(|s| (Reverse(s.card.cost), s.card.name.to_lowercase())),
+        Some(Sort::Owned) => cards.sort_by_cached_key(|s| (Reverse(s.card.owned), s.card.name.to_lowercase())),
+        Some(Sort::OwnedAsc) => cards.sort_by_cached_key(|s| (s.card.owned, s.card.name.to_lowercase())),
         None => {}
     }
     let mut lines: Vec<Line> =

@@ -18,6 +18,9 @@ pub enum Answer {
         version: u64,
         message: String,
     },
+    /// A native key cannot acknowledge a scripted draft. Draw this on the replacement page
+    /// without notifying the autosave queue.
+    NativeSubmit,
     /// `unsure`: a save the server no longer remembers may have been this one (`Outcome::Stale`).
     Stale {
         version: u64,
@@ -26,47 +29,43 @@ pub enum Answer {
 }
 
 /// What became of a save, as the builder's script compares it. A renamed variant fails the Rust
-/// build, then `tsc` where a script still compares the old name. `Loaded` is the page as loaded,
-/// before any save, for which the note tells the builder nothing.
+/// build, then `tsc` where a script still compares the old name.
 #[derive(Clone, Copy, ToJson)]
 pub enum SaveOutcome {
-    Loaded,
     Saved,
     Refused,
     Stale,
 }
 
 impl Answer {
-    /// What the script compares.
-    fn outcome(&self) -> SaveOutcome {
-        match self {
-            Answer::None => SaveOutcome::Loaded,
-            Answer::Saved { .. } => SaveOutcome::Saved,
-            Answer::Refused { .. } => SaveOutcome::Refused,
-            Answer::Stale { .. } => SaveOutcome::Stale,
+    /// The same notice on a whole page and in a patch.
+    fn words(&self) -> impl Render + '_ {
+        html! {
+            match self {
+                Answer::None => {}
+                Answer::Saved { .. } => { "Saved." }
+                Answer::Refused { message, .. } => { "Not saved: "{message} }
+                Answer::NativeSubmit => {
+                    "Not saved: This form already saved before autosave started. Review the saved deck below before making another change."
+                }
+                Answer::Stale { .. } => { "Not saved: this deck was changed in another tab." }
+            }
         }
     }
 
-    fn version(&self) -> u64 {
-        match self {
-            Answer::None => 0,
-            Answer::Saved { version, .. } | Answer::Refused { version, .. } | Answer::Stale { version, .. } => *version,
-        }
-    }
-
-    fn draft(&self) -> u64 {
-        match self {
-            Answer::Saved { draft, .. } => *draft,
-            _ => 0,
-        }
-    }
-
-    fn unsure(&self) -> bool {
-        matches!(self, Answer::Stale { unsure: true, .. })
+    /// Only a scripted save has a queue to notify.
+    pub fn patch(&self) -> Option<impl Patch + '_> {
+        let (outcome, version, draft, unsure) = match *self {
+            Answer::Saved { version, draft } => (SaveOutcome::Saved, version, draft, false),
+            Answer::Refused { version, .. } => (SaveOutcome::Refused, version, 0, false),
+            Answer::Stale { version, unsure } => (SaveOutcome::Stale, version, 0, unsure),
+            Answer::None | Answer::NativeSubmit => return None,
+        };
+        Some(SaveNote { answer: self, receipt: Some((outcome, version, draft, unsure)) })
     }
 }
 
-/// A save's answer, told to the builder around the note: what became of it (never `Loaded`), the
+/// A save's answer, told to the builder around the note: what became of it, the
 /// deck's version after it, which send was saved, and, when stale, whether a save the server no
 /// longer remembers may have been it. It bubbles from the note.
 #[corten::script::event]
@@ -77,23 +76,15 @@ pub struct DeckAnswered {
     pub unsure: bool,
 }
 
-/// What became of the last save, in words, inside the builder's status line. Each save answers
-/// with this note as a patch; as it joins the page its script tells the builder the outcome (a
-/// `DeckAnswered` event), which then takes the version, rolls a refused change back, or looks
-/// for another tab's save. Without JavaScript it is part of the page a refused save answers with.
+/// Only a patch notifies the queue. Keep the binding usable by tabs from before a deploy.
 #[component(js)]
-pub fn SaveNote<'a>(answer: &'a Answer) -> impl Patch {
+pub fn SaveNote<'a>(answer: &'a Answer, receipt: Option<(SaveOutcome, u64, u64, bool)>) -> impl Patch {
     html! {
         <span
             id={SaveNoteId}
-            on:connect={js::answered(target, answer.outcome(), answer.version(), answer.draft(), answer.unsure())}
+            on:connect={receipt.map(|(outcome, version, draft, unsure)| js::answered(target, outcome, version, draft, unsure))}
         >
-            match answer {
-                Answer::None => {}
-                Answer::Saved { .. } => { "Saved." }
-                Answer::Refused { message, .. } => { "Not saved: "{message} }
-                Answer::Stale { .. } => { "Not saved: this deck was changed in another tab." }
-            }
+            {answer.words()}
         </span>
     }
 }

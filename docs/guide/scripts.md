@@ -206,6 +206,23 @@ works: from the component's own handler, or on a state only the working componen
 part's link is hidden only while a read is on its way ([A slow part](live-data.md#a-slow-part)).
 There is no page-wide flag that says a script loaded.
 
+In [Deck Builder](../../examples/deck-builder/README.md), Save stays drawn too. The builder's
+handler opts a clean form into `data-patch` when it connects and uses its autosave queue. Until then
+the browser submits the plain form: a save redirects, and a refusal draws the page with its reason.
+If a native Save is still waiting after the server committed it, a different edit sent with that
+same form key gets a conflict, not a success for the first edit. If the module loads after the
+player has typed, a difference from `defaultValue` keeps that document native. Starting autosave
+would not know whether the native form had already saved. The count fields and focus stay put,
+and the next native Save uses the original key and version before opening a fresh page. Add and
+Add selected can save without changing any count input. If autosave starts on such a form and
+submits a key that already saved natively, the server draws a conflict page with the saved deck
+and a fresh key. It does not give the queue an acknowledgement for a draft it never saved.
+With autosave active, the count inputs stay editable even when another count is incomplete.
+The builder waits for the whole form to be valid, then reads all its counts before sending,
+including a focused field whose `change` event has not fired. The queue remembers that deck,
+not an earlier drawing of it.
+Filter applies the current query even if its input handler was not there when the player typed it.
+
 ### A value both sides compute
 
 A value a handler computes that the server also draws (a refund the first draw shows, and the
@@ -418,17 +435,17 @@ A script that submits a `data-patch` form (`form.requestSubmit()`) and needs wha
 decided learns it the same way: the patch the handler answers with carries an element whose
 `on:connect` dispatches a typed event with the values the handler read, and the screen listens
 for it. The outcome is then the handler's own data, typed by its Rust struct and checked at the
-call, which a status could not carry. `examples/deck-builder`'s `SaveNote` is this: each save's
-patch draws a note whose
-`on:connect={js::answered(target, answer.outcome(), answer.version(), answer.draft(), answer.unsure())}`
-dispatches `DeckAnswered`, and the deck builder takes the saved version, a refusal or a stale
-save from it. Which of those it was is a `SaveOutcome`, an enum that derives `ToJson`, as the
-event's field and as `answered`'s parameter (`@param {import("../../types/app").SaveOutcome} outcome`),
+call, which a status could not carry. `examples/deck-builder`'s `SaveNote` is this: a scripted
+save's patch draws a note whose `on:connect={js::answered(target, outcome, version, draft, unsure)}`
+dispatches `DeckAnswered` from `save_note.js`. Keep that binding the same across deploys: a tab
+left open still has its old exports, even when its next patch is drawn by a new server. The builder
+imports the note's module at startup so a save or retry needs no new script request. A note on a
+full page only shows its text and dispatches nothing. The builder takes the saved version, a refusal
+or a stale save from `DeckAnswered`. Which of those it was is a `SaveOutcome`, an enum that derives
+`ToJson`, as the event's field and as `answered`'s outcome parameter,
 so `tsc` checks the builder's `event.outcome === "Refused"` against the enum's names: a renamed
 variant fails the Rust build and then `tsc`, where a `String` field would let the branch quietly stop
-matching. The page as first loaded has had no save answered, and a generated declaration cannot be
-optional at a call (the table at the top of this page), so that is a variant of its own, `Loaded`,
-for which `answered` dispatches nothing. A submit with no answer to draw (other than a bare `204` or
+matching. A submit with no answer to draw (other than a bare `204` or
 `205`, the submit done with nothing to draw) is `corten:error` on the
 form (when a read drew over it while the write was out, on the form the read drew in its place
 on the same page, else on the document; it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
@@ -1125,8 +1142,9 @@ wrong one and `tsc` checks the field's name and type: read each row's key once (
 markup's call is checked against the handler's name, while no call to a handler whose parameter is
 a JSDoc union of strings compiles (a Rust enum the server declares, such as `SortBy`, is the other
 checked way, in the table at the top of this page). `examples/seller-desk` sorts and filters its
-grid this way, and `examples/deck-builder` makes its deck's lines with `replace(items)` after each
-change, each filled from the collection row of the same card. Rows a script only puts in another
+grid this way. In `examples/deck-builder` new lines are filled from their collection rows;
+retained lines keep their number inputs, so a refusal or reorder cannot erase an incomplete
+number by filling every row again. Rows a script only puts in another
 order, and never writes or makes, need no view: each gives its ref the value it sorts by
 (`ref={row.with(sort_cents(l))}`, the number the server's own sort uses, such as a price in cents,
 never a cell's text), and the handler compares the values of a `Map<HTMLTableRowElement, number>`

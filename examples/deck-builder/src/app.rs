@@ -23,7 +23,7 @@ use serde::Serialize;
 use crate::{
     cards::{self, Card, Refusal},
     text::Msg,
-    views::{self, Answer, SaveNote},
+    views::{self, Answer},
 };
 
 /// A card in the saved deck and its copies: the rows of the deck's feed.
@@ -64,6 +64,9 @@ struct Saves {
 struct Applied {
     draft: u64,
     version: u64,
+    // A plain form has no draft queue to reconcile a changed resend. Remember its
+    // effective deck by collection index, not by a second copy of each card ID.
+    ordinary: Option<Box<[(usize, u32)]>>,
 }
 
 /// How long an applied save's key is remembered: a page sends a lost save again within moments,
@@ -79,6 +82,10 @@ pub enum Outcome {
     Saved { version: u64, draft: u64 },
     /// The rules refused it; the deck is as it was.
     Refused(u64, Refusal),
+    /// A plain form reused a key that already saved a different deck.
+    ChangedSubmit(u64),
+    /// Autosave reused a key that saved before the builder owned the form.
+    NativeSubmit,
     /// It was built on an older version: another tab saved first, or the server restarted since.
     /// `unsure`: a save made after that version has had its key forgotten, so if this key was
     /// sent before (its answer lost), that save may have been this one.
@@ -136,10 +143,10 @@ impl Builder {
     }
 
     /// Saves `deck` (the page's send `draft`) if the saved deck is still at `version` of
-    /// `generation` and the rules allow it. A submit key already applied answers as it did then,
-    /// whatever the deck: the page sent it again because the answer was lost, and the draft says
-    /// which deck was saved.
-    pub fn save(&self, generation: &str, version: u64, deck: Deck, key: &SubmitKey, draft: u64) -> Outcome {
+    /// `generation` and the rules allow it. On replay, the original draft identifies which
+    /// scripted edit saved, but a native receipt does not name any scripted edit. A plain form
+    /// only gets the original success if it sends the same deck.
+    fn save(&self, generation: &str, version: u64, deck: Result<Deck, Refusal>, key: &SubmitKey, draft: u64) -> Outcome {
         let mut saves = self.lock();
         let at = Instant::now();
         while saves.order.front().is_some_and(|(applied, _)| at.duration_since(*applied) >= self.kept_for) {
@@ -149,7 +156,29 @@ impl Builder {
                 saves.forgotten_through = saves.forgotten_through.max(forgotten.version);
             }
         }
-        if let Some(applied) = saves.by_key.get(key) {
+        // Only a receipt from this generation can reconcile an unparseable edit.
+        let applied = saves.by_key.get(key).filter(|_| deck.is_ok() || generation == self.generation());
+        if draft != 0 && applied.is_some_and(|save| save.draft == 0) {
+            return Outcome::NativeSubmit;
+        }
+        let deck = match deck {
+            Ok(deck) => deck,
+            // A malformed native resend still needs to say that the earlier save was made.
+            Err(_) if draft == 0 && applied.is_some() => return Outcome::ChangedSubmit(self.deck.seq()),
+            Err(refusal) => return Outcome::Refused(self.deck.seq(), refusal),
+        };
+        if let Some(applied) = applied {
+            if draft == 0
+                && !applied.ordinary.as_ref().is_some_and(|original| {
+                    deck.len() == original.len()
+                        && deck
+                            .iter()
+                            .zip(original.iter())
+                            .all(|((id, count), (index, before))| self.index.get(id) == Some(index) && count == before)
+                })
+            {
+                return Outcome::ChangedSubmit(self.deck.seq());
+            }
             return Outcome::Saved { version: applied.version, draft: applied.draft };
         }
         let now = self.deck.seq();
@@ -176,7 +205,8 @@ impl Builder {
             }
         });
         let version = self.deck.seq();
-        saves.by_key.insert(key.clone(), Applied { draft, version });
+        let ordinary = (draft == 0).then(|| deck.iter().map(|(id, &count)| (self.index[id], count)).collect());
+        saves.by_key.insert(key.clone(), Applied { draft, version, ordinary });
         saves.order.push_back((at, key.clone()));
         Outcome::Saved { version, draft }
     }
@@ -248,8 +278,11 @@ pub struct DeckQuery {
 #[serde(rename_all = "kebab-case")]
 pub enum Sort {
     Name,
+    NameDesc,
     Cost,
+    CostDesc,
     Owned,
+    OwnedAsc,
 }
 
 /// The deck as its form posts it: each line's card and count (`card[i]` has `count[i]`), the
@@ -275,7 +308,7 @@ pub struct DeckInput {
     /// This submit, so one sent again is saved once.
     pub submit: SubmitKey,
     /// Which of the page's sends this is: the script counts them, so an answer to one sent again
-    /// says which deck was saved. 0 without JavaScript.
+    /// says which deck was saved. 0 when the form is submitted without the builder's script.
     #[serde(default)]
     pub draft: u64,
     /// The page's filter and order, to come back to after a save without JavaScript.
@@ -302,23 +335,31 @@ fn deck_page(req: &Req, builder: &Builder, view: &DeckQuery, answer: &Answer, st
     req.page_with_status(status, html! { <views::Layout req={req} title="Deck builder">{screen}</views::Layout> })
 }
 
-/// Saves the deck. With JavaScript the answer is the save note, which tells the page's script what
-/// became of the save; without, a saved deck goes back to the page and a refused one is the page
-/// with the reason.
+/// Scripted saves get a note, unless the key already belongs to a native save. That refusal
+/// draws the saved deck with a fresh key instead of asking the scripted queue to reconcile it.
+/// An ordinary form submit redirects after a save or draws the refusal.
 async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckInput>) -> HtmlResult {
-    let outcome = match builder.posted(&input) {
-        Ok(deck) => builder.save(&input.generation, input.version, deck, &input.submit, input.draft),
-        Err(refusal) => Outcome::Refused(builder.saved().0, refusal),
-    };
+    let outcome = builder.save(&input.generation, input.version, builder.posted(&input), &input.submit, input.draft);
     let (answer, status) = match &outcome {
         Outcome::Saved { version, draft } => (Answer::Saved { version: *version, draft: *draft }, StatusCode::OK),
         Outcome::Refused(version, refusal) => {
             (Answer::Refused { version: *version, message: refusal.to_string() }, StatusCode::UNPROCESSABLE_ENTITY)
         }
+        Outcome::ChangedSubmit(version) => (
+            Answer::Refused {
+                version: *version,
+                message: "This form already saved a different edit. Enter your change again on the saved deck below.".into(),
+            },
+            StatusCode::CONFLICT,
+        ),
+        Outcome::NativeSubmit => (Answer::NativeSubmit, StatusCode::CONFLICT),
         Outcome::Stale { version, unsure } => (Answer::Stale { version: *version, unsure: *unsure }, StatusCode::CONFLICT),
     };
-    if let Some(action) = req.action() {
-        return action.patch_with_status(status, SaveNote { answer: &answer });
+    if input.draft != 0
+        && let Some(action) = req.action()
+        && let Some(note) = answer.patch()
+    {
+        return action.patch_with_status(status, note);
     }
     let view = DeckQuery { q: input.q, sort: input.sort };
     match outcome {
@@ -345,8 +386,8 @@ mod tests {
         "1b2c3d4e-5f60-4718-9a2b-3c4d5e6f7a8b",
     ];
 
-    /// The deck form as the page holds it: `deck` built on `version`, under `key`. A save as the
-    /// page's script sends it adds `.mode(Mode::Action)`.
+    /// The deck form as the page holds it: `deck` built on `version`, under `key`. A scripted
+    /// save supplies a nonzero draft and uses `Mode::Action`.
     fn saving<'c>(app: &'c Client, version: u64, deck: &[(&str, u32)], key: &SubmitKey) -> Call<'c, FormBody> {
         let f = DeckInput::FIELDS;
         let call = app.post(&url::Save).field(f.generation, GEN).field(f.version, version).field(f.submit, key);
@@ -400,9 +441,177 @@ mod tests {
         assert!(status == StatusCode::OK && note.contains(r#""Saved",1,1,false)"#), "{note}");
         assert_eq!((builder.deck.seq(), builder.saved().1.get("salt-oracle")), (1, Some(&1)));
         // A new key, built on the old version, is stale.
-        let res = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
+        let res = saving(&app, 0, &deck, &submit_key()).field(f.draft, 3).mode(Mode::Action).await;
         let (status, note) = read(&res);
         assert!(status == StatusCode::CONFLICT && note.contains(r#""Stale",1,0,false)"#), "{note}");
+    }
+
+    #[tokio::test]
+    async fn runtime_sends_an_ordinary_form_when_the_builder_module_is_missing() {
+        fn send(call: Call<'_, FormBody>) -> Call<'_, FormBody> {
+            call.field(DeckInput::FIELDS.draft, 0)
+                .mode(Mode::Action)
+                .header(corten::http::header::HeaderName::from_static("prefer"), "corten-draws=whole")
+        }
+
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let f = DeckInput::FIELDS;
+        let saved = send(saving(&app, 0, &starter(), &submit_key()).field(f.add, "pearl-diver").field(f.q, "pearl")).await;
+        assert_eq!(saved.status(), StatusCode::NO_CONTENT);
+        assert_eq!(saved.headers()["corten-location"], "/?q=pearl");
+
+        let mut deck = starter();
+        deck.push(("pearl-diver", 1));
+        deck.iter_mut().find(|(id, _)| *id == "ashen-drake").unwrap().1 = 3;
+        let refused = send(saving(&app, 1, &deck, &submit_key())).await;
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(refused.text().contains("<!DOCTYPE html>") && refused.text().contains("You own 2 copies of Ashen Drake."));
+        assert!(!refused.headers().contains_key("corten-patch"));
+
+        let stale = send(saving(&app, 0, &starter(), &submit_key())).await;
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        assert!(stale.text().contains("<!DOCTYPE html>") && stale.text().contains("changed in another tab"));
+        assert!(stale.text().contains(r#"name="version" value="1""#));
+        assert!(!stale.headers().contains_key("corten-patch"));
+        assert_eq!((builder.deck.seq(), builder.saved().1.get("pearl-diver")), (1, Some(&1)));
+    }
+
+    #[tokio::test]
+    async fn a_plain_resend_reports_a_different_edit_without_overwriting_the_saved_deck() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let key = submit_key();
+        let f = DeckInput::FIELDS;
+        let add = || saving(&app, 0, &starter(), &key).field(f.add, "pearl-diver");
+        assert_eq!(add().await.status(), StatusCode::SEE_OTHER);
+
+        let mut deck = starter();
+        deck.push(("salt-oracle", 1));
+        assert_eq!(saving(&app, 1, &deck, &submit_key()).await.status(), StatusCode::SEE_OTHER);
+        // Even after the deck moves on, an exact resend is known to have been saved.
+        assert_eq!(add().await.status(), StatusCode::SEE_OTHER);
+        let changed = saving(&app, 0, &starter(), &key).await;
+        assert_eq!(changed.status(), StatusCode::CONFLICT);
+        assert!(changed.text().contains("Not saved: This form already saved a different edit."));
+        assert!(changed.text().contains(r#"name="version" value="2""#));
+        assert_eq!((builder.saved().0, builder.saved().1.get("salt-oracle")), (2, Some(&1)));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_retry_reconciles_the_saved_deck_but_a_fresh_key_gets_a_refusal() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let f = DeckInput::FIELDS;
+        let key = submit_key();
+        let mut deck = starter();
+        let lost = saving(&app, 0, &deck, &key).field(f.add, "salt-oracle").await;
+        assert_eq!(lost.status(), StatusCode::SEE_OTHER);
+
+        let invalid = |version, key: &SubmitKey| {
+            saving(&app, version, &deck[1..], key)
+                .field(f.card, "gravel-sprite")
+                .field(f.count, "0.5")
+                .field(f.add, "salt-oracle")
+        };
+        let retry = invalid(0, &key).await;
+        let (status, page) = read(&retry);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(page.contains("This form already saved a different edit."));
+        assert!(page.contains(r#"name="version" value="1""#));
+        assert!(page.contains(r#"name="card" value="salt-oracle""#));
+
+        let refused = invalid(1, &submit_key()).await;
+        let (status, page) = read(&refused);
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(page.contains("Enter a number of copies"));
+        assert_eq!((builder.saved().0, builder.saved().1.get("salt-oracle")), (1, Some(&1)));
+
+        deck[0].1 = 2;
+        deck.push(("salt-oracle", 1));
+        let corrected = saving(&app, 1, &deck, &submit_key()).await;
+        assert_eq!(corrected.status(), StatusCode::SEE_OTHER);
+        let (version, saved) = builder.saved();
+        assert_eq!((version, saved.get("gravel-sprite"), saved.get("salt-oracle")), (2, Some(&2), Some(&1)));
+    }
+
+    #[tokio::test]
+    async fn autosave_cannot_acknowledge_a_native_save_as_its_own_draft() {
+        let f = DeckInput::FIELDS;
+        for submitter in ["Save", "Add", "Add selected"] {
+            let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+            let app = app(builder.clone()).test();
+            let key = submit_key();
+            let mut saved = starter();
+            saved.push(("pearl-diver", 1));
+            let native = match submitter {
+                "Save" => saving(&app, 0, &saved, &key),
+                "Add" => saving(&app, 0, &starter(), &key).field(f.add, "pearl-diver"),
+                _ => saving(&app, 0, &starter(), &key).field(f.add_picked, "1").field(f.pick, "pearl-diver"),
+            };
+            assert_eq!(native.await.status(), StatusCode::SEE_OTHER, "{submitter}");
+
+            let mut added_again = starter();
+            added_again.push(("pearl-diver", 2));
+            // A draft built before the feed arrived and one built after it both hold the old key.
+            for (version, deck) in [(0, &saved), (1, &added_again)] {
+                let res = saving(&app, version, deck, &key)
+                    .field(f.draft, 1)
+                    .mode(Mode::Action)
+                    .header(corten::http::header::HeaderName::from_static("prefer"), "corten-draws=whole")
+                    .await;
+                assert_eq!(res.status(), StatusCode::CONFLICT, "{submitter}, version {version}");
+                assert!(res.headers().contains_key("corten-shell"), "{submitter}");
+                assert!(!res.headers().contains_key("corten-patch") && !res.headers().contains_key("corten-page"), "{submitter}");
+                assert!(res.text().contains("<!DOCTYPE html>"), "{submitter}");
+                assert!(res.text().contains("This form already saved before autosave started."), "{submitter}");
+                assert!(!res.text().contains("save_note.answered("), "{submitter}");
+                assert!(res.text().contains(r#"name="version" value="1""#), "{submitter}");
+                assert_eq!((builder.saved().0, builder.saved().1.get("pearl-diver")), (1, Some(&1)), "{submitter}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_overflowing_autosave_recovers_only_a_known_native_submit() {
+        let f = DeckInput::FIELDS;
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let native = submit_key();
+        let added = saving(&app, 0, &starter(), &native).field(f.add, "salt-oracle").await;
+        assert_eq!(added.status(), StatusCode::SEE_OTHER);
+
+        let overflow = |generation, key: &SubmitKey| {
+            app.post(&url::Save)
+                .field(f.generation, generation)
+                .field(f.version, 0)
+                .field(f.submit, key)
+                .field(f.draft, 1)
+                .field(f.card, "gravel-sprite")
+                .field(f.count, "4294967296")
+                .mode(Mode::Action)
+        };
+        let res = overflow(GEN, &native).await;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        assert!(res.headers().contains_key("corten-shell") && !res.headers().contains_key("corten-patch"));
+        assert!(res.text().contains("This form already saved before autosave started."));
+        assert!(res.text().contains(r#"name="card" value="salt-oracle""#));
+        assert!(res.text().contains(r#"name="version" value="1""#));
+        let (_, key_field) = res.text().split_once(r#"name="submit" data-submit value=""#).unwrap();
+        let (replacement, _) = key_field.split_once('"').unwrap();
+        assert!(!replacement.is_empty() && replacement != native.as_str());
+        assert_eq!((builder.saved().0, builder.saved().1.get("salt-oracle")), (1, Some(&1)));
+
+        let scripted = submit_key();
+        let saved = saving(&app, 1, &starter(), &scripted).field(f.draft, 1).mode(Mode::Action).await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        let before = builder.saved();
+        for (generation, key) in [(GEN, &submit_key()), ("other", &native), (GEN, &scripted)] {
+            let res = overflow(generation, key).await;
+            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert!(res.headers().contains_key("corten-patch") && res.text().contains("Enter a number of copies"));
+            assert_eq!(builder.saved(), before);
+        }
     }
 
     #[test]
@@ -417,7 +626,7 @@ mod tests {
         let deck = |extra: &str| {
             let mut deck: Deck = cards::STARTER.iter().map(|&(id, n)| (id.to_string(), n)).collect();
             deck.insert(extra.into(), 1);
-            deck
+            Ok(deck)
         };
         // A page saved twice before the restart: version 2.
         let before = Builder::from(60, Some("a"), KEPT_FOR);
@@ -445,14 +654,15 @@ mod tests {
         deck.insert("pearl-diver".into(), 1);
         // Keys forgotten at once: the first save's answer was lost, and it is sent again later.
         let builder = Builder::from(60, Some(GEN), Duration::ZERO);
-        assert_eq!(builder.save(GEN, 0, deck.clone(), &key(0), 1), Outcome::Saved { version: 1, draft: 1 });
-        assert_eq!(builder.save(GEN, 0, deck.clone(), &key(0), 2), Outcome::Stale { version: 1, unsure: true });
+        assert_eq!(builder.save(GEN, 0, Ok(deck.clone()), &key(0), 0), Outcome::Saved { version: 1, draft: 0 });
+        assert_eq!(builder.save(GEN, 0, Err(Refusal::NotANumber), &key(0), 0), Outcome::Refused(1, Refusal::NotANumber));
+        assert_eq!(builder.save(GEN, 0, Ok(deck.clone()), &key(0), 0), Outcome::Stale { version: 1, unsure: true });
         // Built on the version after that save, nothing forgotten could be it.
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        builder.save(GEN, 0, deck.clone(), &key(0), 1);
+        builder.save(GEN, 0, Ok(deck.clone()), &key(0), 1);
         deck.insert("pearl-diver".into(), 2);
-        builder.save(GEN, 1, deck.clone(), &key(1), 2);
-        assert_eq!(builder.save(GEN, 1, deck, &key(2), 3), Outcome::Stale { version: 2, unsure: false });
+        builder.save(GEN, 1, Ok(deck.clone()), &key(1), 2);
+        assert_eq!(builder.save(GEN, 1, Ok(deck), &key(2), 3), Outcome::Stale { version: 2, unsure: false });
     }
 
     #[tokio::test]
@@ -461,15 +671,19 @@ mod tests {
         let app = app(builder.clone()).test();
         let mut deck = starter();
         deck[4] = ("ashen-drake", 3);
-        let res = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
+        let f = DeckInput::FIELDS;
+        let res = saving(&app, 0, &deck, &submit_key()).field(f.draft, 1).mode(Mode::Action).await;
         let (status, note) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(note.contains("Not saved: You own 2 copies of Ashen Drake."), "{note}");
-        assert!(note.contains(r#""Refused",0,0,false)"#), "{note}");
+        assert!(note.contains(r#"save_note.answered($t,"Refused",0,0,false)"#), "{note}");
         assert_eq!(builder.deck.seq(), 0);
-        let f = DeckInput::FIELDS;
-        let res =
-            saving(&app, 0, &[], &submit_key()).field(f.card, "gravel-sprite").field(f.count, "two").mode(Mode::Action).await;
+        let res = saving(&app, 0, &[], &submit_key())
+            .field(f.card, "gravel-sprite")
+            .field(f.count, "two")
+            .field(f.draft, 1)
+            .mode(Mode::Action)
+            .await;
         let (status, note) = read(&res);
         assert!(status == StatusCode::UNPROCESSABLE_ENTITY && note.contains("Enter a number of copies"), "{note}");
     }
@@ -523,13 +737,18 @@ mod tests {
         let app = app(builder.clone()).test();
         let mut deck = starter();
         deck.push(("pearl-diver", 2));
-        assert_eq!(saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await.status(), StatusCode::OK);
+        assert_eq!(saving(&app, 0, &deck, &submit_key()).await.status(), StatusCode::SEE_OTHER);
         // Another tab, still at version 0.
         let res = saving(&app, 0, &starter(), &submit_key()).await;
         let (status, page) = read(&res);
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(page.contains("changed in another tab") && page.contains(r#"name="version" value="1""#), "{page}");
         assert!(page.contains("Pearl Diver"), "the deck as it is now: {page}");
+
+        let patched = saving(&app, 0, &starter(), &submit_key()).field(DeckInput::FIELDS.draft, 1).mode(Mode::Action).await;
+        let (status, note) = read(&patched);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(note.contains(r#"save_note.answered($t,"Stale",1,0,false)"#), "{note}");
     }
 
     #[tokio::test]
@@ -545,9 +764,14 @@ mod tests {
             cards::STARTER.len() + 1,
             "every deck line is a DeckLine, and the template's"
         );
-        assert!(page.contains("/scripts/deck_builder.js\">") && page.contains("/scripts/save_note.js\">"), "{page}");
-        // The page as loaded has had no save answered: its note tells the builder nothing.
-        assert!(page.contains(r#"save_note.answered($t,"Loaded",0,0,false)"#), "{page}");
+        assert!(page.contains("/scripts/deck_builder.js\">"), "{page}");
+        assert!(
+            page.split("<link rel=\"modulepreload\" href=\"")
+                .skip(1)
+                .any(|link| link.split_once('"').is_some_and(|(href, _)| href.ends_with("/scripts/save_note.js"))),
+            "the acknowledgement module preloads with the builder"
+        );
+        assert!(!page.contains("save_note.answered("), "a whole page does not acknowledge an autosave");
         let view = DeckQuery { q: Some("drake".into()), sort: Some(Sort::Cost) };
         let res = app.get(&url::Home { view }).await;
         let page = res.text();

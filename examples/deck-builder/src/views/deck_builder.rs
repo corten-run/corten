@@ -2,7 +2,8 @@ use corten::prelude::*;
 use corten_ui::CopyButton;
 
 use super::deck_preview::DeckPreviewChanged;
-use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, SaveNote, Shown, curve_cost, deck_list};
+use super::save_note::SaveNote;
+use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, Shown, curve_cost, deck_list};
 use crate::{
     app::{DeckInput, DeckQuery, Slot, Sort, url},
     cards::{DECK_SIZE, Kind, TOP_COST},
@@ -59,10 +60,10 @@ pub fn DeckBuilder<'a>(
     view: &'a DeckQuery,
     answer: &'a Answer,
 ) -> impl Render {
-    let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
+    let (cards_zone, deck_zone, rows, grip, add, all, picked, shown, none) = refs();
     let (lines_ref, template, lift, copies, form, version_ref, total, bars, tallies, kinds) = refs();
     let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
-    let (unsure, previews) = refs();
+    let (unsure, previews, query, save_query, save_sort) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
     let parts = js::Parts {
@@ -88,7 +89,7 @@ pub fn DeckBuilder<'a>(
         empty,
         number,
     };
-    let browse = js::Browse { cards: rows, all, picked, shown, none, found: t.js().grid_shown(), number };
+    let browse = js::Browse { cards: rows, all, picked, shown, none, save_query, found: t.js().grid_shown(), number };
     let carry = js::Carry {
         cards_zone,
         deck_zone,
@@ -104,7 +105,11 @@ pub fn DeckBuilder<'a>(
         over_cards: "Over the collection.",
     };
     let filter = view.q.as_deref().unwrap_or("");
-    let sorted = |by: Sort| view.sort == Some(by);
+    let sorted = |asc, desc| match view.sort {
+        Some(by) if by == asc => Some("ascending"),
+        Some(by) if by == desc => Some("descending"),
+        _ => None,
+    };
     let size: u32 = lines.iter().map(|l| l.count).sum();
     let mut curve = [0u32; TOP_COST as usize + 1];
     for line in lines.iter() {
@@ -116,7 +121,7 @@ pub fn DeckBuilder<'a>(
     html! {
         <div
             class={Builder}
-            on:connect={js::start(parts, url::DeckFeed, signal)}
+            on:connect={js::start(parts, copies, browse, url::DeckFeed, f.card.as_str(), f.count.as_str(), signal)}
             on:keydown={js::keys(event, parts, carry)}
             on:document:keydown={js::shortcut(event, parts)}
             on:dragend={js::dropped(carry)}
@@ -140,8 +145,15 @@ pub fn DeckBuilder<'a>(
                         </span>
                     </p>
                 </div>
-                <form class={Filter} method="get" action={url::Home::default()} role="search" on:submit={js::stay(event)}>
+                <form
+                    class={Filter}
+                    method="get"
+                    action={url::Home::default()}
+                    role="search"
+                    on:submit={js::applyFilter(event, query, browse)}
+                >
                     <input
+                        ref={query}
                         type="search"
                         name={q.q}
                         value={filter}
@@ -150,7 +162,7 @@ pub fn DeckBuilder<'a>(
                         on:input={js::filter(target, browse)}
                     >
                     if let Some(sort) = view.sort { <input type="hidden" name={q.sort} value={sort}> }
-                    <button class={NoScript}>"Filter"</button>
+                    <button type="submit">"Filter"</button>
                 </form>
                 <div class={Picks}>
                     <span><output ref={picked}>"0"</output>" selected"</span>
@@ -167,32 +179,33 @@ pub fn DeckBuilder<'a>(
                                     <input
                                         ref={all}
                                         type="checkbox"
+                                        disabled
                                         aria-label="Select every card shown"
                                         on:change={js::pickAll(browse)}
                                     >
                                 </th>
                                 <th><span class={Hidden}>"Move"</span></th>
-                                <th aria-sort={sorted(Sort::Name).then_some("ascending")}>
+                                <th aria-sort={sorted(Sort::Name, Sort::NameDesc)}>
                                     <a
                                         href={url::Home { view: DeckQuery { q: view.q.clone(), sort: Some(Sort::Name) } }}
-                                        on:click={js::sortByName(event, target, rows)}
+                                        on:click={js::sortByName(event, target, rows, save_sort, Sort::Name.as_ref(), Sort::NameDesc.as_ref())}
                                     >
                                         "Card"
                                     </a>
                                 </th>
-                                <th aria-sort={sorted(Sort::Cost).then_some("ascending")}>
+                                <th aria-sort={sorted(Sort::Cost, Sort::CostDesc)}>
                                     <a
                                         href={url::Home { view: DeckQuery { q: view.q.clone(), sort: Some(Sort::Cost) } }}
-                                        on:click={js::sortByCost(event, target, rows)}
+                                        on:click={js::sortByCost(event, target, rows, save_sort, Sort::Cost.as_ref(), Sort::CostDesc.as_ref())}
                                     >
                                         "Cost"
                                     </a>
                                 </th>
                                 <th>"Type"</th>
-                                <th aria-sort={sorted(Sort::Owned).then_some("descending")}>
+                                <th aria-sort={sorted(Sort::OwnedAsc, Sort::Owned)}>
                                     <a
                                         href={url::Home { view: DeckQuery { q: view.q.clone(), sort: Some(Sort::Owned) } }}
-                                        on:click={js::sortByOwned(event, target, rows)}
+                                        on:click={js::sortByOwned(event, target, rows, save_sort, Sort::Owned.as_ref(), Sort::OwnedAsc.as_ref())}
                                     >
                                         "In deck"
                                     </a>
@@ -202,7 +215,7 @@ pub fn DeckBuilder<'a>(
                         </thead>
                         <tbody
                             ref={rows}
-                            on:change={js::pick(pick.closest(), browse)}
+                            on:change={js::tally(browse)}
                             on:click={js::add(event, add.closest(), parts)}
                             on:dragstart={js::lift(event, grip.closest(), parts, carry)}
                             on:keydown={js::pickUp(event, grip.closest(), parts, carry)}
@@ -219,7 +232,6 @@ pub fn DeckBuilder<'a>(
                                     in_deck={shown.in_deck}
                                     selected={false}
                                     hidden={shown.hidden}
-                                    pick={pick}
                                     grip={grip}
                                     add={add}
                                 />
@@ -254,7 +266,7 @@ pub fn DeckBuilder<'a>(
                 // note inside it, and the script shows one of the spans while it has something to
                 // say (`data-state`).
                 <div ref={status} class={Status} role="status" data-state="">
-                    <SaveNote answer={answer} />
+                    <SaveNote answer={answer} receipt={None} />
                     <span class={Saving}>"Saving…"</span>
                     <span class={Saved}>"Saved."</span>
                     <span class={Updated}>"Updated from another tab."</span>
@@ -296,17 +308,18 @@ pub fn DeckBuilder<'a>(
                         </div>
                     }
                 </dl>
-                <form ref={form} id={DeckFormId} method="post" action={url::Save} data-patch novalidate>
+                <form ref={form} id={DeckFormId} method="post" action={url::Save}>
                     <input ref={generation_ref} type="hidden" name={f.generation} value={generation}>
                     <input ref={version_ref} type="hidden" name={f.version} value={version}>
                     {SubmitKey::field(f.submit)}
                     <input ref={draft} type="hidden" name={f.draft} value="0">
-                    <input type="hidden" name={f.q} value={filter}>
-                    if let Some(sort) = view.sort { <input type="hidden" name={f.sort} value={sort}> }
+                    <input ref={save_query} type="hidden" name={f.q} value={filter}>
+                    <input ref={save_sort} type="hidden" name={f.sort} value={view.sort} disabled={view.sort.is_none()}>
                     <ul
                         ref={lines_ref}
                         class={Lines}
-                        on:change={js::typed(copies.closest(), parts)}
+                        on:change={js::typed(parts)}
+                        on:focusout={js::resumeSave(parts)}
                         on:dragstart={js::liftLine(event, lift.closest(), parts, carry)}
                         on:dragover={js::overLine(event, lines_ref)}
                         on:drop={js::dropLine(event, parts, carry)}
@@ -325,8 +338,8 @@ pub fn DeckBuilder<'a>(
                             />
                         }
                     </ul>
-                    <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Drag cards here, or press Add."</p>
-                    <button class={NoScript}>"Save"</button>
+                    <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Use Add to put cards in the deck."</p>
+                    <button type="submit" on:click={js::saveNow(event, parts)}>"Save"</button>
                 </form>
                 <template ref={template}>
                     <DeckLine id="" name="" kind="" cost={0} count={0} owned={0} lift={lift} copies={copies} />

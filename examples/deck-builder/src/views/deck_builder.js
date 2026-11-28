@@ -9,9 +9,11 @@
 import { keep, subscribe } from "corten";
 import { CollectionRow, DeckLine, rows } from "corten/views";
 import { DeckPreviewChanged } from "corten/events";
+// A save must not need to fetch a script; older documents already load this module.
+import "./save_note.js";
+/** @import { DeckAnswered } from "corten/events" */
 /** @import { CortenError, FeedUrl, Message, NumberFormat } from "corten" */
 /** @import { Holds } from "corten/views" */
-/** @import { DeckAnswered } from "corten/events" */
 
 /** @typedef {import("../../types/app").Slot} Slot Generated from `Slot` in src/app.rs. */
 
@@ -53,6 +55,7 @@ import { DeckPreviewChanged } from "corten/events";
  * @property {HTMLOutputElement} picked
  * @property {HTMLOutputElement} shown
  * @property {HTMLParagraphElement} none
+ * @property {HTMLInputElement} save_query
  * @property {Message<"shown" | "total">} found
  * @property {NumberFormat} number
  */
@@ -96,6 +99,8 @@ const kept = () =>
     version: 0,
     /** A save is on its way. */
     sending: false,
+    /** A pending save was blocked by an invalid field, not sent. */
+    blocked: false,
     /** Sends whose answer never came (a lost connection): one may have been saved. @type {Sent[]} */
     unanswered: /** @type {Sent[]} */ ([]),
     /** How many sends this page made: the next one's draft number. */
@@ -115,8 +120,6 @@ const kept = () =>
     /** @type {Change[]} */ redo: [],
     /** @type {{ undo: Change[], redo: Change[] }} */ saved: { undo: [], redo: [] },
     /** @type {Moving | null} */ moving: null,
-    /** The deck line order shown in this page. The server stores counts, not presentation order. */
-    /** @type {string[]} */ order: [],
     /** @type {AbortSignal | undefined} */ signal: undefined,
     motion: 0,
   }));
@@ -133,21 +136,47 @@ const kept = () =>
 const names = new Intl.Collator(document.documentElement.lang || undefined);
 
 /**
- * Reads the deck the server rendered, and follows the saved deck until the builder leaves the
- * page: another tab's save arrives as a patch.
- * @param {Parts} parts @param {FeedUrl<Slot>} feed @param {AbortSignal} signal
+ * Starts on a clean form. A dirty form may already have been posted natively; its values
+ * and original key stay with the browser until a native submission replaces the document.
+ * A native Add can leave even a clean form with a spent key. Keep that key so the server
+ * can refuse the handoff rather than acknowledge a scripted draft it never applied.
+ * @param {Parts} parts @param {HTMLInputElement[]} copies @param {Browse} browse
+ * @param {FeedUrl<Slot>} feed @param {string} cardField @param {string} countField @param {AbortSignal} signal
  */
-export function start(parts, feed, signal) {
+export function start(parts, copies, browse, feed, cardField, countField, signal) {
+  // The server draws zero selected. Only tally if a control changed before startup.
+  if (browse.cards.querySelector("input:checked")) tally(browse);
+  browse.all.disabled = false;
+  if (copies.some((input) => input.value !== input.defaultValue || input.validity.badInput)) return;
   const s = kept();
   s.signal = signal;
   s.generation = parts.generation.value;
   s.version = Number(parts.version.value);
-  s.drawn = typedDeck(parts);
-  s.order = [...s.drawn.keys()];
-  s.base = new Map(s.drawn);
-  s.theirs = new Map(s.drawn);
+  const lines = rows(parts.lines, DeckLine);
+  /** @type {Deck} */ const base = new Map();
+  for (const input of copies) {
+    const line = lines.of(input);
+    if (!line) continue;
+    const saved = Number(input.defaultValue);
+    if (saved > 0) base.set(line.id, saved);
+  }
+  s.base = base;
+  s.drawn = base;
+  s.theirs = new Map(base);
   s.theirGeneration = s.generation;
   s.theirVersion = s.version;
+  // Write the send the queue will acknowledge, not the editor's spelling (e.g. "2e0").
+  // Leave the live inputs and the form's version, draft and submit key alone.
+  parts.form.addEventListener("formdata", ({ formData }) => {
+    const sent = s.sending && s.unanswered.at(-1);
+    if (!sent) return;
+    formData.delete(cardField);
+    formData.delete(countField);
+    for (const [id, n] of sent.deck) {
+      formData.append(cardField, id);
+      formData.append(countField, String(n));
+    }
+  }, { signal });
   subscribe(
     feed,
     {
@@ -194,20 +223,12 @@ export function start(parts, feed, signal) {
     },
     { signal },
   );
+  parts.form.dataset.patch = "";
 }
 
-/**
- * The deck as its count inputs hold it, a cleared one as no copies.
- * @param {Parts} parts
- */
-function typedDeck(parts) {
-  /** @type {Deck} */
-  const deck = new Map();
-  for (const line of rows(parts.lines, DeckLine)) {
-    const n = Math.max(0, Math.trunc(line.count) || 0);
-    if (n > 0) deck.set(line.id, (deck.get(line.id) ?? 0) + n);
-  }
-  return deck;
+/** Whether the builder owns writes to the deck. @param {Parts} parts */
+function enhanced(parts) {
+  return parts.form.hasAttribute("data-patch");
 }
 
 /** Whether two decks hold the same cards. @param {Deck} a @param {Deck} b */
@@ -238,27 +259,46 @@ function applied(deck, change) {
 }
 
 /**
- * A change the player made: drawn, kept for undo (as what it did, after the floor at no copies),
- * and saved.
- * @param {State} s @param {Parts} parts @param {Change} change
+ * Read one coherent edit, including focused and previously blurred counts. Until all fields
+ * are valid the DOM owns the unfinished edit; don't redraw it or make a send out of it.
+ * @param {State} s @param {Parts} parts @param {Change} [extra] a move to apply to those counts
  */
-function change(s, parts, change) {
-  const next = applied(s.drawn, change);
+function takeCounts(s, parts, extra) {
+  if (!parts.form.checkValidity()) {
+    s.blocked = true;
+    return false;
+  }
+  s.blocked = false;
+  /** @type {Deck} */ const live = new Map();
+  const lines = rows(parts.lines, DeckLine);
+  for (const line of lines) {
+    const n = line.count;
+    if (n > 0) live.set(line.id, n);
+    // A refusal kept this unfinished field. At zero it no longer needs a row or a deck change.
+    else if (!s.drawn.has(line.id)) lines.remove(line);
+  }
+  const next = extra ? applied(live, extra) : live;
   const did = diff(s.drawn, next);
-  if (did.length === 0) return;
-  s.undo.push(did);
-  s.redo.length = 0;
-  draw(s, parts, next);
-  save(s, parts);
+  if (did.length) {
+    s.undo.push(did);
+    s.redo.length = 0;
+    draw(s, parts, next, true);
+  }
+  return true;
+}
+
+/** @param {DeckLine} line @param {Deck} drawn */
+function editing(line, drawn) {
+  return line.count !== (drawn.get(line.id) ?? 0) || !!line.el.querySelector(":invalid");
 }
 
 /**
  * Shows `deck`: the lines (made, filled or removed by key, in the page's presentation order), each
  * collection row's count in the deck, the count, the curve, the kinds, the deck list, and whether
  * undo and redo have anything.
- * @param {State} s @param {Parts} parts @param {Deck} deck
+ * @param {State} s @param {Parts} parts @param {Deck} deck @param {boolean} [acceptFields]
  */
-function draw(s, parts, deck) {
+function draw(s, parts, deck, acceptFields = false) {
   const cards = rows(parts.cards, CollectionRow);
   const changed = new Set(diff(s.drawn, deck).map(([id]) => id));
   s.motion += 1;
@@ -267,21 +307,28 @@ function draw(s, parts, deck) {
     const row = cards.get(id);
     if (row && row.in_deck !== n) row.in_deck = n;
   }
-  s.drawn = deck;
   const items = [];
   for (const [id, count] of deck) {
     const row = cards.get(id);
     if (row) items.push({ id, name: row.name, kind: row.kind, cost: row.cost, count, owned: row.owned });
   }
-  const order = s.order.filter((id) => deck.has(id));
-  const placed = new Set(order);
-  const added = items.filter((item) => !placed.has(item.id));
-  added.sort((a, b) => a.cost - b.cost || names.compare(a.name, b.name));
-  order.push(...added.map((item) => item.id));
-  s.order = order;
-  const position = new Map(order.map((id, index) => [id, index]));
-  items.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
-  rows(parts.lines, DeckLine, parts.template).replace(items);
+  const lines = rows(parts.lines, DeckLine, parts.template);
+  // Only a player's reorder moves retained rows. A refusal can leave a focused native
+  // editor between two saved lines; moving its node would lose focus even with the same value.
+  const position = new Map(Array.from(lines, (line, i) => [line.id, i]));
+  items.sort((a, b) => (position.get(a.id) ?? position.size) - (position.get(b.id) ?? position.size)
+    || a.cost - b.cost || names.compare(a.name, b.name));
+  // A feed update, refusal or reorder can arrive mid-keystroke. Fill new rows from the
+  // template, but leave a retained input's native editor alone until we take its value.
+  for (const line of lines) {
+    if (!acceptFields && editing(line, s.drawn)) continue;
+    const n = deck.get(line.id);
+    if (n === undefined) lines.remove(line);
+    else if (acceptFields || line.count !== n) line.count = n;
+  }
+  const missing = items.filter((item) => !lines.get(item.id));
+  if (missing.length) lines.push(missing);
+  s.drawn = deck;
   for (const id of changed) {
     const card = cards.get(id);
     if (card) motion(card.el, "card", s.motion, s.signal);
@@ -357,10 +404,10 @@ function say(parts, state) {
  * answer comes. The form holds the drawn deck; the version says what it was built on, and the
  * draft which send this is. Each send is kept with the history as it was, until an answer says
  * which one the server saved.
- * @param {State} s @param {Parts} parts
+ * @param {State} s @param {Parts} parts @param {Change} [extra] a change to the live counts
  */
-function save(s, parts) {
-  if (s.sending || s.conflict || s.waiting) return;
+function save(s, parts, extra) {
+  if (!takeCounts(s, parts, extra) || s.sending || s.conflict || s.waiting) return;
   if (same(s.drawn, s.base) && s.unanswered.length === 0) return;
   s.sending = true;
   s.drafts += 1;
@@ -430,7 +477,7 @@ function heard(s, parts) {
     if (parts.status.dataset.state === "offline") return;
     s.waiting = false;
     save(s, parts);
-  } else if (same(s.drawn, s.base)) {
+  } else if (same(s.drawn, s.base) && !Array.from(rows(parts.lines, DeckLine)).some((line) => editing(line, s.drawn))) {
     s.waiting = false;
     known(s, parts, new Map(s.theirs), s.theirGeneration, s.theirVersion);
     draw(s, parts, new Map(s.theirs));
@@ -453,6 +500,7 @@ function heard(s, parts) {
  */
 export function merge(parts) {
   const s = kept();
+  if (!takeCounts(s, parts)) return;
   const mine = diff(s.base, s.drawn);
   settle(s, parts);
   draw(s, parts, applied(s.theirs, mine));
@@ -470,7 +518,7 @@ export function reload(parts) {
   s.undo = [];
   s.redo = [];
   s.saved = { undo: [], redo: [] };
-  draw(s, parts, new Map(s.theirs));
+  draw(s, parts, new Map(s.theirs), true);
   say(parts, "updated");
 }
 
@@ -504,6 +552,18 @@ export function retry(parts) {
   save(s, parts);
 }
 
+/**
+ * Save through the autosave queue when this handler runs; otherwise the button submits the form.
+ * @param {MouseEvent} event @param {Parts} parts
+ */
+export function saveNow(event, parts) {
+  if (!enhanced(parts)) return;
+  event.preventDefault();
+  if (!parts.form.reportValidity()) return;
+  if (parts.status.dataset.state === "offline") retry(parts);
+  else save(kept(), parts);
+}
+
 /** @param {Parts} parts */
 export function undo(parts) {
   step(kept(), parts, true);
@@ -519,6 +579,7 @@ export function redo(parts) {
  * @param {State} s @param {Parts} parts @param {boolean} back
  */
 function step(s, parts, back) {
+  if (!takeCounts(s, parts)) return;
   const entry = (back ? s.undo : s.redo).pop();
   if (!entry) return;
   (back ? s.redo : s.undo).push(entry);
@@ -528,14 +589,19 @@ function step(s, parts, back) {
 
 /**
  * A count typed into a deck line (its `change`, once the player leaves it or presses Enter).
- * @param {HTMLInputElement} input @param {Parts} parts
+ * @param {Parts} parts
  */
-export function typed(input, parts) {
+export function typed(parts) {
+  if (enhanced(parts)) save(kept(), parts);
+}
+
+/** The count may have been corrected back to its original value, with no change to save.
+ * @param {Parts} parts
+ */
+export function resumeSave(parts) {
+  if (!enhanced(parts)) return;
   const s = kept();
-  const line = rows(parts.lines, DeckLine).of(input);
-  if (!line) return;
-  const n = Math.max(0, Math.trunc(Number(input.value)) || 0);
-  change(s, parts, [[line.id, n - (s.drawn.get(line.id) ?? 0)]]);
+  if (s.blocked) queueMicrotask(() => save(s, parts));
 }
 
 /**
@@ -544,10 +610,12 @@ export function typed(input, parts) {
  * @param {MouseEvent} event @param {HTMLButtonElement} button @param {Parts} parts
  */
 export function add(event, button, parts) {
+  if (!enhanced(parts)) return;
   const row = rows(parts.cards, CollectionRow).of(button);
   if (!row) return;
   event.preventDefault();
-  change(kept(), parts, [[row.id, 1]]);
+  if (!parts.form.reportValidity()) return;
+  save(kept(), parts, [[row.id, 1]]);
 }
 
 /**
@@ -555,10 +623,11 @@ export function add(event, button, parts) {
  * @param {MouseEvent} event @param {Parts} parts @param {Browse} browse
  */
 export function addPicked(event, parts, browse) {
+  if (!enhanced(parts)) return;
   event.preventDefault();
   const ids = picks(browse.cards);
-  if (ids.length === 0) return;
-  change(kept(), parts, ids.map((id) => [id, 1]));
+  if (ids.length === 0 || !parts.form.reportValidity()) return;
+  save(kept(), parts, ids.map((id) => [id, 1]));
   clearPicks(browse);
 }
 
@@ -578,6 +647,7 @@ function picks(cards) {
  * @param {DragEvent} event @param {HTMLButtonElement} grip @param {Parts} parts @param {Carry} carry
  */
 export function lift(event, grip, parts, carry) {
+  if (!enhanced(parts)) return;
   const row = rows(parts.cards, CollectionRow).of(grip);
   if (!row) return;
   const ids = row.selected ? picks(parts.cards) : [row.id];
@@ -594,6 +664,7 @@ export function lift(event, grip, parts, carry) {
  * @param {DragEvent} event @param {HTMLButtonElement} grip @param {Parts} parts @param {Carry} carry
  */
 export function liftLine(event, grip, parts, carry) {
+  if (!enhanced(parts)) return;
   const line = rows(parts.lines, DeckLine).of(grip);
   if (!line) return;
   kept().moving = { from: "deck", ids: [line.id], over: "deck", back: null };
@@ -698,10 +769,12 @@ function drop(s, parts, carry, on) {
   end(s, carry);
   const what = whatMoves(parts, carry, moving.ids);
   if (moving.from === "cards" && on === "deck") {
-    change(s, parts, moving.ids.map((id) => [id, 1]));
+    if (!parts.form.reportValidity()) return;
+    save(s, parts, moving.ids.map((id) => [id, 1]));
     if (moving.back) carry.announce.textContent = carry.added({ what });
   } else if (moving.from === "deck" && on === "cards") {
-    change(s, parts, moving.ids.map((id) => [id, -(s.drawn.get(id) ?? 0)]));
+    if (!parts.form.reportValidity()) return;
+    save(s, parts, moving.ids.map((id) => [id, -(rows(parts.lines, DeckLine).get(id)?.count ?? 0)]));
     if (moving.back) carry.announce.textContent = carry.removed({ what });
   } else if (moving.from === "deck" && on === "deck" && moving.reordered) {
     // Keyboard reordering already drew the new order; Space only releases the grip.
@@ -728,27 +801,23 @@ function end(s, carry) {
  * @param {State} s @param {Parts} parts @param {string} id @param {string} targetId @param {boolean} after
  */
 function reorder(s, parts, id, targetId, after) {
-  const order = s.order.filter((lineId) => s.drawn.has(lineId));
-  const from = order.indexOf(id);
-  const target = order.indexOf(targetId);
-  if (from < 0 || target < 0 || from === target) return;
-  order.splice(from, 1);
-  const at = order.indexOf(targetId) + (after ? 1 : 0);
-  order.splice(at, 0, id);
-  s.order = order;
-  draw(s, parts, new Map(s.drawn));
+  const lines = rows(parts.lines, DeckLine);
+  const from = lines.get(id);
+  const target = lines.get(targetId);
+  if (!from || !target || id === targetId || !s.drawn.has(id) || !s.drawn.has(targetId)) return;
+  parts.lines.insertBefore(from.el, after ? target.el.nextSibling : target.el);
+  draw(s, parts, s.drawn);
 }
 
 /** @param {State} s @param {Parts} parts @param {string} id @param {-1 | 1} direction */
 function reorderBy(s, parts, id, direction) {
-  const order = s.order.filter((lineId) => s.drawn.has(lineId));
+  const order = Array.from(rows(parts.lines, DeckLine), (line) => line.id).filter((lineId) => s.drawn.has(lineId));
   const from = order.indexOf(id);
   const to = from + direction;
   if (from < 0 || to < 0 || to >= order.length) return false;
-  order.splice(from, 1);
-  order.splice(to, 0, id);
-  s.order = order;
-  draw(s, parts, new Map(s.drawn));
+  const target = order[to];
+  if (target === undefined) return false;
+  reorder(s, parts, id, target, direction > 0);
   return true;
 }
 
@@ -758,6 +827,7 @@ function reorderBy(s, parts, id, direction) {
  * @param {KeyboardEvent} event @param {HTMLButtonElement} grip @param {Parts} parts @param {Carry} carry
  */
 export function pickUp(event, grip, parts, carry) {
+  if (!enhanced(parts)) return;
   const row = rows(parts.cards, CollectionRow).of(grip);
   if (!row || !pressed(event) || kept().moving) return;
   event.preventDefault();
@@ -769,6 +839,7 @@ export function pickUp(event, grip, parts, carry) {
  * @param {KeyboardEvent} event @param {HTMLButtonElement} grip @param {Parts} parts @param {Carry} carry
  */
 export function pickUpLine(event, grip, parts, carry) {
+  if (!enhanced(parts)) return;
   const line = rows(parts.lines, DeckLine).of(grip);
   if (!line || !pressed(event) || kept().moving) return;
   event.preventDefault();
@@ -838,6 +909,7 @@ export function keys(event, parts, carry) {
  * @param {KeyboardEvent} event @param {Parts} parts
  */
 export function shortcut(event, parts) {
+  if (!enhanced(parts)) return;
   const s = kept();
   const field = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
   if (event.defaultPrevented || field || s.moving || !(event.ctrlKey || event.metaKey) || event.altKey) return;
@@ -869,6 +941,7 @@ const texts = new WeakMap();
  * @param {HTMLInputElement} input @param {Browse} browse
  */
 export function filter(input, browse) {
+  browse.save_query.value = input.value;
   const query = input.value.trim().toLocaleLowerCase();
   let shown = 0;
   let total = 0;
@@ -885,17 +958,13 @@ export function filter(input, browse) {
   tally(browse);
 }
 
-/** With JavaScript the filter applies as it is typed: Enter sends nothing. @param {SubmitEvent} event */
-export function stay(event) {
+/**
+ * Apply even a query typed before the module ran.
+ * @param {SubmitEvent} event @param {HTMLInputElement} input @param {Browse} browse
+ */
+export function applyFilter(event, input, browse) {
+  filter(input, browse);
   event.preventDefault();
-}
-
-/** @param {HTMLInputElement} box @param {Browse} browse */
-export function pick(box, browse) {
-  const row = rows(browse.cards, CollectionRow).of(box);
-  if (!row) return;
-  row.selected = box.checked;
-  tally(browse);
 }
 
 /** Checks (or clears) every row shown. @param {Browse} browse */
@@ -915,7 +984,8 @@ export function clearPicks(browse) {
  * indeterminate when some are.
  * @param {Browse} browse
  */
-function tally({ cards, all, picked, number }) {
+export function tally(browse) {
+  const { cards, all, picked, number } = browse;
   let n = 0;
   let visible = 0;
   let visibleChecked = 0;
@@ -934,19 +1004,22 @@ function tally({ cards, all, picked, number }) {
 // One handler per column, so the markup names a column the compiler knows. The header is a link
 // to the same order from the server, for a browser without JavaScript.
 
-/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards */
-export function sortByName(event, link, cards) {
-  sort(event, link, cards, () => 0, "ascending");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse */
+export function sortByName(event, link, cards, field, normal, reverse) {
+  sort(event, link, cards, field, normal, reverse, () => 0, "ascending");
 }
 
-/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards */
-export function sortByCost(event, link, cards) {
-  sort(event, link, cards, (row) => row.cost, "ascending");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse */
+export function sortByCost(event, link, cards, field, normal, reverse) {
+  sort(event, link, cards, field, normal, reverse, (row) => row.cost, "ascending");
 }
 
-/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards */
-export function sortByOwned(event, link, cards) {
-  sort(event, link, cards, (row) => row.owned, "descending");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<CollectionRow, HTMLTableSectionElement>} cards
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse */
+export function sortByOwned(event, link, cards, field, normal, reverse) {
+  sort(event, link, cards, field, normal, reverse, (row) => row.owned, "descending");
 }
 
 /**
@@ -954,16 +1027,19 @@ export function sortByOwned(event, link, cards) {
  * order the server's link gives first, and the other way on the next click. Each row's keys are
  * read once, not at every comparison. A click that opens the link elsewhere is left to the browser.
  * @param {MouseEvent} event @param {HTMLAnchorElement} link
+ * @param {HTMLInputElement} field @param {string} normal @param {string} reverse
  * @param {Holds<CollectionRow, HTMLTableSectionElement>} cards @param {(row: CollectionRow) => number} by
  * @param {"ascending" | "descending"} first
  */
-function sort(event, link, cards, by, first) {
+function sort(event, link, cards, field, normal, reverse, by, first) {
   if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
   event.preventDefault();
   const th = /** @type {HTMLTableCellElement} */ (link.closest("th"));
   const order = th.getAttribute("aria-sort") !== first ? first : first === "ascending" ? "descending" : "ascending";
   for (const other of Array.from(th.parentElement?.children ?? [])) other.removeAttribute("aria-sort");
   th.setAttribute("aria-sort", order);
+  field.value = order === first ? normal : reverse;
+  field.disabled = false;
   const dir = order === "ascending" ? 1 : -1;
   const keyed = Array.from(rows(cards, CollectionRow), (row) => ({ el: row.el, n: by(row), name: row.name }));
   // Names go the other way only when they are the order; under a number they stay A to Z.

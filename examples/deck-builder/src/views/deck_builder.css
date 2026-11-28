@@ -28,11 +28,11 @@
 .picks { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 8px; color: var(--muted); }
 .picks output { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .picks button:first-of-type { margin-left: auto; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-/* Controls that need the script, and those only a browser without it needs. */
+/* Deck editing controls need the builder to own the form. Add, Filter and Save work without it. */
+.builder:not(:has(form[data-patch])) :is(.history, .table td:nth-child(2), .table th:nth-child(2), .lines button) { display: none; }
 @media (scripting: none) {
-  .script, .history, .table td:nth-child(2), .table th:nth-child(2), .lines button, .curve svg { display: none; }
+  .script, .curve svg { display: none; }
 }
-@media (scripting: enabled) { .no-script { display: none; } }
 .hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* The collection: rows scroll inside their box, under a header that stays. */
@@ -46,7 +46,7 @@
 .table th, .table td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .table tbody tr:last-child > * { border-bottom: 0; }
 .table tbody tr:hover { background: var(--bg); }
-.table tr[data-selected] { background: var(--tint); }
+.table tr:has(> td:first-child > input:checked) { background: var(--tint); }
 .table th:first-child, .table td:first-child { width: 36px; padding-right: 0; }
 .table td:nth-child(2) { width: 28px; padding: 0; }
 .table thead a { color: inherit; text-decoration: none; white-space: nowrap; }
