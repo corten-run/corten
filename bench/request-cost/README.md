@@ -67,9 +67,7 @@ same listing without an `Accept` line and requires the HTML document with its ti
 That control is not counted. The lowercase media type compares **successful JSON** on both
 commits; a request that changes from HTML to JSON is a correctness check, not that comparison.
 The extra case adds one answer capture, three depth-one instruction windows and one allocation
-window per build. It adds no depth-16 or idle runs. In a local Linux run those extra commands
-took 23.4 s on `8178187f5` and 22.2 s on `749bf6ec0`, excluding builds; this is not a
-hosted time allowance or a request latency. A kit-only change builds the same framework
+window per build. It adds no depth-16 or idle runs. A kit-only change builds the same framework
 inputs on both sides with the new probe; that is not a measurement of a framework change.
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
@@ -153,6 +151,7 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --allocator --silent
 ```
 
 1. `--answers` writes each case's answer as sent, with its `Date` and `ETag` values replaced.
+   When reusing a directory, it removes the selected cases' old captures before starting a probe.
    Compare the two builds' directories (`diff -r`) before counting: item 2 asks that the answers
    be verified, and a count of two builds that answer differently compares two different jobs.
    Every reading also checks each answer against the case's own, as above.

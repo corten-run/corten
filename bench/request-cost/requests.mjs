@@ -110,22 +110,35 @@ export function unexpectedScreenDocument(answer) {
   return checkAnswer("screen document", { type: "text/html; charset=utf-8", body: LISTING }, answer);
 }
 
+/** Each occurrence, including empty values; continuations belong to the preceding field.
+ * @param {string} head @param {string} field lowercase field name with its colon */
+function fieldValues(head, field) {
+  return head.replace(/\r\n[ \t]+/g, " ").split("\r\n")
+    .filter((line) => line.slice(0, field.length).toLowerCase() === field)
+    .map((line) => line.slice(field.length).replace(/^[ \t]+|[ \t]+$/g, ""));
+}
+
 /** @param {string} name @param {{body: string | RegExp, encoding?: string, type?: string}} expected @param {Buffer} answer */
 function checkAnswer(name, { body, encoding, type }, answer) {
   const end = answer.indexOf("\r\n\r\n");
   const head = answer.latin1Slice(0, end);
   if (!head.startsWith("HTTP/1.1 200 ")) return `not a 200: ${head.split("\r\n")[0]}`;
   if (type !== undefined) {
-    const types = head.replace(/\r\n[ \t]+/g, " ").split("\r\n").filter((line) => /^content-type:/i.test(line));
-    if (types.length !== 1 || types[0]?.slice("content-type:".length).replace(/^[ \t]+|[ \t]+$/g, "") !== type) return `expected a single Content-Type of ${type}`;
+    const types = fieldValues(head, "content-type:");
+    if (types.length !== 1 || types[0] !== type) return `expected a single Content-Type of ${type}`;
   }
   if (name === "page-public") {
     if (/^age:/im.test(head)) return "a kept public page (Age header)";
     const policy = head.split("\r\n").filter((line) => /^cache-control:/i.test(line));
     if (policy.length !== 1 || !/^cache-control:[ \t]*public, max-age=60[ \t]*$/i.test(policy[0] ?? "")) return "not the public page's Cache-Control";
   }
-  const coded = /^content-encoding:[ \t]*(\S*)[ \t]*$/im.exec(head)?.[1];
-  if (coded !== encoding) return `Content-Encoding ${coded ?? "none"}, not ${encoding ?? "none"}`;
+  if (/^content-encoding:/im.test(head)) {
+    const codings = fieldValues(head, "content-encoding:");
+    if (codings.length !== 1) return "expected a single Content-Encoding field";
+    const [coding] = codings;
+    if (!coding || /[\s,]/.test(coding)) return "expected one Content-Encoding coding";
+    if (coding !== encoding) return `Content-Encoding ${coding}, not ${encoding ?? "none"}`;
+  } else if (encoding !== undefined) return `Content-Encoding none, not ${encoding}`;
   let bytes = answer.subarray(end + 4);
   if (encoding === "zstd") {
     // Node's zlib has zstd from 22.15; the repository's .node-version is later.

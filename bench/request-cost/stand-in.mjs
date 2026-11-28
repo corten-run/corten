@@ -26,6 +26,7 @@
 //   STAND_IN_THIRD=<n>           a third thread ran n in each part, in a file of its own (`-03`)
 //   STAND_IN_FEWER_MALLOCS=1     a part holds one call to malloc fewer than its requests (16 each)
 //   STAND_IN_NOT_FOUND_FROM=<n>  the server's nth request and those after it are answered 404
+//   STAND_IN_FIXED_JSON=1        the screen ignores Accept, even for the document control
 //   STAND_IN_DEAF_AFTER=<n>      after its nth run the control exits 0 and asks for nothing
 //   STAND_IN_CLOSE_ON_SWEEP=<n>  close one held connection before replying to the nth sweep
 //   STAND_IN_SWEEP_LOG=1         emit ordinary stdout lines before the allocator reply
@@ -141,9 +142,16 @@ function serve() {
         part.requests += 1;
         requests += 1;
         const line = /** @type {string} */ (head.split("\r\n")[0]).replace(/ HTTP\/1\.1$/, "");
-        const body = requests >= notFoundFrom ? undefined : bodies[configuration]?.[line];
+        let body = bodies[configuration]?.[line];
+        let type = "";
+        if (configuration === "screen" && line === "GET /listing") {
+          const json = process.env.STAND_IN_FIXED_JSON === "1" || head.split("\r\n").includes("Accept: application/json");
+          body = json ? '{"title":"Listing","data":{"name":"Ashen"}}' : "<!DOCTYPE html><html><head><title>Listing</title></head><body><main>Ashen</main></body></html>";
+          type = `content-type: ${json ? "application/json" : "text/html; charset=utf-8"}\r\n`;
+        }
+        if (requests >= notFoundFrom) body = undefined;
         const [status, sent] = body === undefined ? ["404 Not Found", ""] : ["200 OK", body];
-        socket.write(`HTTP/1.1 ${status}\r\ncontent-length: ${sent.length}\r\ndate: ${new Date().toUTCString()}\r\n\r\n${sent}`, "latin1");
+        socket.write(`HTTP/1.1 ${status}\r\n${type}content-length: ${sent.length}\r\ndate: ${new Date().toUTCString()}\r\n\r\n${sent}`, "latin1");
         if (held > 0) {
           held += 1;
           hold(1);

@@ -120,6 +120,20 @@ test("the screen must negotiate its listing, not return a fixed document or fixe
   }
 });
 
+test("unencoded means no Content-Encoding field, and compressed means one zstd coding", () => {
+  const plain = '{"title":"Listing","data":{"name":"Ashen"}}';
+  const json = "Content-Type: application/json\r\n";
+  const page = "<!DOCTYPE html><tr><td>119</td><td>A row of the page, about as long as a row of a listing is</td><td>833</td></tr></table></main></body></html>";
+  const coded = zlib.zstdCompressSync(Buffer.from(page)).latin1Slice();
+  const zstd = "Content-Encoding: zstd\r\n";
+  assert.equal(unexpected("screen-json", answer(plain, json)), null);
+  assert.equal(unexpected("page-browser", answer(coded, zstd)), null);
+  for (const fields of ["Content-Encoding: gzip, br\r\n", "Content-Encoding:\t\r\n", zstd + zstd.toLowerCase(), zstd + " br\r\n", "Content-Encoding: zstd,br\r\n"]) {
+    assert.match(String(unexpected("screen-json", answer(plain, json + fields))), /Content-Encoding/);
+    assert.match(String(unexpected("page-browser", answer(coded, fields))), /Content-Encoding/);
+  }
+});
+
 test("an answer is the case's only as a 200 with the case's body and encoding", () => {
   const row = (/** @type {number} */ n) => `<tr><td>${n}</td><td>A row of the page, about as long as a row of a listing is</td><td>${n * 7}</td></tr>`;
   const page = `<!DOCTYPE html><html lang="en"><head></head><body><main><h1>Items</h1><table>${row(118)}${row(119)}</table></main></body></html>`;

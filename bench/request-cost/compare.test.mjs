@@ -752,6 +752,22 @@ test("equal screen captures with a non-JSON type cannot qualify a comparison", (
   assert.ok(verdict(markdown).includes("`screen-json` has no answer on base and head (`expected a single Content-Type of application/json`)"));
 });
 
+test("screen counters cannot qualify a missing capture or two matching wrongly encoded captures", (t) => {
+  const { base, head } = builds(t);
+  for (const wrong of [true, false]) {
+    for (const side of [base, head]) {
+      const file = join(side, "answers", "screen-json.http");
+      if (wrong) writeFileSync(file, answer("screen-json").latin1Slice().replace("date: -", "Content-Encoding: gzip, br\r\ndate: -"), "latin1");
+      else rmSync(file);
+    }
+    const { markdown, status, holds } = compare(base, head, { description: counting });
+    assert.deepEqual([status, holds], [1, false]);
+    assert.ok(verdict(markdown).includes(`\`screen-json\` has no answer on base and head (\`${wrong ? "expected one Content-Encoding coding" : "no capture"}\`)`));
+    assert.match(markdown, /^\| `screen-json` \| [\d,]+ \| [\d,]+ \|/m);
+    assert.match(markdown, /^\| `screen-json` \| 16\.00 \| 16\.00 \|/m);
+  }
+});
+
 const SUM = "e59d3e11".padEnd(64, "0");
 const OTHER = "0e1f2a3b".padEnd(64, "9");
 /** Writes each build's `sha256` as job.sh does, or leaves none where it is null. @param {{ base: string, head: string }} at @param {string | null} base @param {string | null} head */

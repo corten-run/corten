@@ -107,6 +107,8 @@ async function allocations() {
 
 async function answers(/** @type {string} */ directory) {
   mkdirSync(directory, { recursive: true });
+  // If a probe refuses or stops early, no old answer may stand in for a selected case.
+  for (const name of names) rmSync(join(directory, `${name}.http`), { force: true });
   for (const name of names) {
     const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
     const probe = await start(binary, configuration, { cpu, port, hosts });
