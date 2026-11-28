@@ -141,8 +141,9 @@ their absence cannot establish framework or host qualification.
 
 `Catalog Contract` runs the harness and Corten parity for framework-only changes; app
 changes run the harness and the affected apps, including consumers of shared drivers.
-The listed fleet-controller files keep the harness, Corten's root-context build and both
-JSON jobs, but do not select unrelated app builds. Benchmark Evidence selection is unchanged.
+The listed fleet-controller files and the Corten Live and Marketplace apps' `Cargo.lock` files
+keep the harness, Corten's root-context build and both JSON jobs, but do not select unrelated
+app builds. Other files beside the locks can be shared drivers. Benchmark Evidence selection is unchanged.
 Changes to shared benchmark inputs or the workflow, and manual runs, test all 20 parity
 apps and both JSON jobs. Unknown app directories and files directly in `bench/fullstack/apps/`
 also select everything. An `aspnet-aot` change runs the JSON jobs.

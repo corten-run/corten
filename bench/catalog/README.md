@@ -663,8 +663,9 @@ from the pull request's merge commit against its first parent, or a push to `mai
 previous tip of `main`: a change to the directory of an app the matrix lists selects that app
 and the apps that share a driver it changed (`aspnet-aot` runs the JSON jobs instead), a change
 to the framework's Rust inputs (`crates`, `Cargo.toml`, `Cargo.lock`, `.cargo`, the toolchain
-files) or to `bench/catalog/corten` selects Corten, one of the listed fleet-controller files
-selects Corten and both JSON jobs, and a change to the benchmark's other shared inputs, to an app
+files) or to `bench/catalog/corten` selects Corten. The standalone Corten Cargo locks under
+`bench/marketplace/corten` and `bench/live/apps/corten`, like the listed fleet-controller files,
+select Corten and both JSON jobs. A change to the benchmark's other shared inputs, to an app
 directory the matrix does not list yet, or to the workflow selects them all. A manual run, and a
 push whose earlier commit is unknown or not an ancestor, also select them all; a change to none of these builds none
 ([Checks](../../CONTRIBUTING.md#checks)).

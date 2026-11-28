@@ -76,6 +76,19 @@ test("fleet controller changes keep the harness, Corten build, JSON and evidence
   }
 });
 
+test("only Corten consumes its Live and Marketplace Cargo locks; shared inputs still select every app", () => {
+  for (const dir of ["bench/live/apps/corten", "bench/marketplace/corten"]) {
+    const lock = `${dir}/Cargo.lock`;
+    assert.deepEqual(selectScope(allApps, [lock]), { apps: ["corten"], json: true });
+    assert.equal(selectKernel([lock]), true);
+    assert.equal(selectEvidence([lock]), true);
+    assert.deepEqual(selectScope(allApps, [lock, "bench/fullstack/apps/rails/Gemfile.lock"]), { apps: ["corten", "rails"], json: true });
+    for (const shared of [`${dir}/Cargo.toml`, `${lock}.bak`, "bench/marketplace/corten/tests/deadline-contract.mjs"]) {
+      assert.deepEqual(selectScope(allApps, [lock, shared]), { apps: allApps, json: true });
+    }
+  }
+});
+
 test("Catalog always starts its scope job and gates parity and JSON on the selected inputs", () => {
   assert.equal(workflow.on.pull_request, null);
   assert.deepEqual(workflow.on.push, { branches: ["main"] });

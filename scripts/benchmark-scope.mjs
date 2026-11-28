@@ -42,8 +42,9 @@ export function selectScope(allApps, paths) {
   for (const path of paths) {
     if (matches(path, rustInputs) || matches(path, ["bench/catalog/corten"])) {
       selected.add("corten");
-    } else if (fleetControllerFiles.has(path)) {
-      // Only the Corten Dockerfiles copy the root context. Keep the harness and both JSON jobs.
+    } else if (fleetControllerFiles.has(path) || path === "bench/live/apps/corten/Cargo.lock" || path === "bench/marketplace/corten/Cargo.lock") {
+      // Only Corten builds from the root context and uses the two Rust locks. Other files beside
+      // the locks can be shared parity drivers. Keep the harness and both JSON jobs.
       selected.add("corten");
       json = true;
     } else if (matches(path, catalogShared)) {
