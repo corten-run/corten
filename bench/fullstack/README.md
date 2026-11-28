@@ -1417,9 +1417,9 @@ three runs:
    ID is another boot's: one started again in the same boot (`run-all.mjs` itself killed or
    stopped), or with no ID to compare, ends the round the same way, before its clean slate. Each
    progress line is written whole and synced before its step starts (a write cut short stops the
-   round there, recorded failed), and a progress file whose last line was cut short is read as a
-   count step that had not ended. That is checked before a start writes anything, and the cut file
-   is left as it is, so a start stopped part way through cannot hide it from the next.
+   round there, recorded failed). A progress file whose last line was cut short is read as a count
+   step that had not ended, even if that line begins with a finish record. The runner refuses before
+   writing to the progress file and leaves it as it is, so the next start sees the same refusal.
    `droplet.mjs` on a droplet a round of that name ran on (`--host`, with or without `--from`)
    checks the same before it removes anything that round left (its progress file, or all of
    `/bench`). It refuses (exit 4) unless systemd confirms, each query succeeding, that its unit is
@@ -1491,8 +1491,10 @@ three runs:
    recorded SHA-256 hashes and no `count-failed.txt`. Missing or mismatched files or an archive
    with the marker fail collection without replacing local files or deleting the droplet. The
    same ended unit must still be confirmed before publishing the verified files and removing any
-   local marker. A legacy finish, a continuation without a new count, or a record without a matching
-   observed invocation uses the legacy download and does not clear a local marker. The upload leaves out the working tree's own
+   local marker. If the ended unit reports a different invocation, collection refuses without a
+   download (even a partial one) or deletion. A legacy finish, a continuation without a new count,
+   or an ended unit with no observable invocation ID uses the legacy download and does not clear
+   a local marker. The upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.
    A droplet

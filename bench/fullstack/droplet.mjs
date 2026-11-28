@@ -604,7 +604,10 @@ const watch = async (/** @type {boolean} */ once) => {
       const unreadable = !beforeFields || !parseSnapshot(after);
       const ended = snapshotsEnded(before, after);
       if (ended && (suite === "fullstack" ? terminal?.[1].startsWith("finished") : doneMarker.test(text))) {
-        const countPublication = terminal?.[2] === beforeFields?.InvocationID ? terminal?.[3] ?? null : null;
+        const expected = terminal?.[2];
+        const observed = beforeFields?.InvocationID;
+        if (expected && observed && expected !== observed) return { state: "count-contradicted", snapshot: null };
+        const countPublication = expected && expected === observed ? terminal?.[3] ?? null : null;
         return { state: "finished", snapshot: before.trim(), countPublication };
       }
       // The unit has ended and the round did not finish. A full-stack round's droplet that
@@ -640,7 +643,7 @@ const watch = async (/** @type {boolean} */ once) => {
   }
 };
 
-let countProofDownload = false;
+let countProofRequired = false;
 try {
   if (collect || attach) {
     mayDestroy = false;
@@ -653,6 +656,8 @@ try {
     }
   }
   const { state, snapshot, countPublication } = await watch(collect);
+  countProofRequired = state === "count-contradicted" || (state === "finished" && countPublication !== null);
+  if (state === "count-contradicted") throw new Error("finished count record names a different systemd invocation");
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
   if (state === "finished" || state === "stopped") startUnconfirmed = false;
   if (state === "running" || state === "unknown") {
@@ -665,7 +670,6 @@ try {
     let confirmed = true;
     if (state === "finished") {
       console.log("downloading the results");
-      countProofDownload = countPublication !== null;
       confirmed = await downloadAll("results", countPublication, snapshot);
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
@@ -729,8 +733,9 @@ try {
   // Only a round whose unit reads ended (inactive or failed with no job queued, in two snapshots
   // that agree) before the download and the same after it is downloaded from and destroyed: a
   // watch that lost the droplet for a while says nothing of whether the round is still running.
-  // A failed proof-bearing download must not fall back to unverified partial collection.
-  if (!countProofDownload && !collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
+  // A contradicted count invocation or failed proof-bearing download must not fall back to
+  // unverified partial collection.
+  if (!countProofRequired && !collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
     const why = String(/** @type {any} */ (e).message).split("\n")[0];
     const seen = endedNow();
     if (seen === null) console.log(`the round could not go on (${why}), and ${unitName} on the droplet at ${host} could not be confirmed ended (inactive or failed with no job queued, in two snapshots that agree): it is not ended, or could not be read, so nothing is downloaded and the droplet is left as it is${deleteHint()}`);

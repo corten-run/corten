@@ -354,7 +354,7 @@ const fakeSystemctl = [
   '      s=$(state); job=; if [ -n "$FAKE_JOBS" ] && [ -e "$FAKE_JOBS" ]; then read -r job rest < "$FAKE_JOBS"; fi',
   '      echo "ActiveState=$s"; case "$s" in active) echo "SubState=running" ;; *) echo "SubState=dead" ;; esac',
   '      [ -n "$FAKE_JOBS_FAIL" ] || echo "Job=$job"',
-  '      if [ -n "$started" ]; then echo "InvocationID=bbbb"; echo "StateChangeTimestampMonotonic=2000"; else echo "InvocationID=${FAKE_INVOCATION-aaaa}"; echo "StateChangeTimestampMonotonic=1000"; fi',
+  '      if [ -n "$started" ]; then echo "InvocationID=${FAKE_STARTED_INVOCATION-bbbb}"; echo "StateChangeTimestampMonotonic=2000"; else echo "InvocationID=${FAKE_INVOCATION-aaaa}"; echo "StateChangeTimestampMonotonic=1000"; fi',
   "      exit 0",
   "    fi",
   '    case "$3" in',
@@ -364,7 +364,7 @@ const fakeSystemctl = [
   "    esac ;;",
   '  disable) exit "${FAKE_DISABLE_RC:-0}" ;;',
   '  stop) exit "${FAKE_STOP_RC:-0}" ;;',
-  '  start) [ -z "$FAKE_STARTED" ] || : > "$FAKE_STARTED"; [ -z "$FAKE_START_DONE" ] || echo "all done" >> "$FAKE_START_DONE"; [ -z "$FAKE_START_PROGRESS" ] || echo "2026-11-27T00:02:00.000Z finished" >> "$FAKE_START_PROGRESS"; exit "${FAKE_START_RC:-0}" ;;',
+  '  start) [ -z "$FAKE_STARTED" ] || : > "$FAKE_STARTED"; [ -z "$FAKE_START_DONE" ] || echo "all done" >> "$FAKE_START_DONE"; [ -z "$FAKE_START_PROGRESS" ] || printf "%s\\n" "${FAKE_START_PROGRESS_LINE-2026-11-27T00:02:00.000Z finished}" >> "$FAKE_START_PROGRESS"; exit "${FAKE_START_RC:-0}" ;;',
   '  is-active) exit "${FAKE_ACTIVE_RC:-0}" ;;',
   '  list-jobs) [ -z "$FAKE_JOBS_FAIL" ] || exit 1; if [ -n "$FAKE_JOBS" ] && [ -e "$FAKE_JOBS" ]; then cat "$FAKE_JOBS"; fi ;;',
   '  daemon-reload) [ -z "$FAKE_RELOAD_HOOK" ] || sh "$FAKE_RELOAD_HOOK" ;;',
@@ -1200,7 +1200,6 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
 
       for (const [why, setup] of /** @type {const} */ ([
         ["legacy finish without proof", { progress: end("finished") }],
-        ["unrelated invocation", { fake: { FAKE_INVOCATION: "b".repeat(32) } }],
         ["invocation not observable", { fake: { FAKE_INVOCATION: "" } }],
       ])) {
         const ambiguous = collectCount(setup);
@@ -1261,6 +1260,31 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.doesNotMatch(changed.stdout, /trend saw/);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
       assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
+    });
+    await t.test("a contradicted count invocation refuses before download or deletion on collect and launch", async (t) => {
+      const differentInvocation = "b".repeat(32);
+      const check = (/** @type {ReturnType<typeof launch>} */ r) => {
+        assert.equal(r.status, 1, r.stdout + r.stderr);
+        assert.match(r.stderr, /finished count record names a different systemd invocation/);
+        assert.doesNotMatch(r.stdout, /downloading|trend saw/);
+        assert.ok(!r.downloaded && !r.deleted, r.calls.join("\n---\n"));
+        assert.ok(!r.calls.some((c) => c.startsWith("scp root@")), "the result archive was copied");
+      };
+      await t.test("--collect leaves a retained pair unchanged even without a local marker", () => {
+        check(collectCount({ oldFence: false, retained: true, changedFile: "instructions.json",
+          fake: { FAKE_INVOCATION: differentInvocation, FAKE_STATE: "failed" } }));
+        assert.equal(readFileSync(join(localResult, "instructions.json"), "utf8"), instructions);
+        assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
+        assert.ok(!existsSync(localMarker));
+      });
+      await t.test("a waiting launch does not fall back to partial collection", () => {
+        const launched = launch({ progress: unfinished(other), create: true, detach: false, fast: true,
+          fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_STARTED_INVOCATION: differentInvocation,
+            FAKE_START_DONE: remoteLog, FAKE_START_PROGRESS: remoteProgress, FAKE_START_PROGRESS_LINE: proof.trimEnd().split("\n").at(-1) ?? "" } });
+        assert.ok(launched.started, launched.stdout + launched.stderr);
+        check(launched);
+        assert.ok(!existsSync(localResult));
+      });
     });
     // The first custody check finds a start queued for the unit (its job waiting): a refusal, as
     // the clear's is, so the droplet this launch created is not destroyed, nothing is cleared,
@@ -1561,6 +1585,28 @@ console.log("the old summary was still fenced after count");
   const progressText = readFileSync(join(f.here, "results-r1.progress"), "utf8");
   assert.equal(progressText.split("\n").at(-2)?.split(" ").slice(1).join(" "), `finished count ${countInvocation} ${hashes.join(" ")}`);
   assert.equal(resumeAt(progressText).ended, "finished");
+});
+
+test("a restart refuses a torn finished count record before treating the round as ended", linuxCount, (t) => {
+  const f = countFixture(t, `writeFileSync(output, ${JSON.stringify(fullInstructions)});`);
+  const completed = f.run();
+  assert.equal(completed.status, 0, completed.said);
+  const file = join(f.here, "results-r1.progress");
+  const complete = readFileSync(file, "utf8");
+  const summary = readFileSync(f.summary, "utf8");
+  const restarted = f.run();
+  assert.equal(restarted.status, 0, restarted.said);
+  assert.equal(readFileSync(file, "utf8"), complete);
+
+  const torn = complete.slice(0, -9);
+  assert.match(torn, / finished count [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{56}$/);
+  writeFileSync(file, torn);
+  const refused = f.run();
+  assert.equal(refused.status, 1, refused.said);
+  assert.match(refused.said, /round failed: the round's progress file ends in a line cut short/);
+  assert.doesNotMatch(refused.said, /node count\.mjs|node summarize\.mjs|all done/);
+  assert.equal(readFileSync(file, "utf8"), torn);
+  assert.equal(readFileSync(f.summary, "utf8"), summary);
 });
 
 test("a crash immediately after syncing count start leaves old instructions ineligible for replay", linuxCount, (t) => {

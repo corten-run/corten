@@ -246,7 +246,7 @@ try {
   if (unattended) {
     const text = existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "";
     const state = resumeAt(text, from);
-    if (state.ended) process.exit(0);
+    if (state.ended && text.endsWith("\n")) process.exit(0);
     // Before anything is written or cleaned: a count step whose perf may still run ends the round,
     // as a halt does. A progress file whose last line was cut short is left as it is: appending
     // ends that line first, and a start stopped part way through the append would leave the next
