@@ -28,11 +28,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
 import { ACK_FD, ACK_MS, acknowledgments, CONTROL_FD, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
-import { roundNameError } from "./round.mjs";
+import { countStageArg, roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const stage = args.at(-1)?.startsWith(countStageArg) ? args.pop()?.slice(countStageArg.length) : null;
+const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = args;
 if (!["fixture", "api"].includes(source)) throw new Error("source is fixture or api");
 const targets = targetsArg.split(",");
 for (const target of targets) {
@@ -261,9 +263,11 @@ for (const names of PROBE_SETS) {
   if (refuse) throw new Error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}`);
 }
 
-// Merged into the round's earlier counts, so one app can be counted again on its own.
-const file = join(dir, "instructions.json");
-const results = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+// Standalone counts merge into earlier rows and save partial progress. A run-all count starts
+// empty and writes its own file only once complete, without reading or changing the retained one.
+const file = join(stage ?? dir, "instructions.json");
+const results = !stage && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+const keepPartial = () => { if (!stage) writeFileSync(file, JSON.stringify(results, null, 1)); };
 // The image each counted container was started from, by ID, read before its warmup: which build
 // was counted, whatever its tag names now (count-pairs.mjs checks it against the side's).
 const imagesFile = join(dir, "count-images.json");
@@ -280,7 +284,7 @@ for (const name of appsArg.split(",")) {
       console.log(name, target, why);
       docker("rm", "-f", `fsw-${name}`);
       results[`${name}/${target}${suffix}`] = { failed: why };
-      writeFileSync(file, JSON.stringify(results, null, 1));
+      keepPartial();
       continue;
     }
     const container = run.stdout.trim();
@@ -337,7 +341,7 @@ for (const name of appsArg.split(",")) {
           const why = e.message.trim().split("\n")[0] || "perf was not seen to end";
           results[`${name}/${target}${suffix}`] = { failed: why };
           console.error(`${name} ${target}${suffix}: ${why}`);
-          writeFileSync(file, JSON.stringify(results, null, 1));
+          keepPartial();
         } finally {
           removeUnwaited(container);
         }
@@ -349,8 +353,8 @@ for (const name of appsArg.split(",")) {
     }
     docker("rm", "-f", container);
     // Written after each app, so a restart partway through the step keeps the apps already counted.
-    writeFileSync(file, JSON.stringify(results, null, 1));
+    keepPartial();
   }
 }
-writeFileSync(file, JSON.stringify(results, null, 1));
+writeFileSync(file, JSON.stringify(results, null, 1), { flush: Boolean(stage) });
 console.log("done");

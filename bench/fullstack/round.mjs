@@ -7,6 +7,9 @@ import { HALT_EXIT } from "./count-perf.mjs";
 /** run-all.mjs's steps, in order. The builds come last, so a slow one costs no other step its time. */
 export const steps = ["cold-start", "fixture", "api", "count", "conform", "browser", "build"];
 
+/** Internal argument for count.mjs and summarize.mjs to stage one round's instruction evidence. */
+export const countStageArg = "--count-stage=";
+
 /**
  * How long the build step may run, all apps together (minutes): it starts no app's build past this,
  * and skips the rest, so the round ends within its unit's hours. r14, the first droplet round
@@ -730,7 +733,7 @@ export function countHalt({ stopped, code }) {
  * start again (resumeAt). The effects are run-all.mjs's, passed in, so round.test.mjs runs this
  * loop itself. Count evidence is marked incomplete before the call, including if it halts. An
  * ordinary count error still lets later steps and the summary run, but the round fails instead
- * of recording a finish. Only a successful count call clears the marker.
+ * of recording a finish. Clear the marker only when the new summary can be published too.
  * @param {string[]} list
  * @param {ReturnType<typeof calls>} all
  * @param {{
@@ -750,8 +753,13 @@ export function countHalt({ stopped, code }) {
  * }} effects
  */
 export async function runSteps(list, all, { call, progress, skip, countFailed = false, recordCount, reset, build, open, close, linux, clock, summary, done }) {
+  let counted = false;
   for (const step of list) {
     if (step === "count" && !linux) continue;
+    if (step === "count") {
+      recordCount(true);
+      countFailed = true;
+    }
     progress(`start ${step}`);
     // The matched tier's browser timing reaches the apps through the edge: without it, only
     // browser.mjs is skipped (parity, look and bytes reach the apps directly).
@@ -759,10 +767,6 @@ export async function runSteps(list, all, { call, progress, skip, countFailed = 
     if (edgeFailed) skip(step, `browser.mjs: ${edgeFailed}`);
     if (step === "build") await build(clock());
     else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
-      if (step === "count") {
-        countFailed = true;
-        recordCount(true);
-      }
       const result = await call(limit, args);
       // A count's own halt is named first (it says why a perf may still count); any call left
       // running or with its output released stops the round all the same.
@@ -773,7 +777,7 @@ export async function runSteps(list, all, { call, progress, skip, countFailed = 
       }
       leftRunning(step, result, skip);
       if (step === "count" && result.code === 0) {
-        recordCount(false);
+        counted = true;
         countFailed = false;
       }
       if (result.stopped) {
@@ -791,6 +795,7 @@ export async function runSteps(list, all, { call, progress, skip, countFailed = 
   leftRunning("summary", result, skip);
   if (result.stopped || result.code !== 0) throw new Error(result.stopped ?? `summarize.mjs exited with ${result.code}`);
   if (countFailed) throw new Error("count step failed; summary omits instruction counts");
+  if (counted) recordCount(false);
   done();
   progress("finished");
 }

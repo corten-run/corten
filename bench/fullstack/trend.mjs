@@ -29,6 +29,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyK6Provenance } from "../load-tool.mjs";
+import { COUNT_FAILED_FILE } from "./pack.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -254,7 +255,12 @@ export function roundsIn(results) {
       const of = commitOf(d.name);
       if (!of) return [];
       const { commit, dirty } = of;
-      const summary = JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8"));
+      const dir = join(results, d.name);
+      const marker = join(dir, COUNT_FAILED_FILE);
+      // Check on both sides of the read: a recount can start or publish while this runs.
+      const recount = existsSync(marker);
+      const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+      if (recount || existsSync(marker)) summary.instructions = {};
       // The matched tier's rounds are m<n>; one in an r<n> folder would mix its numbers into the trend.
       if (summary.tier === "matched") throw new Error(`${d.name}'s summary.json is of the matched tier, whose rounds are m<n>: it does not belong among the defaults tier's r<n>`);
       return [{ round: d.name, commit, dirty, at: time(d.name, commit), summary }];

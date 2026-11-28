@@ -5,12 +5,13 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps, tier } from "./apps.mjs";
 import { COUNT_FAILED_FILE, rawOf } from "./pack.mjs";
-import { roundNameError } from "./round.mjs";
+import { countStageArg, roundNameError } from "./round.mjs";
 import { classes, kinds, slowMs, slowShare } from "./mixed.mjs";
 import { edgeOf, phases, ssrOf } from "./ssr.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const round = process.argv[2] ?? "r1";
+const stage = process.argv[3]?.startsWith(countStageArg) ? process.argv[3].slice(countStageArg.length) : null;
 // A matched round (m<n>) is summarized with BENCH_TIER=matched, its apps, and only it.
 if (roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
 const dir = join(here, "results", round);
@@ -39,9 +40,11 @@ if (existsSync(skippedFile)) {
 
 summary.ssr = ssrOf(raw, Object.keys(apps));
 
-const countFailed = existsSync(join(dir, COUNT_FAILED_FILE));
+// Only run-all passes a validated, private count stage. A normal replay honors the marker.
+const countFailed = !stage && existsSync(join(dir, COUNT_FAILED_FILE));
 if (countFailed) summary.countFailed = true;
-const instructions = countFailed ? {} : read(join(dir, "instructions.json")) ?? {};
+const instructions = stage ? JSON.parse(readFileSync(join(stage, "instructions.json"), "utf8"))
+  : countFailed ? {} : read(join(dir, "instructions.json")) ?? {};
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 for (const [key, runs] of Object.entries(instructions)) {
   if (!Array.isArray(runs)) { summary.instructions[key] = { failed: runs.failed }; continue; }
@@ -61,7 +64,7 @@ for (const [key, list] of Object.entries(summary.browser)) {
   const m = (k) => ({ med: pct(list.map((r) => r[k]), 0.5), p90: pct(list.map((r) => r[k]), 0.9) });
   summary.browser[key] = { n: list.length, allWorked: list.every((r) => r.sortWorked !== false), ttfb: m("ttfb"), fcp: m("fcp"), lcp: m("lcp"), interactive: m("hydratedAt"), tbt: m("tbtToHydration"), action: m("actionMs"), clientNav: m("clientNavMs"), heapMB: { med: +(pct(list.map((r) => r.jsHeapUsedMB * 10), 0.5) / 10).toFixed(1) } };
 }
-writeFileSync(join(dir, "summary.json"), JSON.stringify(summary, null, 1));
+writeFileSync(join(stage ?? dir, "summary.json"), JSON.stringify(summary, null, 1), { flush: Boolean(stage) });
 
 const line = (cells) => `| ${cells.join(" | ")} |`;
 for (const s of summary.skipped ?? []) console.log(`SKIPPED: step ${s.step ?? "?"} (${s.why ?? s.line}); its results are partly or wholly missing`);

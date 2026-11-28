@@ -1395,12 +1395,17 @@ three runs:
    recorded failed. A call that could
    not be started (no process) is taken as stopped, never as an exit. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step.
-   `run-all.mjs` marks count evidence incomplete before starting the count. Only a clean exit 0
-   with a freshly written, valid `instructions.json` clears `count-failed.txt`. On an ordinary
-   count error (including exit 0 without that output), later steps and the summary still run,
-   but the round exits non-zero. The marker makes `summarize.mjs` omit all instruction rows and
-   report `countFailed: true` on replay too, even after a halt. It leaves `instructions.json`
-   intact: standalone `count.mjs` still merges counts for individual apps.
+   `run-all.mjs` syncs `count-failed.txt` before recording the count step's start. A clean exit 0
+   must produce a fresh file in a private directory, with every requested app and target's
+   repeats or an explicit failure for that target. Only after publishing both that file as
+   `instructions.json` and its new `summary.json` does the round clear the marker. A restart
+   before publication does not adopt the staging files. On an ordinary count error, including
+   incomplete output, later steps and the summary still run, but the round exits non-zero.
+   With the marker present, `summarize.mjs` omits instructions and reports `countFailed: true`,
+   and `trend.mjs` ignores instructions even in an older summary. A failed count leaves the
+   earlier `instructions.json` intact. Standalone `count.mjs` still merges individual app
+   counts; it does not certify an incomplete round. Do not run a separate count or summary
+   writer in the same round directory while `run-all.mjs` is running.
    The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
    seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
    does not reach the probe's process group of its own) ends the round there, with the reason in
@@ -1617,8 +1622,9 @@ three runs:
    switch, are a suspect
    ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/corten-run/corten/issues/812));
    r16's counts are compared with r15's. An app that cannot be counted is
-   recorded as failed and the others are still counted, and `instructions.json` is written after
-   each app. A count does not depend on what else the machine is doing, so it is steadier than
+   recorded as failed and the others are still counted. A standalone count writes
+   `instructions.json` after each app; a round stages all its rows before publication.
+   A count does not depend on what else the machine is doing, so it is steadier than
    time; it does not see waiting (I/O, locks) or how well the instructions run.
    `node count.mjs <round> 3 <apps> page,json api` counts with items from the item API instead,
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).
@@ -2719,8 +2725,8 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
    `instructions.json`, `count-failed.txt` (if the count was incomplete, including a halt), `browser.json`,
    `conformance.json`, `hardening.json`, `trend.json` and `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one
-   archive beside them, `raw.tar.xz`, which Git ignores (`bench/fullstack/.gitignore`). Only
-   the packed archive is ignored: the loose raw files of a round not yet packed are not, so pack a
+   archive beside them, `raw.tar.xz`, which Git ignores (`bench/fullstack/.gitignore`). Unlike
+   the archive and private staging directories, loose raw files are not ignored, so pack a
    round before committing its summaries. A maintainer publishes the archive where it will be kept,
    and the round's `raw.txt` records where it can be fetched and its SHA-256
    ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).

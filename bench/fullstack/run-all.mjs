@@ -29,7 +29,7 @@
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { COUNT_FAILED_FILE } from "./pack.mjs";
 import { passesOf } from "./passes.mjs";
-import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
+import { appendLine, buildStep, calls, countRestartError, countStageArg, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -55,6 +55,10 @@ const now = () => new Date().toISOString();
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8", timeout: 5 * minute });
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 const progressFile = join(here, `results-${round}.progress`);
+const syncDir = (/** @type {string} */ path) => {
+  const dir = openSync(path, "r");
+  try { fsyncSync(dir); } finally { closeSync(dir); }
+};
 /** This boot's ID, or null where it cannot be read. */
 const bootId = () => { try { return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null; } catch { return null; } };
 // Written whole or not at all (appendLine throws, and the step is not started), then synced to disk
@@ -67,26 +71,28 @@ const progress = (/** @type {string} */ what) => {
   const fd = openSync(progressFile, "a+");
   const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd() : what;
   try { appendLine(fd, `${now()} ${line}`); fsyncSync(fd); } finally { closeSync(fd); }
-  if (created) { const dir = openSync(here, "r"); try { fsyncSync(dir); } finally { closeSync(dir); } }
+  if (created) syncDir(here);
 };
 const results = join(here, "results", round);
 const skippedFile = join(results, "skipped.txt");
 const countFailureFile = join(results, COUNT_FAILED_FILE);
-const instructionsFile = join(results, "instructions.json");
-const countStat = () => statSync(instructionsFile, { bigint: true, throwIfNoEntry: false });
+/** @type {string | null} */
+let countedStage = null;
 
-/** Verify that this call wrote a usable artifact. Identical measurements can rewrite the same bytes.
- * @param {ReturnType<typeof countStat>} before */
-function freshCount(before) {
+/** Verify the current invocation's own output, including every requested app/target and repeat.
+ * @param {string} stage @param {string[]} args */
+function completeCount(stage, args) {
   try {
-    const after = countStat();
-    if (!after?.isFile() || (before && after.ino === before.ino && after.mtimeNs === before.mtimeNs && after.ctimeNs === before.ctimeNs)) return false;
-    const rows = JSON.parse(readFileSync(instructionsFile, "utf8"));
+    const file = join(stage, "instructions.json");
+    if (!statSync(file, { throwIfNoEntry: false })?.isFile()) return false;
+    const rows = JSON.parse(readFileSync(file, "utf8"));
     if (!rows || typeof rows !== "object" || Array.isArray(rows)) return false;
-    const targets = Object.values(rows);
+    const [, , repeats, names] = args; // calls() requests the fixture page and JSON, except JSON-only apps.
+    const keys = names.split(",").flatMap((name) => apps[name].pages === false ? [`${name}/json`] : [`${name}/page`, `${name}/json`]);
+    if (keys.length === 0 || Object.keys(rows).length !== keys.length || !keys.every((key) => Object.hasOwn(rows, key))) return false;
     const count = (/** @type {unknown} */ n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
-    return targets.length > 0 && targets.every((runs) => Array.isArray(runs)
-      ? runs.length > 0 && runs.every((row) => row && count(row.failed)
+    return Object.values(rows).every((runs) => Array.isArray(runs)
+      ? runs.length === Number(repeats) && runs.every((row) => row && count(row.failed)
         && (row.userPerRequest === null || count(row.userPerRequest))
         && (row.kernelPerRequest === null || count(row.kernelPerRequest))
         && (row.kernelPass == null || count(row.kernelPass.failed)))
@@ -110,9 +116,10 @@ const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
 const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
   console.log(now(), "node", args.join(" "));
   const counting = args[0] === "count.mjs";
-  const before = counting ? countStat() : undefined;
+  const stage = counting ? mkdtempSync(join(dirname(results), ".count-")) : args[0] === "summarize.mjs" ? countedStage : null;
+  if (counting && stage) process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
   // Unattended, its output passes through here so a quiet call can be told from a busy one.
-  const child = spawn("node", args, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
+  const child = spawn("node", stage ? [...args, countStageArg + stage] : args, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
   const result = await superviseCall(child, {
     label: args[0],
     limitMs: unattended ? limit * minute : Infinity,
@@ -120,9 +127,12 @@ const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) =
     signalGroup: (pid, signal) => process.kill(-pid, signal),
     write: (chunk) => process.stdout.write(chunk),
   });
-  if (counting && result.code === 0 && !result.stopped && !result.live && !freshCount(before)) {
-    console.log(now(), "count.mjs exited 0 without fresh, valid instruction rows; continuing without instruction counts");
-    return { ...result, code: 1 };
+  if (counting && stage && result.code === 0 && !result.stopped && !result.live) {
+    if (!completeCount(stage, args)) {
+      console.log(now(), "count.mjs exited 0 without complete, valid instruction rows; continuing without instruction counts");
+      return { ...result, code: 1 };
+    }
+    countedStage = stage;
   }
   if (!result.stopped && result.code !== 0) console.log(`step failed with ${result.code}`);
   return result;
@@ -277,7 +287,20 @@ try {
       if (failed) {
         mkdirSync(results, { recursive: true });
         writeFileSync(countFailureFile, "count step failed\n", { flush: true });
-      } else rmSync(countFailureFile, { force: true });
+        // A synced start record must never survive a reboot without the fence, even in a new dir.
+        syncDir(results);
+        syncDir(dirname(results));
+        syncDir(here);
+      } else {
+        if (!countedStage) throw new Error("no staged count to publish");
+        // The two closed files were synced by their writers. If interrupted before either rename
+        // is durable, both readers still see the marker and show no instruction counts.
+        renameSync(join(countedStage, "instructions.json"), join(results, "instructions.json"));
+        renameSync(join(countedStage, "summary.json"), join(results, "summary.json"));
+        syncDir(results);
+        rmSync(countFailureFile);
+        syncDir(results);
+      }
     },
     reset: () => { if (unattended) reset(); },
     // Each build is one app's: one stopped skips that app alone, and none starts past the budget.

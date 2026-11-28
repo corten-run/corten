@@ -11,6 +11,7 @@ import { k6Image, k6Provenance, k6Version } from "../load-tool.mjs";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { COUNT_FAILED_FILE } from "./pack.mjs";
+import { roundsIn } from "./trend.mjs";
 import { maxPasses } from "./passes.mjs";
 import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, snapshotsEnded, startMinutes, startSettled, startUnit, steps, stepsUntil, superviseCall, takeLaunch, unit, unitSnapshot } from "./round.mjs";
 
@@ -154,7 +155,7 @@ test("a count call that exits 4, or is stopped or killed before count.mjs saw it
   for (const result of [{ code: 4 }, { stopped: "count.mjs printed nothing for 60 minutes, so it was stopped", code: null }, { code: null }]) {
     const { run, log } = await runRound((script) => (script === "count.mjs" ? result : {}));
     await assert.rejects(run, /the round stopped in its count step/, JSON.stringify(result));
-    assert.deepEqual(log.slice(0, 4), ["progress start count", "open count", "count failed: true", "call count.mjs"], JSON.stringify(result));
+    assert.deepEqual(log.slice(0, 4), ["count failed: true", "progress start count", "open count", "call count.mjs"], JSON.stringify(result));
     assert.equal(log.length, 5, log.join("\n"));
     assert.match(log[4], /^skip count: .*, so the round stops here and nothing more runs on this host$/);
     for (const after of ["reset", "progress end count", "call conform.mjs", "progress start conform", "build", "progress start summary", "call summarize.mjs", "done", "progress finished"]) assert.ok(!log.includes(after), `${after} after ${JSON.stringify(result)}`);
@@ -165,9 +166,9 @@ test("a count call that exits 4, or is stopped or killed before count.mjs saw it
     if (code === 0) await run;
     else await assert.rejects(run, /count step failed/);
     assert.deepEqual(log.filter((l) => /^(progress |call |count failed: |build$|done$)/.test(l)), [
-      "progress start count", "count failed: true", "call count.mjs", ...(code === 0 ? ["count failed: false"] : []), "progress end count", "progress start conform", "call conform.mjs", "progress end conform",
+      "count failed: true", "progress start count", "call count.mjs", "progress end count", "progress start conform", "call conform.mjs", "progress end conform",
       "progress start browser", "call parity.mjs", "call look.mjs", "call bytes.mjs", "call browser.mjs", "progress end browser",
-      "progress start build", "build", "progress end build", "progress start summary", "call summarize.mjs", ...(code === 0 ? ["done", "progress finished"] : []),
+      "progress start build", "build", "progress end build", "progress start summary", "call summarize.mjs", ...(code === 0 ? ["count failed: false", "done", "progress finished"] : []),
     ], String(code));
   }
   // Another step's call stopped at its limit skips the rest of that step alone and asks for a clean slate, as before.
@@ -1226,12 +1227,16 @@ test("a progress line is written whole before its step starts, or the step is no
 });
 
 const staleInstructions = JSON.stringify({ "corten/json": [{ userPerRequest: 123456, kernelPerRequest: 26000, failed: 0 }] });
+const fullInstructions = JSON.stringify(Object.fromEntries(["page", "json"].map((target) => [
+  `corten/${target}`, Array.from({ length: 3 }, () => ({ userPerRequest: 123456, kernelPerRequest: 26000, failed: 0 })),
+])));
 
-/** Each stand-in records that it ran; a successful count actually writes a result. */
+/** Each stand-in records that it ran; successful count and summary write staged artifacts. */
 function standRoundStep(/** @type {string} */ here, /** @type {string} */ script, code = 0) {
-  const writeCount = script === "count.mjs" && code === 0
-    ? `writeFileSync("results/r1/instructions.json", ${JSON.stringify(staleInstructions)});\n` : "";
-  writeFileSync(join(here, script), `import { appendFileSync, writeFileSync } from "node:fs";\nappendFileSync("ran.txt", ${JSON.stringify(script + "\n")});\n${writeCount}process.exit(${code});\n`);
+  const staged = code === 0 && (script === "count.mjs" || script === "summarize.mjs")
+    ? `const stage = process.argv.at(-1);
+if (stage.startsWith("--count-stage=")) writeFileSync(stage.slice("--count-stage=".length) + "/${script === "count.mjs" ? "instructions.json" : "summary.json"}", ${JSON.stringify(script === "count.mjs" ? fullInstructions : "{}")});\n` : "";
+  writeFileSync(join(here, script), `import { appendFileSync, writeFileSync } from "node:fs";\nappendFileSync("ran.txt", ${JSON.stringify(script + "\n")});\n${staged}process.exit(${code});\n`);
 }
 
 test("an unattended run-all.mjs whose count step's start is written short writes the rest before it counts, and one whose write fails does not count and records the round failed", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
@@ -1267,7 +1272,7 @@ syncBuiltinESMExports();
       const scratch = join(root, mode, "tmp");
       mkdirSync(scratch);
       const child = spawn(process.execPath, ["--import", pathToFileURL(patch).href, join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
-        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
       });
       let said = "";
       for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
@@ -1327,7 +1332,13 @@ function countFixture(t, /** @type {string} */ script, /** @type {string | undef
   mkdirSync(results, { recursive: true });
   const instructions = join(results, "instructions.json");
   if (prior !== undefined) writeFileSync(instructions, prior);
-  writeFileSync(join(here, "count.mjs"), `import { readFileSync, writeFileSync } from "node:fs";\nconst instructions = ${JSON.stringify(instructions)};\n${script}\n`);
+  writeFileSync(join(here, "count.mjs"), `import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const instructions = ${JSON.stringify(instructions)};
+const stage = process.argv.at(-1);
+const output = stage.startsWith("--count-stage=") ? join(stage.slice("--count-stage=".length), "instructions.json") : instructions;
+${script}
+`);
   writeFileSync(join(here, "conform.mjs"), 'console.log("fixture ran the later step");\n');
   const call = (/** @type {string[]} */ args) => {
     const r = spawnSync(process.execPath, args, {
@@ -1335,12 +1346,12 @@ function countFixture(t, /** @type {string} */ script, /** @type {string | undef
       env: { PATH: dirname(process.execPath), HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" },
     });
     assert.ifError(r.error);
-    return { status: r.status, said: r.stdout + r.stderr };
+    return { status: r.status, signal: r.signal, said: r.stdout + r.stderr };
   };
   return {
-    run: () => call(["run-all.mjs", round, "10", "count", "conform", "--unattended"]),
+    run: (/** @type {string[]} */ nodeArgs = []) => call([...nodeArgs, "run-all.mjs", round, "10", "count", "conform", "--unattended"]),
     replay: () => call(["summarize.mjs", round]),
-    summary: join(results, "summary.json"), marker: join(results, COUNT_FAILED_FILE), instructions,
+    here, results, summary: join(results, "summary.json"), marker: join(results, COUNT_FAILED_FILE), instructions,
   };
 }
 
@@ -1364,9 +1375,16 @@ test("count review: a halted round writes no summary but later replay omits the 
 
 for (const [kind, script, prior] of [
   ["missing", ""],
-  ["truncated", 'writeFileSync(instructions, \'{"corten/json": [\');'],
+  ["truncated", 'writeFileSync(output, \'{"corten/json": [\');'],
   ["unchanged", "", staleInstructions],
-  ["invalid rows", 'writeFileSync(instructions, \'{"corten/json": [null]}\');'],
+  ["invalid rows", `const rows = JSON.parse(${JSON.stringify(fullInstructions)});
+    rows["corten/json"][1] = null; writeFileSync(output, JSON.stringify(rows));`],
+  ["metadata only", 'utimesSync(instructions, 1, 1);', fullInstructions],
+  ["one refreshed target", `const rows = existsSync(output) ? JSON.parse(readFileSync(output, "utf8")) : {};
+    rows["corten/page"] = JSON.parse(${JSON.stringify(fullInstructions)})["corten/page"];
+    writeFileSync(output, JSON.stringify(rows));`, fullInstructions],
+  ["a missing repeat", `const rows = JSON.parse(${JSON.stringify(fullInstructions)});
+    rows["corten/json"].pop(); writeFileSync(output, JSON.stringify(rows));`, fullInstructions],
 ]) {
   test(`count review: exit 0 with ${kind} count output fails with a marked summary`, linuxCount, (t) => {
     const f = countFixture(t, script, prior);
@@ -1379,22 +1397,102 @@ for (const [kind, script, prior] of [
     const saved = JSON.parse(readFileSync(f.summary, "utf8"));
     assert.equal(saved.countFailed, true);
     assert.deepEqual(saved.instructions, {});
+    assert.equal(existsSync(f.instructions) ? readFileSync(f.instructions, "utf8") : undefined, prior);
   });
 }
 
 test("a count that rewrites identical rows clears the old failure", linuxCount, (t) => {
-  const f = countFixture(t, "writeFileSync(instructions, readFileSync(instructions));", staleInstructions);
+  const f = countFixture(t, `writeFileSync(output, ${JSON.stringify(fullInstructions)});`, fullInstructions);
   writeFileSync(f.marker, "count step failed\n");
+  writeFileSync(f.summary, JSON.stringify({ instructions: { "corten/json": { user: 111 } } }));
+  writeFileSync(join(f.here, "conform.mjs"), `import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+assert.ok(existsSync(${JSON.stringify(f.marker)}), "marker must still fence the previous summary");
+assert.equal(JSON.parse(readFileSync(${JSON.stringify(f.summary)}, "utf8")).instructions["corten/json"].user, 111);
+console.log("the old summary was still fenced after count");
+`);
   const result = f.run();
   assert.equal(result.status, 0, result.said);
+  assert.match(result.said, /the old summary was still fenced after count/);
   assert.match(result.said, /all done/);
   assert.ok(!existsSync(f.marker), result.said);
   const saved = JSON.parse(readFileSync(f.summary, "utf8"));
   assert.equal(saved.countFailed, undefined);
   assert.equal(saved.instructions["corten/json"].user, 123456);
+  assert.equal(readFileSync(f.instructions, "utf8"), fullInstructions);
 });
 
-test("a refused count probe fails the round and keeps stale instruction counts out of its summary", { skip: process.platform !== "linux" && "count probes run on Linux only" }, () => {
+test("a crash immediately after syncing count start leaves old instructions ineligible for replay", linuxCount, (t) => {
+  const f = countFixture(t, 'throw new Error("count should not have started");', staleInstructions);
+  const progress = join(f.here, "results-r1.progress");
+  const patch = join(f.here, "crash.mjs");
+  writeFileSync(patch, `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const progress = ${JSON.stringify(progress)};
+const sync = fs.fsyncSync;
+fs.fsyncSync = (fd) => {
+  sync(fd);
+  if (fs.readlinkSync("/proc/self/fd/" + fd) === progress && fs.readFileSync(progress, "utf8").includes(" start count ")) {
+    process.kill(process.pid, "SIGKILL");
+  }
+};
+syncBuiltinESMExports();
+`);
+  const crashed = f.run(["--import", pathToFileURL(patch).href]);
+  assert.equal(crashed.signal, "SIGKILL", crashed.said);
+  assert.match(readFileSync(progress, "utf8"), / start count [\da-f-]+\n$/);
+  assert.doesNotMatch(crashed.said, /count\.mjs/);
+  const replay = f.replay();
+  assert.equal(replay.status, 0, replay.said);
+  const saved = JSON.parse(readFileSync(f.summary, "utf8"));
+  assert.equal(saved.countFailed, true);
+  assert.deepEqual(saved.instructions, {});
+  assert.equal(readFileSync(f.instructions, "utf8"), staleInstructions);
+});
+
+test("trend ignores instructions in a saved summary after a halted recount, without changing its other metrics", linuxCount, (t) => {
+  const f = countFixture(t, "process.exit(4);", staleInstructions);
+  const old = JSON.stringify({ instructions: { "corten/json": { user: 123456 } }, bytes: { corten: { html: { gzip: 2345 } } } });
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: import.meta.dirname, encoding: "utf8" });
+  assert.equal(head.status, 0, head.stderr);
+  writeFileSync(join(f.results, "commit.txt"), head.stdout);
+  writeFileSync(f.summary, old);
+  const load = () => roundsIn(dirname(f.results))[0].summary;
+  assert.equal(load().instructions["corten/json"].user, 123456);
+  assert.match(f.run().said, /the round stopped in its count step/);
+  assert.equal(readFileSync(f.summary, "utf8"), old);
+  assert.deepEqual(load().instructions, {});
+  assert.equal(load().bytes.corten.html.gzip, 2345);
+});
+
+test("a finished count cannot unfence the old summary if publication is interrupted", linuxCount, (t) => {
+  const f = countFixture(t, `writeFileSync(output, ${JSON.stringify(fullInstructions)});`, staleInstructions);
+  const old = JSON.stringify({ instructions: { "corten/json": { user: 111 } } });
+  writeFileSync(f.summary, old);
+  const patch = join(f.here, "crash.mjs");
+  writeFileSync(patch, `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  rename(from, to);
+  if (to === ${JSON.stringify(f.instructions)}) process.kill(process.pid, "SIGKILL");
+};
+syncBuiltinESMExports();
+`);
+  const crashed = f.run(["--import", pathToFileURL(patch).href]);
+  assert.equal(crashed.signal, "SIGKILL", crashed.said);
+  assert.doesNotMatch(crashed.said, /all done/);
+  assert.equal(readFileSync(f.instructions, "utf8"), fullInstructions);
+  assert.equal(readFileSync(f.summary, "utf8"), old);
+  assert.ok(existsSync(f.marker));
+  const replay = f.replay();
+  assert.equal(replay.status, 0, replay.said);
+  const saved = JSON.parse(readFileSync(f.summary, "utf8"));
+  assert.equal(saved.countFailed, true);
+  assert.deepEqual(saved.instructions, {});
+});
+
+test("the real count producer keeps refused probes out of packed replay and only publishes its own requested rows", linuxCount, () => {
   const root = mkdtempSync(join(tmpdir(), "run-all-count-refused-"));
   try {
     const bench = resolve(import.meta.dirname, "..");
@@ -1426,7 +1524,7 @@ esac
     writeFileSync(join(dir, "instructions.json"), instructions);
     const run = (/** @type {string[]} */ args) => spawnSync(process.execPath, args, {
       cwd: here, encoding: "utf8", timeout: 15_000,
-      env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" },
+      env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, TMPDIR: root, BENCH_APPS: "corten,aspnet-aot", BENCH_APP_CPUS: "1" },
     });
     const result = run(["run-all.mjs", round, "10", "count", "count"]);
     const said = result.stdout + result.stderr;
@@ -1452,6 +1550,40 @@ esac
     assert.equal(replay.status, 0, replay.stderr);
     assert.match(replay.stdout, /count step failed/i);
     assert.deepEqual(JSON.parse(readFileSync(summaryFile, "utf8")), summary);
+
+    // Accepted probes and an explicit app-start failure per requested target: the producer still
+    // went through every target. The JSON-only app must not need a page or inherit an old row.
+    writeFileSync(join(bin, "perf"), `#!/bin/sh
+while [ "$1" != "-e" ]; do [ "$#" -gt 0 ] || exit 1; shift; done
+shift
+IFS=,
+for event in $1; do printf '1000,,%s,1000000,100.00,,\\n' "$event"; done
+`, { mode: 0o755 });
+    const next = "r999998";
+    const nextDir = join(here, "results", next);
+    const nextInstructions = join(nextDir, "instructions.json");
+    const stale = { ...JSON.parse(instructions), "aspnet-aot/page": { failed: "stale page" } };
+    mkdirSync(nextDir);
+    writeFileSync(nextInstructions, JSON.stringify(stale));
+    writeFileSync(join(nextDir, "tools.json"), JSON.stringify({ k6: k6Provenance(image, version) }));
+    const good = run(["run-all.mjs", next, "10", "count", "count"]);
+    assert.ifError(good.error);
+    assert.equal(good.status, 0, good.stdout + good.stderr);
+    assert.match(good.stdout, /all done/);
+    const counted = JSON.parse(readFileSync(nextInstructions, "utf8"));
+    assert.deepEqual(Object.keys(counted).sort(), ["aspnet-aot/json", "corten/json", "corten/page"]);
+    for (const row of Object.values(counted)) assert.match(row.failed, /docker run failed \(93\)/);
+    const freshSummary = JSON.parse(readFileSync(join(nextDir, "summary.json"), "utf8"));
+    assert.deepEqual(freshSummary.instructions, counted);
+    assert.deepEqual(freshSummary.tools.k6, k6Provenance(image, version));
+
+    writeFileSync(nextInstructions, JSON.stringify(stale));
+    const standalone = run(["count.mjs", next, "1", "corten", "page"]);
+    assert.equal(standalone.status, 0, standalone.stdout + standalone.stderr);
+    const merged = JSON.parse(readFileSync(nextInstructions, "utf8"));
+    assert.match(merged["corten/page"].failed, /docker run failed \(93\)/);
+    assert.deepEqual(merged["corten/json"], stale["corten/json"]);
+    assert.deepEqual(merged["aspnet-aot/page"], stale["aspnet-aot/page"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1480,7 +1612,7 @@ test("an unattended count that exits 4 stops immediately; one that exits 1 fails
       mkdirSync(scratch);
       // No docker on PATH: the clean slate's docker calls fail and change nothing.
       const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
-        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
       });
       let said = "";
       for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));

@@ -3,3 +3,5 @@
 # results). Only the packed archive is ignored, not a round's loose raw files before packing. The
 # archives committed before this stay tracked.
 /results/*/raw.tar.xz
+# Private count publication stages (can remain after an abrupt stop).
+/results/.count-*
