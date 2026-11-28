@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps, tier } from "./apps.mjs";
-import { rawOf } from "./pack.mjs";
+import { COUNT_FAILED_FILE, rawOf } from "./pack.mjs";
 import { roundNameError } from "./round.mjs";
 import { classes, kinds, slowMs, slowShare } from "./mixed.mjs";
 import { edgeOf, phases, ssrOf } from "./ssr.mjs";
@@ -39,8 +39,11 @@ if (existsSync(skippedFile)) {
 
 summary.ssr = ssrOf(raw, Object.keys(apps));
 
+const countFailed = existsSync(join(dir, COUNT_FAILED_FILE));
+if (countFailed) summary.countFailed = true;
+const instructions = countFailed ? {} : read(join(dir, "instructions.json")) ?? {};
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
-for (const [key, runs] of Object.entries(read(join(dir, "instructions.json")) ?? {})) {
+for (const [key, runs] of Object.entries(instructions)) {
   if (!Array.isArray(runs)) { summary.instructions[key] = { failed: runs.failed }; continue; }
   // Which load kernel instructions came from: a row with `kernelPass` counted them over a second
   // load of their own (#2151); one without, from before that, over the load user instructions are.
@@ -62,6 +65,7 @@ writeFileSync(join(dir, "summary.json"), JSON.stringify(summary, null, 1));
 
 const line = (cells) => `| ${cells.join(" | ")} |`;
 for (const s of summary.skipped ?? []) console.log(`SKIPPED: step ${s.step ?? "?"} (${s.why ?? s.line}); its results are partly or wholly missing`);
+if (countFailed) console.log("COUNT STEP FAILED: instruction counts were not included in this summary");
 // A number, with its passes' range when there were several, and "~" when it is within noise of
 // Corten's (their ranges overlap).
 // A phase some of whose passes have no files says how many it has.

@@ -7,8 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
+import { k6Image, k6Provenance, k6Version } from "../load-tool.mjs";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
+import { COUNT_FAILED_FILE } from "./pack.mjs";
 import { maxPasses } from "./passes.mjs";
 import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, snapshotsEnded, startMinutes, startSettled, startUnit, steps, stepsUntil, superviseCall, takeLaunch, unit, unitSnapshot } from "./round.mjs";
 
@@ -129,6 +131,7 @@ async function runRound(outcome = () => ({}), from = "count") {
     },
     progress: (what) => log.push(`progress ${what}`),
     skip: (step, why) => log.push(`skip ${step}: ${why}`),
+    recordCount: (failed) => log.push(`count failed: ${failed}`),
     reset: () => log.push("reset"),
     build: async () => { log.push("build"); },
     open: async (step) => { log.push(`open ${step}`); return null; },
@@ -156,14 +159,15 @@ test("a count call that exits 4, or is stopped or killed before count.mjs saw it
     assert.match(log[3], /^skip count: .*, so the round stops here and nothing more runs on this host$/);
     for (const after of ["reset", "progress end count", "call conform.mjs", "progress start conform", "build", "progress start summary", "call summarize.mjs", "done", "progress finished"]) assert.ok(!log.includes(after), `${after} after ${JSON.stringify(result)}`);
   }
-  // The controls: a count that ends 0 or with an ordinary error goes on to every step, the summary and the finish.
+  // Both exits allow later steps and summary, but only a successful count allows a finish.
   for (const code of [0, 1]) {
     const { run, log } = await runRound((script) => (script === "count.mjs" ? { code } : {}));
-    await run;
-    assert.deepEqual(log.filter((l) => l.startsWith("progress") || l.startsWith("call") || l === "build" || l === "done"), [
-      "progress start count", "call count.mjs", "progress end count", "progress start conform", "call conform.mjs", "progress end conform",
+    if (code === 0) await run;
+    else await assert.rejects(run, /count step failed/);
+    assert.deepEqual(log.filter((l) => /^(progress |call |count failed: |build$|done$)/.test(l)), [
+      "progress start count", "call count.mjs", `count failed: ${code !== 0}`, "progress end count", "progress start conform", "call conform.mjs", "progress end conform",
       "progress start browser", "call parity.mjs", "call look.mjs", "call bytes.mjs", "call browser.mjs", "progress end browser",
-      "progress start build", "build", "progress end build", "progress start summary", "call summarize.mjs", "done", "progress finished",
+      "progress start build", "build", "progress end build", "progress start summary", "call summarize.mjs", ...(code === 0 ? ["done", "progress finished"] : []),
     ], String(code));
   }
   // Another step's call stopped at its limit skips the rest of that step alone and asks for a clean slate, as before.
@@ -1213,7 +1217,7 @@ test("a progress line is written whole before its step starts, or the step is no
     await assert.rejects(runSteps(["count", "conform"], [["count", 60, "count.mjs", "r1"], ["conform", 60, "conform.mjs", "r1"]], {
       call: async (_, args) => { log.push(`call ${args[0]}`); return { stopped: null, code: 0 }; },
       progress: (what) => { log.push(`progress ${what}`); if (what === "start count") throw new Error("the progress line was cut short"); },
-      skip: () => {}, reset: () => {}, build: async () => {}, open: async () => null, close: () => {}, linux: true, clock: () => 0, summary: ["summarize.mjs", "r1"], done: () => {},
+      skip: () => {}, recordCount: () => {}, reset: () => {}, build: async () => {}, open: async () => null, close: () => {}, linux: true, clock: () => 0, summary: ["summarize.mjs", "r1"], done: () => {},
     }), /cut short/);
     assert.deepEqual(log, ["progress start count"]);
   } finally {
@@ -1297,7 +1301,70 @@ function importClosure(/** @type {string} */ entry) {
   return [...seen];
 }
 
-test("an unattended run-all.mjs whose count exits 4 starts no later step and does not finish; one whose count exits 0 or 1 goes on", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
+test("a refused count probe fails the round and keeps stale instruction counts out of its summary", { skip: process.platform !== "linux" && "count probes run on Linux only" }, () => {
+  const root = mkdtempSync(join(tmpdir(), "run-all-count-refused-"));
+  try {
+    const bench = resolve(import.meta.dirname, "..");
+    for (const entry of ["run-all.mjs", "count.mjs", "summarize.mjs"]) {
+      for (const file of importClosure(join(import.meta.dirname, entry))) {
+        const copy = join(root, relative(bench, file));
+        mkdirSync(dirname(copy), { recursive: true });
+        copyFileSync(file, copy);
+      }
+    }
+    const here = join(root, "fullstack");
+    const bin = join(root, "bin");
+    const round = "r999999";
+    const dir = join(here, "results", round);
+    mkdirSync(bin);
+    mkdirSync(dir, { recursive: true });
+    const image = { Id: `sha256:${"a".repeat(64)}`, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" };
+    const version = `k6 v${k6Version}`;
+    writeFileSync(join(dir, "tools.json"), JSON.stringify({ k6: k6Provenance(image, version) }));
+    writeFileSync(join(bin, "docker"), `#!/bin/sh
+case "$1 $2" in
+  'image inspect') printf '%s\\n' '${JSON.stringify([image])}' ;;
+  'run --rm') printf '%s\\n' '${version}' ;;
+  *) exit 93 ;;
+esac
+`, { mode: 0o755 });
+    writeFileSync(join(bin, "perf"), "#!/bin/sh\nprintf '%s\\n' 'fixture refused the probe' >&2\nexit 1\n", { mode: 0o755 });
+    const instructions = JSON.stringify({ "corten/json": [{ userPerRequest: 123456, kernelPerRequest: 26000, failed: 0 }] });
+    writeFileSync(join(dir, "instructions.json"), instructions);
+    const run = (/** @type {string[]} */ args) => spawnSync(process.execPath, args, {
+      cwd: here, encoding: "utf8", timeout: 15_000,
+      env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" },
+    });
+    const result = run(["run-all.mjs", round, "10", "count", "count"]);
+    const said = result.stdout + result.stderr;
+    assert.ifError(result.error);
+    assert.match(said, /probing perf stat/);
+    assert.match(said, /perf cannot count .*fixture refused the probe/);
+    assert.equal(readFileSync(join(dir, "instructions.json"), "utf8"), instructions);
+    const summaryFile = join(dir, "summary.json");
+    const summary = JSON.parse(readFileSync(summaryFile, "utf8"));
+    assert.deepEqual(summary.instructions, {}, said);
+    assert.equal(result.status, 1, said);
+    assert.match(said, /round failed: count step failed/);
+    assert.doesNotMatch(said, /all done|123,456/);
+    assert.equal(summary.countFailed, true);
+    writeFileSync(join(here, "conform.mjs"), 'console.log("fixture ran the later step");\n');
+    const continued = run(["run-all.mjs", round, "10", "conform", "conform"]);
+    assert.equal(continued.status, 1, continued.stdout + continued.stderr);
+    assert.match(continued.stdout, /fixture ran the later step/);
+    assert.match(continued.stdout, /round failed: count step failed/);
+    const packed = run(["pack.mjs", round]);
+    assert.equal(packed.status, 0, packed.stderr);
+    const replay = run(["summarize.mjs", round]);
+    assert.equal(replay.status, 0, replay.stderr);
+    assert.match(replay.stdout, /count step failed/i);
+    assert.deepEqual(JSON.parse(readFileSync(summaryFile, "utf8")), summary);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an unattended count that exits 4 stops immediately; one that exits 1 fails after the later steps and summary", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
   const bench = resolve(import.meta.dirname, "..");
   const root = mkdtempSync(join(tmpdir(), "run-all-halt-"));
   try {
@@ -1313,6 +1380,11 @@ test("an unattended run-all.mjs whose count exits 4 starts no later step and doe
       stand("count.mjs", String(code));
       stand("conform.mjs", "0");
       stand("summarize.mjs", "0");
+      const countFailed = join(here, "results", "r1", COUNT_FAILED_FILE);
+      if (code === 0) {
+        mkdirSync(dirname(countFailed), { recursive: true });
+        writeFileSync(countFailed, "count step failed\n");
+      }
       const scratch = join(root, String(code), "tmp");
       mkdirSync(scratch);
       // No docker on PATH: the clean slate's docker calls fail and change nothing.
@@ -1334,9 +1406,11 @@ test("an unattended run-all.mjs whose count exits 4 starts no later step and doe
         assert.match(readFileSync(join(here, "results", "r1", "skipped.txt"), "utf8"), /step count skipped: count\.mjs exited 4: a perf it started was not seen to end, so the round stops here/);
         assert.ok(!said.includes("all done"), said);
       } else {
-        assert.equal(exit, 0, said);
+        assert.equal(exit, code, said);
         assert.deepEqual(ran, ["count.mjs", "conform.mjs", "summarize.mjs"], said);
-        assert.deepEqual(progress, ["boot", "start count", "end count", "start conform", "end conform", "start summary", "finished"], said);
+        assert.deepEqual(progress, ["boot", "start count", "end count", "start conform", "end conform", "start summary", code === 0 ? "finished" : "failed"], said);
+        assert.equal(existsSync(countFailed), code === 1, said);
+        assert.equal(said.includes("all done"), code === 0, said);
         assert.ok(!existsSync(join(here, "results", "r1", "skipped.txt")), said);
       }
     }

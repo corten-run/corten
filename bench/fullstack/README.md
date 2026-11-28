@@ -1395,6 +1395,11 @@ three runs:
    recorded failed. A call that could
    not be started (no process) is taken as stopped, never as an exit. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step.
+   If the count step exits with an ordinary error, the later steps still run and the summary is
+   written, but the round exits non-zero. `count-failed.txt` makes `summarize.mjs` omit all
+   instruction rows and report `countFailed: true`, including when the summary is rebuilt. It
+   leaves `instructions.json` intact: standalone `count.mjs` still merges counts for individual
+   apps. Only a later successful count step in `run-all.mjs` clears the failure for that round.
    The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
    seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
    does not reach the probe's process group of its own) ends the round there, with the reason in
@@ -2710,8 +2715,9 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`,
    `docker-rebuild.json`, `rust-analyzer.json`, `bytes.json`, `cold-start.json`,
-   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and
-   `raw.txt` (below). Its raw output (each app's k6, CPU and startup files, every count) is one
+   `instructions.json`, `count-failed.txt` (if the count step failed), `browser.json`,
+   `conformance.json`, `hardening.json`, `trend.json` and `raw.txt` (below). Its raw output
+   (each app's k6, CPU and startup files, every count) is one
    archive beside them, `raw.tar.xz`, which Git ignores (`bench/fullstack/.gitignore`). Only
    the packed archive is ignored: the loose raw files of a round not yet packed are not, so pack a
    round before committing its summaries. A maintainer publishes the archive where it will be kept,

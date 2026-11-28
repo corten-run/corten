@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export const COUNT_FAILED_FILE = "count-failed.txt";
+
 /** What stays a file: what summarize.mjs writes, what the README and tests read, the log, and a
  * committed round's note of where its raw output is. */
 export const KEPT = new Set([
@@ -33,6 +35,7 @@ export const KEPT = new Set([
   "bytes.json",
   "cold-start.json",
   "instructions.json",
+  COUNT_FAILED_FILE,
   "browser.json",
   "conformance.json",
   "hardening.json",

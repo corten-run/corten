@@ -35,6 +35,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
+import { COUNT_FAILED_FILE } from "./pack.mjs";
 import { passesOf } from "./passes.mjs";
 import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
@@ -68,7 +69,9 @@ const progress = (/** @type {string} */ what) => {
   try { appendLine(fd, `${now()} ${line}`); fsyncSync(fd); } finally { closeSync(fd); }
   if (created) { const dir = openSync(here, "r"); try { fsyncSync(dir); } finally { closeSync(dir); } }
 };
-const skippedFile = join(here, "results", round, "skipped.txt");
+const results = join(here, "results", round);
+const skippedFile = join(results, "skipped.txt");
+const countFailureFile = join(results, COUNT_FAILED_FILE);
 const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
   const line = `${now()} step ${step} skipped: ${why}`;
   console.log(line);
@@ -239,6 +242,14 @@ try {
     call,
     progress,
     skip,
+    countFailed: existsSync(countFailureFile),
+    recordCount: (failed) => {
+      if (failed) {
+        mkdirSync(results, { recursive: true });
+        writeFileSync(countFailureFile, "count step failed\n", { flush: true });
+        console.log(now(), "count step failed; continuing without instruction counts");
+      } else rmSync(countFailureFile, { force: true });
+    },
     reset: () => { if (unattended) reset(); },
     // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
     build: async (stepStarted) => { await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call, progress, skip, reset: () => { if (unattended) reset(); } }); },

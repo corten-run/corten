@@ -728,13 +728,17 @@ export function countHalt({ stopped, code }) {
  * whose output was released (superviseCall's `live`), stops it there: the reason is recorded as the step's skip, and no later
  * call, clean slate, step or summary runs, nor is the step's end or the round's finish recorded; this throws, and run-all.mjs records the round failed, which it does not
  * start again (resumeAt). The effects are run-all.mjs's, passed in, so round.test.mjs runs this
- * loop itself.
+ * loop itself. An ordinary count error is recorded before the end of the step; later steps and
+ * the summary still run, but the round fails instead of recording a finish. A successful count
+ * clears any earlier failure for this round.
  * @param {string[]} list
  * @param {ReturnType<typeof calls>} all
  * @param {{
  *   call: (limit: number, args: string[]) => Promise<{ stopped: string | null, code: number | null, live?: boolean }>,
  *   progress: (what: string) => void,
  *   skip: (step: string, why: string) => void,
+ *   countFailed?: boolean,
+ *   recordCount: (failed: boolean) => void,
  *   reset: () => void,
  *   build: (started: number) => Promise<void>,
  *   open: (step: string) => Promise<string | null>,
@@ -745,7 +749,7 @@ export function countHalt({ stopped, code }) {
  *   done: () => void,
  * }} effects
  */
-export async function runSteps(list, all, { call, progress, skip, reset, build, open, close, linux, clock, summary, done }) {
+export async function runSteps(list, all, { call, progress, skip, countFailed = false, recordCount, reset, build, open, close, linux, clock, summary, done }) {
   for (const step of list) {
     if (step === "count" && !linux) continue;
     progress(`start ${step}`);
@@ -764,6 +768,10 @@ export async function runSteps(list, all, { call, progress, skip, reset, build, 
         throw new Error(`${halt}; the round stopped in its count step`);
       }
       leftRunning(step, result, skip);
+      if (step === "count") {
+        countFailed = result.code !== 0;
+        recordCount(countFailed);
+      }
       if (result.stopped) {
         skip(step, result.stopped);
         reset();
@@ -778,6 +786,7 @@ export async function runSteps(list, all, { call, progress, skip, reset, build, 
   const result = await call(10, summary);
   leftRunning("summary", result, skip);
   if (result.stopped || result.code !== 0) throw new Error(result.stopped ?? `summarize.mjs exited with ${result.code}`);
+  if (countFailed) throw new Error("count step failed; summary omits instruction counts");
   done();
   progress("finished");
 }
