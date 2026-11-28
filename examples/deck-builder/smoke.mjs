@@ -73,6 +73,8 @@ const comesToShow = (page, id, count) =>
 const row = (page, id) => page.locator(`tbody tr[data-key="${id}"]`);
 const version = (page) => page.inputValue("input[name=version]");
 const saveButton = 'form[method=post] button:text-is("Save")';
+const filterButton = "form[role=search] button";
+const countOf = (id) => `li[data-key="${id}"] input[type=number]`;
 /** @param {import("@playwright/test").Request} request */
 const isSave = (request) => request.method() === "POST" && new URL(request.url()).pathname === "/deck";
 /** @param {import("@playwright/test").Request} request */
@@ -88,6 +90,7 @@ const drawnKeys = (page, selector, attr) => page.locator(selector).evaluateAll((
     }
     return true;
   }).map((el) => el.getAttribute(attr)), attr);
+const buttonDrawn = async (page, selector) => (await drawnKeys(page, selector, "id")).length === 1;
 
 /** Runs `act` in the page and times it: handlers run while the event is dispatched. */
 const time = (page, name, act) =>
@@ -194,6 +197,9 @@ try {
     sentVersions.join() === `${loaded},${loaded + 1}` && firstKey && secondKey && firstKey !== secondKey &&
     !sent[0].getAll("card").includes("undertow-serpent") && sent[1].getAll("card").includes("undertow-serpent") &&
     page.url() === `${base}/`, `POST versions ${sentVersions.join()}; page at ${await version(page)}`);
+  const cloned = page.locator('ul li:is([data-key="pearl-diver"], [data-key="undertow-serpent"])');
+  check("client-cloned rows have no fixed template ID",
+    (await cloned.count()) === 2 && (await cloned.locator("xpath=self::*[@id]").count()) === 0);
 
   // Undo and redo: buttons and keys, each saved.
   await page.click("button:has-text('Undo')");
@@ -215,7 +221,7 @@ try {
   // typed, and the deck already saved.
   await page.fill("input[type=search]", "drake");
   const typedRows = await page.locator("tbody tr:not([hidden])").count();
-  const drawnWithScripts = [await page.isVisible("form[role=search] button"), await page.isVisible(saveButton)];
+  const drawnWithScripts = [await buttonDrawn(page, filterButton), await buttonDrawn(page, saveButton)];
   const savedVersion = await version(page);
   let posted = 0;
   /** @param {import("@playwright/test").Request} r */
@@ -600,6 +606,9 @@ try {
         // Only the browser's aborted resource and the runtime's report for this exact module
         // are expected. In particular, no uncaught page error (even from this URL) is ignored.
         if (moduleUrls.has(m.location().url) && /^Failed to load resource: net::ERR_FAILED\b/.test(message)) return;
+        // The dropped-response controls below deliberately fail their browser POST; a key
+        // conflict is also an expected HTTP response, not a script or patch error.
+        if (m.location().url === `${base}/deck` && /^Failed to load resource: (net::ERR_FAILED\b|the server responded with a status of 409\b)/.test(message)) return;
         if ([...moduleUrls].some((url) => message.startsWith(`corten: script module ${new URL(url).pathname} did not load (is its component in App::components?)`))) return;
         blockedErrors.push(message);
       });
@@ -617,7 +626,7 @@ try {
         return document.querySelectorAll('script[type="module"][src$="/deck_builder.js"]').length;
       });
       const loadedAt = Number(await version(blocked));
-      const count = 'li[data-key="gravel-sprite"] input[type=number]';
+      const count = countOf("gravel-sprite");
       let navigations = 0;
       blocked.on("framenavigated", (frame) => { if (frame === blocked.mainFrame()) navigations += 1; });
       const submit = async (button) => {
@@ -630,7 +639,7 @@ try {
         return { status: response.status(), fields: saveFields(response.request()), shown: await version(blocked),
           saved: body.includes("Saved."), bytes: Buffer.byteLength(body) };
       };
-      if (!(await blocked.isVisible(saveButton))) {
+      if (!(await buttonDrawn(blocked, saveButton))) {
         check(saveCase, false, `aborted ${aborted}; the Save button is not drawn`);
         check(addCase, false, "the Save button is not drawn");
       } else {
@@ -638,8 +647,8 @@ try {
         const saves = [];
         for (const copies of [startCount === "2" ? "3" : "2", "1"]) {
           await blocked.fill(count, copies);
-          const { status, fields, shown, saved } = await submit(blocked.locator(saveButton));
-          saves.push({ status, sent: fields.get("version"), shown, key: fields.get("submit"), saved });
+          const { status, fields, shown, saved, bytes } = await submit(blocked.locator(saveButton));
+          saves.push({ status, sent: fields.get("version"), shown, key: fields.get("submit"), saved, bytes });
           if (copies !== "1") {
             const note = await blocked.locator("#save-note").textContent();
             const drawn = await drawnKeys(blocked, "#save-note", "id");
@@ -656,7 +665,7 @@ try {
           aborted > 0 && ran === 1 && navigations === 0 &&
             saves.every((save, i) => save.status === 200 && save.saved && save.sent === String(loadedAt + i) && save.shown === String(loadedAt + i + 1)) &&
             !!first.key && !!second.key && first.key !== second.key && serverCount === "1" && Number(serverVersion) === loadedAt + 2,
-          `aborted ${aborted}; ${saves.map((save) => `POST ${save.status} at ${save.sent}, page at ${save.shown}`).join("; ")}; ${navigations} navigations; saved count ${serverCount} at ${serverVersion}`,
+          `aborted ${aborted}; ${saves.map((save) => `POST ${save.status} at ${save.sent}, page at ${save.shown} (${save.bytes} raw patch bytes)`).join("; ")}; ${navigations} navigations; saved count ${serverCount} at ${serverVersion}`,
         );
 
         const beforeAdd = await deck(blocked);
@@ -666,32 +675,116 @@ try {
         const shownAfterAdd = await deck(blocked);
         await fresh.reload();
         const storedAfterAdd = await deck(fresh);
+        const exportOf = (page) => page.locator("#deck-list").evaluate((field) => /** @type {HTMLTextAreaElement} */ (field).value);
+        check(`${name} fallback Add updates the total and export without reloading`,
+          (await total(blocked)) === (await total(fresh)) && (await exportOf(blocked)) === (await exportOf(fresh)),
+          `total ${await total(blocked)}, saved total ${await total(fresh)}`);
         const save = await submit(blocked.locator(saveButton));
         const cards = save.fields.getAll("card");
         const savedCount = save.fields.getAll("count")[cards.indexOf(addedCard)];
         await fresh.reload();
         const storedAfterSave = await deck(fresh);
         const finalVersion = await version(fresh);
-        await fresh.close();
         check(addCase, aborted > 0 && ran === 1 && navigations === 0 && beforeAdd[addedCard] === undefined &&
           add.status === 200 && add.saved && add.fields.get("add") === addedCard && add.fields.get("version") === serverVersion &&
           Number(add.shown) === Number(serverVersion) + 1 && storedAfterAdd[addedCard] === 1 && sameDeck(shownAfterAdd, storedAfterAdd) &&
           save.status === 200 && save.saved && save.fields.get("version") === add.shown && savedCount === "1" &&
           sameDeck(storedAfterSave, storedAfterAdd) && save.shown === add.shown && finalVersion === add.shown,
-          `${addedCard}: Add ${add.status}, drawn ${shownAfterAdd[addedCard]}, stored ${storedAfterAdd[addedCard]} (${add.bytes} raw patch bytes); Save ${save.status}, posted ${savedCount}, stored ${storedAfterSave[addedCard]}; ${navigations} navigations`);
+          `${addedCard}: Add ${add.status}, drawn ${shownAfterAdd[addedCard]}, stored ${storedAfterAdd[addedCard]} (${add.bytes} raw patch bytes); Save ${save.status}, posted ${savedCount}, stored ${storedAfterSave[addedCard]} (${save.bytes} raw patch bytes); ${navigations} navigations`);
+
+        // The first save has already deleted Gravel Sprite at the server. Put it back and
+        // edit another row before that answer is drawn. Save again while the form is busy.
+        const held = Promise.withResolvers();
+        const release = Promise.withResolvers();
+        await blocked.route("**/deck", async (route) => {
+          const response = await route.fetch();
+          held.resolve(response.status());
+          await release.promise;
+          await route.fulfill({ response });
+        }, { times: 1 });
+        const otherCount = countOf("moth-court-herald");
+        const otherCopies = (await blocked.inputValue(otherCount)) === "1" ? "2" : "1";
+        let queued;
+        try {
+          await blocked.fill(count, "");
+          await blocked.click(saveButton);
+          if (await held.promise !== 200) throw new Error("the held removal did not succeed");
+          await fresh.reload();
+          if ((await deck(fresh))["gravel-sprite"] !== undefined) throw new Error("the server did not remove the held card");
+          await blocked.fill(count, "1");
+          await blocked.fill(otherCount, otherCopies);
+          const next = blocked.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("version") === String(Number(finalVersion) + 1), { timeout: 5_000 });
+          await blocked.click(saveButton);
+          release.resolve(undefined);
+          queued = await next;
+        } finally {
+          release.resolve(undefined);
+        }
+        await blocked.locator('form[aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
+        const queuedFields = saveFields(queued.request());
+        const posted = (fields, id) => fields.getAll("count")[fields.getAll("card").indexOf(id)];
+        await fresh.reload();
+        const stored = await deck(fresh);
+        check(`${name} fallback Save keeps both edits queued behind a committed removal`,
+          queued.status() === 200 && posted(queuedFields, "gravel-sprite") === "1" &&
+          posted(queuedFields, "moth-court-herald") === otherCopies &&
+          stored["gravel-sprite"] === 1 && stored["moth-court-herald"] === Number(otherCopies),
+          `queued POST ${queued.status()}; sent ${posted(queuedFields, "gravel-sprite")}, ${posted(queuedFields, "moth-court-herald")}; stored ${stored["gravel-sprite"]}, ${stored["moth-court-herald"]}`);
+
+        // Drop two committed Add answers. An identical retry must be safe; a changed one with
+        // the same key is a visible conflict and must not write over the already saved deck.
+        for (const changed of [false, true]) {
+          await blocked.reload();
+          const before = await deck(blocked);
+          const id = (await drawnKeys(blocked, "tbody tr", "data-key")).find((id) => id && before[id] === undefined);
+          if (!id) throw new Error("no card to add before dropping an answer");
+          const button = row(blocked, id).getByRole("button", { name: "Add", exact: true });
+          const committed = Promise.withResolvers();
+          await blocked.route("**/deck", async (route) => {
+            const response = await route.fetch();
+            committed.resolve({ status: response.status(), fields: saveFields(route.request()) });
+            await route.abort();
+          }, { times: 1 });
+          await button.click();
+          const first = await committed.promise;
+          await blocked.locator('form[aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
+          if (changed) await blocked.fill(otherCount, (await blocked.inputValue(otherCount)) === "1" ? "2" : "1");
+          const retry = await submit(button);
+          const note = await blocked.locator("#save-note").textContent();
+          await fresh.reload();
+          const stored = await deck(fresh);
+          check(`${name} fallback ${changed ? "changed retry reports a conflict" : "identical retry saves only once"} after a dropped Add answer`,
+            first.status === 200 && first.fields.get("submit") === retry.fields.get("submit") &&
+            retry.status === (changed ? 409 : 200) && retry.saved === !changed &&
+            (changed ? note?.startsWith("Not saved:") : note === "Saved.") &&
+            (await drawnKeys(blocked, "#save-note", "id")).length === 1 &&
+            (await version(fresh)) === String(Number(first.fields.get("version")) + 1) &&
+            await version(blocked) === await version(fresh) && stored[id] === 1 &&
+            stored["moth-court-herald"] === before["moth-court-herald"] && sameDeck(await deck(blocked), stored),
+            `same key: ${first.fields.get("submit") === retry.fields.get("submit")}; HTTP ${retry.status}; ${note}`);
+        }
+        await fresh.close();
       }
-      const button = "form[role=search] button";
+      // Playwright's isVisible alone accepts opacity: 0. Exercise the same predicate used by
+      // both button checks, leaving the controls unchanged for the real actions.
+      for (const selector of [saveButton, filterButton]) {
+        const opaque = await buttonDrawn(blocked, selector);
+        await blocked.locator(selector).evaluate((el) => { el.parentElement.style.opacity = "0"; });
+        const transparent = await buttonDrawn(blocked, selector);
+        await blocked.locator(selector).evaluate((el) => { el.parentElement.style.removeProperty("opacity"); });
+        check(`${name} blocked-module button check rejects zero opacity for ${selector}`, opaque && !transparent);
+      }
       await blocked.fill("input[type=search]", "oracle");
       // Typing filtered nothing: no builder handler ran.
       const before = await drawnKeys(blocked, "tbody tr", "data-key");
       const all = await blocked.locator("tbody tr").count();
-      if (!(await blocked.isVisible(button))) {
+      if (!(await buttonDrawn(blocked, filterButton))) {
         check(filterCase, false, `aborted ${aborted}; the Filter button is not drawn`);
       } else {
         // The runtime sends a GET form itself (a client navigation), so the answer may be a fetch
         // rather than a document load: either is the server's filter.
         const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "oracle", { timeout: 15_000 });
-        const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=oracle/), blocked.click(button)]);
+        const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=oracle/), blocked.click(filterButton)]);
         // The server's own answer first: of its collection rows, only those that match are shown.
         const rowsAnswered = Array.from((await response.text()).matchAll(/<tr\b([^>]*)>/g), ([, attrs]) => ({
           key: /data-key="([^"]+)"/.exec(attrs)?.[1] ?? "",
@@ -716,6 +809,48 @@ try {
       await own?.close();
       check(`${name} with the builder's module not loading: no unexpected page or console errors`, blockedErrors.length === 0, blockedErrors.join(" | "));
     }
+  }
+
+  // A scripted retry can carry a newer local edit as well. Hold the feed so only the 409
+  // receipt can identify the first write, and watch the script send the newer edit afresh.
+  const editing = await context.newPage();
+  const watching = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  editing.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  editing.on("pageerror", (e) => errors.push(e.message));
+  await editing.route("**/feed/deck/live**", async (route) => {
+    watching.resolve(undefined);
+    await resume.promise;
+    await route.abort().catch(() => {});
+  });
+  try {
+    await editing.goto(base);
+    await watching.promise;
+    const before = await deck(editing);
+    const [firstId, nextId] = (await drawnKeys(editing, "tbody tr", "data-key")).filter((id) => id && before[id] === undefined);
+    const firstButton = row(editing, firstId).getByRole("button", { name: "Add", exact: true });
+    const nextButton = row(editing, nextId).getByRole("button", { name: "Add", exact: true });
+    const lost = editing.waitForRequest(isSave, { timeout: 5_000 });
+    await editing.route("**/deck", async (route) => {
+      await route.fetch();
+      await route.abort();
+    }, { times: 1 });
+    await firstButton.click();
+    await editing.getByRole("button", { name: "Try again" }).waitFor({ timeout: 5_000 });
+    const first = saveFields(await lost);
+    const conflict = editing.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("submit") === first.get("submit"), { timeout: 5_000 });
+    const saved = editing.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("submit") !== first.get("submit"), { timeout: 5_000 });
+    await nextButton.click();
+    const [reused, followUp] = await Promise.all([conflict, saved]);
+    await settled(editing);
+    const shown = await deck(editing);
+    check("the builder resolves a changed retry's conflict and writes the newer edit under a new key",
+      reused.status() === 409 && followUp.status() === 200 && shown[firstId] === 1 && shown[nextId] === 1 &&
+      (await comesToShow(other, nextId, 1)) && (await deck(other))[firstId] === 1,
+      `HTTP ${reused.status()}, ${followUp.status()}; shown ${shown[firstId]}, ${shown[nextId]}`);
+  } finally {
+    resume.resolve(undefined);
+    await editing.close();
   }
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those

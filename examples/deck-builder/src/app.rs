@@ -23,7 +23,10 @@ use serde::Serialize;
 use crate::{
     cards::{self, Card, Refusal},
     text::Msg,
-    views::{self, Answer, DeckBuilderRefs, DeckLines, DeckVersion, SaveNote},
+    views::{
+        self, Answer, DeckBuilderRefs, DeckEmpty, DeckExport, DeckGeneration, DeckLines, DeckLinesId, DeckTotal, DeckVersion,
+        SaveNote, SavedLine,
+    },
 };
 
 /// A card in the saved deck and its copies: the rows of the deck's feed.
@@ -45,8 +48,8 @@ pub struct Builder {
     pub deck: Feed<Slot>,
     /// How long an applied save's key is remembered (`KEPT_FOR`).
     kept_for: Duration,
-    /// The saves applied in the last day, so one sent again (its answer lost on the way) answers
-    /// as it did. Every save holds this lock, so the version it checks is the one it writes after.
+    /// The saves applied in the last day, so an identical retry answers as it did.
+    /// Every save holds this lock, so the version it checks is the one it writes after.
     /// A real store keeps the keys next to the deck, in its transaction.
     saves: Arc<Mutex<Saves>>,
 }
@@ -62,6 +65,8 @@ struct Saves {
 
 /// A save that was applied: which of the page's sends it was, and the version it made.
 struct Applied {
+    base: u64,
+    edit: DeckEdit,
     draft: u64,
     version: u64,
 }
@@ -77,6 +82,8 @@ const KEPT_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 pub enum Outcome {
     /// Saved: the version it made, and which of the page's sends under this key it was.
     Saved { version: u64, draft: u64 },
+    /// This key already made a different write. The receipt identifies that write, not this one.
+    KeyConflict { version: u64, draft: u64 },
     /// The rules refused it; the deck is as it was.
     Refused(u64, Refusal),
     /// It was built on an older version: another tab saved first, or the server restarted since.
@@ -87,6 +94,14 @@ pub enum Outcome {
 
 /// A deck as `card id -> copies`, no zeros.
 pub type Deck = BTreeMap<String, u32>;
+
+/// The effective mutation, not the fields used only to draw the page. Keep Add separately so a
+/// Save and an Add that happen to produce the same deck cannot replay each other's answer.
+#[derive(Default, PartialEq)]
+struct DeckEdit {
+    deck: Deck,
+    added: Deck,
+}
 
 impl Builder {
     /// The collection (`DECK_CARDS` cards, 240 unless set) and the starter deck.
@@ -135,11 +150,10 @@ impl Builder {
         (self.deck.seq(), self.deck.read(|rows| rows.values().map(|s| (s.id.clone(), s.count)).collect()))
     }
 
-    /// Saves `deck` (the page's send `draft`) if the saved deck is still at `version` of
-    /// `generation` and the rules allow it. A submit key already applied answers as it did then,
-    /// whatever the deck: the page sent it again because the answer was lost, and the draft says
-    /// which deck was saved.
-    pub fn save(&self, generation: &str, version: u64, deck: Deck, key: &SubmitKey, draft: u64) -> Outcome {
+    /// Saves the edit if the deck is still at its base version and the rules allow it. A retry
+    /// of the same edit returns the original receipt. Draft labels attempts in the script, not
+    /// mutations: the receipt always names the original draft.
+    fn save(&self, generation: &str, base: u64, edit: DeckEdit, key: &SubmitKey, draft: u64) -> Outcome {
         let mut saves = self.lock();
         let at = Instant::now();
         while saves.order.front().is_some_and(|(applied, _)| at.duration_since(*applied) >= self.kept_for) {
@@ -149,18 +163,23 @@ impl Builder {
                 saves.forgotten_through = saves.forgotten_through.max(forgotten.version);
             }
         }
-        if let Some(applied) = saves.by_key.get(key) {
-            return Outcome::Saved { version: applied.version, draft: applied.draft };
-        }
         let now = self.deck.seq();
         if generation != self.generation() {
             // Every key and save of that generation went with the restart.
             return Outcome::Stale { version: now, unsure: false };
         }
-        if version != now {
-            return Outcome::Stale { version: now, unsure: saves.forgotten_through > version };
+        if let Some(applied) = saves.by_key.get(key) {
+            return if applied.base == base && applied.edit == edit {
+                Outcome::Saved { version: applied.version, draft: applied.draft }
+            } else {
+                Outcome::KeyConflict { version: applied.version, draft: applied.draft }
+            };
         }
-        if let Err(refusal) = cards::check(&deck, |id| self.card(id)) {
+        if base != now {
+            return Outcome::Stale { version: now, unsure: saves.forgotten_through > base };
+        }
+        let deck = &edit.deck;
+        if let Err(refusal) = cards::check(deck, |id| self.card(id)) {
             return Outcome::Refused(now, refusal);
         }
         // Read before the write: every save holds the lock, so nothing writes in between.
@@ -169,21 +188,21 @@ impl Builder {
             for id in gone {
                 tx.remove(&id);
             }
-            for (id, &count) in &deck {
+            for (id, &count) in deck {
                 if tx.get(id).map(|s| s.count) != Some(count) {
                     tx.insert(Slot { id: id.clone(), count });
                 }
             }
         });
         let version = self.deck.seq();
-        saves.by_key.insert(key.clone(), Applied { draft, version });
+        saves.by_key.insert(key.clone(), Applied { base, edit, draft, version });
         saves.order.push_back((at, key.clone()));
         Outcome::Saved { version, draft }
     }
 
     /// The deck a form posted: each card with its count, then the card an Add button names, or
     /// the picked cards for Add selected (a browser without JavaScript). A cleared count is none.
-    fn posted(&self, input: &DeckInput) -> Result<Deck, Refusal> {
+    fn posted(input: &DeckInput) -> Result<DeckEdit, Refusal> {
         if input.card.len() != input.count.len() {
             return Err(Refusal::NotANumber);
         }
@@ -194,13 +213,14 @@ impl Builder {
             let n = deck.entry(id.clone()).or_default();
             *n = n.saturating_add(copies);
         }
-        let added = input.add.iter().chain(input.add_picked.as_ref().map_or(&[][..], |_| &input.pick[..]));
-        for id in added {
+        let mut added = Deck::new();
+        for id in input.additions() {
+            *added.entry(id.clone()).or_default() += 1;
             let n = deck.entry(id.clone()).or_default();
             *n = n.saturating_add(1);
         }
         deck.retain(|_, n| *n > 0);
-        Ok(deck)
+        Ok(DeckEdit { deck, added })
     }
 }
 
@@ -283,6 +303,12 @@ pub struct DeckInput {
     pub sort: Option<Sort>,
 }
 
+impl DeckInput {
+    fn additions(&self) -> impl Iterator<Item = &String> {
+        self.add.iter().chain(self.add_picked.as_ref().map_or(&[][..], |_| &self.pick[..]))
+    }
+}
+
 async fn deck_feed(State(builder): State<Builder>) -> FeedResponse<Slot> {
     builder.deck.snapshot()
 }
@@ -302,36 +328,26 @@ fn deck_page(req: &Req, builder: &Builder, view: &DeckQuery, answer: &Answer, st
     req.page_with_status(status, html! { <views::Layout req={req} title="Deck builder">{screen}</views::Layout> })
 }
 
-/// Saves the deck. An action answers with the save note and, for a successful form submit without
-/// the builder script, the saved lines and their version. Without the runtime a saved deck goes
-/// back to the page and a refused one is the page with the reason.
+/// Saves the deck. The script reads its note; the fallback form also needs its version and any
+/// server changes. Without the runtime a save redirects and a refusal draws the page.
 async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckInput>) -> HtmlResult {
-    let outcome = match builder.posted(&input) {
+    let outcome = match Builder::posted(&input) {
         Ok(deck) => builder.save(&input.generation, input.version, deck, &input.submit, input.draft),
         Err(refusal) => Outcome::Refused(builder.saved().0, refusal),
     };
     let (answer, status) = match &outcome {
         Outcome::Saved { version, draft } => (Answer::Saved { version: *version, draft: *draft }, StatusCode::OK),
+        Outcome::KeyConflict { version, draft } => {
+            (Answer::KeyConflict { version: *version, draft: *draft }, StatusCode::CONFLICT)
+        }
         Outcome::Refused(version, refusal) => {
             (Answer::Refused { version: *version, message: refusal.to_string() }, StatusCode::UNPROCESSABLE_ENTITY)
         }
         Outcome::Stale { version, unsure } => (Answer::Stale { version: *version, unsure: *unsure }, StatusCode::CONFLICT),
     };
     if let Some(action) = req.action() {
-        // The script supplies a nonzero draft and takes the version from the note, which also
-        // lets it reconcile a retried answer with its feed. The plain form needs the lines
-        // and version from the same snapshot, even if another save followed this answer's write.
-        if let Answer::Saved { draft: 0, .. } = answer {
-            let (version, saved) = builder.saved();
-            let lines = views::deck_lines(&builder, &saved);
-            return action.patch_with_status(
-                status,
-                html! {
-                    <DeckVersion bundle={DeckBuilderRefs} version={version} />
-                    <DeckLines bundle={DeckBuilderRefs} lines={&lines} />
-                    <SaveNote answer={&answer} />
-                },
-            );
+        if input.draft == 0 && (status.is_success() || status == StatusCode::CONFLICT) {
+            return fallback(action, req.t(), &builder, &input, answer, status);
         }
         return action.patch_with_status(status, SaveNote { answer: &answer });
     }
@@ -340,6 +356,78 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
         Outcome::Saved { .. } => req.redirect(&url::Home { view }),
         _ => deck_page(&req, &builder, &view, &answer, status),
     }
+}
+
+/// A successful Save already has the submitted fields, including cleared rows: keep their
+/// controls so an edit made after sending still reaches a queued submit. Only Add changes
+/// fields on the server. A newer snapshot cannot be reconciled by advancing the version:
+/// draw it as a conflict, which also stops the runtime from sending any queued submit.
+fn fallback(
+    action: corten::Action<'_>,
+    t: Msg,
+    builder: &Builder,
+    input: &DeckInput,
+    mut answer: Answer,
+    mut status: StatusCode,
+) -> HtmlResult {
+    use corten::view::Append;
+
+    let bundle = DeckBuilderRefs;
+    if let Answer::Saved { version, .. } = answer
+        && version == input.version
+        && input.additions().next().is_none()
+        && version == builder.deck.seq()
+    {
+        return action.patch(html! {
+            <DeckVersion bundle={bundle} version={version} />
+            <SaveNote answer={&answer} />
+        });
+    }
+    let (version, saved) = builder.saved();
+    if let Answer::Saved { version: applied, .. } = answer
+        && applied != version
+    {
+        answer = Answer::Superseded { version };
+        status = StatusCode::CONFLICT;
+    }
+    let lines = views::deck_lines(builder, &saved);
+    let lines = lines.as_slice();
+    let total = lines.iter().map(|line| line.count).sum();
+    let text = views::deck_list(lines);
+    let mut appended = Vec::new();
+    let mut updated = Vec::new();
+    if status.is_success() {
+        for line in lines {
+            if input.additions().any(|id| *id == line.card.id) {
+                if input.card.contains(&line.card.id) {
+                    updated.push(line);
+                } else {
+                    appended.push(line);
+                }
+            }
+        }
+    }
+    action.patch_with_status(
+        status,
+        html! {
+            if status == StatusCode::CONFLICT {
+                <DeckGeneration bundle={bundle} generation={builder.generation()} />
+                <DeckLines bundle={bundle} lines={lines} />
+            } else {
+                for line in updated {
+                    <SavedLine bundle={bundle} line={line} />
+                }
+                if !appended.is_empty() {
+                    {Append(DeckLinesId, html! { for line in appended { <SavedLine bundle={bundle} line={line} /> } })}
+                    <DeckEmpty bundle={bundle} empty={false} />
+                }
+            }
+            <DeckVersion bundle={bundle} version={version} />
+            <DeckTotal bundle={bundle} total={total} t={t} />
+            <DeckExport bundle={bundle} text={&text} />
+            <SaveNote answer={&answer} />
+        },
+    )
 }
 
 #[cfg(test)]
@@ -408,12 +496,11 @@ mod tests {
         let (status, note) = read(&res);
         assert!(status == StatusCode::OK && note.contains(r#""Saved",1,1,false)"#), "{note}");
         assert_eq!(builder.deck.seq(), 1);
-        // The same key with a changed deck (made while the answer was lost): nothing is written,
-        // and the answer names the send that was saved, so the page sends the change next.
+        // A changed retry conflicts. Only the earlier send is named in the receipt.
         deck.pop();
         let res = saving(&app, 0, &deck, &key).field(f.draft, 2).mode(Mode::Action).await;
         let (status, note) = read(&res);
-        assert!(status == StatusCode::OK && note.contains(r#""Saved",1,1,false)"#), "{note}");
+        assert!(status == StatusCode::CONFLICT && note.contains(r#""KeyConflict",1,1,false)"#), "{note}");
         assert_eq!((builder.deck.seq(), builder.saved().1.get("salt-oracle")), (1, Some(&1)));
         // A new key, built on the old version, is stale.
         let res = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
@@ -422,7 +509,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_form_save_patches_the_saved_lines_and_version_for_the_next_submit() {
+    async fn a_form_save_leaves_submitted_rows_in_place_and_add_patches_only_its_rows() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
         let app = app(builder.clone()).test();
         let mut deck = starter();
@@ -435,7 +522,12 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="1""#), "{patch}");
         assert!(patch.contains(r#""Saved",1,0,false)"#), "{patch}");
-        assert!(patch.contains(r#"id="deck-lines""#) && patch.contains(r#"name="card" value="salt-oracle""#), "{patch}");
+        assert!(
+            patch.contains(r#"id="deck-lines" data-append"#) && patch.contains(r#"name="card" value="salt-oracle""#),
+            "{patch}"
+        );
+        assert!(!patch.contains(r#"name="card" value="gravel-sprite""#), "{patch}");
+        assert!(patch.contains(r#"id="deck-total""#) && patch.contains("1 Salt Oracle"), "{patch}");
 
         let gravel = deck.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap();
         gravel.1 = 1;
@@ -443,16 +535,35 @@ mod tests {
         let (status, patch) = read(&second);
         assert_eq!(status, StatusCode::OK);
         assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="2""#), "{patch}");
-        assert!(!patch.contains(r#"name="card" value="salt-oracle""#), "{patch}");
+        assert!(!patch.contains("deck-lines") && !patch.contains("deck-line-"), "{patch}");
         assert_eq!((builder.deck.seq(), builder.saved().1.get("gravel-sprite")), (2, Some(&1)));
 
-        // A replay still acknowledges the first write, but redraws the current form and version.
-        let replay = saving(&app, 0, &starter(), &key).field(f.add, "salt-oracle").mode(Mode::Action).await;
+        // The first write really happened, but it can no longer reconcile the fallback form.
+        let mut original = starter();
+        original.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap().1 = 2;
+        let replay = saving(&app, 0, &original, &key).field(f.add, "salt-oracle").mode(Mode::Action).await;
         let (status, patch) = read(&replay);
-        assert_eq!(status, StatusCode::OK);
-        assert!(patch.contains(r#""Saved",1,0,false)"#), "{patch}");
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(patch.contains("Saved, but the deck has since changed") && patch.contains(r#"<ul id="deck-lines""#), "{patch}");
         assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="2""#), "{patch}");
         assert!(!patch.contains(r#"name="card" value="salt-oracle""#), "{patch}");
+    }
+
+    #[tokio::test]
+    async fn add_reconciles_an_existing_row_even_when_the_committed_deck_does_not_change() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let mut fields = starter();
+        fields.iter_mut().find(|(id, _)| *id == "gravel-sprite").unwrap().1 -= 1;
+        let res = saving(&app, 0, &fields, &submit_key()).field(DeckInput::FIELDS.add, "gravel-sprite").mode(Mode::Action).await;
+        let (status, patch) = read(&res);
+        assert_eq!(status, StatusCode::OK);
+        assert!(patch.contains(r#"id="deck-line-gravel-sprite""#) && !patch.contains("data-append"), "{patch}");
+        assert_eq!((builder.deck.seq(), builder.saved().1.get("gravel-sprite")), (0, Some(&3)));
+    }
+
+    fn edit(deck: Deck) -> DeckEdit {
+        DeckEdit { deck, ..DeckEdit::default() }
     }
 
     #[test]
@@ -471,15 +582,15 @@ mod tests {
         };
         // A page saved twice before the restart: version 2.
         let before = Builder::from(60, Some("a"), KEPT_FOR);
-        before.save("a", 0, deck("salt-oracle"), &key(0), 1);
-        assert_eq!(before.save("a", 1, deck("pearl-diver"), &key(1), 2), Outcome::Saved { version: 2, draft: 2 });
+        before.save("a", 0, edit(deck("salt-oracle")), &key(0), 1);
+        assert_eq!(before.save("a", 1, edit(deck("pearl-diver")), &key(1), 2), Outcome::Saved { version: 2, draft: 2 });
         // After it the deck starts again in another generation, and writes as far as version 2:
         // the same number is not the same deck.
         let after = Builder::from(60, Some("b"), KEPT_FOR);
-        after.save("b", 0, deck("lantern-warden"), &key(2), 1);
-        after.save("b", 1, deck("undertow-serpent"), &key(3), 2);
-        assert_eq!(after.save("a", 2, deck("kiln-colossus"), &key(4), 3), Outcome::Stale { version: 2, unsure: false });
-        assert_eq!(after.save("b", 2, deck("kiln-colossus"), &key(4), 3), Outcome::Saved { version: 3, draft: 3 });
+        after.save("b", 0, edit(deck("lantern-warden")), &key(2), 1);
+        after.save("b", 1, edit(deck("undertow-serpent")), &key(3), 2);
+        assert_eq!(after.save("a", 2, edit(deck("kiln-colossus")), &key(4), 3), Outcome::Stale { version: 2, unsure: false });
+        assert_eq!(after.save("b", 2, edit(deck("kiln-colossus")), &key(4), 3), Outcome::Saved { version: 3, draft: 3 });
     }
 
     #[test]
@@ -495,14 +606,14 @@ mod tests {
         deck.insert("pearl-diver".into(), 1);
         // Keys forgotten at once: the first save's answer was lost, and it is sent again later.
         let builder = Builder::from(60, Some(GEN), Duration::ZERO);
-        assert_eq!(builder.save(GEN, 0, deck.clone(), &key(0), 1), Outcome::Saved { version: 1, draft: 1 });
-        assert_eq!(builder.save(GEN, 0, deck.clone(), &key(0), 2), Outcome::Stale { version: 1, unsure: true });
+        assert_eq!(builder.save(GEN, 0, edit(deck.clone()), &key(0), 1), Outcome::Saved { version: 1, draft: 1 });
+        assert_eq!(builder.save(GEN, 0, edit(deck.clone()), &key(0), 2), Outcome::Stale { version: 1, unsure: true });
         // Built on the version after that save, nothing forgotten could be it.
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        builder.save(GEN, 0, deck.clone(), &key(0), 1);
+        builder.save(GEN, 0, edit(deck.clone()), &key(0), 1);
         deck.insert("pearl-diver".into(), 2);
-        builder.save(GEN, 1, deck.clone(), &key(1), 2);
-        assert_eq!(builder.save(GEN, 1, deck, &key(2), 3), Outcome::Stale { version: 2, unsure: false });
+        builder.save(GEN, 1, edit(deck.clone()), &key(1), 2);
+        assert_eq!(builder.save(GEN, 1, edit(deck), &key(2), 3), Outcome::Stale { version: 2, unsure: false });
     }
 
     #[tokio::test]
@@ -590,11 +701,8 @@ mod tests {
         let (status, page) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert_eq!(page.matches(r#"<tr data-key=""#).count(), 60, "every card is a CollectionRow");
-        assert_eq!(
-            page.matches(r#"<li data-key=""#).count(),
-            cards::STARTER.len() + 1,
-            "every deck line is a DeckLine, and the template's"
-        );
+        assert_eq!(page.matches(r#"id="deck-line-"#).count(), cards::STARTER.len() + 1);
+        assert!(page.contains(r#"id="deck-line-""#), "the template has its own empty key");
         assert!(page.contains("/scripts/deck_builder.js\">") && page.contains("/scripts/save_note.js\">"), "{page}");
         // The page as loaded has had no save answered: its note tells the builder nothing.
         assert!(page.contains(r#"save_note.answered($t,"Loaded",0,0,false)"#), "{page}");

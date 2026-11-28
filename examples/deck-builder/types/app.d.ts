@@ -6,7 +6,7 @@
  * build, then `tsc` where a script still compares the old name. `Loaded` is the page as loaded,
  * before any save, for which the note tells the builder nothing.
  */
-export type SaveOutcome = "Loaded" | "Saved" | "Refused" | "Stale";
+export type SaveOutcome = "Loaded" | "Saved" | "KeyConflict" | "Refused" | "Stale";
 
 /** A card in the saved deck and its copies: the rows of the deck's feed. */
 export interface Slot {

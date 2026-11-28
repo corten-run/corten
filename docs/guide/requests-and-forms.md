@@ -1093,8 +1093,9 @@ posts it again, and the runtime sends a `data-patch` form again with it after a 
 arrives, any status below 500, the runtime gives the form a new key, so the next submit is a new
 one. A patch never sets the key: the runtime keeps the form's own over the one the patch drew, so
 a 5xx patch (`Refusal::Upstream`) cannot swap in a fresh key before the retry. A form sent again before the first had an answer (a
-browser without JavaScript, a data client) is the same submission: the app answers it with what
-it did the first time, and the user sees that and can send the change. A `data-patch` form's
+browser without JavaScript, a data client) can replay the same submission: compare its effective
+write with the one recorded under the key and return the first outcome for a match. If the
+write differs, refuse it explicitly; the key does not mean the new edit was saved. A `data-patch` form's
 change made while its write is out waits for the answer instead, and goes under the new key
 (below). The key is the app's to store, next to the write (Corten keeps
 no store); `corten_cluster::begin` takes it as its idempotency key. It answers a write sent again

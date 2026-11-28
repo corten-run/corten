@@ -23,6 +23,12 @@ Without JavaScript the same deck is built with forms: Add and Add selected post 
 cards added, Save posts the counts as typed, and the filter and the column headers are a `GET`
 form and links the server answers.
 
+If only the builder module fails to load, the runtime still enhances the form. Save keeps
+the submitted rows in place, including cleared counts that can be edited again before a reload.
+Add appends new rows or replaces just the rows it changes. The total and main text export show
+what was committed. An identical retry cannot add cards twice; a changed retry with the same
+key gets a conflict instead of a misleading Saved note.
+
 ## Run it
 
 From this directory:

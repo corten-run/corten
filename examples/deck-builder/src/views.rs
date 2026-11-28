@@ -21,7 +21,10 @@ mod preview_export;
 mod save_note;
 
 pub use collection_row::CollectionRow;
-pub use deck_builder::{DeckBuilder, DeckBuilderRefs, DeckFormId, DeckLines, DeckVersion};
+pub use deck_builder::{
+    DeckBuilder, DeckBuilderRefs, DeckEmpty, DeckExport, DeckFormId, DeckGeneration, DeckLines, DeckLinesId, DeckTotal,
+    DeckVersion, SavedLine,
+};
 pub use deck_line::DeckLine;
 pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
 pub use draft_notes::DraftNotes;
@@ -148,7 +151,7 @@ pub fn screen<'a>(
     }
 }
 
-/// The form's lines, in the same order on the page and after a fallback save.
+/// The saved lines in the page's initial order, also used by the text export.
 pub fn deck_lines<'a>(builder: &'a Builder, saved: &Deck) -> Vec<Line<'a>> {
     let mut lines: Vec<_> = saved.iter().filter_map(|(id, &count)| builder.card(id).map(|card| Line { card, count })).collect();
     lines.sort_by_cached_key(|l| (l.card.cost, l.card.name.to_lowercase()));

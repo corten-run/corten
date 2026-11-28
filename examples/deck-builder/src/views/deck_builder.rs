@@ -20,6 +20,22 @@ pub struct DeckFormId;
 #[derive(Id)]
 struct DeckVersionId;
 
+#[derive(Id)]
+struct DeckGenerationId;
+
+#[component]
+pub fn DeckGeneration(bundle: DeckBuilderRefs, generation: &str) -> impl Patch {
+    html! {
+        <input
+            ref={bundle.generation_ref()}
+            id={DeckGenerationId}
+            type="hidden"
+            name={DeckInput::FIELDS.generation}
+            value={generation}
+        >
+    }
+}
+
 #[component]
 pub fn DeckVersion(bundle: DeckBuilderRefs, version: u64) -> impl Patch {
     let field = DeckInput::FIELDS.version;
@@ -27,12 +43,17 @@ pub fn DeckVersion(bundle: DeckBuilderRefs, version: u64) -> impl Patch {
 }
 
 #[derive(Id)]
-struct DeckLinesId;
+pub struct DeckLinesId;
 
 #[derive(Id)]
 struct DeckEmptyId;
 
-/// The posted card/count pairs, redrawn from the saved deck for a fallback submit.
+#[component(css = DeckBuilder)]
+pub fn DeckEmpty(bundle: DeckBuilderRefs, empty: bool) -> impl Patch {
+    html! { <p id={DeckEmptyId} ref={bundle.empty()} class={Empty} hidden={!empty}>"Drag cards here, or press Add."</p> }
+}
+
+/// The posted card/count pairs, redrawn together only when the fallback form conflicts.
 #[component(css = DeckBuilder)]
 pub fn DeckLines<'a>(bundle: DeckBuilderRefs, lines: &'a [Line<'a>]) -> impl Patch {
     html! {
@@ -49,7 +70,22 @@ pub fn DeckLines<'a>(bundle: DeckBuilderRefs, lines: &'a [Line<'a>]) -> impl Pat
                 />
             }
         </ul>
-        <p id={DeckEmptyId} ref={bundle.empty()} class={Empty} hidden={!lines.is_empty()}>"Drag cards here, or press Add."</p>
+        <DeckEmpty bundle={bundle} empty={lines.is_empty()} />
+    }
+}
+
+#[component]
+pub fn SavedLine<'a>(bundle: DeckBuilderRefs, line: &'a Line<'a>) -> impl Patch {
+    html! {
+        <DeckLine
+            id={&line.card.id}
+            name={&line.card.name}
+            kind={line.card.kind.as_str()}
+            cost={line.card.cost}
+            count={line.count}
+            owned={line.card.owned}
+            bundle={bundle}
+        />
     }
 }
 
@@ -66,6 +102,19 @@ struct DeckHeadingId;
 /// The deck as text, which the Copy button copies.
 #[derive(Id)]
 struct DeckListId;
+
+#[derive(Id)]
+struct DeckTotalId;
+
+#[component]
+pub fn DeckTotal(bundle: DeckBuilderRefs, total: u32, t: Msg) -> impl Patch {
+    html! { <output id={DeckTotalId} ref={bundle.total()}>{t.number(total)}</output> }
+}
+
+#[component]
+pub fn DeckExport(bundle: DeckBuilderRefs, text: &str) -> impl Patch {
+    html! { <textarea ref={bundle.list()} id={DeckListId} readonly rows="8" aria-label="Deck list">{text}</textarea> }
+}
 
 /// The curve's height, in the chart's units: the tallest bar's.
 const BAR: u32 = 48;
@@ -102,13 +151,16 @@ pub fn DeckBuilder<'a>(
     answer: &'a Answer,
 ) -> impl Render {
     let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
-    let (template, form, total, bars, tallies, kinds) = refs();
+    let (template, form, bars, tallies, kinds) = refs();
     let lines_ref: Ref<el::HTMLUListElement, RowsOf<{ view_id("DeckLine") }>> = refs();
     let lift: Ref<el::HTMLButtonElement> = refs();
     let copies: Ref<el::HTMLInputElement> = refs();
     let empty: Ref<el::HTMLParagraphElement> = refs();
     let version_ref: Ref<el::HTMLInputElement> = refs();
-    let (undo, redo, status, conflict, list, announce, draft, generation_ref, keep) = refs();
+    let (undo, redo, status, conflict, announce, draft, keep) = refs();
+    let total: Ref<el::HTMLOutputElement> = refs();
+    let list: Ref<el::HTMLTextAreaElement> = refs();
+    let generation_ref: Ref<el::HTMLInputElement> = refs();
     let (unsure, previews) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
@@ -287,7 +339,10 @@ pub fn DeckBuilder<'a>(
             >
                 <div class={Head}>
                     <h2 id={DeckHeadingId}>"Deck"</h2>
-                    <p class={Total}><output ref={total}>{t.number(size)}</output>" / "{DECK_SIZE}" cards"</p>
+                    <p class={Total}>
+                        <DeckTotal bundle={DeckBuilderRefs} total={size} t={t} />
+                        " / "{DECK_SIZE}" cards"
+                    </p>
                     <div class={History}>
                         <button ref={undo} type="button" disabled aria-keyshortcuts="Control+Z" on:click={js::undo(parts)}>
                             "Undo"
@@ -344,7 +399,7 @@ pub fn DeckBuilder<'a>(
                     }
                 </dl>
                 <form ref={form} id={DeckFormId} method="post" action={url::Save} data-patch novalidate>
-                    <input ref={generation_ref} type="hidden" name={f.generation} value={generation}>
+                    <DeckGeneration bundle={DeckBuilderRefs} generation={generation} />
                     <DeckVersion bundle={DeckBuilderRefs} version={version} />
                     {SubmitKey::field(f.submit)}
                     <input ref={draft} type="hidden" name={f.draft} value="0">
@@ -366,7 +421,7 @@ pub fn DeckBuilder<'a>(
                 </template>
                 <details class={Export}>
                     <summary>"Deck list"</summary>
-                    <textarea ref={list} id={DeckListId} readonly rows="8" aria-label="Deck list">{text}</textarea>
+                    <DeckExport bundle={DeckBuilderRefs} text={&text} />
                     <CopyButton text={DeckListId} label="Copy" copied="Copied" class={()} />
                     <DeckPreview root={previews} instance="a" label="Plan A" total={size} text={&text} />
                     <DeckPreview root={previews} instance="b" label="Plan B" total={size} text={&text} />

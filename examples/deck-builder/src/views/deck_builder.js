@@ -139,6 +139,8 @@ const names = new Intl.Collator(document.documentElement.lang || undefined);
  */
 export function start(parts, feed, signal) {
   const s = kept();
+  // The template shares the server row's markup, but copies must not inherit its fixed ID.
+  parts.template.content.firstElementChild?.removeAttribute("id");
   s.signal = signal;
   s.generation = parts.generation.value;
   s.version = Number(parts.version.value);
@@ -371,19 +373,30 @@ function save(s, parts) {
 }
 
 /**
- * The save's answer, from the note it put on the page. Saved: the send it names (this one, or,
- * when this one went with the key of a send whose answer was lost, that one) is the saved deck at
- * the new version, and what changed since goes next. Refused: the page goes back to the saved deck,
- * and its history to what it was then; the note says why. Stale: another tab saved first and this
- * key saved nothing, which the feed shows (now, or when it arrives). Then whatever the feed brought
- * while the save was on its way is taken.
+ * The save's answer, from the note it put on the page. Saved: the send it names is the saved deck
+ * at the new version. KeyConflict refuses the new edit but identifies the earlier send that used
+ * this key; in both cases only the named draft is known saved, and what changed since goes next.
+ * Refused: the page and its history go back to the saved deck; the note says why. Stale: another
+ * tab saved first and this key saved nothing, which the feed shows (now, or when it arrives).
+ * Then whatever the feed brought while the save was on its way is taken.
  * @param {DeckAnswered} event @param {Parts} parts
  */
 export function answered(event, parts) {
   const s = kept();
+  // The runtime discards submits queued behind a 409. Review the receipt after it finishes
+  // drawing the conflict, then send any still-unsaved edit with the new submit key.
+  if (event.outcome === "KeyConflict") {
+    setTimeout(() => { if (!s.signal?.aborted) takeAnswer(s, event, parts); });
+  } else {
+    takeAnswer(s, event, parts);
+  }
+}
+
+/** @param {State} s @param {DeckAnswered} event @param {Parts} parts */
+function takeAnswer(s, event, parts) {
   s.sending = false;
   say(parts, "");
-  if (event.outcome === "Saved") {
+  if (event.outcome === "Saved" || event.outcome === "KeyConflict") {
     const sent = s.unanswered.find((u) => u.draft === event.draft);
     if (sent && event.version >= s.version) {
       known(s, parts, sent.deck, s.generation, event.version);
@@ -410,9 +423,9 @@ export function answered(event, parts) {
  * restarted, and its numbers start again), or a save's answer came (whatever the feed brought
  * meanwhile waited for it). The deck is one this page sent whose answer was lost: the
  * page knows it now and sends what is left. A send's answer was lost and the deck is not one of
- * them: the server is asked by sending again (with the same key, which saves nothing twice and
- * says which deck it saved), unless it cannot be reached. Else another tab saved it: with nothing
- * unsaved here the page takes it; with a change of its own, the player chooses.
+ * them: the server is asked by sending again (the same key cannot make a second write, but
+ * its receipt can identify the earlier save), unless it cannot be reached. Else another tab
+ * saved it: with nothing unsaved here the page takes it; with a change of its own, the player chooses.
  * @param {State} s @param {Parts} parts
  */
 function heard(s, parts) {

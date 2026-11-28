@@ -183,9 +183,13 @@ browser still matches `scripting: enabled` if a module fails to load or an exten
 If a control submits a working server form, keep it drawn even when scripts are enabled. The
 handler can filter as the user types or save as they edit, but the button still works if the
 handler does not load. [The deck-builder smoke](../../examples/deck-builder/smoke.mjs) blocks the
-builder's module in Chromium, Firefox and WebKit, then filters, saves twice, and checks that Add
-followed by Save keeps the added card. Each successful fallback save patches the form's card
-and count fields and their hidden version from the same saved deck, as well as drawing the note.
+builder's module in Chromium, Firefox and WebKit, then filters, saves, and checks that Add
+followed by Save keeps the added card. A fallback Save leaves the submitted rows in place so
+edits made while it was pending can still be sent. Add changes only the affected rows, with a
+typed ID per card so the runtime can match its count in a replacement. The answer draws the
+version and note, and refreshes the total and text export when the saved deck changes. A stale
+form or a changed retry with an already-used submit key gets a conflict drawing the saved deck,
+not a success that lets the next queued edit overwrite it.
 
 ### A value both sides compute
 

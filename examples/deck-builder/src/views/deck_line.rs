@@ -3,6 +3,10 @@ use corten::prelude::*;
 use super::deck_builder::{DeckBuilderRefs, MoveHelpId};
 use crate::app::DeckInput;
 
+/// Stable patch identity: every line has a count field with the same name.
+#[derive(Id)]
+struct DeckLineId<'a>(&'a str);
+
 /// A card in the deck and its copies. `view` makes `DeckLine` in `corten/views`: the builder's
 /// script makes and orders these from the deck it shows (`rows(lines, DeckLine, template).replace`),
 /// filled from the collection row of the same card, so every hole is data a script has, and the
@@ -21,10 +25,12 @@ pub fn DeckLine<'a>(
     count: u32,
     owned: u32,
     bundle: DeckBuilderRefs,
-) -> impl Render {
+) -> impl Patch {
     let f = DeckInput::FIELDS;
+    // The server's patch anchor is fixed. The view's key must stay a writable hole for rows().
+    let patch_id = DeckLineId(id);
     html! {
-        <li key={id} data-kind={kind}>
+        <li key={id} id={patch_id} data-kind={kind}>
             <input type="hidden" name={f.card} value={id}>
             <button ref={bundle.lift()} type="button" draggable="true" aria-label={name} aria-describedby={MoveHelpId}>
                 "⠿"
