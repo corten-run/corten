@@ -2444,8 +2444,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * noted by the page as it is drawn (`noteSaving`, armed before the press), and the note read
      * within the same budget. The 30 s are one budget (`steps`), checked as each step starts, so no
      * step starts once they have passed.
+     * @param {() => void} [beforePress] arms a route at the same boundary as the read log
      */
-    const submit = async () => {
+    const submit = async (beforePress = () => {}) => {
       const sending = steps(30_000, "the alert was not sent and drawn saving within 30 s");
       await sending.step(() => page.fill("input[name=above]", "150"));
       await sending.step(() => page.focus(save));
@@ -2453,6 +2454,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       await sending.step(() => {
         pressedAt = performance.now();
         startWrite();
+        beforePress();
         return page.keyboard.press("Enter");
       });
       await sending.poll(notedSaving);
@@ -2674,8 +2676,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // sent, is parsed in the page as the runtime parses a patch (`readAgainFault`): its status line
     // among its elements and its last read-again tag `ReadAgain::from`'s, asking again from the held
     // read's address after `AGAIN_SECONDS`; an answer that is not is never sent, and fails the check.
-    // It is held only when the server answered the read as a patch (status 2xx with `corten-patch`,
-    // without which the runtime draws nothing and asks nothing again, `readPatchAgain`).
+    // The fixture requires a 2xx answer with `corten-patch`. The runtime requires the header and
+    // same origin, but does not require 2xx (`readPatchAgain`).
     // The hold must be taken within 5 s of the press, before the page leaves, and the answer confirmed
     // within 15 s of the read reaching the route. The held read must still be under way as the
     // departure starts (the check has heard it neither finish nor fail, and the route has sent nothing
@@ -2707,6 +2709,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     /** @type {() => void} */
     let letGo = () => {};
     const going = new Promise((resolve) => (letGo = () => resolve(undefined)));
+    let holdStarted = false;
     let holdOver = false;
     /** The mark of the held read's answer, this run's own: its `smoke-held` header and its status line's `data-smoke-held`. */
     const heldMark = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -2732,7 +2735,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     };
     const holdRead = async (/** @type {import("@playwright/test").Route} */ route) => {
       const r = route.request();
-      if (holdOver || held !== null || r.method() !== "GET" || r.headers()["corten"] !== "action") return letThrough(route);
+      if (!holdStarted || holdOver || held !== null || !alertsPartRead(r)) return letThrough(route);
       held = r;
       heldTime = performance.now();
       heldIn(r);
@@ -2752,7 +2755,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         /** @type {string} */
         let answer;
         if (!res.ok() || !patch) {
-          heldFault = `the server answered the held read with no patch (status ${res.status()}${patch ? "" : ", no corten-patch header"}), so no answer that asks again could be held`;
+          heldFault = `the fixture requires a 2xx patch to hold (got status ${res.status()}${patch ? "" : ", no corten-patch header"})`;
           await ex.send(5000, "its abort", heldSend(() => route.abort()));
           return;
         } else if (body.includes(savingLine)) {
@@ -2852,14 +2855,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     };
     /** Whether News was drawn in the document the patch's page was in (a client navigation, true) or a new one (a full load, false); null if not read. @type {boolean | null} */
     let inPlace = null;
+    const departureFault = process.env.SMOKE_PATCH_DEPARTURE_FAULT;
     try {
       page.on("requestfinished", onHeldFinished);
       page.on("requestfailed", onHeldFailed);
-      await within(5000, "the held-read route was not set within 5 s", page.route("**/alerts?saved=*", holdRead));
+      await within(5000, "the held-read route was not set within 5 s", page.route(alertsPath, holdRead));
       // Before the press, so the held read's own fetch is among those noted.
       await readWithin(
         "the departing page's fetch notes",
-        page.evaluate(({ key, swaps }) => {
+        page.evaluate(({ key, swaps, wrongFirst }) => {
           const w = /** @type {any} */ (window);
           /** By unique `smoke-note` id, whether the page's part fetch had settled. @type {{ id: string, settled: boolean }[]} */
           const reads = [];
@@ -2886,6 +2890,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             return out;
           };
           window.fetch = w.__smokeLeaveWrapper;
+          // The keydown comes before the submit and its POST answer can start the real receipt read.
+          if (wrongFirst) {
+            w.__smokeLeaveWrongFirst = (/** @type {KeyboardEvent} */ e) => {
+              if (e.key !== "Enter") return;
+              removeEventListener("keydown", w.__smokeLeaveWrongFirst, { capture: true });
+              void fetch("/alerts?shown=1&saved=1", { headers: { corten: "action" } }).catch(() => {});
+            };
+            addEventListener("keydown", w.__smokeLeaveWrongFirst, { capture: true });
+          }
           const snapshot = (/** @type {string} */ at) => {
             try {
               if (sessionStorage.getItem(at) === null) sessionStorage.setItem(at, JSON.stringify(reads));
@@ -2900,9 +2913,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             w.__smokeLeaveUnload = () => snapshot(`${key}:unload`);
             addEventListener("beforeunload", w.__smokeLeaveUnload, { capture: true, once: true });
           }
-        }, { key: leaveKey, swaps }),
+        }, { key: leaveKey, swaps, wrongFirst: departureFault === "wrong-first-read" }),
       );
-      await submit();
+      await submit(() => (holdStarted = true));
       // Judged by when the route heard the read (`heldTime`), not by when `submit` returned: a
       // press acknowledged late does not fail a read held in time.
       heldSoon = await notedBy(pressedAt + 5000, () => heldTime, heldCame);
@@ -2941,16 +2954,26 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       if (heldConfirmed) {
         await readWithin(
           "the News page's note of the held answer",
-          page.evaluate((mark) => {
+          page.evaluate(({ mark, transientDraw }) => {
             const w = /** @type {any} */ (window);
-            const shows = () => !!document.querySelector(`[data-smoke-held="${mark}"]`);
-            w.__smokeHeldDrawn = shows();
-            const seen = new MutationObserver(() => {
-              if (shows()) w.__smokeHeldDrawn = true;
+            const selector = `[data-smoke-held="${mark}"]`;
+            /** @param {Node} node */
+            const holds = (node) => node instanceof Element && (node.matches(selector) || !!node.querySelector(selector));
+            w.__smokeHeldDrawn = !!document.querySelector(selector);
+            const seen = new MutationObserver((records) => {
+              if (records.some((r) => Array.from(r.addedNodes).some(holds))) w.__smokeHeldDrawn = true;
             });
             w.__smokeHeldSeen = seen;
-            seen.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-          }, heldMark),
+            seen.observe(document, { subtree: true, childList: true });
+            if (transientDraw) {
+              const subtree = document.createElement("div");
+              const line = document.createElement("p");
+              line.setAttribute("data-smoke-held", mark);
+              subtree.append(line);
+              document.body.append(subtree);
+              subtree.remove();
+            }
+          }, { mark: heldMark, transientDraw: departureFault === "transient-draw" }),
         );
         releasedAt = performance.now();
         letGo();
@@ -2960,7 +2983,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       await cleanUp(
         () => (holdOver = true),
         () => letGo(),
-        () => within(5000, "the held-read route was not removed within 5 s", page.unroute("**/alerts?saved=*", holdRead)),
+        () => within(5000, "the held-read route was not removed within 5 s", page.unroute(alertsPath, holdRead)),
         () => {
           page.off("requestfinished", onHeldFinished);
           page.off("requestfailed", onHeldFailed);
@@ -2976,10 +2999,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               if (w.__smokeLeaveWrapper && window.fetch === w.__smokeLeaveWrapper) window.fetch = w.__smokeLeaveFetch;
               if (w.__smokeLeavePress) removeEventListener("click", w.__smokeLeavePress, { capture: true });
               if (w.__smokeLeaveUnload) removeEventListener("beforeunload", w.__smokeLeaveUnload, { capture: true });
+              if (w.__smokeLeaveWrongFirst) removeEventListener("keydown", w.__smokeLeaveWrongFirst, { capture: true });
               delete w.__smokeLeaveWrapper;
               delete w.__smokeLeaveFetch;
               delete w.__smokeLeavePress;
               delete w.__smokeLeaveUnload;
+              delete w.__smokeLeaveWrongFirst;
               sessionStorage.removeItem(key);
               sessionStorage.removeItem(`${key}:unload`);
             }, leaveKey),
@@ -2999,7 +3024,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             }),
           );
     const heldAt = held === null ? -1 : again.indexOf(held);
-    const holdsReceipt = heldAt >= writeFrom && heldReceipt !== null && again[heldAt].url() === heldReceipt;
+    if (departureFault === "wrong-first-read") {
+      console.log(`patch departure control: reads after press ${again.slice(writeFrom).map((r) => new URL(r.url()).search).join(", ")}; held read ${heldAt < 0 ? "none" : heldAt - writeFrom + 1}`);
+    }
+    const heldFirst = heldAt === writeFrom;
+    const holdsReceipt = heldFirst && heldReceipt !== null && again[heldAt].url() === heldReceipt;
     const afterHeld = heldAt < 0 ? [] : again.slice(heldAt + 1);
     const delivered = releasedAt !== null && releaseFault === "" && heldFinish !== null && "at" in heldFinish && heldFinish.at - releasedAt <= 5000;
     // Without the Navigation API the page leaves by a full load: its document, with the runtime's
@@ -3016,9 +3045,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       !(heldSoon && heldAt >= writeFrom)
         ? "no part read held within 5 s of the press, so the page did not leave with one under way"
         : !holdsReceipt
-          ? heldReceipt === null
-            ? "no receipt read from the press's POST answer"
-            : `the held read was of ${again[heldAt].url()}, not the press's POST receipt ${heldReceipt}`
+          ? !heldFirst
+            ? `the hold took read ${heldAt - writeFrom + 1} after the press, not the first (${again[writeFrom].url()})`
+            : heldReceipt === null
+              ? "no receipt read from the press's POST answer"
+              : `the held read was of ${again[heldAt].url()}, not the press's POST receipt ${heldReceipt}`
           : !heldConfirmed
             ? `the held read's answer was not confirmed as one that asks again${heldFault ? `: ${heldFault}` : " within 15 s"}, so its end would not show the page stopping`
             : !leftAsMeant

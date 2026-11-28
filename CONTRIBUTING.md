@@ -755,14 +755,16 @@ the draw must follow the press within six seconds even if the driver acknowledge
 check waits 2.2 s once it has that note and counts every read logged after the marked request,
 including any sent before the check read the note. The check that navigating away stops a
 patch's reads holds the first part read after the write's press, taken within five seconds of the
-press by the time the route heard it. It must read the address named by the press's own POST answer.
+press by the time the route heard it. The hold and the log match the same alerts part reads,
+regardless of query. The held read must be first in that log from the press on, and must read the
+address named by the press's own POST answer.
 The route fetches and holds its answer until the page has left for News. That answer must ask
 again, since a terminal one (`Saved.`, no tag) ends the reads whether or
 not the page left: it is the server's own while that says `Saving...`, or, once the write has
 landed, the stand-in's answer as the server's while it lands (`Saving...` and a tag asking again
-from the read's own address after one second), held only when the server answered it as a patch
-(a 2xx status with `corten-patch`, without which the runtime draws nothing and asks nothing again),
-and the route parses it in the page as the runtime parses a patch, confirming that it asks again
+from the read's own address after one second). The fixture requires a 2xx answer with
+`corten-patch`; the runtime accepts same-origin `corten-patch` answers regardless of status.
+The route parses the answer in the page as the runtime parses a patch, confirming that it asks again
 within 15 seconds of the read reaching the route; one that does not ask again is
 never sent, and fails the check. The held read must still be under way as the departure starts (the
 check has heard it neither finish nor fail, and the route has sent nothing for it) and when the press
@@ -779,9 +781,14 @@ the old page must record the held fetch's own `smoke-note` as still pending at `
 The failure must be heard after the departure started, no later than five seconds after the
 driver's News title wait returns, and before the answer is let go, so a read that failed in the old
 document before unloading, or one ended by the route's own release or abort, is not taken for the
-departure's. In either case, an observer notes any insertion of the held answer's marked status
-line in News. No part read may follow the held one in the log as it stands 2.2 s later, nor the
-held answer ever enter the News page. The check that a read the server
+departure's. In either case, an observer checks the nodes added in each mutation record, including
+their descendants, for the held answer's marked status line in News. Inserting and removing the
+line in one task still counts. No part read may follow the held one in the log as it stands 2.2 s
+later, nor the held answer ever enter the News page. In Chromium, run the smoke with
+`SMOKE_PATCH_DEPARTURE_FAULT=wrong-first-read` or `SMOKE_PATCH_DEPARTURE_FAULT=transient-draw`
+in the browser runner to make this check fail on purpose: the first sends a different part read
+before the POST's receipt read, and the second inserts and immediately removes a marked subtree.
+The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read
 sent while the check fills or focuses the form is not taken for it. That read must be of the receipt
