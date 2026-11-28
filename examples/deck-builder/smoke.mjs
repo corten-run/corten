@@ -1,6 +1,6 @@
 // Browser smoke test and timings for the deck builder: every move in the browser, autosave with
 // its refusals, another tab's edits, and the same forms with JavaScript off or the builder blocked.
-// Usage: node examples/deck-builder/smoke.mjs http://localhost:18487
+// Usage: node examples/deck-builder/smoke.mjs http://localhost:18487 [--handoff-only]
 import http from "node:http";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
@@ -231,61 +231,123 @@ async function blockedBuilder(engine, name) {
 }
 
 /** Use the real module, but release it only after the player has edited the plain HTML. */
-async function delayedBuilder(incomplete = false) {
+async function delayedBuilder(scenario) {
   const context = await browser.newContext();
   const resume = Promise.withResolvers();
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(8_000);
+    const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
+    const other = page.locator('li[data-key="ashen-drake"] input[type=number]');
+    const post = async (button = page.locator(saveButton)) => {
+      const [answer] = await Promise.all([page.waitForResponse((r) => isSave(r.request())), button.evaluate((el) => el.click())]);
+      return answer;
+    };
+    if (scenario === "lost answer") {
+      const plain = await browser.newContext({ javaScriptEnabled: false });
+      try {
+        const seed = await plain.newPage();
+        await seed.goto(home);
+        await seed.locator('li[data-key="gravel-sprite"] input[type=number]').fill("3");
+        await Promise.all([seed.waitForEvent("load"), seed.locator(saveButton).click()]);
+      } finally {
+        await plain.close();
+      }
+    }
     await page.route(builderModule, async (route) => {
       await resume.promise;
       await route.continue();
-    });
+    }, { times: 1 });
     await Promise.all([
       page.waitForRequest((request) => builderModule(new URL(request.url()))),
       page.goto(home, { waitUntil: "commit" }),
     ]);
-    const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
-    const other = page.locator('li[data-key="ashen-drake"] input[type=number]');
     const edited = (await count.inputValue()) === "2" ? "3" : "2";
-    const otherEdited = (await other.inputValue()) === "1" ? "2" : "1";
+    const incomplete = scenario === "incomplete";
+    const removing = scenario === "removed";
+    const otherEdited = incomplete && (await other.inputValue()) === "1" ? "2" : "1";
     const previous = Number(await version(page));
+    const key = await page.locator("input[name=submit]").inputValue();
     const visible = page.locator("tbody tr:not([hidden])");
-    await (incomplete ? other : count).fill(incomplete ? otherEdited : edited);
+    await (incomplete || removing ? other : count).fill(removing ? "" : incomplete ? otherEdited : edited);
     // Focusing the query commits the first count's change before the module can handle it.
     await page.locator("input[type=search]").fill("oracle");
-    const focused = incomplete ? await count.elementHandle() : null;
-    if (focused) {
-      await count.fill("");
-      check("the unfinished count is empty and focused before startup",
-        await focused.evaluate((el) => el.value === "" && document.activeElement === el));
+    if (removing) await count.focus();
+    if (incomplete) await count.fill("");
+    const focused = incomplete || removing ? await count.elementHandle() : null;
+    const beforeStart = await focused?.evaluate((el) => ({ value: el.value, focused: document.activeElement === el }));
+    if (scenario === "lost answer") {
+      // Submit to a disposable window so the pending module request in this
+      // document survives. The server commits; only its redirect is withheld.
+      const form = page.locator("form[method=post]");
+      const [target] = await Promise.all([
+        page.waitForEvent("popup"),
+        form.evaluate((form) => {
+          if (!window.open("about:blank", "withheldSave")) throw new Error("Could not open the answer window");
+          form.target = "withheldSave";
+        }),
+      ]);
+      try {
+        await context.route(deckUrl, async (route) => {
+          const actual = await route.fetch({ maxRedirects: 0 });
+          check("the withheld native answer was a real 303 for count 2",
+            actual.status() === 303 && route.request().isNavigationRequest() && postedGravel(route.request()) === "2" &&
+            saveFields(route.request()).get("submit") === key);
+          await route.fulfill({ status: 204, body: "" });
+        }, { times: 1 });
+        await Promise.all([
+          context.waitForEvent("response", { predicate: (r) => isSave(r.request()) && r.status() === 204, timeout: 8_000 }),
+          page.locator(saveButton).evaluate((el) => el.click()),
+        ]);
+      } finally {
+        await form.evaluate((form) => form.removeAttribute("target"));
+        await target.close();
+      }
+      const saved = await context.newPage();
+      try {
+        await saved.goto(home, { waitUntil: "domcontentloaded" });
+        check("the original page still has the old version after the server saved 2", Number(await version(page)) === previous &&
+          Number(await version(saved)) === previous + 1 && (await deck(saved))["gravel-sprite"] === 2);
+      } finally {
+        await saved.close();
+      }
     }
     check("typing before the builder starts leaves the collection unfiltered", await visible.count() > 1);
-    const live = page.waitForRequest(isLive);
+    const loaded = page.waitForEvent("load");
     resume.resolve(undefined);
-    await live;
+    await loaded;
+
+    if (scenario === "lost answer" && await page.locator("form[data-patch]").count()) {
+      const keep = page.getByRole("button", { name: "Keep both changes" });
+      await keep.waitFor();
+      await post(keep);
+      await settled(page);
+      const actual = (await deck(page))["gravel-sprite"];
+      check("a lost native answer does not offer a merge", false, `Keep both left ${actual} copies`);
+      return;
+    }
 
     if (focused) {
-      check("startup preserves the unfinished count in the same focused field",
-        await focused.evaluate((el) => el.isConnected && el.value === "" && document.activeElement === el));
-      await page.keyboard.type(edited);
+      check(`${scenario}: startup preserves the same focused field`, beforeStart?.focused &&
+        await focused.evaluate((el, before) => el.isConnected && el.value === before && document.activeElement === el, beforeStart?.value));
+      if (incomplete) await page.keyboard.type(edited);
     } else {
       await page.locator(filterButton).click();
       check("Filter applies the query typed before startup without navigating", page.url() === home &&
         await visible.count() === 1 && await visible.first().getAttribute("data-key") === "salt-oracle");
     }
 
-    const post = page.waitForResponse((r) => isSave(r.request()));
     // Keep focus in the count, as some browsers do when pressing a button.
-    const [saved] = await Promise.all([post, page.locator(saveButton).evaluate((button) => button.click())]);
-    await settled(page);
-    check("Save sends the count edited before startup through autosave", saved.ok() &&
-      Number(new URLSearchParams(saved.request().postData() ?? "").get("draft")) > 0 &&
-      Number(await version(page)) === previous + 1);
-    await page.reload();
-    check("the edit made before startup survives a reload", Number(await version(page)) === previous + 1 &&
-      await count.evaluate((input) => /** @type {HTMLInputElement} */ (input).defaultValue) === edited &&
+    const saved = await post();
+    if (!saved.request().isNavigationRequest()) await settled(page);
+    await page.waitForFunction((v) => document.querySelector("input[name=version]")?.value === v, String(previous + 1));
+    check(`${scenario}: Save stays native with the original form key and version`, saved.request().isNavigationRequest() &&
+      saved.status() === 303 && saveFields(saved.request()).get("draft") === "0" &&
+      saveFields(saved.request()).get("version") === String(previous) && saveFields(saved.request()).get("submit") === key);
+    if (removing) check("Save removes the cleared row from the page it leaves open", await other.count() === 0);
+    else check(`${scenario}: Save leaves the intended count, not a second change`,
       await count.inputValue() === edited && (!incomplete || await other.inputValue() === otherEdited));
+    await page.waitForSelector("form[data-patch]");
   } finally {
     resume.resolve(undefined);
     await context.close();
@@ -305,7 +367,7 @@ const time = (page, name, act) =>
     }, `(${act.toString()})()`)
     .then((t) => (timings[name] = `${t.handled.toFixed(2)} ms (settled ${t.settled.toFixed(2)} ms)`));
 
-try {
+async function smoke() {
   const context = await browser.newContext();
   context.setDefaultTimeout(10_000);
   const page = await open(context);
@@ -728,8 +790,11 @@ try {
   for (const [engine, name] of [[chromium, "Chromium"], [firefox, "Firefox"], [webkit, "WebKit"]]) {
     await blockedBuilder(engine, name);
   }
-  await delayedBuilder();
-  await delayedBuilder(true);
+}
+
+try {
+  if (!process.argv.includes("--handoff-only")) await smoke();
+  for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those
   // answers.

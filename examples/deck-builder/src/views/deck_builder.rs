@@ -332,7 +332,7 @@ pub fn DeckBuilder<'a>(
                             />
                         }
                     </ul>
-                    <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Drag cards here, or press Add."</p>
+                    <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Use Add to put cards in the deck."</p>
                     <button type="submit" on:click={js::saveNow(event, parts, copies)}>"Save"</button>
                 </form>
                 <template ref={template}>

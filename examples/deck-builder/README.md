@@ -27,8 +27,9 @@ Filter and Save stay visible with scripting enabled. Until the builder starts, t
 submits the forms natively: successful writes redirect to the saved deck, and a refusal draws
 the page with its reason. If a first Save already committed, resending its key with different
 counts shows a conflict and asks the player to re-enter that edit on the saved deck. With the
-module running, Filter keeps the page and Save uses the autosave queue. A count being typed
-when the module starts keeps its field and focus.
+module running, Filter keeps the page. If a count was already edited when the module started,
+that document keeps its fields, focus, and native Save. A native submission opens a fresh document,
+which can start the autosave queue without guessing whether an earlier submission saved.
 
 ## Run it
 
