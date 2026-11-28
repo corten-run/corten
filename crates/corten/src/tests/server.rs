@@ -3363,12 +3363,19 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
                 let answered = runtime.block_on(async {
                     let request = Request::get("/never").header("accept", "text/html").body(Body::empty()).unwrap();
-                    let mut answer = pin!(inner.oneshot(request));
                     let mut gone = pin!(gone.changed());
                     let began = Instant::now();
                     let before = taken();
                     let mut armed = Some(armed);
-                    let res = poll_fn(|cx| {
+                    let mut answer = pin!(async move {
+                        let res = inner.oneshot(request).await.unwrap();
+                        // Timed where it was answered, not where the test's thread reads it.
+                        let took = began.elapsed();
+                        let status = res.status().as_u16();
+                        let body = res.into_body().collect().await.unwrap().to_bytes();
+                        (status, body, took)
+                    });
+                    poll_fn(|cx| {
                         let polled = answer.as_mut().poll(cx);
                         if let Some(armed) = armed.take() {
                             assert!(polled.is_pending(), "the inner request waits on its deadline");
@@ -3382,13 +3389,7 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
                         }
                         polled.map(Some)
                     })
-                    .await?
-                    .unwrap();
-                    // Timed where it was answered, not where the test's thread reads it.
-                    let took = began.elapsed();
-                    let status = res.status().as_u16();
-                    let body = res.into_body().collect().await.unwrap().to_bytes();
-                    Some((status, body, took))
+                    .await
                 });
                 let Some((status, body, took)) = answered else { return String::new() };
                 let _ = saw.send((status, body, took));
@@ -3424,7 +3425,8 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
     let body = String::from_utf8_lossy(&body);
     // The first is what tokio 1.54.1 panics with here, at the timer's check that its runtime is
     // running. The second is its error for a timer whose driver has shut down, which this test
-    // was not seen to reach: allowed so a tokio that makes the two checks in another order passes.
+    // was not seen to reach: allowed for a tokio that reports the shutdown through the timer's
+    // result instead.
     assert!(
         body.contains("the handler panicked: A Tokio 1.x context was found, but it is being shutdown.")
             || body.contains("the handler panicked: timer error: the timer is shutdown"),

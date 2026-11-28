@@ -45,7 +45,9 @@ so a page rendered from memory registers none.
 A connection `serve` accepted keeps one timer for its requests' deadlines once two requests of
 its have waited, rather than making one a request: the first two requests to wait make their own,
 the connection makes its timer at the second, and each after them sets the connection's again
-and leaves it set ([design.md, Choice 77](../design.md#choice-deadline-timer)). A connection
+and leaves it set ([design.md, Choice 77](../design.md#choice-deadline-timer)). What the
+connection counts is its own polls that return pending after a deadline began to wait in them,
+so two requests that begin to wait in one poll count once. A connection
 whose only request waits, as a proxy that opens one for each request sends them, keeps none. A
 deadline fires when it did. What an app can see of the kept timer:
 
@@ -78,12 +80,14 @@ deadline fires when it did. What an app can see of the kept timer:
 - A handler that serves a request on a runtime of its own, inside a connection `serve` polls
   (`block_in_place` and `block_on`), has that request's deadline wait on the timer of the runtime
   around it when the deadline borrows the connection's timer: the connection makes one after two
-  of its polls have each returned pending with a deadline that began to wait in that poll,
-  whichever requests they were, and lends it while no other deadline has it. The deadline still
-  fires on time while that runtime runs; if it shuts down first, the request is answered 500
-  where it would have gone on waiting to its deadline (a test serves such a request, waits until
-  its deadline has borrowed the timer and shuts the outer runtime down). A deadline that made
-  its own timer instead waits on the handler's runtime and is answered 503 when it fires.
+  of its polls have each returned pending after a deadline made a timer of its own during that
+  poll, whichever requests they were, and lends it during its polls while it has one and no
+  other deadline has it. The deadline still fires on time while that runtime runs (and, in a
+  test that pauses or advances a clock, while the two runtimes' clocks agree); if it shuts down
+  first, the request is answered 500 where it would have gone on waiting to its deadline (a test
+  serves such a request, waits until its deadline has borrowed the timer and shuts the outer
+  runtime down). A deadline that made its own timer instead waits on the handler's runtime, and
+  its request is answered as any whose deadline fires.
 
 Routes that start their answer later than pages should (an upstream that answers in minutes, a
 report, large uploads) get a deadline of their own where they are mounted, so the rest of the

@@ -12027,10 +12027,13 @@ rules something out.
     (`crates/corten/src/deadline.rs`) once two distinct polls of the connection have each
     returned pending after a deadline of its made a timer of its own during that poll (the
     deadline need not still be waiting when the poll returns). Until then those deadlines make
-    their own, as before. A deadline that borrows the connection's timer sets it to its own
+    their own, as before, and so do all its later ones where the connection's runtime has no
+    clock to make a timer on. A deadline that borrows the connection's timer sets it to its own
     time (`Sleep::reset`, a compare-and-swap with no lock while the timer is still set and the
-    new time is not earlier) and gives it back still set; the timer is dropped with the
-    connection. A connection only one of whose polls ends so makes none. The connection's task
+    new time is not earlier) and, dropped where its connection is being polled, gives it back,
+    still set unless it fired; dropped anywhere else it drops the timer, and the connection's
+    later deadlines make their own. Otherwise the timer is dropped with the connection. A
+    connection only one of whose polls ends so makes none. The connection's task
     owns the timer and lends it to the thread only while the connection is polled, under a number
     of the connection's own, so a deadline finds it there and gives it back only to the
     connection that made it. A deadline that finds none makes its own and drops it, whether the
@@ -12238,13 +12241,17 @@ rules something out.
        to the deadline, an hour under an area's long one.
     6. A handler can serve a request on a runtime of its own inside a connection's poll
        (`block_in_place` and `block_on`, which a test here treats as supported). If the inner
-       deadline borrows the connection's timer, it waits on the outer runtime's timer. It fires
-       on time while the outer runtime runs. If that runtime shuts down first, the timer's next
+       deadline borrows the connection's timer, it waits on the outer runtime's timer: its time
+       is read on the inner runtime's clock and the outer runtime's driver runs it, so it fires
+       on time while the outer runtime runs and the two clocks agree (only a test that pauses
+       or advances one makes them differ). If that runtime shuts down first, the timer's next
        poll panics inside the handler's catch and the inner request is answered 500. If the
-       deadline instead made a timer on its own runtime, it goes on waiting and answers 503 if
-       the deadline fires while the handler still waits. The test waits for the borrow and the
+       deadline instead made a timer on its own runtime, it goes on waiting, and the request is
+       answered as any whose deadline fires
+       ([design Choice 30](#choice-deadline-body)). The test waits for the borrow and the
        timer's first pending poll before shutting the outer runtime down. Whether the current
-       runtime is the timer's is not checked: the way to a runtime's identity is `Handle::current()`, which
+       runtime is the timer's is not checked: the way to a runtime's identity is
+       `Handle::current()`, which
        clones the runtime's `Arc`, two atomic operations on a count every thread shares. Making
        a timer and registering it cloned it twice, and `Sleep::reset` clones it once itself
        (read in tokio 1.54.1), so a deadline on the kept timer does that pair once where it did
