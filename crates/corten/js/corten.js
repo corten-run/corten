@@ -3516,9 +3516,10 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
     if (current) {
       submits.delete(form);
-      // In a task of its own, after the answer is drawn; not into a page being left.
+      // After the answer is drawn, in a task of its own. A visit can draw another page before
+      // this task runs, even though the write is no longer pending for the visit to abort.
       const { next, nextWithin } = pending;
-      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin));
+      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && turn === turns && sendAgain(form, next, nextWithin));
     }
   }
 }

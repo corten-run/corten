@@ -1,4 +1,176 @@
-import { check, pollFor } from "./helpers.mjs";
+import { readFile } from "node:fs/promises";
+import { check, pollFor, skip } from "./helpers.mjs";
+
+/** A waiting press belongs to the page where it was made, not whichever form has its id later. */
+export async function queuedPage(/** @type {import("@playwright/test").Browser} */ browser, report = check) {
+  const origin = "http://127.0.0.1";
+  const runtime = await readFile(new URL("../../crates/corten/js/dist/corten.js", import.meta.url));
+  const form = (/** @type {string} */ side, value = side) => `<form id="save" data-patch method="post" action="/save-${side}"><input name="n" value="${value}"><button>Save</button></form>`;
+  const original = "POST /save-home n=home";
+  const retry = "POST /save-home n=home2";
+  const destination = "POST /save-dest n=dest";
+  const cases = [
+    { move: "link", visits: "nav /dest", away: true },
+    { move: "query", visits: "nav /home?view=other", away: true },
+    { move: "back", visits: "nav /dest", away: true },
+    { move: "forward", visits: "nav /dest", away: true },
+    { move: "round trip", visits: "nav /dest, nav /home", away: true },
+    { move: "server redirect", visits: "nav /redirect, nav /dest", away: true },
+    { move: "write redirect", visits: "action /go, page /dest", away: true },
+    { move: "same-address visit", visits: "nav /redirect, nav /home", retry: true, redraw: true },
+    { move: "patch", retry: true, redraw: true },
+    { move: "fragment", retry: true },
+    { move: "cancelled visit", retry: true },
+    { move: "pagehide" },
+  ];
+  for (const test of cases) {
+    const { move, away } = test;
+    const name = `a waiting submit stays on its page: ${move}`;
+    const p = await browser.newPage();
+    /** @type {string[]} */
+    const posts = [];
+    /** @type {string[]} */
+    const visits = [];
+    let answerFirst = () => {};
+    const hold = new Promise((resolve) => (answerFirst = () => resolve(undefined)));
+    try {
+      await p.route(`${origin}/**`, async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.pathname === "/runtime.js") return route.fulfill({ contentType: "text/javascript", body: runtime });
+        const mode = request.headers().corten;
+        if (url.pathname === "/go") {
+          visits.push(`${mode} ${url.pathname}`);
+          return route.fulfill({ status: 204, headers: { "corten-location": "/dest" } });
+        }
+        if (request.method() === "POST") {
+          if (!["/save-home", "/save-dest"].includes(url.pathname)) throw new Error("unexpected fixture POST");
+          posts.push(`${request.method()} ${url.pathname} ${request.postData()}`);
+          if (posts.length === 1) {
+            await hold;
+            if (move === "patch") return route.fulfill({ contentType: "text/html", headers: { "corten-patch": "1" }, body: form("home", "home2") });
+          }
+          return route.fulfill({ status: 204 });
+        }
+        if (mode) visits.push(`${mode} ${url.pathname}${url.search}`);
+        if (url.pathname === "/redirect") return route.fulfill({ status: 204, headers: { "corten-location": move === "same-address visit" ? "/home" : "/dest" } });
+        const side = url.pathname === "/dest" || url.search ? "dest" : "home";
+        const value = mode && move === "same-address visit" ? "home2" : side;
+        const body = `<h1>${side}</h1>${form(side, value)}<a id="home" href="/home">Home</a><a id="dest" href="/dest">Destination</a><a id="query" href="/home?view=other">Other view</a><a id="redirect" href="/redirect">Redirect</a><a id="fragment" href="#save">Fragment</a><form id="go" data-patch method="post" action="/go"><button>Go</button></form>`;
+        const document = `<!doctype html><title>Submit queue fixture</title><meta name="corten-shell" content="fixture"><script type="module" src="/runtime.js"></script><main>${body}</main>`;
+        return route.fulfill({
+          contentType: "text/html",
+          headers: mode === "page" ? { "corten-shell": "fixture" } : mode ? { "corten-page": "1" } : {},
+          body: mode === "nav" ? body : document,
+        });
+      });
+      const click = (/** @type {string} */ selector) => p.evaluate((s) => /** @type {HTMLElement} */ (document.querySelector(s)).click(), selector);
+      const drawn = (/** @type {string} */ side) => p.waitForFunction((side) => document.querySelector("main h1")?.textContent === side, side, { timeout: 6000 });
+      const traverse = (/** @type {"back" | "forward"} */ way) => p.evaluate((way) => window.navigation[way]().finished.then(() => {}), way);
+      await p.goto(`${origin}/${move === "back" ? "dest" : "home"}`);
+      if (!(await p.evaluate(() => "navigation" in window))) {
+        skip("waiting submits across visits", "no Navigation API");
+        return;
+      }
+      if (move === "back") {
+        await click("#home");
+        await drawn("home");
+      } else if (move === "forward") {
+        await click("#dest");
+        await drawn("dest");
+        await traverse("back");
+        await drawn("home");
+      }
+      visits.length = 0;
+
+      await p.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.presses = 0;
+        document.addEventListener("submit", (e) => e.target === document.getElementById("save") && (w.presses += 1), { capture: true });
+        const later = window.setTimeout;
+        const fetch = window.fetch;
+        /** @type {Promise<Response>[]} */
+        const writes = [];
+        window.fetch = (url, init) => {
+          const request = fetch(url, init);
+          if (init?.method === "POST") writes.push(request);
+          return request;
+        };
+        // A bare response or simple patch, with nothing else scheduled: hold the queue's task.
+        // After it runs, join every POST fetch it started before checking the route's records.
+        window.setTimeout = (fn, delay, ...args) => {
+          if (typeof fn !== "function" || delay !== undefined) return later(fn, delay, ...args);
+          window.setTimeout = later;
+          w.releaseRetry = async () => {
+            fn(...args);
+            await Promise.all(writes);
+          };
+          return 0;
+        };
+        w.formBefore = document.getElementById("save");
+      });
+      await Promise.all([p.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/save-home", { timeout: 6000 }), click("#save button")]);
+      await p.evaluate(() => {
+        document.querySelector("#save input").value = "home2";
+        document.querySelector("#save button").click();
+      });
+      answerFirst();
+      await p.waitForFunction(() => typeof window.releaseRetry === "function", undefined, { timeout: 6000 });
+      const before = posts.join(", ");
+
+      if (move === "link" || move === "round trip") await click("#dest");
+      else if (move === "query") await click("#query");
+      else if (move === "back" || move === "forward") await traverse(move);
+      else if (move === "server redirect" || move === "same-address visit") await click("#redirect");
+      else if (move === "write redirect") await click("#go button");
+      else if (move === "fragment") {
+        await click("#fragment");
+        await p.waitForURL("**/home#save", { timeout: 6000 });
+      } else if (move === "cancelled visit") {
+        await p.evaluate(() => {
+          window.navigation.addEventListener("navigate", (e) => e.preventDefault(), { once: true });
+          const { committed, finished } = window.navigation.navigate("/dest");
+          return Promise.allSettled([committed, finished]).then((results) => {
+            if (!results.every((r) => r.status === "rejected")) throw new Error("fixture visit was not cancelled");
+          });
+        });
+      } else if (move === "pagehide") await p.evaluate(() => dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+      if (away) await drawn("dest");
+      if (test.redraw) await p.waitForFunction(() => window.formBefore !== document.getElementById("save"), undefined, { timeout: 6000 });
+      if (move === "round trip") {
+        await traverse("back");
+        await drawn("home");
+      }
+      const state = await p.evaluate(async () => {
+        const w = /** @type {any} */ (window);
+        const form = document.getElementById("save");
+        await w.releaseRetry();
+        return { presses: w.presses, replaced: w.formBefore !== form };
+      });
+      const replayed = posts.join(", ");
+      // A fresh press on the destination proves its form really can send; its POST is not the retry.
+      const freshPress = away && move !== "round trip";
+      if (freshPress) {
+        await p.waitForFunction(() => !document.getElementById("save")?.hasAttribute("aria-busy"), undefined, { timeout: 6000 });
+        await Promise.all([p.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/save-dest", { timeout: 6000 }), click("#save button")]);
+      }
+      const expected = test.retry ? `${original}, ${retry}` : original;
+      report(
+        name,
+        before === original &&
+          replayed === expected &&
+          state.presses === 2 &&
+          state.replaced === Boolean(away || test.redraw) &&
+          visits.join(", ") === (test.visits ?? "") &&
+          posts.join(", ") === (freshPress ? `${expected}, ${destination}` : expected),
+        `before: ${before}; after retry: ${replayed}; final: ${posts.join(", ")}; visits: ${visits.join(", ") || "none"}; presses: ${state.presses}; replaced: ${state.replaced}`,
+      );
+    } finally {
+      answerFirst();
+      await p.close();
+    }
+  }
+}
 
 export async function submitQueue(holdWatch, page, abandoned, errors, zero) {
   // The cases below press their buttons in the page (`button.click()`), so each submit has run
