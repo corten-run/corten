@@ -328,7 +328,21 @@ export function countRestartError(progress, bootId) {
     : started === bootId ? "it started again in the boot its count step started in" : null;
   return why && `the round stopped in its count step and ${why}, so a perf or probe that step started may still run; nothing more runs on this host`;
 }
-const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const bootIdPattern = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+export const BOOT_ID = new RegExp(`^${bootIdPattern}$`);
+const countFinish = new RegExp(`^finished count ((?!0{32} )[0-9a-f]{32}) ([0-9a-f]{64} [0-9a-f]{64})(?: (${bootIdPattern}))?$`);
+
+/** A complete terminal record. Only a rebind adds the optional boot ID to the count proof.
+ * @param {string} line */
+export function terminalRecord(line) {
+  const record = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (.*)$/.exec(line)?.[1];
+  if (record === "finished" || record === "failed") return { state: record, count: null };
+  if (!record || !/^finished count(?: |$)/.test(record)) return null;
+  const proof = countFinish.exec(record);
+  return proof
+    ? { state: "finished", count: { invocation: proof[1], publication: proof[2], boot: proof[3] } }
+    : { state: "invalid-count", count: null };
+}
 
 /**
  * What is read of a round's unit to tell whether it has ended, in one `systemctl show` (one

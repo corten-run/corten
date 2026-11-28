@@ -29,7 +29,7 @@
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { COUNT_FAILED_FILE, countPublicationOf } from "./pack.mjs";
 import { passesOf } from "./passes.mjs";
-import { appendLine, buildStep, calls, countRestartError, countStageArg, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
+import { appendLine, BOOT_ID, buildStep, calls, countRestartError, countStageArg, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall, terminalRecord } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -246,7 +246,40 @@ try {
   if (unattended) {
     const text = existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "";
     const state = resumeAt(text, from);
-    if (state.ended && text.endsWith("\n")) process.exit(0);
+    if (state.ended && text.endsWith("\n")) {
+      const lines = text.split("\n");
+      const terminal = terminalRecord(lines.at(-2) ?? "");
+      if (terminal?.state === "invalid-count" || terminal?.count) {
+        // Keep the old proof on refusal. A trailing "failed" would hide it from collection.
+        recordFailure = false;
+        const proof = terminal.count;
+        if (!proof) throw new Error("the finished count record is malformed");
+        if (!invocationId) throw new Error("cannot carry a finished count into an unknown systemd invocation");
+        if (invocationId !== proof.invocation) {
+          const boot = bootId();
+          // Original publication is in the boot that started the staged count. A rebound
+          // record names its own boot instead, so another start in that boot cannot rebind it.
+          const previousBoot = proof.boot ?? lines.findLast((line) => /^\S+ start count(?: |$)/.test(line))?.split(" ")[3];
+          if (!boot || !BOOT_ID.test(boot) || !previousBoot || !BOOT_ID.test(previousBoot) || boot === previousBoot) {
+            throw new Error("cannot carry a finished count without proof of a different boot");
+          }
+          if (lstatSync(countFailureFile, { throwIfNoEntry: false }) || countPublicationOf(results) !== proof.publication) {
+            throw new Error("published count files contradict the finished count record");
+          }
+          // A torn append would hide the old proof. Publish only the complete extended journal.
+          const stage = mkdtempSync(join(dirname(results), ".count-"));
+          try {
+            const ready = join(stage, "progress");
+            writeFileSync(ready, `${text}${now()} finished count ${invocationId} ${proof.publication} ${boot}\n`, { flush: true });
+            renameSync(ready, progressFile);
+            syncDir(here);
+          } finally {
+            rmSync(stage, { recursive: true, force: true });
+          }
+        }
+      }
+      process.exit(0);
+    }
     // Before anything is written or cleaned: a count step whose perf may still run ends the round,
     // as a halt does. A progress file whose last line was cut short is left as it is: appending
     // ends that line first, and a start stopped part way through the append would leave the next

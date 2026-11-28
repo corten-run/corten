@@ -17,6 +17,8 @@ import { maxPasses } from "./passes.mjs";
 import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, snapshotsEnded, startMinutes, startSettled, startUnit, steps, stepsUntil, superviseCall, takeLaunch, unit, unitSnapshot } from "./round.mjs";
 
 const countInvocation = "a".repeat(32);
+const rebootInvocation = "c".repeat(32);
+const rebootId = "12345678-abcd-4abc-8abc-123456789abc";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -1198,16 +1200,21 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
         assert.deepEqual(readdirSync(dirname(localResult)), ["r1"]);
       }
 
-      for (const [why, setup] of /** @type {const} */ ([
-        ["legacy finish without proof", { progress: end("finished") }],
-        ["invocation not observable", { fake: { FAKE_INVOCATION: "" } }],
-      ])) {
-        const ambiguous = collectCount(setup);
-        assert.equal(ambiguous.status, 0, ambiguous.stdout + ambiguous.stderr);
-        assert.match(ambiguous.stdout, /trend saw the count fence/, why);
-        assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", why);
-        assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary, why);
-      }
+      const legacy = collectCount({ progress: end("finished"), fake: { FAKE_INVOCATION: "" } });
+      assert.equal(legacy.status, 0, legacy.stdout + legacy.stderr);
+      assert.match(legacy.stdout, /trend saw the count fence/);
+      assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
+      assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary);
+
+      const rebooted = counted.restart(rebootId, rebootInvocation);
+      assert.equal(rebooted.status, 0, rebooted.said);
+      const reboundProgress = readFileSync(join(counted.here, "results-r1.progress"), "utf8");
+      const afterBoot = collectCount({ progress: reboundProgress, fake: { FAKE_INVOCATION: rebootInvocation } });
+      assert.equal(afterBoot.status, 0, afterBoot.stdout + afterBoot.stderr);
+      assert.ok(afterBoot.downloaded && afterBoot.deleted, afterBoot.stdout + afterBoot.stderr);
+      assert.match(afterBoot.stdout, /trend saw no count fence/);
+      assert.equal(readFileSync(join(localResult, "instructions.json"), "utf8"), instructions);
+      assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary);
       const continued = counted.run([], "conform");
       assert.equal(continued.status, 0, continued.said);
       const withoutCount = collectCount({ progress: readFileSync(join(counted.here, "results-r1.progress"), "utf8") });
@@ -1261,11 +1268,11 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
       assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
     });
-    await t.test("a contradicted count invocation refuses before download or deletion on collect and launch", async (t) => {
+    await t.test("an unbound count invocation refuses before download or deletion on collect and launch", async (t) => {
       const differentInvocation = "b".repeat(32);
-      const check = (/** @type {ReturnType<typeof launch>} */ r) => {
+      const check = (/** @type {ReturnType<typeof launch>} */ r, why = /finished count record names a different systemd invocation/) => {
         assert.equal(r.status, 1, r.stdout + r.stderr);
-        assert.match(r.stderr, /finished count record names a different systemd invocation/);
+        assert.match(r.stderr, why);
         assert.doesNotMatch(r.stdout, /downloading|trend saw/);
         assert.ok(!r.downloaded && !r.deleted, r.calls.join("\n---\n"));
         assert.ok(!r.calls.some((c) => c.startsWith("scp root@")), "the result archive was copied");
@@ -1277,13 +1284,23 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
         assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
         assert.ok(!existsSync(localMarker));
       });
-      await t.test("a waiting launch does not fall back to partial collection", () => {
-        const launched = launch({ progress: unfinished(other), create: true, detach: false, fast: true,
-          fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_STARTED_INVOCATION: differentInvocation,
-            FAKE_START_DONE: remoteLog, FAKE_START_PROGRESS: remoteProgress, FAKE_START_PROGRESS_LINE: proof.trimEnd().split("\n").at(-1) ?? "" } });
-        assert.ok(launched.started, launched.stdout + launched.stderr);
-        check(launched);
+      await t.test("missing invocation or malformed proof never downgrades to legacy or partial collection", () => {
+        check(collectCount({ oldFence: false, both: false, fake: { FAKE_INVOCATION: "" } }),
+          /finished count record has no observed systemd invocation/);
         assert.ok(!existsSync(localResult));
+        check(collectCount({ oldFence: false, progress: end("finished count"), both: false }),
+          /the finished count record is malformed/);
+        assert.ok(!existsSync(localResult));
+      });
+      await t.test("a waiting launch does not fall back to partial collection", () => {
+        for (const id of [differentInvocation, ""]) {
+          const launched = launch({ progress: unfinished(other), create: true, detach: false, fast: true,
+            fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_STARTED_INVOCATION: id,
+              FAKE_START_DONE: remoteLog, FAKE_START_PROGRESS: remoteProgress, FAKE_START_PROGRESS_LINE: proof.trimEnd().split("\n").at(-1) ?? "" } });
+          assert.ok(launched.started, launched.stdout + launched.stderr);
+          check(launched, id ? undefined : /finished count record has no observed systemd invocation/);
+          assert.ok(!existsSync(localResult));
+        }
       });
     });
     // The first custody check finds a start queued for the unit (its job waiting): a refusal, as
@@ -1495,10 +1512,10 @@ const output = stage.startsWith("--count-stage=") ? join(stage.slice("--count-st
 ${script}
 `);
   writeFileSync(join(here, "conform.mjs"), 'console.log("fixture ran the later step");\n');
-  const call = (/** @type {string[]} */ args) => {
+  const call = (/** @type {string[]} */ args, invocation = countInvocation) => {
     const r = spawnSync(process.execPath, args, {
       cwd: here, encoding: "utf8", timeout: 15_000,
-      env: { PATH: dirname(process.execPath), HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", INVOCATION_ID: countInvocation },
+      env: { PATH: dirname(process.execPath), HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", INVOCATION_ID: invocation },
     });
     assert.ifError(r.error);
     return { status: r.status, signal: r.signal, said: r.stdout + r.stderr };
@@ -1507,6 +1524,17 @@ ${script}
     run: (/** @type {string[]} */ nodeArgs = [], from = "count") => {
       if (from !== "count") rmSync(progress);
       return call([...nodeArgs, "run-all.mjs", round, "10", from, "conform", "--unattended"]);
+    },
+    restart: (/** @type {string} */ boot, /** @type {string} */ invocation, blockPublish = false) => {
+      const patch = join(root, "boot.mjs");
+      writeFileSync(patch, `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const read = fs.readFileSync;
+fs.readFileSync = (file, ...args) => file === "/proc/sys/kernel/random/boot_id" ? ${JSON.stringify(boot)} : read(file, ...args);
+${blockPublish ? 'fs.renameSync = () => { throw new Error("fixture blocked the journal replacement"); };' : ""}
+syncBuiltinESMExports();
+`);
+      return call(["--import", pathToFileURL(patch).href, "run-all.mjs", round, "10", "count", "conform", "--unattended"], invocation);
     },
     replay: () => call(["summarize.mjs", round]),
     here, results, summary: join(results, "summary.json"), marker: join(results, COUNT_FAILED_FILE), instructions,
@@ -1607,6 +1635,58 @@ test("a restart refuses a torn finished count record before treating the round a
   assert.doesNotMatch(refused.said, /node count\.mjs|node summarize\.mjs|all done/);
   assert.equal(readFileSync(file, "utf8"), torn);
   assert.equal(readFileSync(f.summary, "utf8"), summary);
+});
+
+test("a no-op reboot binds only the same intact count to a new invocation", linuxCount, (t) => {
+  const f = countFixture(t, `writeFileSync(output, ${JSON.stringify(fullInstructions)});`);
+  const completed = f.run();
+  assert.equal(completed.status, 0, completed.said);
+  const file = join(f.here, "results-r1.progress");
+  const complete = readFileSync(file, "utf8");
+  const originalBoot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  const summary = readFileSync(f.summary, "utf8");
+  const refuse = (/** @type {string} */ boot, /** @type {string} */ invocation, /** @type {RegExp} */ why, journal = complete) => {
+    const r = f.restart(boot, invocation);
+    assert.equal(r.status, 1, r.said);
+    assert.match(r.said, why);
+    assert.doesNotMatch(r.said, /node count\.mjs|node summarize\.mjs|all done/);
+    assert.equal(readFileSync(file, "utf8"), journal);
+  };
+  refuse(originalBoot, rebootInvocation, /without proof of a different boot/);
+  refuse("", rebootInvocation, /without proof of a different boot/);
+  refuse(rebootId, "", /unknown systemd invocation/);
+  const noPreviousBoot = complete.replace(" start count " + originalBoot + "\n", " start count\n");
+  assert.notEqual(noPreviousBoot, complete);
+  writeFileSync(file, noPreviousBoot);
+  refuse(rebootId, rebootInvocation, /without proof of a different boot/, noPreviousBoot);
+  writeFileSync(file, complete);
+
+  rmSync(f.instructions);
+  refuse(rebootId, rebootInvocation, /published count files contradict/);
+  writeFileSync(f.instructions, fullInstructions);
+  writeFileSync(f.summary, "{}");
+  refuse(rebootId, rebootInvocation, /published count files contradict/);
+  writeFileSync(f.summary, summary);
+  writeFileSync(f.marker, "failed\n");
+  refuse(rebootId, rebootInvocation, /published count files contradict/);
+  rmSync(f.marker);
+
+  const blocked = f.restart(rebootId, rebootInvocation, true);
+  assert.equal(blocked.status, 1, blocked.said);
+  assert.match(blocked.said, /fixture blocked the journal replacement/);
+  assert.equal(readFileSync(file, "utf8"), complete);
+  assert.deepEqual(readdirSync(dirname(f.results)), ["r1"]);
+
+  const reboot = f.restart(rebootId, rebootInvocation);
+  assert.equal(reboot.status, 0, reboot.said);
+  assert.doesNotMatch(reboot.said, /node count\.mjs|node summarize\.mjs|all done/);
+  const rebound = readFileSync(file, "utf8");
+  const hashes = [f.instructions, f.summary].map((path) => createHash("sha256").update(readFileSync(path)).digest("hex")).join(" ");
+  assert.equal(rebound.slice(0, complete.length), complete);
+  assert.equal(rebound.split("\n").at(-2)?.split(" ").slice(1).join(" "), `finished count ${rebootInvocation} ${hashes} ${rebootId}`);
+  assert.equal(readFileSync(f.instructions, "utf8"), fullInstructions);
+  assert.equal(readFileSync(f.summary, "utf8"), summary);
+  refuse(rebootId, "d".repeat(32), /without proof of a different boot/, rebound);
 });
 
 test("a crash immediately after syncing count start leaves old instructions ineligible for replay", linuxCount, (t) => {

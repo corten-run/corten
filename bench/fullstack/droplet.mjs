@@ -60,7 +60,7 @@ import { allApps, buildArgs } from "./apps.mjs";
 import { ARCHIVE, COUNT_FAILED_FILE, countPublicationOf, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, parseSnapshot, snapshotsEnded, startSettled, startUnit, steps, takeLaunch, unit, unitSnapshot } from "./round.mjs";
+import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, parseSnapshot, snapshotsEnded, startSettled, startUnit, steps, takeLaunch, terminalRecord, unit, unitSnapshot } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -591,9 +591,8 @@ const watch = async (/** @type {boolean} */ once) => {
       while (all.length && all.at(-1) === "") all.pop();
       const [uptime = "", beforeLine = "", ...rest] = all;
       const afterLine = rest.pop() ?? "";
-      const terminal = suite === "fullstack"
-        ? /^progress \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (finished(?: count ((?!0{32} )[0-9a-f]{32}) ([0-9a-f]{64} [0-9a-f]{64}))?|failed)$/.exec(rest.shift() ?? "")
-        : null;
+      const progressLine = suite === "fullstack" ? rest.shift() ?? "" : "";
+      const terminal = progressLine.startsWith("progress ") ? terminalRecord(progressLine.slice(9)) : null;
       const before = beforeLine.startsWith("before ") ? beforeLine.slice(7) : "unreadable";
       const after = afterLine.startsWith("after ") ? afterLine.slice(6) : "unreadable";
       const text = rest.join("\n");
@@ -603,18 +602,19 @@ const watch = async (/** @type {boolean} */ once) => {
       const beforeFields = parseSnapshot(before);
       const unreadable = !beforeFields || !parseSnapshot(after);
       const ended = snapshotsEnded(before, after);
-      if (ended && (suite === "fullstack" ? terminal?.[1].startsWith("finished") : doneMarker.test(text))) {
-        const expected = terminal?.[2];
+      if (ended && terminal?.state === "invalid-count") return { state: "count-unbound", snapshot: null, countError: "the finished count record is malformed" };
+      if (ended && (suite === "fullstack" ? terminal?.state === "finished" : doneMarker.test(text))) {
+        const proof = terminal?.count;
         const observed = beforeFields?.InvocationID;
-        if (expected && observed && expected !== observed) return { state: "count-contradicted", snapshot: null };
-        const countPublication = expected && expected === observed ? terminal?.[3] ?? null : null;
-        return { state: "finished", snapshot: before.trim(), countPublication };
+        if (proof && proof.invocation !== observed) return { state: "count-unbound", snapshot: null,
+          countError: observed ? "finished count record names a different systemd invocation" : "finished count record has no observed systemd invocation" };
+        return { state: "finished", snapshot: before.trim(), countPublication: proof?.publication ?? null };
       }
       // The unit has ended and the round did not finish. A full-stack round's droplet that
       // restarted less than five minutes ago may not have started the unit again yet, and the unit
       // may be between states, so this has to hold for three polls.
       stopped = ended && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
-      if (stopped >= 3 || (stopped && (suite === "fullstack" ? terminal?.[1] === "failed" : /round failed/.test(text)))) return { state: "stopped", snapshot: before.trim() };
+      if (stopped >= 3 || (stopped && (suite === "fullstack" ? terminal?.state === "failed" : /round failed/.test(text)))) return { state: "stopped", snapshot: before.trim() };
       if (once && !stopped) return { state: unreadable ? "unknown" : "running", snapshot: null };
       if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its queued job could not be read (${before}; ${after}): round ${round} is watched until it reads as ended`);
       unreadableSaid = unreadable;
@@ -655,9 +655,9 @@ try {
       process.exit(0);
     }
   }
-  const { state, snapshot, countPublication } = await watch(collect);
-  countProofRequired = state === "count-contradicted" || (state === "finished" && countPublication !== null);
-  if (state === "count-contradicted") throw new Error("finished count record names a different systemd invocation");
+  const { state, snapshot, countPublication, countError } = await watch(collect);
+  countProofRequired = state === "count-unbound" || (state === "finished" && countPublication !== null);
+  if (state === "count-unbound") throw new Error(countError);
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
   if (state === "finished" || state === "stopped") startUnconfirmed = false;
   if (state === "running" || state === "unknown") {
@@ -733,7 +733,7 @@ try {
   // Only a round whose unit reads ended (inactive or failed with no job queued, in two snapshots
   // that agree) before the download and the same after it is downloaded from and destroyed: a
   // watch that lost the droplet for a while says nothing of whether the round is still running.
-  // A contradicted count invocation or failed proof-bearing download must not fall back to
+  // An unbound count proof or failed proof-bearing download must not fall back to
   // unverified partial collection.
   if (!countProofRequired && !collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
     const why = String(/** @type {any} */ (e).message).split("\n")[0];

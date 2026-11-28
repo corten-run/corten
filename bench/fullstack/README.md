@@ -1491,10 +1491,13 @@ three runs:
    recorded SHA-256 hashes and no `count-failed.txt`. Missing or mismatched files or an archive
    with the marker fail collection without replacing local files or deleting the droplet. The
    same ended unit must still be confirmed before publishing the verified files and removing any
-   local marker. If the ended unit reports a different invocation, collection refuses without a
-   download (even a partial one) or deletion. A legacy finish, a continuation without a new count,
-   or an ended unit with no observable invocation ID uses the legacy download and does not clear
-   a local marker. The upload leaves out the working tree's own
+   local marker. With a count proof, an absent or different invocation ID refuses without a
+   download (even a partial one) or deletion. If the enabled service starts after a reboot, the
+   runner can bind the same finished count to its new invocation without running any steps. It
+   requires known, different boot IDs, both original hashes, and no failure marker. It writes the
+   new terminal record with the current boot ID in an atomic journal replacement; on refusal it
+   leaves the old proof intact. Only a plain finish without a count proof uses the legacy download
+   and leaves any local marker in place. The upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.
    A droplet
