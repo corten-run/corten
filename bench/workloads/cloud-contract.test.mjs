@@ -1,12 +1,58 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ownedDroplet, portableEvidenceSegment, remoteFiles, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
+import { fleetRegion, ownedDroplet, portableEvidenceSegment, remoteFiles, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 
 const state = () => reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" }, "2026-11-13T00:00:00.000Z");
 const droplet = (s) => ({ id: 123, name: s.name, tags: [...tags, s.tag], size_slug: s.host.size, region: { slug: s.host.region },
   networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
 const unit = (s) => `Id=${s.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${s.unit}\nActiveState=inactive\nRestart=no\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC\n`;
+
+const londonCatalog = () => ({
+  sizes: [{ slug: "c-8", available: true, regions: ["lon1"] }, { slug: "c-16", available: true, regions: ["sfo2"] }],
+  regions: [{ slug: "sfo2", available: true, sizes: ["c-16"] }, { slug: "lon1", available: true, sizes: ["c-8"] }],
+});
+const stagedRemaining = { staged: true, remainingOnly: true };
+test("staged placement ignores candidate regions absent in both listings, without relaxing an exact pair", () => {
+  const catalog = londonCatalog();
+  assert.equal(fleetRegion(catalog, undefined, { staged: true }), "lon1");
+  assert.equal(fleetRegion(catalog, undefined, stagedRemaining), "lon1");
+  assert.equal(fleetRegion(catalog, "lon1", stagedRemaining), "lon1");
+  assert.throws(() => fleetRegion(catalog, "blr1", stagedRemaining), /reserved fleet placement not advertised: c-8\/blr1/);
+  assert.throws(() => fleetRegion(catalog, "sfo3", { remainingOnly: true }), /missing or invalid fleet catalog entry: sfo3/);
+  catalog.sizes.pop(); catalog.regions[0].sizes = [];
+  assert.throws(() => fleetRegion(catalog, undefined, { staged: true }), /missing or invalid fleet catalog entry: c-16/);
+});
+
+test("staged placement distinguishes symmetric size omission from one-sided listings", () => {
+  const catalog = londonCatalog();
+  catalog.sizes.shift();
+  assert.throws(() => fleetRegion(catalog, undefined, stagedRemaining), /fleet catalog listings disagree: c-8\/lon1/);
+  catalog.regions[1].sizes = [];
+  assert.throws(() => fleetRegion(catalog, undefined, stagedRemaining), /no supported c-8 fleet placement advertised/);
+  assert.throws(() => fleetRegion(catalog, "lon1", stagedRemaining), /reserved fleet placement not advertised: c-8\/lon1/);
+
+  const missingRegion = londonCatalog();
+  missingRegion.sizes[0].regions.push("blr1");
+  assert.throws(() => fleetRegion(missingRegion, undefined, stagedRemaining), /fleet catalog listings disagree: c-8\/blr1/);
+});
+
+test("staged placement rejects duplicate and malformed present entries, including unused candidates", () => {
+  for (const rows of [
+    [{ slug: "blr1", available: true, sizes: [] }, { slug: "blr1", available: true, sizes: [] }],
+    [{ slug: "blr1", available: "yes", sizes: [] }],
+    [{ slug: "blr1", available: true, sizes: null }],
+    [{ slug: "blr1", available: true, sizes: [8] }],
+    [{ slug: "blr1", available: true, sizes: ["c-8", "c-8"] }],
+  ]) {
+    const catalog = londonCatalog(); catalog.regions.push(...rows);
+    assert.throws(() => fleetRegion(catalog, undefined, stagedRemaining), /missing or invalid fleet catalog entry: blr1/);
+  }
+  const catalog = londonCatalog();
+  catalog.sizes.push(catalog.sizes[0]);
+  assert.throws(() => fleetRegion(catalog, undefined, stagedRemaining), /missing or invalid fleet catalog entry: c-8/);
+});
+
 test("campaign identity retains the complete current registry, without qualifying it", () => {
   const s = state(); assert.equal(validateState(s, "r21"), s);
   assert.deepEqual(s.selection, selection()); assert.deepEqual(s.selection.groups.map((g) => g.group), groupNames);

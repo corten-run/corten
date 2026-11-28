@@ -7,10 +7,11 @@ import { Worker } from "node:worker_threads";
 import { once } from "node:events";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
-import { qualification, validateQualification } from "../marketplace/feature-contract.mjs";
+import { boundedQualificationProbes, qualificationProbes } from "../marketplace/qualification-fixture.mjs";
+import { boundedFeatureProfile, featureProfile, produceBoundedQualification, qualification,
+  validateActiveQualification } from "../marketplace/feature-contract.mjs";
 import { cpuBoundary, replayCpuBoundary, participantEvidence } from "./producer-evidence.mjs";
-import { pageProjection, probeProjection, qualificationEvidence, replayQualificationEvidence } from "./qualification-evidence.mjs";
+import { pageProjection, probeProjection, producerEvidenceFiles, qualificationEvidence, replayQualificationEvidence } from "./qualification-evidence.mjs";
 import { runQualificationWorker } from "./qualify-worker.mjs";
 
 function temporary(fn) {
@@ -80,20 +81,20 @@ test("participant restart counts are stored before failed admission, without env
 }));
 
 function actualQualification(source = "api") {
-  const probes = qualificationProbes(source);
+  const probes = boundedQualificationProbes(source);
   const secret = "credentialXYZ123";
   const html = `<meta name="csrf-token" content="${secret}"><script>const session='${secret}'</script><form action="/write?auth=${secret}" method="post"><input type="hidden" name="_csrf" value="${secret}"><input name="email"></form>`;
   probes.page.body = Buffer.from(html).toString("base64"); probes.page.bodyLength = Buffer.byteLength(html);
   probes.page.headers["set-cookie"] = [`session=${secret}; HttpOnly`];
   probes.page.headers["content-security-policy"] = `default-src 'self'; script-src 'nonce-${secret}' 'unsafe-inline'; frame-ancestors 'none'`;
   probes.page.headers.authorization = `Bearer ${secret}`;
-  return validateQualification(qualification(probes, source));
+  return validateActiveQualification(produceBoundedQualification(probes, source));
 }
-test("actual qualification projection replays unchanged contract and removes credentials from saved bytes", () => temporary(async (dir) => {
+test("actual bounded qualification projection preserves capability cells and removes credentials", () => temporary(async (dir) => {
   for (const source of ["fixture", "api"]) {
     const actual = actualQualification(source), before = JSON.stringify(actual), evidence = qualificationEvidence(actual), file = join(dir, "qualification.json");
     save(file)(evidence);
-    const saved = read(file), q = validateQualification(saved.qualification);
+    const saved = read(file), q = validateActiveQualification(saved.qualification);
     assert.deepEqual({ ...q, probes: null }, { ...actual, probes: null });
     assert.equal(JSON.stringify(actual), before, "projection must not mutate actual probes");
     const page = Buffer.from(q.probes.page.body, "base64");
@@ -103,21 +104,55 @@ test("actual qualification projection replays unchanged contract and removes cre
     const original = Buffer.from(actual.probes.page.body, "base64");
     for (const span of saved.pageProjection.spans) assert.ok(page.subarray(span.offset, span.offset + span.length).equals(original.subarray(span.offset, span.offset + span.length)));
     q.probes.page.headers["cache-control"] = "public";
-    assert.throws(() => validateQualification(q), /cells|missing|eligible|Expected/);
+    assert.throws(() => validateActiveQualification(q), /cells|missing|eligible|Expected/);
   }
 }));
 
+test("Corten's emitted document policy preserves qualification for both sources", () => {
+  // Values from a normal marketplace page GET, with a stand-in for the import-map hash.
+  const hash = "A".repeat(44);
+  const csp = `default-src 'self'; script-src 'self' 'sha256-${hash}'; style-src 'self'; img-src 'self' data: https:; `
+    + "connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; "
+    + "frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten";
+  const permissions = "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), "
+    + "hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()";
+  for (const source of ["fixture", "api"]) {
+    const { probes } = actualQualification(source);
+    Object.assign(probes.page.headers, { "content-security-policy": csp, "permissions-policy": permissions });
+    const actual = produceBoundedQualification(probes, source);
+    assert.equal(actual.eligible, true);
+    const saved = qualificationEvidence(actual);
+    assert.deepEqual({ ...saved.qualification, probes: null }, { ...actual, probes: null });
+    const page = saved.qualification.probes.page;
+    assert.equal(page.headers["content-security-policy"], csp.replace(hash, "x".repeat(hash.length)));
+    assert.equal(page.headers["permissions-policy"], permissions);
+    assert.deepEqual(probeProjection(page).headers, page.headers, "saved headers must be stable on replay");
+    assert.ok(!JSON.stringify(saved).includes(hash), "raw CSP hash must not be retained");
+    assert.equal(probes.page.headers["content-security-policy"], csp, "projection must not change the response");
+  }
+});
+
+test("document policy projection rejects unreviewed names and values", () => {
+  const page = actualQualification().probes.page;
+  for (const value of ["trusted-types", "trusted-types example-policy", "trusted-types corten example-policy",
+    "script-src corten", "example-directive 'none'"]) {
+    assert.throws(() => probeProjection({ ...page, headers: { "content-security-policy": value } }), /unfilterable CSP/);
+  }
+  for (const value of ["example-feature=()", "bluetooth=(self)", "local-fonts=(self)", "window-management=(self)"]) {
+    assert.throws(() => probeProjection({ ...page, headers: { "permissions-policy": value } }), /unfilterable qualification header/);
+  }
+});
+
 test("failed features remain failed; unknown credential-bearing header/error shapes block projection", () => {
   const actual = actualQualification(); actual.probes.crossSite.status = 200;
-  const failed = qualification(actual.probes, "api"), saved = qualificationEvidence(failed);
+  const failed = produceBoundedQualification(actual.probes, "api"), saved = qualificationEvidence(failed);
   assert.equal(saved.qualification.eligible, false); assert.ok(saved.qualification.missing.includes("crossSite"));
   for (const [header, value] of [["cache-control", "private, credentialXYZ123"], ["content-security-policy", "script-src https://credentialXYZ123.invalid"], ["permissions-policy", 'camera=("https://credentialXYZ123.invalid")']]) {
     const q = actualQualification(); q.probes.page.headers[header] = value;
-    assert.throws(() => qualificationEvidence(qualification(q.probes, "api")), /unfilterable/);
+    assert.throws(() => qualificationEvidence(produceBoundedQualification(q.probes, "api")), /unfilterable/);
   }
-  assert.throws(() => probeProjection({ ms: 1, error: "credentialXYZ123" }), /unfilterable/);
-  const broken = actualQualification(); broken.probes.cap.held = 1;
-  assert.equal(qualificationEvidence(qualification(broken.probes, "api")).qualification.eligible, false);
+  assert.throws(() => probeProjection({ ms: 1, error: "credentialXYZ123" }));
+  assert.throws(() => qualificationEvidence(qualification(qualificationProbes(), "api")));
 });
 
 test("page projections preserve actual absent/script/native form branches, including hostile markup", () => {
@@ -141,20 +176,21 @@ test("worker writes replayable fixture qualification, and retains negative/filte
     const p = actualQualification("fixture").probes;
     if (outcome === "feature-failed") p.crossSite.status = 200;
     if (outcome === "filter-blocked") p.page.headers["cache-control"] = "private, credentialXYZ123";
-    const result = await runQualificationWorker(config, (script, input) => {
+    const calls = [];
+    const result = await runQualificationWorker(config, async (script, input) => {
+      assert.equal(script, "conform-probe");
+      calls.push([input.method, input.path, input.headers?.["accept-encoding"] ?? input.headers?.host ?? input.headers?.["sec-fetch-site"] ?? null]);
       const pending = read(join(dir, "qualification-evidence.json")).events.at(-1);
       assert.equal(pending.response, null); assert.equal(pending.responseSha256, null);
       if (outcome === "execution-failed") throw new Error("credentialXYZ123");
-      if (script === "conform-hold") return input.mode === "head" ? p.unfinishedHead : p.cap;
       const { path, headers, method } = input;
-      if (path.startsWith("/health")) return p.live;
+      if (path.startsWith("/health")) { const { path: _path, ...reply } = p.live; return reply; }
       if (path.endsWith("/missing")) return path.startsWith("/api") ? p.json404 : p.page404;
-      if (headers.host === "unrecognized.invalid") return p.badHost;
-      if (headers["x-qualification"]) return p.bigHead;
+      if (headers?.host === "unrecognized.invalid") return p.badHost;
       if (method === "POST" && path.startsWith("/api/marketplace/")) return p.json405;
-      if (method === "POST") return headers.origin !== "http://localhost:8080" ? p.crossSite : input.body.length > 2 ** 20 ? p.bigBody : p.ownPost;
+      if (method === "POST") return headers.origin !== config.base ? p.crossSite : p.ownPost;
       if (method === "HEAD") return p.head;
-      if (headers["accept-encoding"] !== "identity") return path.startsWith("/api") ? p.jsonGzip : p.pageBr;
+      if (headers?.["accept-encoding"]) return path.startsWith("/api") ? headers["accept-encoding"] === "gzip" ? p.jsonGzip : p.jsonBr : p.pageBr;
       return path.startsWith("/api") ? p.json : p.page;
     });
     const file = join(dir, "qualification-evidence.json"), saved = read(file);
@@ -162,12 +198,26 @@ test("worker writes replayable fixture qualification, and retains negative/filte
     assert.doesNotMatch(readFileSync(file, "utf8") + readFileSync(config.output, "utf8"), /credentialXYZ123/);
     if (["complete", "feature-failed"].includes(outcome)) {
       assert.equal(saved.failure, null);
-      assert.equal(validateQualification(saved.qualification).eligible, result.eligible);
+      assert.equal(validateActiveQualification(saved.qualification).eligible, result.eligible);
       assert.equal(saved.rawProbeSha256, result.rawProbeSha256);
-      assert.ok(saved.events.length > 15 && saved.events.every((event) => event.failure === null));
+      assert.deepEqual([result.profile, saved.profile], [boundedFeatureProfile, boundedFeatureProfile]);
+      const page = "/marketplace/en-US/item_1", api = "/api/marketplace/item_1", form = "/write?auth=credentialXYZ123";
+      assert.deepEqual(calls, [["GET", page, null], ["GET", api, null], ["GET", page, "br, gzip"], ["GET", api, "br, gzip"], ["GET", api, "gzip"],
+        ["GET", "/marketplace/en-US/missing", null], ["GET", "/api/marketplace/missing", null], ["POST", api, null], ["HEAD", api, null],
+        ["GET", page, "unrecognized.invalid"], ["POST", form, "same-origin"], ["POST", form, "cross-site"], ["GET", "/health/live", null]]);
+      assert.equal(saved.events.length, calls.length);
+      assert.ok(saved.events.every((event) => event.kind === "http" && event.failure === null));
       const replayed = replayQualificationEvidence(saved, result, config); assert.equal(replayed.eligible, result.eligible);
-      const changed = structuredClone(saved); changed.events[0].response.status = 201;
-      assert.throws(() => replayQualificationEvidence(changed, result, config));
+      for (const change of [
+        (r) => { r.events[0].response.status = 201; },
+        (r) => { r.events[0].responseSha256 = "f".repeat(64); },
+        (r) => { r.events.at(-1).kind = "connection"; },
+        (r) => { r.qualification.probes.page.headers["set-cookie"] = ["session=credentialXYZ123"]; },
+        (r) => { r.qualification = qualification(qualificationProbes(), "fixture"); },
+      ]) {
+        const changed = structuredClone(saved); change(changed);
+        assert.throws(() => replayQualificationEvidence(changed, result, config));
+      }
     } else {
       assert.ok(saved.failure); assert.equal(result.failure, "native-production-qualification-failed");
       assert.ok(saved.events.some((event) => event.failure));
@@ -198,9 +248,18 @@ test("actual native HTTP probe failure retains safe response facts without body/
     assert.equal(saved.events[0].response.status, 503);
     assert.equal(saved.events[0].kind, "http");
     const replayed = replayQualificationEvidence(saved, result, config);
-    assert.deepEqual([replayed.eligible, replayed.targetFailure], [false, "native-qualification-unhealthy-page"]);
+    assert.deepEqual([replayed.profile, replayed.eligible, replayed.targetFailure], [boundedFeatureProfile, false, "native-qualification-unhealthy-page"]);
     const changed = structuredClone(saved); changed.events[0].response.status = 200; changed.events[1].response.status = 200;
     assert.throws(() => replayQualificationEvidence(changed, result, config));
+    const archived = { ...saved }, archivedResult = { ...result }; delete archived.profile; delete archivedResult.profile;
+    assert.equal(replayQualificationEvidence(archived, archivedResult, config, featureProfile).profile, featureProfile);
+    assert.throws(() => replayQualificationEvidence(archived, archivedResult, config));
     assert.doesNotMatch(readFileSync(file, "utf8"), /credentialXYZ123|set-cookie|<form/);
   } finally { await server.terminate(); }
 }));
+
+test("active sources capture bounded acquisition, not legacy probe executables", () => {
+  const active = producerEvidenceFiles(boundedFeatureProfile);
+  assert.ok(active.includes("bench/hardening/qualification.mjs"));
+  assert.ok(!active.some((path) => /conform-(?:probe|hold)/.test(path)));
+});

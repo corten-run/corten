@@ -75,7 +75,7 @@ impl<S: Send + Sync, T: Clone + Send + Sync + 'static> FromRequestParts<S> for C
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
         Self::of(parts).cloned().ok_or_else(|| {
-            Error::new(format!(
+            Error::corten(format!(
                 "corten::ConnectionInfo<{}>: the request has no connection value of this type; \
                  use serve_wrapped_with, or take Option<ConnectionInfo<T>> where none is an answer",
                 std::any::type_name::<T>(),
@@ -201,7 +201,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
         ClientIp::find(parts).ok_or_else(|| {
-            Error::new(
+            Error::corten(
                 "corten::ClientIp: the request has no client address (a Unix socket with no Policy::proxy, a listener \
                  without socket addresses, a router served without a PeerAddr, or a test without Call::peer); take Option<ClientIp> where none is an answer",
             )
@@ -289,8 +289,8 @@ pub(crate) struct ZoneName {
 #[cfg(feature = "zones")]
 impl ZoneName {
     /// The zone in the request's cookie, if any.
-    pub(crate) fn of(headers: &http::HeaderMap) -> Option<Self> {
-        let name = zone_of(headers)?;
+    pub(crate) fn of(cookies: http::header::ValueIter<'_, http::HeaderValue>) -> Option<Self> {
+        let name = crate::security::cookie::get_in(cookies, ZONE_COOKIE).filter(|name| zone_name(name))?;
         let mut bytes = [0; 64];
         bytes[..name.len()].copy_from_slice(name.as_bytes());
         Some(ZoneName { len: name.len() as u8, bytes })
@@ -310,7 +310,7 @@ impl<S: Send + Sync> OptionalFromRequestParts<S> for ClientZone {
         if signal.and_then(Signal::shared).is_some_and(|shared| !shared.client_zone) {
             let message = "corten::ClientZone: the app does not learn its visitors' time zones; add App::client_zone()";
             if cfg!(debug_assertions) {
-                return Err(Error::new(message).with_status(StatusCode::INTERNAL_SERVER_ERROR).into_response());
+                return Err(Error::corten(message).with_status(StatusCode::INTERNAL_SERVER_ERROR).into_response());
             }
             tracing::error!("{message}");
             return Ok(None);

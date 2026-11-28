@@ -2,32 +2,42 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { accountId, commit, context, harness, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
-import { controllerPaths, nativePaths, parseProductionArgs, productionMain } from "./cloud-production.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
+import { controllerPaths, nativePaths, parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
+import { benchPackagePaths, publicError } from "./droplet.mjs";
+import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
-import { sourceUrl } from "./cloud-remote.mjs";
+import { bootstrapReadScript, sourceUrl } from "./cloud-remote.mjs";
+import { providerFailure } from "./cloud-options.mjs";
 import { registration as streamRegistration } from "./test-fixtures/control-stream-fixture.mjs";
 import { controlRegistration, controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { digest } from "./cloud-local.mjs";
+import { fleetOperationPlan } from "./fleet.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
   const spawn = (binary, argv, options) => {
     calls.push([binary, argv, options]);
     if (binary === "git") {
+      if (argv[0] === "-C" && argv[1] === flags.measuredRoot) {
+        const stdout = argv.includes("--show-toplevel") ? flags.measuredRoot : argv.includes("HEAD^{commit}") ? flags.measuredHead ?? commit : flags.measuredDirty ?? "";
+        return { status: 0, stdout };
+      }
       if (argv[0] === "show") {
         const path = argv[1].slice(41);
         return { status: 0, stdout: flags.wrongSource ? "wrong" : readFileSync(resolve(path), "utf8").replaceAll("\r\n", "\n") };
       }
-      if (argv[0] === "cat-file" && flags.missingNative) return { status: 1, stderr: "private" };
-      if (argv[0] === "merge-base" && flags.unmerged) return { status: 1, stderr: "private" };
+      if (argv[0] === "cat-file" && (flags.missingNative || flags.missingPaths?.includes(argv[2].slice(41)))) return { status: 1, stderr: "private" };
+      if (argv[0] === "merge-base" && (flags.unmerged || flags.unrelated && argv.at(-2) === commit)) return { status: 1, stderr: "private" };
       if (argv[0] === "merge-base" && flags.staleTracking && argv.at(-1) === "origin/main") return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.afterFetch) flags.afterFetch();
@@ -58,7 +68,7 @@ function productionHarness(t, flags = {}) {
       ? { status: 1, stdout: "", stderr: "" } : h.run(binary, args, options.timeout);
     return trackedSsh ? { ...result, stderr: "CORTEN_CONTROL " + request.invocation.id + " " + "d".repeat(64) + "\nCORTEN_RESULT " + request.invocation.id + " " + result.status + "\n" } : result;
   };
-  const deps = { spawn, providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
+  const deps = { spawn, roleCheck: flags.roleCheck ?? (() => []), providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
     calls.push([binary, argv, { timeout }]); return h.run(binary, argv, timeout, true);
   }), repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, interrupted: () => flags.cancelled, write: (v) => stdout.push(JSON.parse(v)) };
   deps.streamSpawn = (binary, argv) => {
@@ -82,6 +92,168 @@ function productionHarness(t, flags = {}) {
   async function approve(mode) { const values = args(mode); await productionMain([...values, "--print-approval"], deps); return [...values, "--approve-reviewed-merged-ready", stdout.at(-1).approvalSha256]; }
   return { h, calls, stdout, deps, args, approve };
 }
+
+async function verifiedDeletionRetry(t, flags = { active: true, reportStatus: "verified" }) {
+  const p = productionHarness(t, flags), { h } = p;
+  await h.launch().launch();
+  const closePath = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(closePath));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(closePath, JSON.stringify(closed));
+  Object.assign(flags, { active: false, expired: true, deleteLost: true });
+  h.setArchive(archive([...metadata().filter(e => e.name !== "exit-code"), { name: "exit-code", body: "0\n" }, { name: "campaign/" }]));
+  await assert.rejects(h.task().collect(), /acknowledgement lost/);
+  const before = readFileSync(h.statePath), saved = h.saved();
+  assert.equal(saved.validation.status, "verified"); assert.ok(saved.deletionIntentAt && !saved.destroyedAt);
+  assert.equal(h.deletes, 1);
+  return { p, h, flags, before, saved };
+}
+
+const afterExactAbsence = (action) => {
+  let read = false;
+  return (bin, argv) => {
+    if (bin === "doctl" && argv[2] === "get" && argv[1] === "droplet") read = true;
+    else if (read && bin === "doctl" && argv[0] === "account") { read = false; action(); }
+  };
+};
+
+test("a merged successor reconciles only a previously verified, absent host and replays its measured source", async (t) => {
+  const head = "b".repeat(40);
+  const { p, h, flags, before, saved } = await verifiedDeletionRetry(t);
+  Object.assign(flags, { wrongHead: true, remoteHead: head });
+  flags.measuredRoot = join(h.temp, "measured"); mkdirSync(flags.measuredRoot);
+  p.deps.compiler = root => root === flags.measuredRoot;
+  const args = [...p.args(), "--absent-measured-checkout", flags.measuredRoot];
+  const preview = () => productionMain([...args, "--print-approval"], p.deps);
+  await assert.rejects(productionMain([...p.args(), "--print-approval"], p.deps), /measured integrated checkout/);
+  h.change(s => { delete s.deletionIntentAt; });
+  await assert.rejects(preview(), /verified older reservation/);
+  writeFileSync(h.statePath, before);
+  flags.measuredHead = head;
+  await assert.rejects(preview(), /original measured checkout/); delete flags.measuredHead;
+  flags.measuredDirty = " M bench/source";
+  await assert.rejects(preview(), /clean measured checkout/); delete flags.measuredDirty;
+  flags.unrelated = true;
+  await assert.rejects(preview()); delete flags.unrelated;
+  assert.equal(await preview(), 3);
+  const plan = p.stdout.at(-1);
+  assert.equal(plan.controllerCommit, head);
+  assert.equal(plan.recovery.measuredCommit, commit);
+  assert.equal(plan.recovery.policy, "collect-verified-absent-host-only");
+  const approved = [...args, "--approve-reviewed-merged-ready", plan.approvalSha256];
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  const live = h.host(); h.hosts([live]);
+  let replayed = 0;
+  const run = (observe) => productionMain(approved, { ...p.deps, inspect: async input => {
+    replayed++; assert.equal(input.commit, commit); observe?.(); return h.report();
+  } });
+  await assert.rejects(run(), /absence|still present/);
+  assert.equal(replayed, 0); assert.deepEqual(readFileSync(h.statePath), before);
+  h.hosts([]);
+  flags.accountId = "00000000-0000-4000-8000-000000000001";
+  await assert.rejects(run(), /account identity/); delete flags.accountId;
+  assert.equal(replayed, 0); assert.deepEqual(readFileSync(h.statePath), before);
+  flags.afterFetch = () => { h.change(s => { delete s.deletionIntentAt; }); };
+  const n = p.calls.length;
+  await assert.rejects(run(), /verified older reservation/); delete flags.afterFetch;
+  assert.ok(p.calls.slice(n).every(([bin]) => bin === "git"));
+  writeFileSync(h.statePath, before);
+  await assert.rejects(run(() => h.hosts([live])), /absence|still present/);
+  assert.equal(replayed, 1); assert.deepEqual(readFileSync(h.statePath), before);
+  h.hosts([]);
+  const invalid = join(h.local, "monitor-invalid.json");
+  await assert.rejects(run(() => writeFileSync(invalid, "{}")));
+  unlinkSync(invalid); assert.deepEqual(readFileSync(h.statePath), before);
+  const archivePath = join(h.local, "results.tgz"), archiveBytes = readFileSync(archivePath);
+  const terminalPath = join(h.local, "monitor-terminal.json"), terminalBytes = readFileSync(terminalPath);
+  const operationLock = join(h.local, "operation.lock");
+  await assert.rejects(run(() => { flags.hook = afterExactAbsence(() => writeFileSync(archivePath, "changed")); }), /archive changed/);
+  delete flags.hook; writeFileSync(archivePath, archiveBytes); assert.deepEqual(readFileSync(h.statePath), before);
+  await assert.rejects(run(() => { flags.hook = afterExactAbsence(() => {
+    writeFileSync(terminalPath, JSON.stringify({ ...JSON.parse(terminalBytes), campaign: "r21-fedcba9876543210" }));
+  }); }), /monitor campaign changed/);
+  delete flags.hook; writeFileSync(terminalPath, terminalBytes); assert.deepEqual(readFileSync(h.statePath), before);
+  const replacement = "replacement lock\n";
+  await assert.rejects(run(() => { flags.hook = afterExactAbsence(() => {
+    renameSync(operationLock, operationLock + ".old"); writeFileSync(operationLock, replacement, { flag: "wx" });
+  }); }), /operation lock changed/);
+  delete flags.hook; assert.equal(readFileSync(operationLock, "utf8"), replacement); unlinkSync(operationLock);
+  assert.deepEqual(readFileSync(h.statePath), before);
+  const now = performance.now.bind(performance); let elapsed = 0;
+  const clock = t.mock.method(performance, "now", () => now() + elapsed);
+  await assert.rejects(run(() => { elapsed = 26 * 60_000; }), e => e.controllerStage === "collect-native-replay-deadline");
+  assert.equal(replayed, 6); assert.deepEqual(readFileSync(h.statePath), before);
+  elapsed = 0;
+  assert.equal(await run(() => { elapsed = 16 * 60_000; }), 0); assert.equal(replayed, 7);
+  clock.mock.restore();
+  const after = h.saved(); assert.ok(after.destroyedAt); delete after.destroyedAt;
+  assert.deepEqual(after, saved);
+  assert.equal(h.deletes, 1); assert.equal(h.creates, 1);
+  for (const [bin, argv] of p.calls) {
+    if (bin === "git") continue;
+    assert.equal(bin, "doctl");
+    assert.ok(argv[0] === "account" && argv[1] === "get" || argv[0] === "auth" && argv[1] === "token"
+      || argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "get" && argv[3] === saved.id);
+  }
+});
+
+test("ordinary absence retry rechecks the saved archive after its final observation", async (t) => {
+  const { h, flags, before } = await verifiedDeletionRetry(t);
+  const path = join(h.local, "results.tgz"), bytes = readFileSync(path);
+  await assert.rejects(h.task({ inspect: async () => {
+    flags.hook = afterExactAbsence(() => writeFileSync(path, "changed"));
+    return h.report();
+  } }).collect(), /archive changed/);
+  delete flags.hook; writeFileSync(path, bytes);
+  assert.deepEqual(readFileSync(h.statePath), before);
+  assert.equal(await h.task().collect(), 0);
+  assert.ok(h.saved().destroyedAt); assert.equal(h.deletes, 1);
+});
+
+for (const target of ["archive", "extracted member"]) test(`absence retry rejects a changed ${target} during the final extraction scan`, async (t) => {
+  const { h, flags, before, saved } = await verifiedDeletionRetry(t);
+  const extracted = join(h.local, saved.evidence), last = join(extracted, "run.log");
+  const path = target === "archive" ? join(h.local, "results.tgz") : join(extracted, "host.txt");
+  const lstat = fs.lstatSync; let armed = false, changed = false;
+  const hook = t.mock.method(fs, "lstatSync", (file, ...args) => {
+    if (armed && !changed && file === last) { changed = true; writeFileSync(path, "changed after verification"); }
+    return lstat(file, ...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(h.task({ inspect: async () => {
+      flags.hook = afterExactAbsence(() => { armed = true; });
+      return h.report();
+    } }).collect(), target === "archive" ? /file changed while reading/ : /local handoff custody changed: extraction/);
+  } finally { delete flags.hook; hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(changed, "changed target during the final extraction scan");
+  assert.deepEqual(readFileSync(h.statePath), before); assert.equal(h.deletes, 1);
+});
+
+test("ordinary collection of a finalized result keeps the ordinary replay budget", async (t) => {
+  const { h } = await verifiedDeletionRetry(t);
+  assert.equal(await h.task().collect(), 0);
+  const before = readFileSync(h.statePath), now = performance.now.bind(performance);
+  let elapsed = 0;
+  t.mock.method(performance, "now", () => now() + elapsed);
+  await assert.rejects(h.task({ inspect: async () => {
+    elapsed = 16 * 60_000;
+    return h.report();
+  } }).collect(), e => e.controllerStage === "collect-native-replay-deadline");
+  assert.deepEqual(readFileSync(h.statePath), before);
+  assert.equal(h.deletes, 1);
+});
+
+test("contradictory saved verification does not get the extended replay budget", async (t) => {
+  const { h } = await verifiedDeletionRetry(t);
+  h.change(s => { s.exitCode = 1; });
+  const before = readFileSync(h.statePath), now = performance.now.bind(performance);
+  let elapsed = 0;
+  t.mock.method(performance, "now", () => now() + elapsed);
+  await assert.rejects(h.task({ inspect: async () => {
+    elapsed = 16 * 60_000;
+    return h.report();
+  } }).collect(), e => e.controllerStage === "collect-native-replay-deadline");
+  assert.deepEqual(readFileSync(h.statePath), before); assert.equal(h.deletes, 1);
+});
 
 function unusedBootstrapAttempt(t, flags = {}, script = "true") {
   const p = productionHarness(t, flags);
@@ -390,6 +562,66 @@ test("supervised audit startup surfaces a controller failure before the ready ma
   });
 });
 
+test("bootstrap marker diagnostic preserves command acknowledgement, polling, and custody", async (t) => {
+  for (const [mode, detail, uncertain] of [
+    ["lost-completion", "remote-completion-unconfirmed", true],
+    ["unacknowledged-pending", "remote-completion-unconfirmed", true],
+    ["local-process-error", "local-control-uncertain", true],
+    ["acknowledged-refusal", "acknowledged-exit-refused", false],
+    ["invalid-marker", "marker-invalid", false],
+    ["pending-then-ready", undefined, false],
+  ]) await t.test(mode, async (t) => {
+    const p = productionHarness(t, { active: true, bootstrapPending: ["pending-then-ready", "unacknowledged-pending"].includes(mode) ? 1 : 0,
+      bootstrapError: mode === "acknowledged-refusal" });
+    p.deps.compiler = () => true; // Synthetic launch stops at the controller and never loads the compiler.
+    const input = `set -euo pipefail\n${bootstrapReadScript}\n`, readDigest = digest(input), readRows = () => p.h.saved().control.ledger
+      .filter(({ request }) => request.invocation.requestSha256 === readDigest);
+    const locks = [join(p.h.local, "operation.lock"), join(p.h.base, ".groups-launch.lock")];
+    const raw = "SYNTHETIC_PRIVATE_BOOTSTRAP_OUTPUT";
+    const spawn = p.deps.spawn, streamSpawn = p.deps.streamSpawn;
+    let reads = 0, monitors = 0, error;
+    p.deps.streamSpawn = (...args) => { monitors++; return streamSpawn(...args); };
+    p.deps.spawn = (binary, argv, options) => {
+      const result = spawn(binary, argv, options);
+      if (binary !== "ssh" || !options.input?.endsWith(input)) return result;
+      reads++;
+      assert.deepEqual(locks.map(existsSync), [true, true]);
+      if (["lost-completion", "unacknowledged-pending"].includes(mode)) {
+        assert.equal(result.status, mode === "lost-completion" ? 0 : 3);
+        return { ...result, stdout: raw, stderr: result.stderr.split("\n")[0] + "\n" + raw };
+      }
+      if (mode === "local-process-error") return { ...result, status: null, stdout: raw, error: new Error(raw) };
+      return mode === "invalid-marker" ? { ...result, stdout: raw } : result;
+    };
+    const approval = await p.approve("--detach");
+    if (detail) await assert.rejects(productionMain(approval, p.deps), (value) => { error = value; return true; });
+    else assert.equal(await productionMain(approval, p.deps), 3);
+    assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+    const saved = p.h.saved(), rows = readRows();
+    assert.equal(saved.status, "running");
+    assert.deepEqual(locks.map(existsSync), [uncertain, uncertain]);
+    if (detail) {
+      assert.equal(reads, 1); assert.equal(monitors, 0);
+      assert.equal(p.calls.at(-1)[0], "ssh");
+      assert.ok(p.calls.at(-1)[2].input.endsWith(input), "no request follows the refused marker read");
+      assert.deepEqual(saved.control.sealed, []); assert.equal(saved.control.monitor.phase, "pending");
+      assert.equal(saved.control.monitor.registrationSha256, undefined);
+      assert.deepEqual(rows, saved.control.ledger.slice(-1));
+      assert.deepEqual(rows.map(({ localTerminal, code }) => [localTerminal, code]),
+        [[!uncertain, uncertain ? undefined : mode === "acknowledged-refusal" ? 1 : 0]]);
+      assert.equal(!!error.controlTreeUncertain, uncertain);
+      assert.ok(!publicError(error).includes(raw));
+      t.diagnostic(publicError(error));
+      assert.deepEqual(providerFailure(error), { code: "bootstrap-marker", detail });
+      assert.equal(publicError(error), `${publicError()} Controller stage: controller-launch. Bootstrap marker: ${detail}.`);
+    } else {
+      assert.equal(reads, 2); assert.equal(monitors, 1);
+      assert.deepEqual(rows.map(({ localTerminal, code }) => [localTerminal, code]), [[true, 3], [true, 0]]);
+      assert.deepEqual(saved.control.sealed, ["bootstrap"]); assert.equal(saved.control.monitor.phase, "closed");
+    }
+  });
+});
+
 test("supervised audit startup timeout cancels and joins a registered monitor before fixture cleanup", { timeout: 10000 }, async (t) => {
   const live = Promise.withResolvers(), settling = Promise.withResolvers(), release = Promise.withResolvers();
   const flags = {}; let launch, settled = 0, settledAtReturn;
@@ -536,6 +768,32 @@ test("production entry forwards source-bound stream registration and settles asy
   assert.ok(existsSync(join(p.h.local, "monitor-invalid.json"))); assert.equal(p.h.deletes, 0);
 });
 
+for (const acknowledged of [true, false]) test("cancelled unit query records only an acknowledged exit: " + acknowledged, async t => {
+  const flags = { active: true }, p = productionHarness(t, flags);
+  await p.h.launch().launch(); flags.active = false;
+  const closed = JSON.parse(readFileSync(join(p.h.local, "monitor-local-closed.json")));
+  t.mock.timers.enable({ apis: ["Date"], now: closed.recoverAfterMs + 1 });
+  const spawn = p.deps.spawn;
+  p.deps.spawn = (binary, argv, options) => {
+    const result = spawn(binary, argv, options);
+    if (binary === "ssh" && options.input?.includes("--property=ControlPID")) {
+      assert.equal(result.status, 0); flags.cancelled = true;
+      if (!acknowledged) return { ...result, stderr: "" };
+    }
+    return result;
+  };
+  await assert.rejects(productionMain(await p.approve("--collect"), p.deps),
+    e => acknowledged ? /controller cancelled/.test(e.message) : e.controlTreeUncertain === true);
+  const row = p.h.saved().control.ledger.at(-1);
+  assert.ok(flags.cancelled); assert.equal(p.h.deletes, 0);
+  assert.equal(row.localTerminal, acknowledged); assert.equal(row.code, acknowledged ? 0 : undefined);
+  assert.equal(existsSync(join(p.h.local, "operation.lock")), !acknowledged);
+  if (acknowledged) {
+    p.deps.spawn = spawn; flags.cancelled = false;
+    assert.equal(await productionMain(await p.approve("--collect"), p.deps), 1); assert.equal(p.h.deletes, 1);
+  }
+});
+
 for (const phase of ["pending", "live"]) test("wire registration survives launch cancellation while " + phase, async (t) => {
   const p = productionHarness(t, { active: true }), local = p.h.local, registration = join(local, "monitor-registration.json");
   let atCancel;
@@ -605,11 +863,54 @@ test("production failed bootstrap seal settles its already-ready stream and reta
 test("preview is local/read-only, missing isolated integration is explicit and cannot allocate", async (t) => {
   const p = productionHarness(t, { missingNative: true });
   assert.equal(await productionMain([...p.args("--detach"), "--print-approval"], p.deps), 2);
-  assert.deepEqual(p.stdout[0].missing, nativePaths); assert.equal(p.stdout[0].fullGroupQualified, false);
+  assert.deepEqual(p.stdout[0].missing, [...nativePaths, ...benchPackagePaths]); assert.equal(p.stdout[0].fullGroupQualified, false);
   assert.ok(p.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.ok(!existsSync(p.h.local));
   await assert.rejects(productionMain(await p.approve("--detach"), p.deps), /integration missing/); assert.equal(p.h.creates, 0);
 });
 
+test("detach preview requires both committed bench package files before any reservation", async (t) => {
+  for (const absent of [benchPackagePaths, [benchPackagePaths[0]], [benchPackagePaths[1]]]) {
+    const p = productionHarness(t, { missingPaths: absent });
+    assert.equal(await productionMain([...p.args("--detach"), "--print-approval"], p.deps), 2);
+    assert.deepEqual(p.stdout[0].missing, absent);
+    await assert.rejects(productionMain(await p.approve("--detach"), p.deps), /integration missing/);
+    assert.ok(p.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.equal(p.h.creates, 0); assert.ok(!existsSync(p.h.local));
+  }
+  // Collection keeps its saved reservation; only a new launch installs the bench package.
+  const p = productionHarness(t, { missingPaths: benchPackagePaths }); p.h.seed();
+  assert.equal(await productionMain([...p.args(), "--print-approval"], p.deps), 3); assert.deepEqual(p.stdout[0].missing, []);
+});
+
+test("detach and native collection previews name a missing local bench install before allocation or collection", async (t) => {
+  const launch = productionHarness(t); launch.deps.compiler = () => false;
+  assert.equal(await productionMain([...launch.args("--detach"), "--print-approval"], launch.deps), 2);
+  assert.deepEqual(launch.stdout[0].missing, [localCompilerMissing]); assert.match(localCompilerMissing, /run npm --prefix bench ci/);
+  await assert.rejects(productionMain(await launch.approve("--detach"), launch.deps), /integration missing/);
+  assert.ok(launch.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.equal(launch.h.creates, 0); assert.ok(!existsSync(launch.h.local));
+  const collect = productionHarness(t); collect.h.seed(); collect.deps.compiler = () => false;
+  const saved = readFileSync(collect.h.statePath);
+  assert.equal(await productionMain([...collect.args(), "--print-approval"], collect.deps), 2);
+  assert.deepEqual(collect.stdout[0].missing, [localCompilerMissing]);
+  await assert.rejects(productionMain(await collect.approve(), collect.deps), /integration missing/);
+  assert.ok(collect.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.ok(readFileSync(collect.h.statePath).equals(saved));
+  assert.equal(collect.h.deletes, 0);
+  // Unused-host retirement replays no native evidence, so it does not need the install.
+  const unused = unusedBootstrapAttempt(t); unused.deps.compiler = () => false;
+  await unused.approve(); assert.deepEqual(unused.stdout.at(-1).missing, []);
+});
+
+// The approval hash excludes missing inputs, so the locked plan must check them itself.
+test("a bench install lost after the source recheck stops launch and collection at the locked plan, before provider access", async (t) => {
+  for (const mode of ["--detach", undefined]) {
+    const p = productionHarness(t); if (!mode) p.h.seed();
+    const approved = await p.approve(mode), calls = p.calls.length;
+    let checks = 0; p.deps.compiler = () => ++checks < 3; // Approved plan and source recheck ready, locked plan missing.
+    await assert.rejects(productionMain(approved, p.deps), /integration missing/);
+    assert.equal(checks, 3, "the third check is the locked plan's");
+    assert.ok(p.calls.slice(calls).every(([binary]) => binary === "git"), "no provider or host access");
+    assert.equal(p.h.creates, 0); assert.equal(p.h.deletes, 0);
+  }
+});
 test("state aliases with resolved SSH expansion characters refuse preview and approved launch before provider access", async (t) => {
   for (const approved of [false, true]) {
     for (const nested of [false, true]) {
@@ -669,6 +970,25 @@ test("normal new state directories preview without writes and create a bounded c
   const { controller } = await import("./droplet.mjs");
   controller({ round: "r21", stateDir, detach: true, commit, sshKey: "42", accountId, context }, { repo: p.h.repo, run() { assert.fail("unexpected process"); } });
   assert.ok(existsSync(stateDir)); assert.ok(!existsSync(join(stateDir, "groups-r21"))); assert.equal(p.h.creates, 0);
+});
+
+test("role preflight blocks preview and rechecks before the first provider operation under the launch lock", async (t) => {
+  const denied = "hardening: isolated benign service/recovery actor proof unavailable; connection-flood resistance not measured";
+  const blocked = productionHarness(t, { roleCheck: () => [denied] });
+  assert.equal(await productionMain([...blocked.args("--detach"), "--print-approval"], blocked.deps), 2);
+  assert.deepEqual(blocked.stdout.at(-1).missing, [denied]);
+  assert.ok(blocked.calls.every(([binary]) => binary === "git"));
+  assert.ok(!existsSync(blocked.h.local));
+
+  let checks = 0;
+  const locked = productionHarness(t, { roleCheck: ({ commit: measured, group, mode }) => {
+    assert.equal(measured, commit); assert.equal(group, undefined); assert.equal(mode, undefined);
+    return ++checks === 4 ? [denied] : [];
+  } });
+  const approved = await locked.approve("--detach");
+  await assert.rejects(productionMain(approved, locked.deps), /integration missing/);
+  assert.equal(checks, 4); assert.equal(locked.h.creates, 0);
+  assert.ok(locked.calls.every(([binary]) => binary === "git"));
 });
 
 test("no/mismatched approval, dirty/mismatched source, unmerged head and fetch failure make no cloud calls", async (t) => {
@@ -746,6 +1066,23 @@ test("approved running collect observes once; terminal blocked collect retains e
     if (active) assert.equal(p.h.units, 1);
     else { assert.ok(p.h.saved().destroyedAt); assert.ok(existsSync(join(p.h.local, "results.tgz"))); }
   }
+});
+
+test("production collect preserves closed replay stages but not private inspector evidence", async (t) => {
+  const privateText = "SYNTHETIC_PRIVATE_REPLAY";
+  for (const [stage, inspect] of [
+    ["collect-native-replay-start", () => { throw new Error(privateText); }],
+    ["collect-native-replay-refused", async () => { throw new Error(privateText); }],
+    ["collect-native-report-refused", async () => ({ invalidReport: privateText })],
+  ]) await t.test(stage, async (child) => {
+    const p = productionHarness(child, { active: false }); p.h.seed();
+    p.deps.inspect = inspect;
+    const approval = await p.approve();
+    await assert.rejects(productionMain(approval, p.deps), (error) =>
+      error.controllerStage === stage && publicError(error) === `${publicError()} Controller stage: ${stage}.`);
+    assert.equal(p.h.deletes, 0);
+    assert.ok(existsSync(join(p.h.local, "results.tgz")));
+  });
 });
 
 test("approval binds saved identity and detects state changes during merge verification", async (t) => {
@@ -839,13 +1176,21 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 32);
+  assert.equal(controllerPaths.length, 38);
+  for (const path of ["plan.mjs", "bounded-requests.mjs", "dependency-recovery-contract.mjs"])
+    assert.ok(controllerPaths.includes(`bench/hardening/${path}`), `missing pinned fleet dependency: ${path}`);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-sealed-collection.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-cancellation.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-setup-drain-source.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "cloud-control-stream.mjs", "isolated/control-stream-source.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));
   const args = ["r21", "--collect", "--state-dir", resolve("outside")];
+  const pin = ["--r21-measured-checkout", resolve("measured")], sha = ["--exit-archive-sha256", "a".repeat(64)];
+  for (const suffix of [pin, sha, [...pin, ...sha, "--unused-bootstrap-known-hosts", resolve("verified")]])
+    assert.throws(() => parseProductionArgs([...args, ...suffix]));
+  assert.equal(parseProductionArgs([...args, ...pin, ...sha]).options.exitArchiveSha256, sha[1]);
   for (const suffix of [["--adapter", "evil"], ["--duration", "1"], ["--print-approval", "--print-approval"], ["--approve-reviewed-merged-ready", "not-a-hash"]])
     assert.throws(() => parseProductionArgs([...args, ...suffix]));
 });
@@ -857,16 +1202,45 @@ test("current saved-verifier checkout requirement fails before any provider acce
 });
 
 function groupProduction(t, flags = {}) {
-  const p = productionHarness(t, flags), path = join(p.h.temp, "fleet.json");
+  flags.fleetGroup = groupNames[0];
+  const p = productionHarness(t, flags), root = dirname(p.h.base), path = join(root, "fleet-r21.json");
   const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), sshKey: "42", provider: { accountId, context },
-    tokens: Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")])) });
+    tokens: Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")])) },
+    undefined, undefined, { stagedPlacement: true });
   writeFileSync(path, JSON.stringify(fleet));
   const values = [...p.args("--detach"), "--group", groupNames[0], "--fleet", path];
   return { p, path, fleet, values, async approval() {
     assert.equal(await productionMain([...values, "--print-approval"], p.deps), 3);
-    return [...values, "--approve-reviewed-merged-ready", p.stdout.at(-1).approvalSha256];
+    const { subject, approvalSha256 } = await fleetOperationPlan({ root, round: "r21", detach: true }, { repo: p.h.repo,
+      plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: p.deps.roleCheck }),
+      run: (binary, argv, timeout = 60000) => p.deps.spawn(binary, argv, { timeout }) });
+    const childApproval = p.stdout.at(-1).approvalSha256;
+    assert.equal(subject.jobs[0].approvalSha256, childApproval);
+    writeFileSync(join(root, "launch-intent.json"), JSON.stringify({ schema: "benchmark-group-fleet-staged-launch-intent/v1",
+      approvalSha256, subject }));
+    writeFileSync(join(root, ".fleet-operation.lock"), JSON.stringify({ pid: process.pid, approvalSha256 }));
+    return [...values, "--approve-reviewed-merged-ready", childApproval];
   } };
 }
+
+test("v5 child CLI cannot launch without staged fleet admission or override its region", async (t) => {
+  const g = groupProduction(t);
+  assert.equal(await productionMain([...g.values, "--print-approval"], g.p.deps), 3);
+  const firstApproval = g.p.stdout.at(-1).approvalSha256;
+  await assert.rejects(productionMain([...g.values, "--approve-reviewed-merged-ready", firstApproval], g.p.deps), /launch-intent/);
+  const approved = await g.approval();
+  const lock = join(dirname(g.p.h.base), ".fleet-operation.lock");
+  const savedLock = JSON.parse(readFileSync(lock));
+  writeFileSync(lock, JSON.stringify({ ...savedLock, approvalSha256: "7".repeat(64) }));
+  await assert.rejects(productionMain(approved, g.p.deps), /active batch lock/);
+  const second = [...g.values];
+  second[second.indexOf("--group") + 1] = groupNames[1];
+  second[second.indexOf("--state-dir") + 1] = join(dirname(g.p.h.base), groupNames[1]);
+  await assert.rejects(productionMain([...second, "--print-approval"], g.p.deps), /only fleet admission/);
+  await assert.rejects(productionMain([...second, "--placement", "dedicated-lon1", "--print-approval"], g.p.deps), /unknown option/);
+  assert.equal(g.p.h.creates, 0);
+  assert.ok(g.p.calls.every(([binary]) => binary === "git"));
+});
 
 test("group production approval binds complete fleet bytes before any provider access", async (t) => {
   for (const mutate of [(g) => g.fleet.jobs.pop(), (g) => g.fleet.provider.context = "other",
@@ -886,13 +1260,30 @@ test("approved group composition runs only its native group and collection canno
   assert.equal(await productionMain(await g.approval(), g.p.deps), 3);
   assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
   assert.equal(g.p.h.saved().group, groupNames[0]);
+  const known = join(g.p.h.local, "known_hosts"), launchKey = readFileSync(known);
+  assert.equal(g.p.h.saved().launchHostKeySha256, digest(launchKey));
+  const ssh = g.p.calls.filter(([binary]) => binary === "ssh").map(([, argv]) => argv);
+  assert.ok(ssh[0].includes("StrictHostKeyChecking=accept-new") && ssh[0].includes("GlobalKnownHostsFile=none"));
+  assert.ok(ssh.slice(1).every(argv => argv.includes("StrictHostKeyChecking=yes") && argv.some(arg => arg.includes(".launch-host-key-"))));
   assert.deepEqual(g.p.h.saved().selection.groups.map((row) => row.group), [groupNames[0]]);
   assert.ok(readFileSync(join(g.p.h.local, "job.sh"), "utf8").includes(`--group '${groupNames[0]}'`));
   const values = g.p.args();
   assert.equal(await productionMain([...values, "--print-approval"], g.p.deps), 3);
+  assert.equal(g.p.stdout.at(-1).launchHostKeySha256, digest(launchKey));
   assert.equal(await productionMain([...values, "--approve-reviewed-merged-ready", g.p.stdout.at(-1).approvalSha256], g.p.deps), 3);
   assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
   await assert.rejects(productionMain([...values, "--group", groupNames[1], "--fleet", g.path, "--print-approval"], g.p.deps));
+});
+
+test("replacing the launch host key after collection approval refuses before provider access", async (t) => {
+  const flags = { active: true }, g = groupProduction(t, flags);
+  assert.equal(await productionMain(await g.approval(), g.p.deps), 3);
+  const approved = await g.p.approve(), before = g.p.calls.length, known = join(g.p.h.local, "known_hosts");
+  flags.afterFetch = () => writeFileSync(known, "synthetic replacement\n");
+  await assert.rejects(productionMain(approved, g.p.deps), /saved host key differs from launch/);
+  await assert.rejects(productionMain([...g.p.args(), "--print-approval"], g.p.deps), /saved host key differs from launch/);
+  assert.ok(g.p.calls.slice(before).every(([binary]) => binary === "git"));
+  assert.equal(g.p.h.deletes, 0);
 });
 
 test("changing the fleet between preview and merged-source gate refuses allocation", async (t) => {

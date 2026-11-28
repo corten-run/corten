@@ -16,6 +16,18 @@ stream: the page's own handler answers it ([A slow part](#a-slow-part)).
 
 A value that keeps changing is the next section's `corten::live_watch`.
 
+A stream's headers go out before its fragments are rendered, and a fragment is text, so a form's
+new submit key (`SubmitKey::field`) in one cannot make the stream private as it makes a page. A
+stream whose fragments may draw a key is never `Public` and says `Cache-Control: private,
+no-cache` itself, written by a middleware of its area (`Area::middleware`): its default
+`no-cache` is not enough, since some CDNs keep an answer that says only `no-cache` or
+`no-store`. It carries no CDN caching header (`CDN-Cache-Control`, `Surrogate-Control`, the others
+[caching](app.md#caching) lists, or a name the deployment configures), and no edge rule caches
+its URL whatever it says; otherwise a shared cache gives every visitor the same key
+([forms](requests-and-forms.md#forms)). Under `corten dev`, a stream whose headers as sent have
+no plain `private`, or carry one of those listed CDN headers, is logged when a fragment it gives
+draws a key.
+
 ### Resuming
 
 A part whose data changes rarely should not be drawn again on every page view and reconnect. Give
@@ -50,7 +62,7 @@ chooses, so it is the same on every page only when it has no messages and no dat
 take `.zone(..)` ([Views](views.md), dates). For a 50-row table of 3,132 bytes on 300 open
 pages, a change costs 2.3 million instructions where rendering on each page took 7.6 million
 (callgrind, three runs each: 2.27 to 2.36 and 7.58 to 7.82; `what_a_change_costs_live_watch` in
-`crates/corten/src/tests.rs`); that counts each page's event, not its compression or its write
+[`tests/live.rs`](../../crates/corten/src/tests/live.rs)); that counts each page's event, not its compression or its write
 to the socket. The watchlist's last trade is one line, so it renders on each page.
 
 Another source (a database's change stream, a queue) does the same with `corten::live`: compare
@@ -478,10 +490,41 @@ URL, say) refuses it, so `subscribe()` loads the snapshot again after a backoff 
 1 s to 30 s, not straight away; a `sync` later or after a reconnect (a `reset`) loads it at
 once. Against a feed that answers every stream with `sync`, one page made 544 snapshot requests
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
-221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
-runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream).
-The integration tests use PostgreSQL 18 and NATS JetStream. The crate uses async-nats 0.53 and
-SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3).
+
+A stream that drops is reconnected by the browser after the feed's `retry` (1 s), and in Chromium
+so is one whose connection is refused. An HTTP error ends `EventSource` for good, as a load
+balancer's 502 does while the only instance restarts; `subscribe()` then listens again from its
+cursor after a wait that doubles every second error in a row (1, 1, 1, 2, 2, 4, 4 s and on up to
+30 s), and 1 s again once a stream opens. A snapshot that fails to load (an error, or an answer
+that is not a snapshot), a page's first or one a `sync` asked for, is fetched again on the same
+schedule and counts in the same row; a snapshot that loads starts the count again. With the
+browser's first retry at 1 s and answers that take no time, the tries come 1, 2, 3, 4, 6, 8, 12,
+16, 24, 32, 48 and 64 s after the cut, then every 30 s, where the 1, 2, 4, 8 and 16 s waits before
+put them at 1, 2, 4, 8, 16, 32 and 62 s. In that model no outage up to 48 s is met by a later try
+than before and many are met sooner (one of 5 s at 6 s, not 8 s; 20 s at 24 s, not 32 s), while
+most longer ones are met 2 s later (60 s at 64 s, not 62 s); the time a request takes, a timer
+that runs late and loading the snapshot come on top.
+
+With 20 Chromium pages and a local server that answered every request 502 for 5, 8.5 and 20 s and
+came back with a new epoch, the median page had the new snapshot 6.2, 12.3 and 24.4 s after the
+cut at `074398815`, against 8.2, 16.2 and 32.3 s at `42b474017` (medians of two runs and of
+three); after 90 s, the median of five pages had it at 94.2 s, against 92.2 s (one run each).
+Each page sent the 502 responder 12 requests in the 90 s runs, against 7 (11 in the first minute
+against 6 in one page's trace); by the schedule, a server that stays down then gets one every 30 s
+once the wait reaches 30 s, from 64 s after the cut where it was from 32 s. The tries are not
+spread at random: 2,000
+clients of the feed's protocol (four Node processes of 500, not `subscribe()`), each reconnecting
+to a `watchlist` instance on one CPU (its server code as at `42b474017`, on Docker Desktop), all
+had a snapshot and an open stream within 0.64 to 1.41 s of starting together, by their processes'
+clocks, and within 0.71 to 1.94 s when their starts were spread over 0.5 s (three runs each, the
+first of each the slowest). Spreading cut each client's median time (157 to 248 ms against 450 to
+534 ms after the first run) but not the time until the last one was current, so the runtime does
+not spread them.
+
+`corten-cluster` runs one feed across instances (Postgres outbox, a leased relay to NATS
+JetStream). The integration tests use PostgreSQL 19 and NATS JetStream. The crate uses
+async-nats 0.53 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
 An app upgrading `corten-cluster` must set `async-nats = "0.53"` in its own `Cargo.toml` too:
 `Cluster::start` takes its `async_nats::Client`.
 
@@ -658,10 +701,44 @@ benchmark (200 clients, 50 writes a second, each instance killed and restarted u
 every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000 with
 clients back on the other instance after 1.1 s at the median (measured on async-nats 0.50,
 `examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those 200
-clients are the benchmark's own Node client of the feed's protocol, on its own retry schedule,
-and it counts a gap in `seq` as lost rather than loading a snapshot: they show what the server
-sends through a failover. Beside them a Chromium page runs `subscribe()` itself through the
-same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
+clients are the benchmark's own Node client of the feed's protocol. When a stream is answered
+with an HTTP error they wait 1 s, doubling to 30 s while the errors go on, and 1 s again once a
+stream has opened (`subscribe()` doubles every second error, above), but they are not an
+EventSource: they retry a failed snapshot on their own schedule and count a gap in `seq` as lost
+rather than loading a snapshot, so they show what the server sends through a failover. Beside
+them a Chromium page runs `subscribe()` itself through the same run, and it lost nothing either
+(3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
+
+Behind nginx with more than one instance in one upstream with its passive health checks
+(`max_fails`), streams can keep a restarted instance out, as the benchmark found; to avoid it, route
+the app's stream addresses to an `upstream` of their own with `max_fails=0` on its servers, as
+the benchmark's [`nginx.conf`](../../examples/listings-feed/bench/nginx.conf) does for
+`/feeds/<seller>/live` (its location assumes a seller key without `/`; match your own routes).
+nginx lets a server that failed back in through one trial request every `fail_timeout` and
+clears its failures only when a trial ends well, and a stream does not end. With one upstream for
+everything, an instance that had restarted could stay out of one nginx worker's upstream a trial
+at a time, and once the other instance was killed that worker answered reconnects 502 itself
+(`no live upstreams`, 406 lines from one worker over 16 s while the restarted instance was up).
+In 1 of 11 runs at `e33484d44`, the Node clients' 237 timed reconnects (those that resumed
+with a patch) took up to 17.3 s, as long as four failed tries on the 1, 2, 4 and 8 s backoff take,
+and 60 more fell past the replay window and loaded a new snapshot (not timed). In 6 runs
+at `389ec774d`, with the streams' own upstream, no Node client got an HTTP error, the slowest
+took 1.3 to 1.6 s, and the median of the runs' medians went from 1.1 to 1.25 s: about half of
+the reconnects after a kill first try the killed instance (150 to 152 stream connects timed out
+a run). Every client caught up in every run, some through a snapshot.
+
+`max_fails=0` turns off only the passive exclusion: nginx still sends a new stream to a dead or
+starting instance and moves it to the next one after a connect error or timeout, under
+`proxy_next_upstream`, while another server and a try (`proxy_next_upstream_tries`) are left and
+before any byte is sent to the browser. A killed container's address often does not refuse a
+connection, it does not answer, so the benchmark's streams use a 250 ms
+`proxy_connect_timeout`, chosen for its local network; size yours for your own. That bounds only
+the connect: it does not move a stream that has already opened, or bound an instance that accepts
+and does not answer (`proxy_read_timeout` does, 1 hour in the sample). Where the load balancer can
+check readiness or drain an instance before it stops, prefer that. nginx keeps idle upstream
+connections by default, so keep them shorter than the app's header timeout as [Deploy](deploy.md)
+says.
+
 The runtime checks the envelope of what it is sent: a snapshot's `epoch`, `seq` and `rows`, and a
 patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An answer that is not a
 snapshot (from a server of another version than the page's runtime, or a route that answers other

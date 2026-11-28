@@ -127,9 +127,21 @@ impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
 #[inline]
 fn typed(body: Body, content_type: &'static str) -> Response {
     let mut res = Response::new(body);
-    res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    let headers = res.headers_mut();
+    // Room for the headers `App` adds too, so the map is allocated once, as a page's and JSON's
+    // are: a map made by its first header holds six, and grew when the security headers came.
+    headers.reserve(APP_HEADERS);
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     res
 }
+
+/// The room a text, bytes or JSON answer's header map starts with: what an answer leaves the app
+/// with under the default policy with HSTS, which is its own `Content-Type`, the security headers
+/// (seven for an SVG), `Cache-Control`, its `ETag`, `Vary` and, compressed, `Content-Encoding`.
+/// It is not a limit. A header on top of those (the handler's own, `Reporting-Endpoints`, an API's
+/// `Access-Control-Allow-Origin`) grows the map once, as the security headers grew every such
+/// answer's before.
+pub(crate) const APP_HEADERS: usize = 12;
 
 const TEXT: &str = "text/plain; charset=utf-8";
 const OCTETS: &str = "application/octet-stream";
@@ -234,17 +246,20 @@ where
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Response> {
         for (name, value) in self {
-            let name = name.try_into().map_err(|e| invalid_header(e.to_string()))?;
-            let value = value.try_into().map_err(|e| invalid_header(e.to_string()))?;
+            let name = name.try_into().map_err(|e| invalid_header(res.extensions(), e.to_string()))?;
+            let value = value.try_into().map_err(|e| invalid_header(res.extensions(), e.to_string()))?;
             res.headers_mut().insert(name, value);
         }
         Ok(res)
     }
 }
 
+/// The `500` in place of the answer whose extensions are `answer`, given a header that is not one:
+/// Corten's failure, not the answer the handler meant, and `NoStore` where that answer was
+/// ([`crate::cache::unshared_in_place_of`]).
 #[cold]
-fn invalid_header(error: String) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, error).into_response()
+fn invalid_header(answer: &Extensions, error: String) -> Response {
+    crate::cache::unshared_in_place_of(answer, (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())
 }
 
 impl<T: IntoResponseParts> IntoResponseParts for Option<T> {
@@ -258,20 +273,27 @@ impl<T: IntoResponseParts> IntoResponseParts for Option<T> {
     }
 }
 
+/// Sets each part on the answer in turn. Once one fails, its refusal answers instead, and each part
+/// after it is still read for the policy it would have set: a [`crate::cache::Cache::no_store`]
+/// after a header that is not one keeps the refusal `NoStore` ([`after_a_failed_part`]), as one
+/// before it does, so the guarantee does not depend on the order of the parts.
 macro_rules! tuples {
     ($($ty:ident),+) => {
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for ($($ty,)+ R) {
             fn into_response(self) -> Response {
                 let ($($ty,)+ body) = self;
-                let parts = ResponseParts { res: body.into_response() };
+                let parts: Result<ResponseParts, Response> = Ok(ResponseParts { res: body.into_response() });
                 $(
-                    let parts = match $ty.into_response_parts(parts) {
-                        Ok(parts) => parts,
-                        Err(error) => return error.into_response(),
+                    let parts = match parts {
+                        Ok(parts) => $ty.into_response_parts(parts).map_err(IntoResponse::into_response),
+                        Err(failed) => Err(after_a_failed_part($ty, failed)),
                     };
                 )+
-                parts.res
+                match parts {
+                    Ok(parts) => parts.res,
+                    Err(failed) => failed,
+                }
             }
         }
 
@@ -279,21 +301,40 @@ macro_rules! tuples {
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for (StatusCode, $($ty,)+ R) {
             fn into_response(self) -> Response {
                 let (status, $($ty,)+ body) = self;
-                let parts = ResponseParts { res: body.into_response() };
+                let parts: Result<ResponseParts, Response> = Ok(ResponseParts { res: body.into_response() });
                 $(
-                    let parts = match $ty.into_response_parts(parts) {
-                        Ok(parts) => parts,
-                        // A part's own refusal keeps its status: a header that is not one is a
-                        // `500`, not the status the handler meant for a good answer.
-                        Err(error) => return error.into_response(),
+                    let parts = match parts {
+                        Ok(parts) => $ty.into_response_parts(parts).map_err(IntoResponse::into_response),
+                        Err(failed) => Err(after_a_failed_part($ty, failed)),
                     };
                 )+
-                let mut res = parts.res;
-                *res.status_mut() = status;
-                res
+                match parts {
+                    Ok(parts) => {
+                        let mut res = parts.res;
+                        *res.status_mut() = status;
+                        res
+                    }
+                    // A part's own refusal keeps its status: a header that is not one is a
+                    // `500`, not the status the handler meant for a good answer.
+                    Err(failed) => failed,
+                }
             }
         }
     };
+}
+
+/// `failed`, the refusal of a part before `part` in a tuple, with the `NoStore` policy `part`
+/// would have set on the answer ([`crate::cache::Marks`]): `part` is set on an empty answer of its
+/// own, read for that policy and dropped, so `(status, bad_headers, Cache::no_store(), body)` keeps
+/// its refusal out of every cache as `(status, Cache::no_store(), bad_headers, body)` does. Nothing
+/// else of `part` is kept, and a refusal of its own is not read.
+#[cold]
+fn after_a_failed_part<P: IntoResponseParts>(part: P, mut failed: Response) -> Response {
+    if let Ok(read) = part.into_response_parts(ResponseParts { res: Response::new(crate::body::Body::empty()) }) {
+        let marks = crate::cache::Marks::of(read.extensions());
+        crate::cache::Marks { unshared: false, ..marks }.put(&mut failed);
+    }
+    failed
 }
 tuples!(T1);
 tuples!(T1, T2);

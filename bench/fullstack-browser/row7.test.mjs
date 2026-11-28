@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { performance } from "node:perf_hooks";
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { chromium } from "@playwright/test";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { discoverReactEndpoint, reactHandlerSources } from "./bindings.mjs";
@@ -500,7 +500,7 @@ test("row7: the repository's native Next marketplace handler remains supported",
       const form = document.querySelector("form");
       return form.__reactProps$control.onSubmit({ currentTarget: form, preventDefault() {} });
     });
-    assert.deepEqual(requests, [{ path: "/api/marketplace/item_2?locale=fr-FR", method: "POST", body: { email: "native@example.test", target_price: "1,25" } }]);
+    assert.deepEqual(requests, [{ path: "/api/marketplace/item_2/alerts?locale=fr-FR", method: "POST", body: { email: "native@example.test", target_price: "1,25" } }]);
     assert.equal(await page.locator("p").textContent(), "native accepted");
   } finally { if (browser) await browser.close(); await close(server); }
 });
@@ -556,7 +556,7 @@ test("row7: native Next helper effects are not resolved by identical component s
       captures.push(candidates);
       const discovered = discoverReactEndpoint(candidates);
       await page.evaluate(() => { document.querySelector("form").requestSubmit(); return globalThis.controlOutcome; });
-      assert.deepEqual(requests, [{ path: `/api/marketplace/${mode === "native" ? "item_2" : "item_1"}?locale=fr-FR`, method: "POST" }]);
+      assert.deepEqual(requests, [{ path: `/api/marketplace/${mode === "native" ? "item_2" : "item_1"}/alerts?locale=fr-FR`, method: "POST" }]);
       assert.equal(await page.locator("p").textContent(), "native accepted");
       if (mode === "native") assert.equal(discovered, null, "Source-only native helper identities are unresolved; the emitted linked positive is required separately");
       else {

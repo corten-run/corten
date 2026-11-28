@@ -3,7 +3,7 @@ import { posix, win32 } from "node:path";
 import test from "node:test";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { readyScript, upstreamSourcePath, verifyOwnedReceipts } from "./evidence.mjs";
-import { budgets } from "./plan.mjs";
+import { budgets, parseArgs } from "./plan.mjs";
 
 const runId = "hardening-recovery-proof", stamp = "2026-11-18T00:00:00Z", handling = "dependency-recovery";
 const id = (n) => n.toString(16).padStart(64, "0");
@@ -21,18 +21,20 @@ function acknowledge(r) {
 
 function fixture({ paths = posix, originalFolder = "/native/results/w1", phase = handling, withForm = false, source = "api", triggerName = ".recovery-a1B2c3", offset = 0 } = {}) {
   const cell = { key: "corten/" + source + "/direct/" + phase, app: "corten", source, phase, mode: "direct", status: "observed" };
-  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder, budget: budgets(), cells: [cell],
+  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder, options: parseArgs(["w1", "--review", "receipt-fixture"]),
+    budget: budgets(), cells: [cell],
     tools: { node: image(1), checker: image(2) }, builds: { corten: { imageId: image(3).Id, image: image(3) } } };
   const harness = paths.join(originalFolder, "corten-build-context"), triggerSource = paths.join(originalFolder, triggerName);
+  const delayed = phase !== "request-limit";
   const commands = [
-    ["upstream", "upstream", ["node", phase === handling ? node + "dependency-recovery-upstream.mjs" : "/repo/bench/marketplace/upstream.mjs"]],
+    ["upstream", "upstream", ["node", delayed ? node + "dependency-recovery-upstream.mjs" : "/repo/bench/marketplace/upstream.mjs"]],
     ["application", "applicationDirect", ["/server"]],
     ["ready", "apparatus", ["node", "--input-type=module", "-e", readyScript]],
-    ["qualification", "qualification", ["node", "/repo/bench/marketplace/qualify.mjs", base, source, upstream, qualification]],
+    ["qualification", "qualification", ["node", node + "qualification.mjs", source, "direct", upstream, qualification]],
     ["native-controls", "qualification", ["node", node + "native.mjs", base, source, upstream, qualification, "/results/native-controls.json"]],
     ["parity", "qualification", ["node", node + "parity.mjs", base, source, upstream, "/results/parity.json"]],
     ...(withForm ? [["form", "qualification", formCommand]] : []),
-    ["probe", "apparatus", ["node", node + (phase === handling ? "dependency-recovery-probe.mjs" : "probe.mjs"), "/results/probe.json", "/results/raw.jsonl"]],
+    ["probe", "apparatus", ["node", node + (phase === handling ? "dependency-recovery-probe.mjs" : "bounded-requests-probe.mjs"), "/results/probe.json", "/results/raw.jsonl"]],
     ...["terminal-clock", "terminal-clock", "cleanup-clock"].map(step => [step, "apparatus", ["node", node + "clock.mjs"]]),
   ];
   const entries = commands.map(([step, role, Cmd], i) => {
@@ -42,7 +44,8 @@ function fixture({ paths = posix, originalFolder = "/native/results/w1", phase =
       : step.endsWith("-clock") ? "none" : "container:" + id(offset + 21);
     const operation = service ? "run" : "create", mounts = [], out = paths.join(originalFolder, cell.key);
     const mount = (Destination, Source, RW = false) => mounts.push({ Type: "bind", Destination, Source, RW });
-    const usesTrigger = phase === handling && ["upstream", "probe"].includes(step);
+    const usesTrigger = delayed && ["upstream", "probe"].includes(step);
+    const sampled = phase === handling && step === "probe";
     if (["upstream", "probe"].includes(step) || step.endsWith("-clock")) mount("/repo", harness);
     if (service || role === "qualification") mount("/fixtures", paths.join(originalFolder, "fixtures"));
     if (role === "qualification") {
@@ -50,7 +53,7 @@ function fixture({ paths = posix, originalFolder = "/native/results/w1", phase =
       mount("/repo/node_modules", paths.join(originalFolder, "dependencies"));
     }
     if (role === "qualification" || step === "probe") mount("/results", out, true);
-    if (step === "probe") mount("/sys/fs/cgroup", "/sys/fs/cgroup");
+    if (sampled) mount("/sys/fs/cgroup", "/sys/fs/cgroup");
     if (usesTrigger) mount("/recovery", triggerSource, step === "probe");
     const env = step === "application" ? Object.entries({ MARKETPLACE_SOURCE: source, MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json",
       API_BASE: upstream, PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile,
@@ -60,11 +63,11 @@ function fixture({ paths = posix, originalFolder = "/native/results/w1", phase =
     const created = { Id, Name: "/" + name, Image, RestartCount: 0, Config: { Cmd, Entrypoint: null, Env: env, Labels: labels }, Mounts: mounts,
       HostConfig: { NanoCpus: limit.cpu * 1e9, Memory: limit.memory, MemorySwap: limit.memory, PidsLimit: 512, Ulimits: [{ Name: "nofile", Hard: 65536, Soft: 65536 }],
         ShmSize: role === "qualification" ? 1024 ** 3 : 64 * 1024 ** 2, RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {}, NetworkMode: network,
-        PidMode: step === "probe" ? "host" : "", CgroupnsMode: step === "probe" ? "host" : "private" },
+        PidMode: sampled ? "host" : "", CgroupnsMode: sampled ? "host" : "private" },
       State: { Running: false, ExitCode: 0, OOMKilled: false, Error: "", Dead: false, Restarting: false, StartedAt: stamp, FinishedAt: stamp } };
     const args = [operation, ...(service ? ["-d"] : []), "--network", network, ...(step === "application" ? ["--network-alias", "fsw-target"] : []),
       "--cpus", String(limit.cpu), "--memory", String(limit.memory), "--memory-swap", String(limit.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536",
-      ...(role === "qualification" ? ["--shm-size", "1g"] : []), ...(step === "probe" ? ["--cgroupns=host", "--pid=host"] : []),
+      ...(role === "qualification" ? ["--shm-size", "1g"] : []), ...(sampled ? ["--cgroupns=host", "--pid=host"] : []),
       ...mounts.flatMap(m => ["-v", m.Source + ":" + m.Destination + (!m.RW ? ":ro" : m.Destination === "/recovery" ? ":rw" : "")]),
       ...env.flatMap(value => ["-e", value]), Image, ...(step === "application" ? [] : Cmd)];
     const r = { schema: "native-hardening-container/v2", index: offset + i, intent: { cell: cell.key, name, step, role, tool, operation, args },
@@ -78,27 +81,32 @@ function fixture({ paths = posix, originalFolder = "/native/results/w1", phase =
 
 test("recovery provenance names the two exact entry points and replays without a form worker", () => {
   assert.equal(upstreamSourcePath(handling), "bench/hardening/dependency-recovery-upstream.mjs");
-  assert.equal(upstreamSourcePath("oversized-requests"), "bench/marketplace/upstream.mjs");
-  for (const options of [{}, { paths: win32, originalFolder: "D:\\native results\\w1", source: "fixture" }]) {
+  assert.equal(upstreamSourcePath("request-timeout"), upstreamSourcePath(handling));
+  assert.equal(upstreamSourcePath("request-limit"), "bench/marketplace/upstream.mjs");
+  for (const options of [{}, { phase: "request-timeout" }, { phase: "request-limit" },
+    { paths: win32, originalFolder: "D:\\native results\\w1", source: "fixture" }]) {
     const { entries, summary } = fixture(options);
     assert.equal(verifyOwnedReceipts(entries, summary).get(summary.cells[0].key).length, 10);
   }
 });
 
-test("recovery launch privileges are unavailable in other phases and a recovery form is forbidden", () => {
-  const legacy = fixture({ phase: "oversized-requests", withForm: true });
-  assert.doesNotThrow(() => verifyOwnedReceipts(legacy.entries, legacy.summary));
+test("bounded probes cannot claim host resource access, change phase, or use a legacy form worker", () => {
+  const limit = fixture({ phase: "request-limit" });
+  const worker = limit.worker("probe");
+  worker.intent.args.splice(1, 0, "--pid=host");
+  acknowledge(worker);
+  assert.throws(() => verifyOwnedReceipts(limit.entries, limit.summary), /limits\/options differ/);
   const recovery = fixture();
-  recovery.summary.cells[0].phase = "oversized-requests";
+  recovery.summary.cells[0].phase = "request-limit";
   assert.throws(() => verifyOwnedReceipts(recovery.entries, recovery.summary), /phase differs from the cell identity/);
-  recovery.summary.cells[0].key = legacy.summary.cells[0].key;
+  recovery.summary.cells[0].key = limit.summary.cells[0].key;
   for (const row of recovery.entries) row.intent.cell = recovery.summary.cells[0].key;
   assert.throws(() => verifyOwnedReceipts(recovery.entries, recovery.summary), /worker command differs/);
   const other = fixture(), app = other.worker("application");
   app.terminal.Mounts.push({ Type: "bind", Destination: "/recovery", Source: "/native/results/w1/.recovery-a1B2c3", RW: true });
   assert.throws(() => verifyOwnedReceipts(other.entries, other.summary), /unexpected recovery trigger mount/);
   const extra = fixture({ withForm: true });
-  assert.throws(() => verifyOwnedReceipts(extra.entries, extra.summary), /no native form worker/);
+  assert.throws(() => verifyOwnedReceipts(extra.entries, extra.summary), /undeclared native worker/);
 });
 
 const triggerMount = (r, change) => {

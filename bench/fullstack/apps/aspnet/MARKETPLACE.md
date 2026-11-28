@@ -22,6 +22,14 @@ Native currency spacing is made nonbreaking so amounts and symbols stay together
 Razor's normal antiforgery token protects form posts. Marketplace uses normal
 full-page navigation while the existing htmx runtime remains loaded.
 
+Hardening's TLS edge can set `MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080`
+while sending plain HTTP upstream. For a marketplace form POST on that exact
+authority (port included), the configured origin is required instead of the
+upstream scheme; other authorities still use the request's scheme and Host,
+so the direct `http://127.0.0.1:8080` preflight works. Forwarding headers do
+not select the origin. Razor antiforgery, cross-site Fetch Metadata refusal,
+and the matched profile's separate Host filter are unchanged.
+
 Labels and CSS are byte-identical copies of `bench/marketplace/labels.json` and
 `marketplace.css`. Run focused native checks from this directory:
 

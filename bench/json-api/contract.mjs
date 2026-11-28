@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/inventory.mjs";
+import { allApps, jsonPeers } from "../fullstack/inventory.mjs";
 import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
 import { aggregate, cpuSettings as catalogCpus, phases, readLoad } from "../catalog/contract.mjs";
 import { records as catalogRecords } from "../catalog/fixtures.mjs";
@@ -10,20 +10,27 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 export { aggregate, phases };
 export const schema = "json-api-results/v1";
 export const timedSchema = "json-api-results/v2";
+export const scheduledProducerSchema = "json-api-producer/v3";
+export const scheduledProducerMarker = "bench/json-api/load-resource-capture.mjs";
 export const timedReceiptSchema = "json-api-native-audit/v2";
 export const auditBundleSchemas = Object.freeze(["json-api-native-audits/v1", "json-api-native-audits/v2"]);
 export const receiptSchema = "json-api-native-audit/v1";
-export const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+export const nodeImage = "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067";
 export { k6Image } from "../load-tool.mjs";
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const payloads = Object.freeze({
   "catalog-v1": { path: "catalog", first: "record_1", fixture: "bench/catalog/fixtures/catalog.json", records: catalogRecords, errors: [503] },
   "marketplace-v2": { path: "marketplace", first: "item_1", fixture: "bench/marketplace/fixtures/marketplace.json", records: marketplaceRecords, errors: [302, 503] },
 });
-export function descriptor() {
+const nineAppContract = "b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9";
+export function descriptor(savedHash) {
   const group = "json-api";
-  return { schema: "json-api-group/v1", registrySchema, group, contractSha256: contractSha256(group),
-    apps: selectedApps(group), cases: structuredClone(definition(group).cases), targets: ["json"],
+  const previous = savedHash === nineAppContract;
+  const cases = previous ? ["catalog-v1", "marketplace-v2"].flatMap((payload) => ["fixture", "api"].map((source) => ({
+    key: `${payload}-${source}-neutral-json`, payload, source, locale: null, target: "json",
+  }))) : structuredClone(definition(group).cases);
+  return { schema: "json-api-group/v1", registrySchema, group, contractSha256: previous ? nineAppContract : contractSha256(group),
+    apps: previous ? ["corten", "aspnet", "fastapi", "express", "spring", "axum-maud", "drogon", "gin", "aspnet-aot"] : selectedApps(group), cases, targets: ["json"],
     payloads: Object.keys(payloads), sources: ["fixture", "api"], nativeProfile: "framework-default", encoding: "identity" };
 }
 export function parseArgs(args) {
@@ -48,22 +55,23 @@ export function parseArgs(args) {
   }
   assert.equal(options.group, "json-api", "explicit --group json-api is required");
   assert.ok(options.passes % 2 === 1, "--passes must be 1, 3 or 5");
-  assert.ok(options.apps.every((app) => Object.hasOwn(allApps, app)), "every registry member needs its own native inventory entry");
+  assert.ok(options.apps.every((app) => Object.hasOwn(allApps, app) || Object.hasOwn(jsonPeers, app)), "every registry member needs its own native inventory entry");
   return options;
 }
 export function cpuSettings(env) {
   return catalogCpus(Object.fromEntries(["APP", "LOAD", "API"].map((role) => [`CATALOG_${role}_CPUS`, env[`JSON_API_${role}_CPUS`]])));
 }
 export const route = (profile, id = payloads[profile.payload].first) => `/api/${payloads[profile.payload].path}/${id}`;
-export function timingPlan(options) {
-  assert.deepEqual(options.apps, descriptor().apps, "exact registry selection required");
+export function timingPlan(options, savedHash) {
+  const group = descriptor(savedHash);
+  assert.deepEqual(options.apps, group.apps, "exact registry selection required");
   assert.ok([1, 3, 5].includes(options.passes), "invalid timing pass count");
   // Same across-pass rotation as the native marketplace pass plan. Profiles stay
   // explicit and in registry order; only the app order within each pass rotates.
   return Array.from({ length: options.passes }, (_, i) => i + 1).flatMap((pass) => {
     const offset = Math.floor((pass - 1) * options.apps.length / options.passes);
     const apps = options.apps.slice(offset).concat(options.apps.slice(0, offset));
-    return descriptor().cases.flatMap((profile) => apps.map((app) => ({ app, pass, profile, stages: ["cold", "warmup", ...phases] })));
+    return group.cases.flatMap((profile) => apps.map((app) => ({ app, pass, profile, stages: ["cold", "warmup", ...phases] })));
   });
 }
 export function identity(summary, app, profile) {
@@ -76,14 +84,14 @@ export function buildPlan(app, payload) {
   return { context, dockerfile: app === "corten" ? `bench/${payloads[payload].path}/corten/Dockerfile` : `${context}/Dockerfile`,
     image: `cb-json-api-${payload}-${app}`, app, payload };
 }
-export function imageLabels(commit, dirty, app, payload) {
+export function imageLabels(commit, dirty, app, payload, savedHash) {
   return { "run.corten.json-api.commit": commit, "run.corten.json-api.dirty": String(dirty),
-    "run.corten.json-api.contract": descriptor().contractSha256, "run.corten.json-api.app": app,
+    "run.corten.json-api.contract": descriptor(savedHash).contractSha256, "run.corten.json-api.app": app,
     "run.corten.json-api.payload": payload, "run.corten.json-api.profile": descriptor().nativeProfile };
 }
-export function verifyImage(image, commit, app, payload) {
+export function verifyImage(image, commit, app, payload, savedHash) {
   assert.match(image?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, "missing immutable native image identity");
-  assert.deepEqual(image.labels, imageLabels(commit, false, app, payload), "native image build provenance differs or is dirty");
+  assert.deepEqual(image.labels, imageLabels(commit, false, app, payload, savedHash), "native image build provenance differs or is dirty");
   verifyImageExecution(image.execution);
 }
 export function verifyImageExecution(execution) {
@@ -113,8 +121,11 @@ export function runtimeContext(summary, profile) {
   return { checkout, runId: summary.runId, network: `${summary.runId}-net`, fixtureSource: `${checkout}/${p.fixture.slice(0, p.fixture.lastIndexOf("/"))}`,
     apiBase: `http://${summary.runId}-${p.path}-api:8080`, startupTimeout: summary.options.startupTimeout,
     nodeImageId: summary.tools?.node?.imageId, k6ImageId: summary.tools?.k6?.imageId,
-    toolExecutions: summary.toolExecutions, ...(summary.schema === timedSchema ? { timed: true,
-      runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt } : {}),
+    toolExecutions: summary.toolExecutions,
+    // The opt-in c-16 layout records the cold probe's own CPUs (report.mjs checks that record); the default has none.
+    ...(summary.measurement?.generatorPlacement === undefined ? {} : { coldProbe: summary.measurement.generatorPlacement.coldProbe }),
+    ...(summary.schema === timedSchema ? { timed: true,
+      runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt, producerSchema: summary.producer?.schema } : {}),
     appExecutions: Object.fromEntries(Object.entries(summary.apps ?? {}).map(([app, entry]) => [app, entry.images?.[profile.payload]?.execution])) };
 }
 function observedConfiguration(info, expected, context, role) {
@@ -176,7 +187,7 @@ export function participantReceipt(info, expected, context, role) {
 function verifyParticipant(observed, expected, context, role) {
   assert.ok(["upstream", "load", "probe"].includes(role), "unknown participating runtime role");
   assert.match(observed?.containerId ?? "", /^[a-f0-9]{64}$/, "missing participating container identity");
-  const budget = expected.cpus[role === "upstream" ? "api" : "load"];
+  const budget = role === "probe" && context.coldProbe !== undefined ? context.coldProbe : expected.cpus[role === "upstream" ? "api" : "load"];
   assert.deepEqual(observed, { role, containerId: observed.containerId, imageId: role === "load" ? context.k6ImageId : context.nodeImageId,
     memoryBytes: role === "upstream" ? 512 * 2 ** 20 : role === "probe" ? 256 * 2 ** 20 : 2 ** 31,
     quota: budget.quota, cpuset: budget.cpuset, configuration: expectedConfiguration(expected, context, role) }, "participating runtime image/CPU/memory/ownership differs");

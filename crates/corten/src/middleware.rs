@@ -6,8 +6,8 @@
 //! The order is fixed, outside in, and each stage needs the one before it:
 //!
 //! 1. Compression is negotiated (`Accept-Encoding`); it is applied last.
-//! 2. A request for a host the app does not answer to gets `421` and nothing else
-//!    ([`crate::security::Policy::host`]); a write another site sent is refused
+//! 2. A request for a host the app does not answer to gets `421` and nothing else, and one HTTP
+//!    does not allow `400` ([`crate::security::Policy::host`]); a write another site sent is refused
 //!    ([`crate::Failure::CrossSite`]).
 //! 3. The request gets its [`crate::Signal`], its nonce and the app.
 //! 4. The deadline and the panic catch start ([`crate::Failure::TimedOut`],
@@ -25,13 +25,19 @@
 //!    page draws once it has answered. Either way the page is filled with their values before
 //!    its answer goes back out through 5: a middleware sees the filled page, and the time it
 //!    measures around `next` includes the reads' wait (`docs/design.md#choice-layout-reads`).
+//!    A [`crate::Public`] page, JSON, text or file the app has kept is given here in the handler's place
+//!    ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`): 1 to 5 ran for its
+//!    request as for any other, and 7 and 8 follow, so a middleware meets every request and sees
+//!    the kept page as it would the handler's answer.
 //! 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's
 //!    error page for a browser ([`crate::App::error_page`]). For a failure the request is at fault
 //!    for (an unknown URL, a wrong method, a method no route in the app has (the router's 501), a
 //!    refusal other than a 429, a request that does not parse), the error page starts the layout reads not started yet and waits for them, here,
 //!    outside 5: a middleware sees neither the error page nor that wait.
-//! 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak
-//!    `ETag` on the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
+//! 8. `accept-language` in `Vary` when anything negotiated the request's locale from it (the
+//!    app's middleware too), security headers, `Cache-Control` (private when anything read a
+//!    caller), then the weak `ETag` on the answer to a `GET` or `HEAD` (outside an API and
+//!    Corten's own paths), and
 //!    `304 Not Modified` in place of the body when the client already has it
 //!    (`docs/design.md#limit-etag`), then compression. A middleware sees the `200` with the
 //!    whole body, also when the client gets the `304`.
@@ -244,7 +250,8 @@ impl Next for Handle {
 
 /// The route's own future, not an async block around it, which would move the request once more.
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
-/// the API writes as its own.
+/// the API writes as its own, which no handler answered either, so it is marked as the router's
+/// own `404` is (`crate::cache::Unshared`).
 #[inline]
 fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
@@ -252,7 +259,9 @@ fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Outp
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
         Some(route) => Either::Left(route.call(req)),
-        None => Either::Right(std::future::ready(IntoResponse::into_response(http::StatusCode::NOT_FOUND))),
+        None => {
+            Either::Right(std::future::ready(crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND))))
+        }
     };
     match here {
         None => Either::Left(answer),

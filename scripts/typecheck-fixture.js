@@ -150,7 +150,13 @@ export async function readScreen(reading, stocks, url, signal) {
   } catch (error) {
     // @ts-expect-error What a read rejects with is unknown until the script narrows it.
     error.status;
-    if (error instanceof ReadError) return error.status === 404;
+    if (error instanceof ReadError) {
+      /** @type {boolean} */
+      const redirected = error.redirected;
+      // @ts-expect-error A ReadError's fields are what the answer was, read only.
+      error.status = 200;
+      return error.status === 404 || redirected;
+    }
   }
   return false;
 }

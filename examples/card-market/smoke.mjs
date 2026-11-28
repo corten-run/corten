@@ -1,5 +1,6 @@
 // Browser smoke test of the production pieces, against the card-market example (API or fixture mode).
 // Usage: node examples/card-market/smoke.mjs [http://localhost:18410]
+import { randomUUID } from "node:crypto";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
@@ -214,67 +215,142 @@ try {
   // Push: the app's worker script (Pwa::import_script) handles a push sent through DevTools, in
   // full Chromium (channel "chromium"): the headless shell denies notifications however they are
   // granted, so its worker's showNotification fails. The app's message, and one of another shape
-  // (no title, a url that is not text) shown untitled and opening / (#1039).
+  // (no title, a url that is not text) shown untitled with / passed to showNotification (#1039).
   const full = await chromium.launch({ headless: true, channel: "chromium" });
   try {
     const pushContext = await full.newContext();
+    await pushContext.grantPermissions(["notifications"], { origin: base });
     const pushPage = await pushContext.newPage();
     await pushPage.goto(base + "/");
-    await pushPage.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
-    await pushContext.grantPermissions(["notifications"], { origin: base });
-    const cdp = await pushContext.newCDPSession(pushPage);
-    /** @type {string | null} */
-    let registrationId = null;
-    cdp.on("ServiceWorker.workerRegistrationUpdated", ({ registrations }) => {
-      for (const r of registrations) if (r.scopeURL === `${base}/` && !r.isDeleted) registrationId = r.registrationId;
-    });
-    await cdp.send("ServiceWorker.enable");
-    for (let i = 0; i < 50 && registrationId === null; i += 1) await pushPage.waitForTimeout(100);
-    /** The notifications the worker shows, read until one has `body` or 5 s pass. @param {string} body */
-    const shownWith = async (body) => {
-      for (const until = Date.now() + 5000; Date.now() < until; await pushPage.waitForTimeout(100)) {
-        const found = await pushPage.evaluate(async (body) => {
-          const n = (await (await navigator.serviceWorker.ready).getNotifications()).find((n) => n.body === body);
-          return n ? { title: n.title, url: n.data?.url } : null;
-        }, body);
-        if (found) return found;
+    const scriptURL = `${base}/service-worker.js`;
+    await pushPage.waitForFunction((url) => {
+      const worker = navigator.serviceWorker.controller;
+      return Notification.permission === "granted" && worker?.state === "activated" && worker.scriptURL === url;
+    }, scriptURL, { timeout: 10000 });
+
+    // A timeout bounds the whole operation, not just the wait between DevTools calls.
+    const withinFiveSeconds = async (run) => {
+      const deadline = performance.now() + 5000;
+      let timer;
+      try {
+        const result = await Promise.race([
+          new Promise((resolve) => (timer = setTimeout(() => resolve(null), 5000))),
+          run(),
+        ]);
+        return performance.now() < deadline ? result : null;
+      } finally {
+        clearTimeout(timer);
       }
-      return null;
     };
-    /**
-     * Sends `message` and reads the notifications until one has its body, sending it once more
-     * (when `tries` allows) if none does in 5 s. Under load Chromium now and then loses a
-     * notification the worker showed: its trace has the push dispatched and the handler's
-     * `waitUntil` settled (`DidHandlePushEvent` COMPLETED), and `getNotifications()` never lists it,
-     * even 30 s later (#1202: 20 of about 670 local runs, 15 of them the second push of the run;
-     * none shown late). What it saw is the detail: the notification and the send that showed it,
-     * or how many sends showed nothing.
-     * @param {{ title?: string, body: string, url: unknown }} message
-     * @param {number} tries
-     */
-    const sendUntilShown = async (message, tries) => {
-      if (registrationId === null) return null;
-      for (let attempt = 1; attempt <= tries; attempt += 1) {
-        await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
-        const found = await shownWith(message.body);
-        if (found) return { ...found, attempt };
-      }
-      return { missed: tries };
+
+    const setUp = async (step, run) => {
+      const result = await withinFiveSeconds(run);
+      if (result === null) throw new Error(`Push setup: ${step} did not finish within five seconds`);
+      return result;
     };
-    const first = await sendUntilShown({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" }, 2);
-    check("a push message shows a notification", first?.title === "Price drop" && first?.url === "/items/item_5", registrationId === null ? "no registration id" : JSON.stringify(first));
-    const odd = await sendUntilShown({ body: "Card Name 7 is back", url: 5 }, 2);
-    check("a push message with no title and a url that is not text shows untitled and opens /", odd?.title === "" && odd?.url === "/", JSON.stringify(odd));
-    // A second send is taken only from a loss as rare as Chromium's (about 1 push in 70 locally):
-    // after one, a new message must show on its first send, so a worker that drops every other
-    // push still fails here. One that drops pushes at random passes more often than a single send
-    // did (half of them: about 2 runs in 5, from 1 in 4), which the detail's `attempt` still shows. Chromium
-    // can lose this third push too (2 of 30 locally), so a run fails without cause about 1 time in
-    // 500 (a resend in 1 run in 35, then this loss), where it failed about 1 time in 35.
-    if (first?.attempt === 2 || odd?.attempt === 2) {
-      const after = await sendUntilShown({ title: "Back in stock", body: "Card Name 9 is back", url: "/items/item_9" }, 1);
-      check("after a push was sent twice, the next shows on its first send", after?.attempt === 1, JSON.stringify(after));
+
+    const cdp = await setUp("newCDPSession", () => pushContext.newCDPSession(pushPage));
+    const { targetInfo } = await setUp("Target.getTargetInfo", () => cdp.send("Target.getTargetInfo"));
+    const ready = Promise.withResolvers();
+    const onVersion = ({ versions }) => {
+      const controlling = versions.find((v) => v.status === "activated" && v.scriptURL === scriptURL &&
+        v.controlledClients?.includes(targetInfo.targetId));
+      if (controlling) ready.resolve(controlling.registrationId);
+    };
+    cdp.on("ServiceWorker.workerVersionUpdated", onVersion);
+    let registrationId;
+    try {
+      await setUp("ServiceWorker.enable", () => cdp.send("ServiceWorker.enable"));
+      registrationId = await setUp("controlling worker lookup", () => ready.promise);
+    } finally {
+      cdp.off("ServiceWorker.workerVersionUpdated", onVersion);
     }
+
+    // Chromium's display event reports the title and body, but does not guarantee the
+    // notification is listable. A getNotifications() read can delete an unlisted row. Instead,
+    // check the destination passed to showNotification and the push's waitUntil promises.
+    const isPushWorker = (worker) => worker.url() === scriptURL;
+    const worker = await setUp("worker discovery", async () => pushContext.serviceWorkers().find(isPushWorker) ??
+      pushContext.waitForEvent("serviceworker", { predicate: isPushWorker, timeout: 0 }));
+    const readNotification = await setUp("observer installation", () => worker.evaluateHandle(() => {
+      const results = new Map();
+      const resultFor = (body) => {
+        if (!results.has(body)) results.set(body, Promise.withResolvers());
+        return results.get(body);
+      };
+      const lifetimes = new Map();
+      const waitUntil = ExtendableEvent.prototype.waitUntil;
+      ExtendableEvent.prototype.waitUntil = function (promise) {
+        waitUntil.call(this, promise);
+        if (!(this instanceof PushEvent)) return;
+        // Correlate by the payload's body, so this covers pushes with a JSON body, as both sends have.
+        const body = this.data?.json()?.body;
+        if (!lifetimes.has(body)) lifetimes.set(body, []);
+        const lifetime = { settled: false };
+        const settle = (outcome) => {
+          lifetime.settled = true;
+          return outcome;
+        };
+        lifetime.outcome = Promise.resolve(promise).then(() => settle("fulfilled"), () => settle("rejected"));
+        lifetimes.get(body).push(lifetime);
+      };
+      // Installed after the worker started, so it sees a handler that looks up
+      // registration.showNotification when a push arrives (as sw-push.js does), not one bound at startup.
+      const show = self.registration.showNotification.bind(self.registration);
+      self.registration.showNotification = async (title, options) => {
+        const body = options?.body;
+        const member = options == null ? undefined : Object.getOwnPropertyDescriptor(options, "data");
+        const data = member?.enumerable && Object.hasOwn(member, "value") ? member.value : undefined;
+        const destination = typeof data === "object" && data !== null && Object.getPrototypeOf(data) === Object.prototype
+          ? Object.getOwnPropertyDescriptor(data, "url") : undefined;
+        const url = destination?.enumerable && Object.hasOwn(destination, "value") && typeof destination.value === "string"
+          ? destination.value : undefined;
+        await show(title, options);
+        // A waitUntil promise of this push was pending when the notification was shown, and every
+        // one the push passed fulfilled; that does not prove a promise depended on the notification.
+        const all = lifetimes.get(body) ?? [];
+        const pending = all.filter(({ settled }) => !settled).length;
+        resultFor(body).resolve({ url, plainData: url !== undefined, pending, outcomes: Promise.all(all.map(({ outcome }) => outcome)) });
+      };
+      return async (body) => {
+        const { url, plainData, pending, outcomes } = await resultFor(body).promise;
+        return { url, plainData, pending, lifetimes: await outcomes };
+      };
+    }));
+    await setUp("BackgroundService.startObserving", () => cdp.send("BackgroundService.startObserving", { service: "notifications" }));
+    await setUp("BackgroundService.setRecording", () => cdp.send("BackgroundService.setRecording", { service: "notifications", shouldRecord: true }));
+
+    /** @param {{ title?: string, body: string, url: unknown }} message */
+    const sendAndObserve = async (message) => {
+      const body = `${message.body} (${randomUUID()})`;
+      const display = Promise.withResolvers();
+      let displayed = false;
+      const onDisplay = ({ backgroundServiceEvent: e }) => {
+        if (e.service !== "notifications" || e.eventName !== "Notification displayed" || e.serviceWorkerRegistrationId !== registrationId) return;
+        if (e.eventMetadata.find(({ key }) => key === "Body")?.value !== body) return;
+        displayed = true;
+        display.resolve(e.eventMetadata.find(({ key }) => key === "Title")?.value);
+      };
+      cdp.on("BackgroundService.backgroundServiceEventReceived", onDisplay);
+      try {
+        const shown = await withinFiveSeconds(async () => {
+          const [title, notification] = await Promise.all([
+            display.promise,
+            readNotification.evaluate((read, body) => read(body), body),
+            cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify({ ...message, body }) }),
+          ]);
+          return { title, ...notification };
+        });
+        return shown ?? { missed: 1, displayed };
+      } finally {
+        cdp.off("BackgroundService.backgroundServiceEventReceived", onDisplay);
+      }
+    };
+    const first = await sendAndObserve({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
+    const lifetimeFulfilled = ({ pending, lifetimes }) => pending > 0 && lifetimes.every((outcome) => outcome === "fulfilled");
+    check("a push shows the titled notification while waitUntil is pending, then fulfills it, and passes the item destination to showNotification", first.title === "Price drop" && first.url === "/items/item_5" && lifetimeFulfilled(first), JSON.stringify(first));
+    const odd = await sendAndObserve({ body: "Card Name 7 is back", url: 5 });
+    check("a push with no title and a url that is not text shows an untitled notification while waitUntil is pending, then fulfills it, and passes / to showNotification", odd.title === "" && odd.url === "/" && lifetimeFulfilled(odd), JSON.stringify(odd));
   } finally {
     await full.close();
   }
@@ -564,6 +640,8 @@ try {
         `${landed}: ${JSON.stringify(link)}`,
       );
       const posted = await sentBy(async () => {
+        // Armed first: the redirect lands on the URL already loaded, so a URL or load-state wait could pass on the old document.
+        const loaded = sw.waitForEvent("load");
         await sw.evaluate(() => {
           const form = document.createElement("form");
           form.method = "post";
@@ -571,8 +649,8 @@ try {
           document.body.append(form);
           form.submit();
         });
+        await loaded;
         await sw.waitForURL(`${base}/smoke/landed`);
-        await sw.waitForLoadState();
       });
       check(`${under} a form posted to a network-only path is sent once and redirected`, once(posted, ["/smoke/once", "/smoke/landed"]), JSON.stringify(posted));
       const page = await sentBy(() => sw.goto(`${base}/smoke/landed?again=${name}`));

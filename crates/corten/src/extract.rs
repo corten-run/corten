@@ -259,7 +259,7 @@ async fn up_to(body: Body, max: usize, past: usize, over: Option<Over>) -> Resul
     let mut small: Vec<u8> = Vec::new();
     let mut len: usize = 0;
     while let Some(piece) = stream.next().await {
-        let piece = piece.map_err(|e| Error::new(e).with_status(StatusCode::BAD_REQUEST))?;
+        let piece = piece.map_err(|e| Error::corten(e).with_status(StatusCode::BAD_REQUEST))?;
         len = len.saturating_add(piece.len());
         if len > max {
             drop((pieces, small));
@@ -355,9 +355,11 @@ impl std::fmt::Display for BodyRejection {
 
 impl std::error::Error for BodyRejection {}
 
+/// Corten's refusal of the request's body, never shared wherever it is answered
+/// ([`crate::cache::Unshared`]).
 impl crate::http::IntoResponse for BodyRejection {
     fn into_response(self) -> crate::http::Response {
-        crate::http::IntoResponse::into_response((self.status, self.text))
+        crate::cache::unshared(crate::http::IntoResponse::into_response((self.status, self.text)))
     }
 }
 
@@ -503,6 +505,51 @@ impl<B: HttpBody + Unpin> HttpBody for Arriving<B> {
     }
 }
 
+/// A request body that had ended when its request came, which is the body of every request sent
+/// without one: it says what hyper's own says of such a body (it is at its end, it is no bytes
+/// long, and a read of it gives nothing), and no read of it waits for the client or fails. It holds
+/// nothing, so the box a [`Body`] keeps it in allocates nothing.
+struct Ended;
+
+impl HttpBody for Ended {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        Poll::Ready(None)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        true
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(0)
+    }
+}
+
+/// The body of a request from the connection ([`crate::serve`]), as the router takes it: read as
+/// it arrives ([`Arriving`]), unless hyper says it has ended already, as it does of a request with
+/// no length or a length of zero. That body has nothing to read and nothing to wait for, so the
+/// stream is not kept or boxed for it ([`Ended`]). A chunked body's end is in the body, so it has
+/// not ended here, whatever it holds.
+///
+/// What hyper hands on as ended was read for HTTP/1 alone, the one protocol Corten serves: there
+/// such a body has no channel to the connection behind it, so dropping it here releases nothing.
+/// An HTTP/2 stream's body would come through here without a compile error, and what hyper holds
+/// for one that ended with its headers is to be read before it does
+/// (`docs/design.md#choice-deadline-body`).
+pub(crate) fn arriving(body: hyper::body::Incoming) -> Body {
+    if body.is_end_stream() {
+        Body::new(Ended)
+    } else {
+        Body::new(Arriving(body))
+    }
+}
+
 /// Forgets a wait for the request body, before the handler is polled again.
 #[inline]
 pub(crate) fn forget_wait() {
@@ -561,6 +608,12 @@ enum End {
 }
 
 /// Why [`Pieces::chunk`] stopped. `?` turns it into an [`Error`] with its status.
+///
+/// That `Error` is Corten's refusal of the request, never shared, wherever the handler answers it:
+/// a body is the request's, and its failure can say who sent it. A value the handler builds itself
+/// is treated the same way: building one opts in to a refusal's caching, as a `Refused` does. A
+/// failure of the handler's own is an `Error` of its own (`Error::status`), which keeps its usual
+/// caching.
 #[derive(Debug)]
 pub enum BodyError {
     /// The body is over the limit (413). It was read past, so a client still sending reads the
@@ -590,7 +643,8 @@ impl From<BodyError> for Error {
             BodyError::Stalled => StatusCode::REQUEST_TIMEOUT,
             BodyError::Broken(_) => StatusCode::BAD_REQUEST,
         };
-        Error::new(error.to_string()).with_status(status)
+        // The request's, read by Corten: never shared, wherever the handler answers it.
+        Error::corten(error.to_string()).with_status(status)
     }
 }
 

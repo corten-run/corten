@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { bindExecution } from "./contract.mjs";
-import { groupNames } from "../registry.mjs";
-import { catalogFleetPlacement } from "../cloud-contract.mjs";
+import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe, sharedSourceSha256 } from "./contract.mjs";
+import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, nativeArtifactRoot } from "../registry.mjs";
+import { catalogFleetPlacement, jsonFleetPlacementFor } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
+import { springWebflux } from "../../mixed-production/source-audit.mjs";
+import { nativeControlPartition } from "./native-roles.mjs";
 
 export const campaignSchema = "benchmark-isolated-campaign/v1";
 export const groupCampaignSchema = "benchmark-isolated-group-campaign/v1";
+export const auditWaitMs = 24 * 60 * 60 * 1000;
 export const productionRecipes = Object.freeze(Object.fromEntries(groupNames.map((group) => [group,
   group === "localized-marketplace" ? "marketplace-short-window"
     : group === "mixed-production" ? "mixed-production-measure"
@@ -21,14 +24,42 @@ export function exact(value, fields) {
   assert.ok(value && Object.getPrototypeOf(value) === Object.prototype, "plain object required");
   assert.deepEqual(Object.keys(value).sort(), [...fields].sort(), "unexpected or missing fields");
 }
-export function campaignRounds(round) {
-  assert.equal(typeof round, "string"); assert.match(round, /^r[1-9]\d*$/);
-  const n = Number(round.slice(1));
-  assert.ok(Number.isSafeInteger(n) && n >= 17 && n <= 1000000000, "official campaign round must be r17..r1000000000");
-  return Object.fromEntries(groupNames.map((group) => [group, group === "catalog-page" ? `c${n}`
-    : group === "json-api" ? `j${2 * n + 1}` : group === "localized-marketplace" ? round
-      : ["live-delivery", "recoverable-live"].includes(group) ? round : `w${n}`]));
+export function verifyOfflineAuditClock(sample, bootId) {
+  exact(sample, ["bootId", "monoNs"]);
+  assert.match(sample.bootId, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/);
+  assert.equal(sample.bootId, bootId, "offline audit clock boot differs");
+  assert.match(sample.monoNs, /^(0|[1-9]\d{0,19})$/);
+  return BigInt(sample.monoNs);
 }
+export function offlineAuditRemainingMs(waiting, now, bootId) {
+  const elapsed = verifyOfflineAuditClock(now, bootId) - verifyOfflineAuditClock(waiting, bootId);
+  assert.ok(elapsed >= 0n, "offline audit clock regressed");
+  const remainingNs = BigInt(auditWaitMs) * 1000000n - elapsed;
+  return remainingNs > 0n ? Number((remainingNs + 999999n) / 1000000n) : 0;
+}
+export function verifyOfflineAuditStart(sample, bootstrap, preparation) {
+  const bootId = bootstrap.host.bootId;
+  const start = verifyOfflineAuditClock(sample, bootId);
+  const closed = verifyOfflineAuditClock({ bootId, monoNs: bootstrap.closedMonoNs }, bootId);
+  assert.ok(start >= closed, "offline audit wait predates bootstrap closure");
+  if (preparation) {
+    // These are the same host boundaries used to prove cleanup, not the
+    // review or journal's wall time. A settled census supersedes the first.
+    const { before, after, settled, terminalClock } = preparation;
+    const observed = (host) => verifyOfflineAuditClock({ bootId: host.bootId, monoNs: host.offlineMonoNs }, bootId);
+    const first = observed(before), last = observed(after);
+    assert.ok(closed <= first && first <= last, "offline audit preparation clock is out of order");
+    assert.deepEqual(after.terminalClock, terminalClock, "offline audit terminal clock differs from sealed lifetime");
+    if (terminalClock) {
+      const terminal = verifyOfflineAuditClock({ bootId: terminalClock.bootId, monoNs: terminalClock.monoNs }, bootId);
+      assert.ok(first <= terminal && terminal <= last, "offline audit terminal clock is outside preparation");
+    }
+    const end = settled ? observed(settled) : last;
+    assert.ok(last <= end, "offline audit settled clock predates the first cleanup census");
+    assert.ok(end <= start, "offline audit wait predates preparation completion");
+  }
+}
+export { campaignRounds };
 export function bindCampaign(input) {
   exact(input, ["round", "commit"]);
   return bindNativeCampaign(input, groupNames, campaignSchema, "legacy");
@@ -37,21 +68,31 @@ export function bindGroupCampaign(input, mode = "dedicated") {
   exact(input, ["round", "commit", "group"]);
   const { group, ...request } = input;
   assert.ok(groupNames.includes(group), "unknown registry group");
-  assert.ok(mode === "dedicated" || mode === catalogFleetPlacement.loadLayout && group === "catalog-page", "unknown group placement");
+  assert.ok(mode === "dedicated" || alternateCampaignPlacements.includes(mode) && group !== "catalog-page"
+    || mode === catalogFleetPlacement.loadLayout && group === "catalog-page"
+    || jsonFleetPlacementFor(group, mode), "unknown group placement");
   return bindNativeCampaign(request, [group], groupCampaignSchema, mode);
 }
 function bindNativeCampaign(input, order, schema, mode) {
   const rounds = campaignRounds(input.round);
+  const dedicatedRecipe = schema === groupCampaignSchema && (order[0] === "mixed-production" ? springWebflux.recipe
+    : order[0] === "client-heavy" ? clientComparisonRecipe : null);
+  const recipes = dedicatedRecipe ? { ...productionRecipes, [order[0]]: dedicatedRecipe } : productionRecipes;
   const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
-    recipe: productionRecipes[group], review: null }, mode));
+    recipe: recipes[group], review: null }, mode));
   const first = bindings[0];
-  assert.ok(bindings.every((b) => b.sources.sha256 === first.sources.sha256), "source changed while binding campaign");
+  // The all-group header binds the common manifest; the campaign hash also
+  // binds Hardening's full app closure through its binding.
+  const sourceIdentity = (b) => schema === campaignSchema && b.request.group === "hardening"
+    ? sharedSourceSha256(b.sources.files) : b.sources.sha256;
+  const sourceSha256 = sourceIdentity(first);
+  assert.ok(bindings.every((b) => sourceIdentity(b) === sourceSha256), "source changed while binding campaign");
   const procedures = ["bench/catalog/README.md", "bench/json-api/README.md", "bench/marketplace/nightly.md",
     "bench/mixed-production/README.md", "bench/fullstack-browser/README.md", "bench/client-heavy/README.md",
     "bench/live/README.md", "bench/recoverable-live/README.md", "bench/hardening/README.md"]
     .map((path) => { const entry = first.sources.files.find((e) => e.path === path); assert.ok(entry, `missing procedure ${path}`); return entry; });
-  const body = { schema, ...input, bindings, procedures, recipes: productionRecipes,
-    sourceSha256: first.sources.sha256, order: [...order], ready: false, executionAuthorized: false };
+  const body = { schema, ...input, bindings, procedures, recipes,
+    sourceSha256, order: [...order], ready: false, executionAuthorized: false };
   return freeze({ ...body, campaignSha256: deploymentSha256(body) });
 }
 export function validateCampaign(plan) {
@@ -64,17 +105,28 @@ export function validateCampaign(plan) {
   assert.ok(isDeepStrictEqual(plan, expected), "campaign differs from fixed native bindings");
 }
 
+// The input is the generated plan, not a controller-side substitute for it.
+export function campaignRoleBlockers(plan) {
+  return plan.bindings.flatMap((binding) => {
+    try { nativeControlPartition(binding); return []; }
+    catch {
+      const group = binding.request.group;
+      return [group + ": native actor-role compatibility unavailable"];
+    }
+  });
+}
+
 // These are operational phases, not arbitrary overrides or a replacement native parser.
 export function jsonPhase(plan, phase, receiptPath) {
   const binding = plan.bindings.find((b) => b.request.group === "json-api");
   assert.ok(binding); assert.ok(["prepare", "timing"].includes(phase));
-  const round = phase === "prepare" ? `j${2 * Number(plan.round.slice(1))}` : binding.request.round;
-  const argv = ["bench/json-api/run.mjs", round, "--group", "json-api"];
-  if (phase === "prepare") argv.push("--build", "--check-only");
-  else { assert.equal(typeof receiptPath, "string"); argv.push("--receipts", receiptPath); }
+  const round = phase === "prepare" ? jsonPreparationRound(plan.round) : binding.request.round;
+  if (phase === "timing") assert.equal(typeof receiptPath, "string");
+  const invocation = phase === "prepare" ? jsonPreparationInvocation(plan.round)
+    : jsonTimingInvocation(round, receiptPath);
   return freeze({ ...binding, request: { ...binding.request, round },
-    execution: { ...binding.execution, invocation: { executable: "node", argv }, effectiveOptions: parseArgs(argv.slice(1)) },
-    validation: { ...binding.validation, artifactRoot: `bench/json-api/results/${round}` } });
+    execution: { ...binding.execution, invocation, effectiveOptions: parseArgs(invocation.argv.slice(1)) },
+    validation: { ...binding.validation, artifactRoot: nativeArtifactRoot("json-api", round) } });
 }
 
 export function mixedPhase(plan, id) {

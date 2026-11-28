@@ -11,6 +11,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const directory = new URL("./lib/", import.meta.url);
 const model = await import(new URL("marketplace.ts", directory));
+const { parseMarketplacePublicOrigin } = await import("./marketplace-origin.ts");
+
+test("public marketplace origin must be a single serialized HTTP(S) origin", () => {
+  assert.equal(parseMarketplacePublicOrigin(undefined), undefined);
+  assert.equal(parseMarketplacePublicOrigin("https://localhost:8080").host, "localhost:8080");
+  assert.equal(parseMarketplacePublicOrigin("http://127.0.0.1:8080").origin, "http://127.0.0.1:8080");
+  for (const invalid of ["ftp://localhost:8080", "https://", "https://localhost/", "https://localhost?",
+    "https://localhost#", "https://user@localhost", "https://localhost:*", "https://localhost:65536",
+    "https://localhost:443", "https://[not-ipv6]", " https://localhost", "https://*"]) {
+    assert.throws(() => parseMarketplacePublicOrigin(invalid), /exact HTTP\(S\) origin/);
+  }
+});
+
 const record = {
   id: "item_1", title: '<script>&"{price}', subtitle: "", description: "<b>Data</b>",
   categories: [{ name: "Cards", slug: "cards" }], badges: ["Rare"], tags: ["foil"],

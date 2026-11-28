@@ -4,10 +4,11 @@ import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, symlinkSync
 import { join, resolve } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import test from "node:test";
-import { command, controller, publicError } from "./droplet.mjs";
+import { benchPackagePaths, command, controller, publicError } from "./droplet.mjs";
 import { archive, campaign, commit, harness, metadata, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
+import { upstreamImages } from "./cloud-contract.mjs";
 import { archiveMembers, extractArchive } from "./cloud-local.mjs";
-import { parseDropletArgs } from "./cloud-options.mjs";
+import { parseDropletArgs, providerFailure } from "./cloud-options.mjs";
 import { validationLimit } from "./cloud-validation.mjs";
 
 test("core default and unapproved CLI never execute cloud; grammar has no tuning/adapter override", (t) => {
@@ -27,6 +28,22 @@ test("detach reserves before one completed create, uploads fixed job and starts 
   const job = readFileSync(join(h.local, "job.sh"), "utf8");
   assert.ok(job.includes(`campaign-entry.mjs' 'r21' --commit '${commit}' --state-dir '/bench/campaign'`));
   assert.ok(!job.includes("--apps")); await assert.rejects(h.launch().launch(), /already reserved/); assert.equal(h.creates, 1);
+  assert.equal(s.benchPackage, true); assert.ok(job.includes("bootstrap_stage=bench-dependencies\ntimeout 900 npm --prefix bench ci --no-audit --no-fund\n"));
+  assert.equal(h.saved().gitSource, true);
+  assert.equal(h.saved().trixieUpstream, true); assert.ok(job.includes(`\ntimeout 900 docker pull ${upstreamImages.trixie}\n`));
+  assert.ok(job.includes("<<'CORTEN_GIT_VERIFY'") && !job.includes("ppa.launchpadcontent.net"));
+});
+
+test("locked pre-create check requires both bench package files at the measured commit", async (t) => {
+  assert.deepEqual(benchPackagePaths, ["bench/package.json", "bench/package-lock.json"]);
+  for (const path of benchPackagePaths) {
+    const hook = (binary, args) => { if (binary === "git" && args[0] === "cat-file" && args.at(-1) === `${commit}:${path}`) throw new Error("synthetic absent object"); };
+    const h = harness(t, { active: true, hook });
+    await assert.rejects(h.launch().launch(), /synthetic absent object/);
+    assert.ok(h.calls.some(([binary, ...args]) => binary === "git" && args.at(-1) === `${commit}:${path}`), path);
+    assert.ok(!h.calls.some(([binary]) => binary !== "git"), path); assert.equal(h.creates, 0);
+    assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
+  }
 });
 
 test("legacy detach keeps sfo2 and scans an older retired sfo2 reservation without changing it", async (t) => {
@@ -62,6 +79,37 @@ test("preflight dirty/wrong HEAD/source/capacity/busy host rejects before create
     const h = harness(t, flags); await assert.rejects(h.launch().launch()); assert.equal(h.creates, 0);
   }
   const h = harness(t); h.hosts(); await assert.rejects(h.launch().launch(), /already exists/); assert.equal(h.creates, 0);
+});
+test("a full account has a closed capacity refusal before create or bootstrap", { timeout: 5000 }, async (t) => {
+  for (const [limit, occupied, capacityRefusal] of [
+    [1, 1, true], [1, 2, true], [-1, 1, false], ["SYNTHETIC_MALFORMED_LIMIT", 1, false], [2, 1, false],
+  ]) {
+    const h = harness(t, { active: true });
+    h.hosts(Array.from({ length: occupied }, (_, i) => ({ id: 901 + i, name: `synthetic-unrelated-capacity-host-${i}`, tags: [] })));
+    const launch = h.launch({ run(binary, args, ...rest) {
+      const result = h.run(binary, args, ...rest);
+      if (binary === "doctl" && args[0] === "account") result.stdout = JSON.stringify({ ...JSON.parse(result.stdout), droplet_limit: limit });
+      return result;
+    } });
+    if (limit === 2) {
+      assert.equal((await launch.launch()).status, "running");
+      assert.equal(h.creates, 1, "one free slot permits exactly one create");
+      continue;
+    }
+    const diagnostic = capacityRefusal ? { code: "account-capacity" } : undefined;
+    await assert.rejects(launch.launch(), (error) => {
+      assert.deepEqual(providerFailure(error), diagnostic);
+      assert.equal(publicError(error), publicError() + (diagnostic ? " Provider failure: account-capacity." : ""));
+      return true;
+    }, `census of ${occupied} with limit ${limit} must refuse`);
+    const saved = h.saved();
+    assert.equal(saved.status, "reserved"); assert.equal(saved.createIntentAt, undefined); assert.equal(saved.id, undefined);
+    assert.deepEqual(saved.control.ledger, []);
+    assert.ok(!existsSync(join(h.base, ".groups-launch.lock")) && !existsSync(join(h.local, "operation.lock")));
+    assert.equal(h.calls.filter(([binary, resource, noun, verb]) => binary === "doctl" && resource === "compute" && noun === "droplet" && verb === "list").length, 1);
+    assert.equal(h.creates, 0);
+    assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
+  }
 });
 test("unavailable SSH exhausts only the bounded untracked no-op probes", async (t) => {
   const h = harness(t, { noSsh: true }); let now = 0;

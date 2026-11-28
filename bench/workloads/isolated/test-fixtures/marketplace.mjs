@@ -2,8 +2,8 @@
 import { locales, workload } from "../../../marketplace/contract.mjs";
 import { records } from "../../../marketplace/fixtures.mjs";
 import { phases, resultSchema, sources, stageAggregate, timedProfiles } from "../../../marketplace/run-contract.mjs";
-import { featureProfile, qualification, qualificationSettings } from "../../../marketplace/feature-contract.mjs";
-import { qualificationProbes } from "../../../marketplace/qualification-fixture.mjs";
+import { boundedFeatureProfile as featureProfile, produceBoundedQualification, boundedQualificationSettings as qualificationSettings } from "../../../marketplace/feature-contract.mjs";
+import { boundedQualificationProbes } from "../../../marketplace/qualification-fixture.mjs";
 import { digest } from "../evidence.mjs";
 
 export function marketplaceResult(binding) {
@@ -16,7 +16,7 @@ export function marketplaceResult(binding) {
       cpus: binding.resources.expectedCpus, encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, featureProfile, qualificationSettings } };
   for (const app of options.apps) {
     const a = s.apps[app] = { label: app, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {},
-      qualification: Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)])) };
+      qualification: Object.fromEntries(sources.map((source) => [source, produceBoundedQualification(boundedQualificationProbes(source), source)])) };
     for (const source of sources) {
       a.checks[source] = { workload, source, jsonRecords: 500, pages: 264,
         profiles: locales.flatMap((locale) => [false, true].flatMap((javaScriptEnabled) => [false, true].map((mobile) => ({ locale, javaScriptEnabled, mobile, passed: true })))),
@@ -26,7 +26,7 @@ export function marketplaceResult(binding) {
         const stats = { cpuUsec: 1000000, samples: 3, cpuAvgPct: 100, cpuMaxPct: 110, memAvgMiB: 10, memMaxMiB: 11 };
         a.runs[key] = [1, 2, 3].map((pass) => ({ pass, locale, complete: true, startedAt: "2026-01-01T00:01:00Z", finishedAt: "2026-01-01T00:03:00Z",
           cold: { containerStartedAt: "2026-01-01T00:02:00Z", first200At: "2026-01-01T00:02:01Z", first200MsFromContainerStart: 1000,
-            measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
+            measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locales[0]}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
           warmup: metric, phases: Object.fromEntries(phases.map((p) => [p, { ...metric, ...stats, requests: 1000 + pass, rps: 1000 + pass, perCpuSecond: 1000 + pass,
             upstream: source === "api" ? { ...stats, highCpu: true } : null }])) }));
         a.phases[key] = Object.fromEntries(phases.map((p) => [p, stageAggregate(a.runs[key], p, 3)]));

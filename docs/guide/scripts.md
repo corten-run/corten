@@ -118,8 +118,10 @@ sets first is taken as declared, even when the class declares its fields, so a m
 `this.naem = ..` is not flagged unless `this` is retyped to `Fields`, a typedef that repeats the
 class's fields (`/** @this {Fields} */` on a method, `/** @type {Fields} */ (this).name = ..` in
 the constructor), and a read of `naem` only when a method other than the constructor set it and
-`undefined` is not accepted. Keep behavior in exported functions, as components do, and have a
-class set only the fields it declares. For a function called with `new` and a call with more
+`undefined` is not accepted. Keep behavior in exported functions, as components do; a class that
+stays declares its fields with a first value (`status = 0;`, which TypeScript 7 requires of a field
+the constructor writes only through `Fields`) and writes them only through `Fields`, as the
+runtime's two classes do. For a function called with `new` and a call with more
 arguments than a function reading `arguments` declares, 6.x accepts these in JavaScript and
 7.0.2 refuses them; use a class and a rest parameter (`...rest`) instead. A value whose type
 nothing fixes (`new Promise((resolve) => ..)`, a type parameter no argument decides) is `any` in
@@ -308,7 +310,7 @@ with a client-side navigation or patch, which keeps the document alive, and chec
 work was running before and stops after; a full page load ends every script with its document,
 so it would pass even if the handler ignored `signal`. Do not supply a different lifecycle in
 the test. [The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection,
-filtering and sorting this way; [the runtime smoke](../../scripts/smoke.mjs) covers connection and
+filtering and sorting this way; [the runtime smoke areas](../../scripts/smoke/) cover connection and
 cleanup. Neither harness needs per-app implementations of Corten's modules. Browser tests run
 separately from `cargo test` and `corten check`; keep them in the app's CI too.
 
@@ -410,7 +412,8 @@ matching. The page as first loaded has had no save answered, and a generated dec
 optional at a call (the table at the top of this page), so that is a variant of its own, `Loaded`,
 for which `answered` dispatches nothing. A submit with no answer to draw (other than a bare `204` or
 `205`, the submit done with nothing to draw) is `corten:error` on the
-form (it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
+form (when a read drew over it while the write was out, on the form the read drew in its place
+on the same page, else on the document; it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
 corten-ui's `Toaster` quiet), and a redirect's notice the page did not draw is `corten:notice` on the document
 ([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's:
 `on:corten:error={js::failed(event, target)}` on the form (or `on:document:corten:error` for every
@@ -1261,7 +1264,9 @@ not `SetListing<'a>`), since the handler's return type names it.
 
 The read goes through the browser's HTTP cache. Corten tags a `200` it may be asked about again
 with a weak `ETag` and sends it `private, no-cache` by default, so each read asks with the tag it
-kept and an unchanged answer is a `304` with no body; a `Public` route's `max-age` lets a read
+kept and an unchanged answer is a `304` with no body (behind a proxy, when it passes
+`Accept-Encoding` and `If-None-Match` on: [deploying](deploy.md#response-compression)); a
+`Public` route's `max-age` lets a read
 within it make no request at all. The page and its data share the URL, and `Vary: corten, accept`
 keeps a cached page from answering a read. The browser keeps one answer per URL, so the 304 holds
 while nothing else fetched that URL in between: once the page itself is fetched there again (a
@@ -1294,7 +1299,7 @@ cookie, so give it only what the page itself may show that user.
 
 Data the page needs when it loads is a handler argument, which costs no request; data it may never
 need, or that a choice the user makes picks, is a read; a change to what the server draws is a
-`data-patch` form. `corten/read` is a module of its own (749 bytes, 486 gzipped), served only to
+`data-patch` form. `corten/read` is a module of its own (767 bytes, 493 gzipped), served only to
 apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
 not download it and the runtime is unchanged; such an app's import map names it on every page (60
 bytes, under 10 compressed)

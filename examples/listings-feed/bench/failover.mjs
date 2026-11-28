@@ -4,11 +4,11 @@
 // CLIENTS subscribers (split over WORKERS threads, so the load generator is not the bottleneck)
 // follow feed s1 through the load balancer much as EventSource + corten.js do:
 // snapshot, then /live?since=cursor; on a dropped stream, reconnect after the server's `retry`
-// with Last-Event-ID; on an HTTP error, back off and reconnect. They are a client of this file's
-// own, not the runtime: a failed snapshot is retried on its own schedule (250 ms doubling to
-// 5 s), the HTTP-error backoff starts again on a patch (the runtime's, when a stream opens), and
-// a gap in seq is counted as lost rather than loading a snapshot, so they count what the server
-// sends. run.mjs keeps a Chromium page on subscribe() through the same run, and scripts/smoke.mjs
+// with Last-Event-ID; on an HTTP error, back off on the runtime's timer for that case (1 s
+// doubling to 30 s, and 1 s again once a stream opens) and reconnect. They are a client of this file's own, not the
+// runtime: a failed snapshot is retried on its own schedule (250 ms doubling to 5 s), and a gap in
+// seq is counted as lost rather than loading a snapshot, so they count what the server sends.
+// run.mjs keeps a Chromium page on subscribe() through the same run, and scripts/smoke.mjs
 // checks subscribe()'s recovery paths in browsers. The main thread commits WPS market
 // writes per second (N listings each) through the load balancer and runs the schedule (default:
 // kill a, start a, kill b, start b; kills are SIGKILL). At the end every client must account for
@@ -70,7 +70,7 @@ async function subscribers({ t0, from, count }) {
     // the rows wrong (`missing`).
     const c = {
       i, first: null, last: 0, high: 0, received: 0, redelivered: 0, coveredBySnapshot: 0, duplicates: 0, missing: 0,
-      snapshots: 0, syncs: [], reconnects: 0, httpErrors: 0, networkErrors: 0, instances: [], outages: [], cursor: "",
+      snapshots: 0, syncs: [], reconnects: 0, httpErrors: 0, httpStatuses: {}, networkErrors: 0, instances: [], outages: [], cursor: "",
       retry: 3000, lastPatchAt: 0, since: "", gaps: [], log: [], stop: new AbortController(),
       // per new patch: seq, written (listing updated_at), received (both Unix ms)
       seqs: [], written: [], receivedAt: [],
@@ -121,11 +121,13 @@ async function subscribers({ t0, from, count }) {
       if (!res.ok) {
         // EventSource would close for good; corten.js listens again from its cursor with backoff.
         c.httpErrors += 1;
+        c.httpStatuses[res.status] = (c.httpStatuses[res.status] ?? 0) + 1;
         dropped();
         backoff += 1;
         await sleep(Math.min(30_000, 500 * 2 ** backoff));
         continue;
       }
+      backoff = 0;
       const instance = res.headers.get("x-instance");
       c.instances.push(instance);
       c.log.push([Date.now() - t0, "open", instance, c.cursor]);
@@ -168,7 +170,6 @@ async function subscribers({ t0, from, count }) {
               c.missing += batch.seq - c.last - 1;
               c.gaps.push([c.last, batch.seq, now - t0]);
             }
-            backoff = 0;
             c.last = batch.seq;
             c.cursor = id ?? c.cursor;
             if (batch.seq <= c.high) {
@@ -425,6 +426,12 @@ function report({ t0, events, first, committed, drainMs, writes, parts }) {
         syncs: { n: syncs.length, byInstanceAndReason: count(syncs, (s) => `${s[1]}:${s[2]}`), bySecond: count(syncs, (s) => Math.floor(s[0] / 1000)) },
         reconnects: results.reduce((s, c) => s + c.reconnects, 0),
         httpErrors: results.reduce((s, c) => s + c.httpErrors, 0),
+        // by status, which alone does not say whether nginx or an instance answered: match it with
+        // run.mjs's load balancer counts
+        httpErrorStatuses: results.reduce((s, c) => {
+          for (const [k, v] of Object.entries(c.httpStatuses)) s[k] = (s[k] ?? 0) + v;
+          return s;
+        }, {}),
         networkErrors: results.reduce((s, c) => s + c.networkErrors, 0),
         clientsEndingOn: count(results, (c) => c.instances.at(-1)),
         lossDetail,

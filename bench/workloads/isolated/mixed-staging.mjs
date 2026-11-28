@@ -5,6 +5,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { deploymentSha256 } from "../deployments.mjs";
 import { verifyNativeReceipt } from "../../json-api/contract.mjs";
+import { deploymentIdentity, nativeDeployment, verifyImageDeployment } from "../../mixed-production/source-audit.mjs";
 import { digest, durable, readRegular, tree } from "./evidence.mjs";
 import { exact, freeze } from "./campaign-contract.mjs";
 
@@ -52,6 +53,7 @@ function subject(plan, sourcesManifest, contextRows) {
     assert.ok(sourceFiles.length);
     return { identity: { app, payload: "marketplace-v2", key: "mixed-native-source", commit: plan.commit,
       contractSha256: binding.selection.contractSha256, nativeProfile: binding.execution.effectiveOptions.profile,
+      ...deploymentIdentity(binding.execution.effectiveOptions, app),
       contextArchiveSha256: sha256, buildInputsSha256: digest(JSON.stringify(sourceFiles)) }, sourceFiles };
   });
   const body = { schema: "benchmark-mixed-audit-subject/v1", scope: "committed-source-and-build-context-not-built-image",
@@ -125,6 +127,7 @@ export function validateMixedRun(binding, directory, saved, bundle) {
     assert.equal(digest(readRegular(join(directory, `${app}-build-context.tar`))), request.identity.contextArchiveSha256);
     assert.equal(entry.image.buildCommit, request.identity.commit); assert.equal(entry.image.buildDirty, "false");
     assert.equal(entry.image.profile, request.identity.nativeProfile); assert.equal(entry.image.contextArchiveSha256, request.identity.contextArchiveSha256);
+    verifyImageDeployment(entry.image, nativeDeployment(binding.execution.effectiveOptions, app));
     assert.match(entry.image.id, /^sha256:[a-f0-9]{64}$/); assert.equal(retained.imageId, entry.image.id);
     assert.equal(retained.receiptSha256, digest(JSON.stringify(bundle.receipts[index])));
   }

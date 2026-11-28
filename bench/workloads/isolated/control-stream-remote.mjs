@@ -1,7 +1,7 @@
 // Campaign-owned lease consumer, independent of the SSH guardian. No reconnect.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, write } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { digest, durable, readRegular, syncDirectory } from "./evidence.mjs";
@@ -25,21 +25,28 @@ function leaseJSON(path) {
 async function startWatchdog(launch, binding, registration, invalidate) {
   const child = launch("/usr/bin/taskset", ["--cpu-list", "0", "/usr/bin/python3", "-I", "-c", guardianSource,
     "stream-watchdog", binding.token, streamHash(registration)], { cwd: "/bench", shell: false, windowsHide: true,
-    stdio: ["pipe", "pipe", "ignore"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
+    stdio: ["pipe", "pipe", "inherit"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
   const ready = Promise.withResolvers(), closed = Promise.withResolvers();
-  let admitted = false, stopping = false, ended = false;
-  const fault = () => {
-    invalidate(); ready.reject(new Error("pinned control watchdog failed"));
+  let admitted = false, reported = false, stopping = false, ended = false;
+  const fault = (reason) => {
+    invalidate(reason); ready.reject(new Error("pinned control watchdog failed"));
   };
-  child.on("error", fault); child.stdin.on("error", fault);
+  child.on("error", () => fault("watchdog process")); child.stdin.on("error", () => fault("watchdog input"));
   child.stdout.on("data", (bytes) => {
-    if (admitted || !bytes.equals(Buffer.from("R"))) { fault(); return; }
+    if (reported) return; // Never admit after a fault.
+    if (bytes.equals(Buffer.from("F")) || bytes.equals(Buffer.from("RF"))) {
+      reported = true; invalidate("pinned watchdog reported a fault");
+      // Before readiness, let close reject the promise after the helper reports its
+      // line. A wedged helper is still killed by the original startup deadline.
+      return;
+    }
+    if (admitted || !bytes.equals(Buffer.from("R"))) { fault("watchdog readiness"); return; }
     admitted = true; ready.resolve();
   });
   child.once("close", (code, signal) => {
     ended = true;
-    const clean = admitted && stopping && code === 0 && signal === null;
-    if (!clean) fault();
+    const clean = admitted && !reported && stopping && code === 0 && signal === null;
+    if (!clean) fault("watchdog exit");
     closed.resolve(clean);
   });
   const bounded = async (promise) => {
@@ -49,7 +56,7 @@ async function startWatchdog(launch, binding, registration, invalidate) {
         timer = setTimeout(() => reject(new Error("control watchdog deadline expired")), 5000);
       })]);
     } catch (error) {
-      invalidate(); if (!ended) child.kill("SIGKILL"); throw error;
+      invalidate("watchdog deadline"); if (!ended) child.kill("SIGKILL"); throw error;
     } finally { clearTimeout(timer); }
   };
   await bounded(ready.promise);
@@ -69,24 +76,39 @@ export async function superviseControlStream(binding, admission, abort, runtime 
   const read = (name) => name === "stream-lease.json" ? leaseJSON(join(root, name)) : JSON.parse(readRegular(join(root, name)));
   assert.equal(streamHash(read("stream-registration.json")), streamHash(registration));
   let revoked = false, ended = false, sealed = false, draining = false, windowStart, renewal = 0;
-  const invalidate = () => {
+  const invalidate = (reason) => {
     if (revoked) return;
     revoked = true;
+    abort.abort();
     try {
-      if (!existsSync(join(root, "stream-invalid.json"))) durable(join(root, "stream-invalid.json"), JSON.stringify({ id: registration.id,
-        host: registration.host, monoNs: String(now()), reason: "independent campaign lease watchdog failed" }));
-    } finally { abort.abort(); }
+      // Job stderr is captured. The historical marker path is an existence gate;
+      // never change its contents after custody can see it.
+      durable(join(root, "stream-invalid.json"), "");
+    } catch {
+      // Another reporter won, or storage failed. Never skip abort or child settlement.
+    }
+    try {
+      const record = JSON.stringify({ id: registration.id, host: registration.host, monoNs: String(now()), reason });
+      write(runtime.faultFd ?? 2, "control fault: " + record + "\n", () => {});
+    } catch { /* diagnostics do not decide revocation */ }
   };
   const check = () => {
+    let stage = "campaign revocation";
     try {
       assert.ok(!revoked && !existsSync(join(root, "stream-invalid.json")), "control lease revoked");
+      stage = "campaign lease read";
       const lease = read("stream-lease.json"), at = now();
+      stage = "campaign lease identity";
       assert.equal(lease.id, registration.id); assert.deepEqual(lease.host, registration.host);
+      stage = "campaign lease renewal";
       assert.ok(Number.isSafeInteger(lease.renewal) && lease.renewal >= renewal); renewal = lease.renewal;
+      stage = "campaign lease expiry";
       assert.ok(at < BigInt(lease.expiresMonoNs) && BigInt(lease.expiresMonoNs) - at <= BigInt(streamLimits.leaseMs) * 1000000n);
+      stage = "campaign observation age";
       assert.ok(at >= BigInt(lease.observedMonoNs) && at - BigInt(lease.observedMonoNs) <= BigInt(streamLimits.sampleGapMs) * 1000000n);
+      stage = "campaign apparatus";
       const observed = sample(registration); verifyApparatus(binding, registration, observed); return observed;
-    } catch (error) { invalidate(); throw error; }
+    } catch (error) { invalidate(stage); throw error; }
   };
   const publish = (kind, payload) => {
     check();
@@ -96,10 +118,10 @@ export async function superviseControlStream(binding, admission, abort, runtime 
   check();
   let stopWatchdog;
   try { stopWatchdog = await startWatchdog(runtime.launch ?? spawn, binding, registration, invalidate); }
-  catch (error) { invalidate(); throw error; }
+  catch (error) { invalidate("watchdog startup"); throw error; }
   return {
     registration, check,
-    open(cpus) { assert.ok(!sealed && !draining && !windowStart); const observed = check(); apparatusProof(binding, registration, observed, cpus); windowStart = observed.monoNs; return observed; },
+    open(cpus, roles) { assert.ok(!sealed && !draining && !windowStart); const observed = check(); apparatusProof(binding, registration, observed, cpus, roles); windowStart = observed.monoNs; return observed; },
     close() { const observed = check(); assert.ok(windowStart && BigInt(observed.monoNs) >= BigInt(windowStart)); windowStart = undefined; return observed; },
     progress(status) {
       assert.ok(!sealed && !draining);
@@ -132,19 +154,30 @@ export async function superviseControlStream(binding, admission, abort, runtime 
       // Only the independently owned campaign process may observe the SSH tree
       // disappear. Local EOF is not an input to this proof.
       const deadline = now() + 10000000000n;
+      let stage = "campaign drain";
       try {
-        for (let attempts = 0; attempts < 100 && now() < deadline; attempts++) {
+        for (let attempts = 0; ; attempts++) {
+          stage = "campaign drain control invalid";
           assert.ok(!abort.signal.aborted && !existsSync(join(root, "stream-invalid.json")));
+          stage = "campaign drain deadline";
+          assert.ok(attempts < 100 && now() < deadline);
+          stage = "campaign drain probe start";
           const result = probe();
-          assert.ok(!result.error && !result.signal && [0, 3].includes(result.status), "apparatus drain uncertain");
+          if (result.error || result.signal || ![0, 3].includes(result.status)) {
+            if (result.error?.code === "ETIMEDOUT") stage = "campaign drain probe deadline";
+            else if (result.error?.code === "ENOBUFS") stage = "campaign drain probe output limit";
+            else if (!result.error) stage = "campaign drain probe exit";
+            assert.fail("apparatus drain uncertain");
+          }
           if (result.status === 0) {
+            stage = "campaign drain invalid proof";
             const proof = JSON.parse(result.stdout); verifyStreamDrain(binding, registration, proof); ended = true; return proof;
           }
+          stage = "campaign drain";
           await sleep(100);
         }
-        assert.fail("apparatus disappearance deadline expired");
-      } catch (error) { invalidate(); throw error; }
+      } catch { invalidate(stage); throw new Error(stage); }
     },
-    async dispose() { if (!ended && !revoked) invalidate(); await stopWatchdog(); },
+    async dispose() { if (!ended && !revoked) invalidate("campaign disposed before drain"); await stopWatchdog(); },
   };
 }

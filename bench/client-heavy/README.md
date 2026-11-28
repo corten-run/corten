@@ -68,15 +68,17 @@ asynchronous work.
 
 The runner records operation dispatch-to-two-animation-frames elapsed time,
 including scheduling and rendering, not pure handler CPU. Observer overhead is
-present in both journeys. Qualification has `actions: null`; action timings are
-collected only in the separate measurement pass after qualification. `readyMs`
+present in every journey. Qualification has `actions: null`; action timings are
+collected only in measured journeys after qualification. `readyMs`
 is mount-to-visible-screen-and-subscription readiness, not document load time.
 These local bounded numbers are diagnostics, not a
 ranking or cloud/load readiness. Offline `readyForLoad` remains false.
 
 ## Candidate freshness
 
-New output is `client-heavy-native/v3`. It saves the recomputed
+The single-sample diagnostic runner writes `client-heavy-native/v3`; the
+[dedicated comparison recipe](#dedicated-comparison-recipe) writes
+`client-heavy-native/v4` with three measured blocks. Both save the recomputed
 `benchmark-latest-stable-evaluation/v2` alongside the native observations. The
 policy, browser manifest/lock and root tooling manifest/lock byte identities are retained, with exact
 candidate roots and their resolved dependency/optional/peer paths. Saved replay
@@ -85,20 +87,40 @@ the exact commit, not a saved eligible flag. Historical native v1/v2 and policy
 v1 retain their old semantics; an old group-wide blocker is not reinterpreted as
 candidate qualification.
 
-The reviewed 13-package 2026-11-17 primary registry observation has Solid and `@solidjs/web` 2.0.0
-and Babel 8.1.2, but the stable `babel-preset-solid` 1.9.19 requires Solid
-`^1.9.16` and Babel `^7.0.0`. Solid remains visible as `unsupported`, reason
-`latest-stable-solid-2-needs-compatible-stable-compiler`, with null qualification
-and measurement. Its compiler hook is not invoked and it has no build artifacts.
-Replay rejects attempted Solid builds/captures, missing or mixed policy, and
-invented unsupported peers. A failed build is never renamed unsupported.
+In the reviewed 2026-11-22 policy, the stable `babel-preset-solid` 1.9.19
+required Solid `^1.9.16` and Babel `^7.0.0`. Attempts bound to that policy
+keep their original `unsupported` Solid row
+(`latest-stable-solid-2-needs-compatible-stable-compiler`), with no build,
+qualification or measurement. Replay rejects attempted builds or captures under
+that disposition. A failed build is never renamed unsupported.
 
-Only Solid's hook loads Babel core. Other candidates retain their own compiler
-and runtime closures; an actual shared consumer of an incompatible package is
-still blocked. This does not remove Solid or any other benchmark inventory,
-change the browser package pins, install an RC, force peers, or hide a compiler
-error. The other browser candidate/build roots and Vue's SFC compiler match
-their observed latest stable versions. This is freshness of those explicit
+New attempts use Solid and `@solidjs/web` 2.0.3 with the official
+[`@solidjs/compiler` 2.0.2 DOM transform](https://github.com/solidjs/solid/blob/7f86b2dee029a82be946918fcaa248ce52d1a96d/packages/compiler/README.md),
+observed on 2026-11-23. The compiler runs inside the existing esbuild hook;
+neither Babel nor Vite is in this candidate's build. The same
+`npm --prefix bench/browser ci` installs both suites. The historical browser
+builder alone uses the `solid-js-legacy` alias (Solid 1.9.19), Babel 7.29.13
+and the DOM plugin with the old preset's options.
+
+The policy checks the exact published archive entries and compiler dependency and
+runtime peer declarations, including the transitive `@solidjs/signals` 2.0.3
+archive. The build checks the installed compiler entry and native binding,
+refuses fallback or overrides, and verifies the complete Solid 2 runtime input
+set that esbuild uses against hashes from the three published runtime archives.
+That includes `solid-js/internal` and the imported Signals modules. Offline
+replay checks the same identities and file set against the browser dependency
+snapshot and build receipt. Build and replay also pin the package manifests
+that select compiler and runtime code or control tree shaking, and reject
+unpublished nested manifests along the runtime paths. The lock must retain the
+published native add-on platform selectors. This clears the Solid input
+gate, not parity: the same browser asset and operation assertions, keyed DOM
+checks, readiness, timing boundaries and cleanup still apply before comparison.
+No old disposition or performance number changes.
+
+Other candidates retain their own compiler and runtime closures. New builds
+use Remix 3.3.0, Svelte 5.59.1 and Vue and its SFC compiler 3.5.46. The supported
+browser candidate/build roots and Vue's SFC compiler match their observed
+latest stable versions. This is freshness of those explicit
 targets, not native qualification. Published supported internal dependency pins
 remain intact, including Vue's Babel parser 7 dependency; this does not invent
 a requirement that every transitive package independently use its latest release.
@@ -112,11 +134,18 @@ Every resolved dependency, installed optional dependency and peer edge must also
 satisfy its declared npm range, checked with exact `semver` 7.8.6 from the root
 tooling dependency. Absent optional edges are allowed; an installed incompatible
 optional or peer is not. An incompatible edge blocks each actual consumer,
-without imposing latest-every-transitive or hiding that consumer. Remix remains
-blocked: its consumed `@remix-run/test` declares esbuild `^0.27.1`, while the
-unchanged browser override resolves `0.28.2`. Root tooling source/lock identity
+without imposing latest-every-transitive or hiding that consumer. The reviewed
+`@remix-run/test` 1.2.0 publishes esbuild `^0.27.1`; it uses a private 0.27.2,
+outside [the Windows dev-server advisory](https://github.com/advisories/GHSA-g7r4-m6w7-qqqr).
+Only that dependency edge may resolve the private copy. Replay checks both
+archives' identities and the private copy's platform dependency declarations.
+The actual benchmark bundler remains the observed latest root esbuild 0.28.2.
+Root tooling source/lock identity
 is part of candidate replay; no global or transitive parser fallback is used.
 The parser is verification tooling only and is not shipped in client bundles.
+The dependency smoke in Benchmark Evidence builds the npm clients and runs the
+browser oracle without a measurement pass. It does not qualify a native run or
+backfill old reports.
 
 The isolated adapter retains exact captured policy input lengths/hashes and
 recomputes the native policy from those raw bytes. It separately recomputes the
@@ -124,10 +153,45 @@ binding policy from custody-verified committed-equivalent inputs. Only the
 existing exact-byte or uniform LF-to-CRLF checkout conversion is accepted;
 different policy dispositions, invented hashes or mixed conversion fail closed.
 
-Composition can consider each candidate separately only after freshness and
-native admission. The current small one-measurement recipe still reports
-`rankingEligible: false` and no comparison-eligible apps. This change provides
-no framework performance qualification, no new baseline, and no ranking.
+### Dedicated comparison recipe
+
+New dedicated client-heavy campaigns bind `client-heavy-comparison-v1` in the
+existing isolated runner. The local diagnostic default and legacy campaign keep
+their single measured pass, and saved v2/v3 results remain readable and unranked.
+To exercise the comparison capture locally (not to qualify or publish a result),
+pass `--profile client-heavy-comparison-v1` to `run.mjs`; it accepts no workload
+or timing overrides.
+
+The recipe uses 100 initial rows, a 1,000-row large create, an append of 100 and
+200 dashboard cards. These cover the established 100-row batch, 1,000-row table
+and 200-price dashboard scales without carrying 10,000-row snapshots through
+each operation and replicate. They use the same seeded inputs, operations and
+oracles for all six apps; they are not the historical browser table's workload.
+
+Qualify the roster first. Then visit it in three serial blocks, rotating by two
+roster positions between blocks and skipping only cells that did not qualify.
+Every built app needs a qualification receipt. A recorded qualification failure
+can leave its peers comparable; a missing attempt blocks comparisons for all.
+Every attempted journey uses a fresh context, does the same work and records
+raw timings and cleanup. An observed, closed failed sample stays in its block
+and disqualifies that cell; nothing is retried or substituted. Unsupported Solid
+keeps its row and has no samples. Native passes do not waive a candidate's
+version-policy blocker. The earlier Remix blocker remains part of its saved
+observation, not a disposition for new inputs.
+
+Replay derives per-action median, minimum and maximum from all three admitted
+samples and reports the attempted order per block alongside the ranges. With
+only Solid skipped, the orders are Corten/React/Vue/Svelte/Remix,
+Vue/Svelte/Remix/Corten/React, and Svelte/Remix/Corten/React/Vue. Skips can leave
+positions uneven; fresh contexts do not reset the browser process or host caches.
+This rotation does not establish balance or remove carryover between attempts.
+
+Only an eligible cell whose entire attempt also passes isolated host proof and
+custody can carry that summary into the official result. A timed-out sample
+cannot count toward its cell even when closure is proved; a missing close
+observation blocks the attempt. The native artifact cannot grant ranking
+eligibility by itself. Treat the ranges as within-host observations, not as a
+winner, a way to resolve small differences, or a replacement for the baseline.
 
 Integration left to the parent: add `node --test bench/client-heavy/*.test.mjs`
 to the check command and route the client-heavy group's native execution to
@@ -175,12 +239,15 @@ bytes in `evidence/blobs/<sha256>`. Node and browser dependency trees receive th
 same before/after byte snapshots. Missing, unsafe-linked, oversized or unreadable
 inputs explicitly block proof; partial snapshots do not mean coverage.
 The collector bounds each tree to 40,000 entries, 32 levels, 128 MiB per file and
-1 GiB of unique saved blobs. The observed browser executable alone may be up to
-512 MiB (Linux headless-shell exceeds 128 MiB); other inputs retain the 128 MiB
-bound. Offline replay checks `browser.json` before reading oversized bytes; only
-its exact executable blob receives the exception, not unreferenced blobs, other
-references or ordinary files. Replay enforces 1 GiB of unique blobs and 2 GiB of
-total saved files. External configuration is not copied or authenticated;
+1 GiB of unique saved blobs. The observed Node and browser executables have
+separate caps of 192 MiB and 512 MiB; the NodeSource 26.13.1 amd64 executable and
+Linux headless-shell exceed 128 MiB. On Linux the file descriptor being read
+must match the inode pinned through the running process's `/proc` executable.
+Offline replay checks `evidence/node.json`
+and `evidence/browser.json` before reading oversized bytes, then checks the exact
+blob length and SHA-256. No other reference gets a higher bound. Replay enforces
+1 GiB of unique blobs and 2 GiB of total saved files. External configuration is
+not copied or authenticated;
 only selected inherited configuration variable names are recorded, not their values.
 
 For the two npm install trees, collection uses a closed-install policy. Only
@@ -224,6 +291,12 @@ PID and fixed launch options. Linux also checks `/proc/<pid>/exe`; the generic
 `chromium.executablePath()` full-browser default is not substituted for the
 headless-shell that actually ran. Shutdown closes the owned server/process, not
 merely the remote connection. Worker executable comparisons remain exact.
+The isolated Linux observer recognizes the renderer role in native argv or in
+Chromium's single rewritten process title: the exact executable path must be
+followed by the renderer switch as its first argument. An arbitrary embedded
+switch does not establish the role, and the verifier still requires the pinned
+browser executable, stable PID, and the measured cgroup and CPU window. The
+untimed Linux browser smoke checks this against Chromium's own process inventory.
 
 Opt-in real Linux apparatus controls (ordinary npm install, actual headless image,
 before/after closure and hostile links, not framework qualification):

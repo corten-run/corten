@@ -41,8 +41,9 @@ function caches(/** @type {string} */ text) {
   return mounts.filter((mount) => mount.type === "cache");
 }
 
-/** The cargo home each `cargo build` in a Dockerfile runs with: a `CARGO_HOME=` before the command,
- * else its stage's `ENV CARGO_HOME`, else none (`undefined`, the image's own). */
+/** The cargo home each build in a Dockerfile runs with (`cargo build`, `cargo install`, and
+ * `corten build`, which runs Cargo): a `CARGO_HOME=` before the command, else its stage's
+ * `ENV CARGO_HOME`, else none (`undefined`, the image's own). */
 function cargoHomes(/** @type {string} */ text) {
   /** @type {(string | undefined)[]} */
   const homes = [];
@@ -55,7 +56,9 @@ function cargoHomes(/** @type {string} */ text) {
       const pairs = /^\w+=/.test(env) ? [...env.matchAll(/(\w+)=(\S+)/g)].map((pair) => [pair[1], pair[2]]) : [env.split(/\s+/)];
       for (const [key, value] of pairs) if (key === "CARGO_HOME") home = value;
     }
-    if (/^RUN\s/i.test(line)) for (const build of line.matchAll(/(?:CARGO_HOME=(\S+)\s+)?cargo build/g)) homes.push(build[1] ?? home);
+    if (/^RUN\s/i.test(line)) {
+      for (const build of line.matchAll(/(?:CARGO_HOME=(\S+)\s+)?(?:cargo (?:build|install)|corten build)/g)) homes.push(build[1] ?? home);
+    }
   }
   return homes;
 }
@@ -63,6 +66,98 @@ function cargoHomes(/** @type {string} */ text) {
 test("every example has an image, and each is checked", () => {
   assert.ok(examples.length > 0);
   for (const file of files) assert.ok(existsSync(new URL(file, root)), `${file} is missing`);
+});
+
+/** The one `RUN` of an example's build stages, without its leading `--mount` options: touch the
+ * sources, build the release locked (one package in the examples' workspace), and copy the binary
+ * out. Any other `RUN` before the run stage, or another shape, is refused, so a second build, a
+ * build behind a variable or a flag in a comment cannot slip past. */
+const BUILD =
+  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && cargo build --release --locked(?: -p [\w-]+)? && (?:mkdir -p \/out && )?cp target\/release\/[\w-]+ \/[\w/]+$/;
+
+/** The two `RUN`s of the template's build stage, which builds with a profile when `PROFILE_FROM`
+ * names the app's script (docs/design.md#choice-profile-image), each in its one shape. The first
+ * installs the `corten` command, locked, only when the argument is given, and refuses one without
+ * the option. The second is {@link BUILD} with the build as a choice of two: `cargo build` without
+ * the argument, `corten build --profile-from` with it, both locked, and neither behind any other
+ * variable. */
+const INSTALL =
+  /^if \[ -n "\$PROFILE_FROM" \]; then rustup component add llvm-tools && CARGO_HOME=[\w/.-]+ cargo install corten-cli --version \{\{version\}\} --locked --root \/usr\/local && if ! corten help build \| grep -q -e --profile-from; then echo "[^"$`\\]*" >&2; exit 1; fi; fi$/;
+const BUILD_EITHER =
+  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && if \[ -z "\$PROFILE_FROM" \]; then CARGO_HOME=[\w/.-]+ cargo build --release --locked; elif \[ -f "\$PROFILE_FROM" \]; then CARGO_HOME=[\w/.-]+ corten build --locked --profile-from sh -- "\$PROFILE_FROM"; else echo "PROFILE_FROM=\$PROFILE_FROM: [^"$`\\]*" >&2; exit 1; fi && cp target\/release\/\{\{name\}\} \/server$/;
+
+/** Why a Dockerfile does not build the way it has to, or nothing when it does: an example's one
+ * `RUN` as {@link BUILD} reads, or, for the template (`profiled`), {@link INSTALL} and
+ * {@link BUILD_EITHER} in that order. Each file has the one shape that is its own, so an example
+ * cannot take the template's. */
+function unlocked(/** @type {string} */ text, profiled = false) {
+  const lines = instructions(text);
+  const runs = lines
+    .slice(0, lines.findLastIndex((line) => /^FROM\s/i.test(line)))
+    .filter((line) => /^RUN\s/i.test(line))
+    .map((line) => line.replace(/^RUN\s+((--mount=\S+)\s+)*/i, "").replace(/\s+/g, " ").trim());
+  if (profiled) {
+    if (runs.length !== 2) return `has ${runs.length} RUN instructions before its run stage, not the 2 of a build that may take a profile`;
+    if (!INSTALL.test(runs[0])) return `installs otherwise than the one locked install of a profiled build: ${runs[0]}`;
+    return BUILD_EITHER.test(runs[1]) ? undefined : `builds otherwise than locked, with a profile or without: ${runs[1]}`;
+  }
+  if (runs.length !== 1) return `has ${runs.length} RUN instructions before its run stage, not 1`;
+  return BUILD.test(runs[0]) ? undefined : `builds otherwise than its one locked release build: ${runs[0]}`;
+}
+
+test("an example's build is read in its one shape, and the template's two RUNs each in theirs", () => {
+  const dockerfile = (/** @type {string[]} */ runs) => ["FROM rust AS build", ...runs.map((run) => `RUN ${run}`), "FROM debian", "RUN echo cargo"].join("\n");
+  const image = (/** @type {string} */ ...runs) => unlocked(dockerfile(runs));
+  const template = (/** @type {string} */ ...runs) => unlocked(dockerfile(runs), true);
+  const touch = "find . -name target -prune -o -type f -exec touch {} +";
+  const copy = "mkdir -p /out && cp target/release/app /out/server";
+  assert.equal(image(`--mount=type=cache,target=/t ${touch} \\\n    && cargo build --release --locked -p app && ${copy}`), undefined);
+  for (const bad of [
+    [`${touch} && cargo build --release -p app && ${copy}`],
+    [`${touch} && cargo build --release -p app && ${copy} # --locked`],
+    [`${touch} && cargo build --release --mount=type=cache,target=/t --locked -p app && ${copy}`],
+    [`${touch} && env CARGO_HOME=/c cargo build --release --locked -p app && ${copy}`],
+    ['sh -c "$BUILD"', `${touch} && cargo build --release --locked -p app && ${copy}`],
+    [`${touch} && cargo build --release --locked -p app && ${copy}`, `${touch} && cargo build --release --locked -p app && ${copy}`],
+    [`${touch} && cargo build --release --locked -p app && cargo build --release -p other && ${copy}`],
+    [`${touch} && env CARGO_HOME=/c cargo build --release -p app && ${copy}`],
+    [`${touch} && cargo build --release --locked -p app && ${copy}`, "cargo build --release"],
+    ["echo build"],
+  ])
+    assert.notEqual(image(...bad), undefined, bad.join(" / "));
+  // The template's two, read from the template so that these are its lines with one thing changed.
+  const [install, build] = instructions(source(TEMPLATE)).filter((line) => /^RUN\s/i.test(line)).map((line) => line.replace(/^RUN\s+/i, ""));
+  assert.equal(template(install, build), undefined);
+  assert.notEqual(image(install, build), undefined, "an example does not take the template's two RUNs");
+  assert.notEqual(template(`${touch} && cargo build --release --locked -p app && ${copy}`), undefined, "nor the template an example's one");
+  // One thing changed, which has to be there to change.
+  const swapped = (/** @type {string} */ run, /** @type {string} */ from, /** @type {string} */ to) => {
+    assert.ok(run.includes(from), `the template has no ${from}`);
+    return run.replace(from, to);
+  };
+  for (const bad of [
+    [swapped(install, " --locked", ""), build],
+    [install, swapped(build, "cargo build --release --locked", "cargo build --release")],
+    [install, swapped(build, "corten build --locked", "corten build")],
+    [swapped(install, "exit 1; ", ""), build],
+    [install, swapped(build, "exit 1; ", "")],
+    [swapped(install, "if ! corten", "if corten"), build],
+    [install, swapped(build, 'sh -- "$PROFILE_FROM"', "sh $PROFILE_FROM")],
+    [install, swapped(build, '[ -f "$PROFILE_FROM" ]', "true")],
+    [install, swapped(build, "cp target/release/{{name}} /server", "cp target/release/server /server")],
+    [install, swapped(build, "cp target/release/{{name}} /server", "cp target/release/{{name}} /srv")],
+    [build, install],
+    [install, build, build],
+    [install, `${touch} && cargo build --release --locked -p app && ${copy}`],
+    [install],
+  ])
+    assert.notEqual(template(...bad), undefined, bad.join(" / "));
+});
+
+// An image builds the versions the lock names, which `corten check` ran, and fails when the lock is
+// missing or stale instead of repairing it inside the build (#1579, #1584).
+test("every image's cargo build is --locked", () => {
+  for (const file of files) assert.equal(unlocked(source(file), file === TEMPLATE), undefined, file);
 });
 
 test("card-market's run stage is the template's, so its smoke checks the template's image", () => {
@@ -101,20 +196,51 @@ test("the template caches cargo's whole home, with its lock, and builds with it"
   const text = source(TEMPLATE);
   const mounts = caches(text);
   const home = mounts.filter((mount) => mount.target === "/var/cache/cargo");
-  assert.equal(home.length, 1, "cargo's home is a cache");
-  assert.equal(home[0].sharing ?? "shared", "shared", "every app's builds share the downloaded crates");
-  assert.equal(home[0].id, undefined, "one cache of crates for every app on the machine");
+  // One mount in each RUN that runs Cargo: the one that installs the `corten` command for a
+  // profiled build, and the build.
+  assert.deepEqual(home.map((mount) => mount.run), [0, 1], "cargo's home is a cache in each RUN that runs cargo");
+  for (const mount of home) {
+    assert.equal(mount.sharing ?? "shared", "shared", "every app's builds share the downloaded crates");
+    assert.equal(mount.id, undefined, "one cache of crates for every app on the machine");
+  }
   const cargo = mounts.filter((mount) => mount.target.startsWith("/usr/local/cargo"));
   assert.deepEqual(cargo, [], "a cache under the image's cargo home leaves cargo's lock out of it");
   const homes = cargoHomes(text);
-  assert.ok(homes.length > 0, "the template builds with cargo");
+  assert.equal(homes.length, 3, "the template installs the command, and builds with cargo or with it");
   for (const used of homes) assert.equal(used, "/var/cache/cargo", "cargo builds with the cached home");
+});
+
+// A profile is asked for (docs/design.md#choice-profile-image): with no PROFILE_FROM the image's
+// build is the ordinary one, and neither the command nor llvm-tools is fetched. The command goes
+// into the layer, under /usr/local: cargo's home here is a cache mount, which is no part of a
+// layer, so a build that reused the layer on a builder without the cache would have no command.
+// A command without the option (0.2.0's `corten build` took no arguments and built without a
+// profile) is refused before the app is built. Both builds hold the lock.
+test("the template's build takes a profile only when PROFILE_FROM names the app's script", () => {
+  const lines = instructions(source(TEMPLATE));
+  const run = (/** @type {string} */ line) => /^RUN\s/i.test(line);
+  // Declared in the build stage and before both of its RUNs: a RUN it is declared after reads it
+  // as empty, so after the first the build looks for a command that was not installed, and
+  // after both the build is the ordinary one without a word.
+  const argument = lines.indexOf("ARG PROFILE_FROM=");
+  assert.ok(argument >= 0, "PROFILE_FROM is empty unless the build is given it");
+  assert.equal(lines.findIndex((line) => /^FROM\s/i.test(line)), 0);
+  assert.ok(argument < lines.findIndex(run), "PROFILE_FROM is declared before the RUNs that read it");
+  assert.ok(lines.findIndex(run) < lines.indexOf("COPY . ."), "the command is installed before the sources, so a changed source does not install it again");
+  // And nothing between takes it away again: an argument lasts to the end of its stage, so a
+  // `FROM` before the build would start a stage without it, and an `ENV` of the name is read
+  // in the argument's place. Either builds the ordinary image whatever the build was given.
+  assert.equal(lines.filter((line) => /^FROM\s/i.test(line)).length, 2, "one build stage and the run stage");
+  assert.deepEqual(lines.filter((line) => /PROFILE_FROM/.test(line) && !/^RUN\s/i.test(line)), ["ARG PROFILE_FROM="], "nothing else sets the name");
+  // What the two RUNs run is read whole by "every image's cargo build is --locked".
+  assert.equal(lines.filter(run).length, 3, "two RUNs build, and the run stage's installs jemalloc");
 });
 
 test("a cargo home is read from before the command or from the stage's ENV", () => {
   const build = "RUN cargo build --release";
   assert.deepEqual(cargoHomes(`FROM a\n${build}`), [undefined]);
   assert.deepEqual(cargoHomes(`FROM a\nRUN CARGO_HOME=/h cargo build`), ["/h"]);
+  assert.deepEqual(cargoHomes(`FROM a\nRUN CARGO_HOME=/h cargo install x && corten build`), ["/h", undefined]);
   assert.deepEqual(cargoHomes(`FROM a\nENV A=1 CARGO_HOME=/h\n${build}`), ["/h"]);
   assert.deepEqual(cargoHomes(`FROM a\nENV CARGO_HOME /h\n${build}`), ["/h"]);
   assert.deepEqual(cargoHomes(`FROM a\nENV CARGO_HOME=/h\nFROM b\n${build}`), [undefined], "a stage from another image starts without it");

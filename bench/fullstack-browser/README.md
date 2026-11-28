@@ -10,13 +10,23 @@ publishing integration is present.
 ## Run
 
 Install the root tooling dependencies and Playwright Chromium using the repository's existing
-setup. Have `node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1` available locally. `--build` builds the approved native
+setup, and the bench package's TypeScript parser with `npm --prefix bench ci`. Have `node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067` available locally. `--build` builds the approved native
 marketplace images using their existing Dockerfiles; alternatively `--targets` selects
 already-built local images. Execution never implicitly pulls an application image.
 Each native app gets one CPU, 1 GiB memory and
 a fresh container/store per case. The independent numeric upstream gets one CPU and 256 MiB.
 The browser runs on the host, outside that budget; these are development diagnostics, not
 isolated performance measurements.
+
+The [isolated campaign](../workloads/isolated/CAMPAIGN.md) adds `--isolated`. Its
+delegated command cgroup places Chromium and the Node driver on logical CPUs 4-7;
+Docker places the application on CPU 1 and the numeric upstream on CPUs 2-3, retaining
+their one-CPU quotas and memory budgets. The supervised SSH apparatus uses CPU 0.
+The runner refuses to start outside the required command cgroup and checks each timed
+container's configured limits and effective cpuset before use. Saved campaign replay
+requires independent kernel observations of those roles as well as the Docker receipts.
+These are placement checks, not proof of an exclusive host, whole-stack parity or a
+publishable result. Row 7 remains provisional.
 
 The complete-group invocation needs no manually prepared targets or receipts:
 
@@ -114,7 +124,8 @@ and enclosing component ID before dispatch. It does not assume that `target_pric
 native state-property name. An absolute update URI is reduced to a pathname only when its
 origin matches the document. Next's custom React enhancement is discovered from the mounted
 form's real `onSubmit`, owning fiber props and containing component function before dispatch.
-`bindings.mjs` uses the already-installed TypeScript parser to resolve only a single supported
+`bindings.mjs` uses the bench package's TypeScript parser (`bench/package.json`) through `bench/typescript.mjs`, which
+stops at import with the `npm --prefix bench ci` instruction when that install is absent, to resolve only a single supported
 native POST expression, without invoking that function or evaluating its source. Unresolved,
 shadowed, cross-origin or mismatched bindings remain failures. A sent POST is not used to invent
 a positive binding. Function text and sampled props alone do not prove imported helper effects.
@@ -443,7 +454,7 @@ actual `MARKETPLACE_SOURCE`, journey provenance, context and independent readbac
 it. Matching saved claims cannot override that source; missing source evidence blocks completion
 and cannot produce a verified host subject.
 
-V2 distinguishes selected-slice completeness, all-registry attempt completeness, unchanged strict
+V2 distinguishes selected-slice completeness, all-registry attempt completeness, strict
 qualification and apparatus cleanup. Failed build/create/start prerequisites can explain an
 unrun journey only through exact app/case-bound acknowledged native commands and required terminal
 receipts; exceptions and saved reason strings cannot. Unverified image source cannot qualify an
@@ -451,7 +462,7 @@ application, even when its failed prerequisite is completely witnessed. Unknown 
 workers, long-lived peers and missing observation windows remain proof-missing, not failed targets.
 Only continuous native network observation plus proved worker absence can derive an empty long-lived
 peer population; completed ordinary HTTP keepalive is not such a peer. Peer-present cells stay blocked
-without matched pre-teardown peer receipts. No worker collector or semantic oracle waiver is added.
+without matched pre-teardown peer receipts. No worker collector is added.
 
 Live, independent parser and missing-item DOM observations use the installed fixed browser
 projection API. Each typed read binds its unique observer, action/context, native resource scope,
@@ -571,7 +582,7 @@ do not waive failed requests, supply missing bytes, retry an action or increase 
 The final pre-harness `requestLedger` is reconciled by ID and complete raw outcome with
 exactly one action, cleanup-navigation receipt or retired-event probe. Cleanup navigation
 requests are retained separately from the probe's quiescence check. Missing/duplicate IDs,
-stale outcomes, failed/body-capture-error requests and unexplained late requests block strict
+stale outcomes, body-capture errors, unexplained failures and late requests block strict
 export, including when an earlier functional flag was positive. Network-observer and browser
 errors are retained through that final boundary. `harnessClosedRequestLedger` is separate;
 closing the context cannot supply native completion evidence.
@@ -601,11 +612,19 @@ Cleanup clicks the app's real header link away, without forcing unmount, deletin
 clearing timers/listeners, or closing connections. For a same-realm retired root it dispatches
 the actual registered event types (default action prevented) plus a retired-page event, then
 observes resource counts, real DOM hashes, requests and errors for the bounded interval.
-Native document-realm replacement is also captured through CDP. A destroyed realm cannot
-supply a fresh retired-DOM read/probe, so those counts stay null and the profile remains
-unsupported under the current strict oracle. There is no automatic platform-destruction
-waiver. Opaque global ownership similarly needs native lifecycle attribution before full
-qualification; a browser context closing is not that proof.
+For an ordinary no-JS full-document journey, native CDP destruction and the replacement
+binding can prove retirement instead. The dead realm's DOM, counts and event probe stay null.
+The bounded window requires proved empty long-lived peer and worker populations, reconciled
+request and upstream ledgers, and clean live landing observations. Landing parser requests
+must complete within the cleanup deadline and before terminal observation starts. Work that
+fails or arrives after that boundary remains in the ledger and cannot qualify. A browser
+context closing is not that proof.
+
+JS-enabled journeys can also prove specific full-document replacements, including the
+required reset, missing-item and return navigations, without weakening same-document
+resource or framework transport checks. An eligible full-document cleanup still requires a
+settled, clean live landing through the terminal window; the dead DOM and counts are not
+invented. See [the JS replacement proof and its limits](LIFECYCLE.md#js-enabled-document-replacement).
 
 `lifecycle.mjs` correlates observed instrumentation realms with native default execution
 contexts, frame/loader commits, target discovery and page WebSocket/EventSource receipts.
@@ -616,15 +635,14 @@ continuous runtime-context lifetimes, bounded terminal probes and actual no-JS p
 provenance. The separate pure `validatePlatformRetirement` and `classifyNoJSRequests` exports
 produce raw diagnostic proofs only, never a local qualification waiver. Workers, unknown
 ownership/coverage or missing terminal receipts block the platform predicate. See
-[the exact interfaces and evidence proposal](LIFECYCLE.md); no shared-oracle variant or
-platform-destruction exemption is accepted here.
+[the exact interfaces and proof boundary](LIFECYCLE.md).
 Committed HTTP frame/loaders also require matched native document dispatch, response and
 terminal receipts. Both pure validators require successful assets' own response receipts;
 removing network coverage cannot become a positive empty-request proof.
 Completed HTTP documents and observed parser inventories must also match native commits in
 the reverse direction. Empty commit streams, orphan redirect continuations, missing mandatory
 native fields and declared assets without matching dispatch coverage remain unknown. These
-checks neither reconstruct deleted observations nor change the strict oracle or 240 profiles.
+checks do not reconstruct deleted observations or change the 240 profiles.
 Redirect links additionally retain the actual predecessor response's complete-URL hash, public
 path/scheme/status and native header timing. Independent native network-stack request-time
 receipts bind each dispatch in a reused-ID chain, including repeated identical URLs; missing
@@ -643,7 +661,7 @@ enhancement bindings are explicit and cannot become a passing strict capture.
 
 Every invocation also writes `captures/<app>.json` (`browser-journey-capture/v1`) and
 `captures/manifest.json` (`native-browser-strict-export/v1`). `capture.mjs` projects only
-complete independently observed cases and calls the unchanged `validateBrowserCapture`.
+complete independently observed cases and calls `validateBrowserCapture`.
 Every candidate/profile survives; partial failed/unsupported observations stay in the raw
 summary, with null evidence in strict unavailable cells as that schema requires. The manifest
 binds raw case and capture hashes and retains exact code/image/browser provenance. Failed,

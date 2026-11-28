@@ -54,7 +54,7 @@ function fixture(original = descriptor(), { status = "complete", mutate = () => 
   const common = { schema: receiptSchema, bindingSha256: original.bindingSha256, author: "producer", reason: "Synthetic validation fixture only", status };
   const receipts = {
     implementation: { ...common, kind: "implementation", artifacts: [raw] },
-    "native-parity": { ...common, kind: "native-parity", cases: original.cases, artifacts: [raw] },
+    "native-parity": { ...common, kind: "native-parity", cases: original.parityCases ?? original.cases, artifacts: [raw] },
     performance: { ...common, kind: "performance", cases: original.cases, artifacts: [raw],
       runs: ["first", "second"].map((repeat) => ({ repeat, cases: original.cases.map((row) => ({ key: row.key, artifact: raw,
         metrics: { cpuUsec: 10, memoryBytes: 100, startupMs: 5, p95Ms: 2 } })) })),
@@ -75,15 +75,15 @@ test("all nine group contracts are pinned independently of historical catalog re
   assert.equal(groupDescriptor("catalog-page", { historical: true }).contractSha256,
     "c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee");
   const hashes = {
-    "catalog-page": "67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0",
-    "json-api": "b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9",
-    "localized-marketplace": "ab61f28221d8abe1225f13816c438b90f79bd0d50a379eae7b1b5fb9275366b7",
-    "mixed-production": "65b1b953d9524aa7e72aaa4e04b8e5d2ce350930f46de874395a24ccbeea2676",
+    "catalog-page": "fff1d9843a1f4934744a0022f36d042c20fb4d7d910e3dc7eb96fef7b4fbc779",
+    "json-api": "ad8cf64f1285022b63ace2972c141996fda6cc7efcb792cd4e8a0ea6eea04ea4",
+    "localized-marketplace": "9aa3ff1dd0561a54fe37419a5e71af474381f0df8cf1837e90faa1f4e6a9813b",
+    "mixed-production": "147a4689167b2bfa0edba103a5fdbe533f7f7b17126fe15e1d0f782983b9a894",
     "fullstack-browser": "d4c219c71546b7c8cfdeb8b0e9b4c44cacc30cd42837dcfa5580db9d125f62d4",
     "client-heavy": "29842bba6ec897e5a86a42cc7f8f777ac69f64b89f41d7c6f6774f9c067486d1",
     "live-delivery": "ca5d6010d1a3ea088849d5ac40ec9aa8d41791c4e316f47a86233ce829b33328",
     "recoverable-live": "b6d91c14ed20babdc0e56719826a6d01bb993de6b16224f5f9b0e2544f3e9eff",
-    hardening: "651c5f73eda0cc5030fc80e85d6ead2b0021ed36161830a08dc8410e387bd33c",
+    hardening: "635b2b9946a7fe96de1f2ab7eb49a2a16b397dbfb95f959790e94b2c9a114a03",
   };
   assert.equal(groupNames.length, 9);
   for (const group of groupNames) {
@@ -121,8 +121,8 @@ test("server deployment descriptions match the refreshed production runtimes", (
   for (const [group, app, runtime] of [
     ["catalog-page", "fastapi", "CPython 3.15.2"],
     ["localized-marketplace", "django", "CPython 3.15.2"],
-    ["json-api", "spring", "Temurin 27.0.1.0.2+1 JRE"],
-    ["fullstack-browser", "rails", "CRuby 4.0.9"],
+    ["json-api", "spring", "Temurin 27.0.1.1+4 JRE"],
+    ["fullstack-browser", "rails", "CRuby 4.0.10"],
     ["fullstack-browser", "laravel", "PHP 8.5.12 ZTS"],
   ]) {
     assert.equal(manifest(group, app).configuration.runtime, runtime, `${app}: stale runtime description`);
@@ -213,7 +213,7 @@ test("live representatives use dispatched native ports and missing recovery port
 
 test("native live runtime descriptions match their checked-in build inputs", () => {
   const sources = [
-    ["rails", "CRuby 4.0.9", "ruby:4.0.9-slim@sha256:"],
+    ["rails", "CRuby 4.0.10", "ruby:4.0.10-slim@sha256:"],
     ["phoenix", "Elixir 1.20.5 / OTP 29.1.2 release", "elixir:1.20.5-otp-29@sha256:"],
     ["gin", "Go 1.27.4 native", "golang:1.27.4-alpine@sha256:"],
   ];
@@ -307,6 +307,41 @@ test("new descriptor binds exact commit/images/config/work/budgets and evidence 
   }
 });
 
+test("Django's Granian ASGI deployment is declared only for Mixed Production and is not qualified", () => {
+  const id = "django-granian-asgi";
+  for (const group of groupNames) {
+    const row = deploymentPlan(group).apps.find((entry) => entry.app === "django"), asgi = row?.deployments.find((entry) => entry.id === id);
+    if (group !== "mixed-production") { assert.equal(asgi, undefined); continue; }
+    assert.equal(row.representative, "django-matched");
+    assert.equal(asgi.qualification, "pending");
+    assert.deepEqual(asgi.evidence, []);
+    assert.equal(asgi.configuration.builds.app.args.PROFILE, "matched-asgi");
+    assert.equal(asgi.configuration.environment.PROFILE, "matched");
+    assert.equal(asgi.configuration.environment.DJANGO_SETTINGS_MODULE, "itempage.mixed_asgi_settings");
+    assert.match(asgi.configuration.command.at(-1), /start_mixed_asgi\.py$/);
+  }
+});
+
+test("Spring WebFlux declares the matched runtime only for dedicated Mixed Production", () => {
+  for (const group of groupNames) {
+    const row = deploymentPlan(group).apps.find((entry) => entry.app === "spring");
+    const webflux = row?.deployments.find((entry) => entry.id === "spring-webflux");
+    if (row) {
+      const { configuration: mvc } = row.deployments[0];
+      assert.equal(row.representative, "spring-native");
+      assert.equal(mvc.profile, "framework-default");
+      assert.equal(mvc.environment.PROFILE, "");
+      for (const { dockerfile } of Object.values(mvc.builds)) assert.match(dockerfile, /\/Dockerfile$/);
+    }
+    if (group !== "mixed-production") { assert.equal(webflux, undefined); continue; }
+    assert.equal(webflux.qualification, "pending");
+    assert.equal(webflux.configuration.profile, "matched");
+    assert.equal(webflux.configuration.environment.PROFILE, "matched");
+    assert.deepEqual(webflux.configuration.builds.app.args, {});
+    assert.match(webflux.configuration.builds.app.dockerfile, /\/Dockerfile\.mixed$/);
+  }
+});
+
 test("all visible receipt outcomes fail closed and references or saved flags alone never assert a full pass", () => {
   for (const status of ["failed", "unsupported", "pending"]) {
     const f = fixture(descriptor(), { status });
@@ -344,6 +379,25 @@ test("exact whole matrix, independent review, raw captures and repeated CPU/memo
   for (const mutate of invalid) {
     const f = fixture(descriptor(), { mutate });
     assert.throws(() => screenDeployment(f.descriptor, f.validators));
+  }
+});
+
+test("marketplace screens actual per-locale parity independently of rotating page metrics", () => {
+  const d = descriptor("localized-marketplace", "django");
+  assert.equal(d.cases.length, 4);
+  for (const source of ["fixture", "api"]) {
+    assert.deepEqual(d.parityCases.filter((p) => p.source === source && p.target === "page").map((p) => p.locale), ["en-US", "fr-FR", "de-DE"]);
+  }
+  const good = fixture(d);
+  assert.equal(screenDeployment(good.descriptor, good.validators).status, "reviewed-for-selection");
+  for (const mutate of [
+    (r) => { r["native-parity"].cases = d.cases; },
+    (r) => { r["native-parity"].cases = d.parityCases.filter((c) => c.locale !== "de-DE"); },
+    (r) => { r.performance.cases = d.parityCases; },
+    (r) => { r.performance.runs[1].cases[0].key = "marketplace-v2-fixture-en-US-page"; },
+  ]) {
+    const bad = fixture(d, { mutate });
+    assert.throws(() => screenDeployment(bad.descriptor, bad.validators), /matrix/);
   }
 });
 
@@ -399,7 +453,7 @@ test("an alternative needs a replayed representative comparison and independentl
 });
 
 test("CLI has only read-only inventory, no execution, tuning, receipt-promotion or app-subset flags", () => {
-  assert.equal(deploymentCli(["--all"]).length, 9); assert.equal(deploymentCli(["json-api"]).apps.length, 9);
+  assert.equal(deploymentCli(["--all"]).length, 9); assert.equal(deploymentCli(["json-api"]).apps.length, 10);
   for (const args of [[], ["--run"], ["catalog-page", "--qualified"], ["catalog-page", "--apps", "express"], ["catalog-page", "--memory", "2g"]]) assert.throws(() => deploymentCli(args));
   assert.deepEqual(Object.keys(outcomeKinds), ["app-capacity", "harness-failure", "functional-failure"]);
   const source = readFileSync(new URL("deployments.mjs", import.meta.url), "utf8");

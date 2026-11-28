@@ -471,7 +471,9 @@ impl Answer {
         self.0.status()
     }
 
-    /// The headers.
+    /// The headers, as the app set them: no server sent this answer, so it has no
+    /// `Content-Length` unless a handler set one or the request was a `HEAD`. Its length is
+    /// `bytes().len()`.
     pub fn headers(&self) -> &HeaderMap {
         self.0.headers()
     }

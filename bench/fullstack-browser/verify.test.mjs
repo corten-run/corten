@@ -1,4 +1,4 @@
-// Synthetic unavailable diagnostics and actual HTTP receipts, never qualification captures.
+// Synthetic unavailable diagnostics and loopback browser receipts, never whole-run qualification.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -14,14 +14,18 @@ import { fileURLToPath } from "node:url";
 import { validateSaved } from "./verify.mjs";
 import { candidates, emptyCells, retainedFamilies, schema, settings, sha256 } from "./contract.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
+import { labels } from "../marketplace/records.mjs";
+import { referenceHtml } from "../marketplace/reference.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
-import { exportBrowserCaptures } from "./capture.mjs";
+import { exportBrowserCaptures, projectCase, oracleSettings } from "./capture.mjs";
 import { createUpstream, UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
-import { reconcileRequests } from "./ledger.mjs";
+import { reconcileNativeNetwork, reconcileRequests } from "./ledger.mjs";
 import { classifyNoJSRequests, validatePlatformRetirement } from "./lifecycle.mjs";
 import { PlatformLifecycle } from "./lifecycle.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { beginBindingWindow, finishBindingWindow } from "./binding-window.mjs";
+import { runJourney } from "./journey.mjs";
+import { replayJSReplacement } from "./document-navigation.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../.."), script = join(repo, "bench/fullstack-browser/verify.mjs");
 const commit = "a".repeat(40), records = fixtureRecords(), plan = createBrowserPlan({ records });
@@ -79,6 +83,266 @@ test("native v2 malformed namespace is awaitable invalid evidence, never an obse
   const saved = JSON.parse(cli.stdout); assert.equal(saved.schema, result.schema); assert.equal(saved.status, "invalid"); assert.equal(saved.expectedExitCode, 1);
   assert.deepEqual(treeHashes(f.folder), before);
 });
+
+async function documentFixture(profile, check, { busyLanding = false, lateLanding = false } = {}) {
+  const app = "react-router";
+  const upstream = createUpstream({}), sessions = new Map(), locale = labels[profile.locale];
+  const assets = '<link rel="stylesheet" href="/fixture.css"><script>window.__reactRouter = {};</script>'
+    + (profile.js ? '<script defer src="/fixture.js"></script>' : '<link rel="modulepreload" href="/disabled.mjs">');
+  let base, landingServed = false, lateSent = false;
+  // Loopback conformance apparatus, not a contender or an authenticated image.
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, base), itemId = url.pathname.split("/").at(-1), record = records[itemId];
+    const send = (status, type, body) => { res.writeHead(status, { "content-type": type }); res.end(body); };
+    if (url.pathname === "/") landingServed = true;
+    if (url.pathname === "/late-cleanup") return send(200, "text/plain", "Late work finished");
+    if (url.pathname === "/fixture.css") return send(200, "text/css", "body{color:black}");
+    if (url.pathname === "/fixture.js") return send(200, "text/javascript", `
+      if (location.pathname === "/" && ${busyLanding}) setInterval(() => {}, 1000);
+      window.filter = async (form) => {
+        const url = new URL(form.action), params = new URLSearchParams(new FormData(form));
+        url.search = params;
+        const html = await (await fetch(url)).text();
+        const article = new DOMParser().parseFromString(html, "text/html").querySelector("article");
+        document.querySelector("article").replaceWith(article);
+      };
+    `);
+    if (url.pathname === "/disabled.mjs") return send(200, "text/javascript", "throw new Error('must not run')");
+    const cookie = /(?:^|; )session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
+    let session = sessions.get(cookie);
+    if (url.pathname === "/api/alerts") return send(200, "application/json", JSON.stringify(session?.alerts ?? []));
+    if (!record) return send(url.pathname === "/" ? 200 : 404, "text/html", `<!doctype html><head>${assets}</head><body><h1>${url.pathname === "/" ? "Landing" : "Not found"}</h1></body>`);
+    if (!session) {
+      const id = randomUUID();
+      sessions.set(id, session = { alerts: [], flash: "" });
+      res.setHeader("set-cookie", `session=${id}; HttpOnly; SameSite=Lax; Path=/`);
+    }
+    let message = session.flash, status = 200;
+    session.flash = "";
+    if (req.method === "POST") {
+      if (req.headers.origin !== base || req.headers["sec-fetch-site"] === "cross-site") return send(403, "text/plain", "Rejected");
+      let body = "";
+      for await (const part of req) body += part;
+      const fields = new URLSearchParams(body), email = fields.get("email");
+      if (!email?.includes("@")) { status = 422; message = locale.invalid_email; }
+      else if (fields.get("target_price") !== "1.25") { status = 422; message = locale.invalid_price; }
+      else {
+        session.alerts.push({ item_id: itemId, email, target_minor: 125 });
+        const values = { email, title: record.title, price: "$1.25" };
+        session.flash = locale.alert_set.replace(/\{(email|title|price)\}/g, (_, key) => values[key]);
+        res.writeHead(303, { location: url.pathname }); res.end(); return;
+      }
+    }
+    const query = url.searchParams;
+    let html = referenceHtml(record, profile.locale, { seller: query.get("seller") ?? "", sort: query.get("sort") ?? "asc",
+      all: query.get("offers") === "all", message });
+    if (profile.js && req.method === "GET" && !query.has("seller") && !message)
+      html = html.replace('method="get"', 'method="get" onsubmit="window.filter(this);return false"');
+    send(status, "text/html", html.replace(/<base [^>]+>/, assets).replace("<body>", '<body><header><a href="/">Away</a></header>'));
+  });
+  const listen = async (server) => { server.listen(0, "127.0.0.1"); await once(server, "listening"); return `http://127.0.0.1:${server.address().port}`; };
+  let browser;
+  try {
+    base = await listen(server);
+    const source = await listen(upstream);
+    browser = await chromium.launch({ headless: true });
+    const cell = await runJourney({ browser, app, base, profile, records, readback: { path: "/api/alerts" },
+      counters: async () => {
+        // The first counters sample after the cleanup link is the post-cleanup sample,
+        // after the producer has settled the landing and taken its request slice.
+        if (lateLanding && landingServed && !lateSent) {
+          lateSent = true;
+          const page = browser.contexts().flatMap((c) => c.pages()).find((p) => p.url() === base + "/");
+          assert.equal(await page.evaluate(async () => (await fetch("/late-cleanup")).text()), "Late work finished");
+        }
+        return (await fetch(source + "/__browser/counters")).json();
+      } });
+    await check(cell, app);
+  } finally {
+    if (browser) await browser.close();
+    await Promise.all([server, upstream].filter((s) => s.listening).map((s) => {
+      s.closeAllConnections(); return new Promise((r) => s.close(r));
+    }));
+  }
+}
+
+function savedDocumentFixture(t, cell, app, profile) {
+  const summary = unavailable();
+  summary.options.apps = [app]; summary.options.cases = [profile.key];
+  summary.images[app] = { id: "sha256:" + "b".repeat(64), repoDigests: [], created: summary.startedAt, architecture: "amd64", os: "linux",
+    builtCommit: commit, builtDirty: "false", imageSourceVerified: true, sourceTreeSha256: "c".repeat(64) };
+  cell.evidence.provenance = { containerId: "d".repeat(64), imageId: summary.images[app].id, startedAt: summary.startedAt, source: profile.source, stillSameProcess: true,
+    configuration: { cpus: 1, memoryBytes: 2 ** 30, marketplaceSource: profile.source, fixtureSha256: summary.fixtureSha256 } };
+  summary.cells[app][plan.cases.indexOf(profile)] = cell;
+  const f = fixture(t, summary);
+  const projected = JSON.parse(readFileSync(join(f.folder, "captures", `${app}.json`))).cases.find((c) => c.case === profile.key);
+  const report = JSON.parse(readFileSync(join(f.folder, "captures", "manifest.json"))).reports[app];
+  return { f, projected, report };
+}
+
+test("complete native no-JS document journey survives strict export and independent saved replay", { timeout: 60000 }, async (t) => {
+  const profile = plan.cases.find((p) => p.key === "fixture-en-US-desktop-no-js");
+  await documentFixture(profile, async (cell, app) => {
+    const e = cell.evidence;
+    assert.equal(cell.outcome, "captured", [...e.failures, ...e.gaps].join("; "));
+    assert.equal(cell.qualificationPassed, true);
+    assert.equal(e.documentNavigationProof.outcome, "proved");
+    const { f, projected, report } = savedDocumentFixture(t, cell, app, profile);
+    assert.deepEqual(report.diagnostics, []);
+    assert.deepEqual(report.validation.cases.find((r) => r.case === profile.key), { case: profile.key, outcome: "captured",
+      functionalPassed: true, observedSteps: profile.steps.length });
+    const accepted = projected.steps.find((r) => r.action.kind === "accepted-write");
+    assert.deepEqual(accepted.requests.filter((r) => r.transport === "document").map((r) => [r.method, r.status]), [["POST", 303], ["GET", 200]]);
+    assert.ok(accepted.requests.some((r) => r.path === "/fixture.css" && r.transport === "parser-asset" && r.status === 200));
+    assert.ok(accepted.requests.some((r) => r.path === "/disabled.mjs" && r.transport === "intentionally-disabled-preload" && r.failure === "csp"));
+    assert.deepEqual(accepted.retired.map((r) => [r.basis, r.owned]), [["platform-destruction", null]]);
+    assert.equal(projected.cleanup.kind, "platform-destruction");
+    for (const key of ["dom", "detached", "afterProbe", "probe"]) assert.equal(projected.cleanup[key], null, key);
+    const before = treeHashes(f.folder), result = await f.check();
+    assert.deepEqual(result.invalid, []);
+    assert.equal(result.outcome, "blocked", "One loopback cell cannot supply native run/container proof");
+    const replayed = result.cells.find((c) => c.app === app && c.case === profile.key);
+    assert.equal(replayed.outcome, "captured");
+    assert.deepEqual(replayed.derived, { requestOutcome: "reconciled", upstreamOutcome: "reconciled",
+      retirement: profile.steps.slice(1).map((step) => ({ action: step.id, outcome: "proved" })), noJS: "classified" });
+    assert.deepEqual(treeHashes(f.folder), before);
+    delete e.nativeCleanup.landingSettledAt;
+    f.save(false); // Leave the successful projection; the raw clock receipt no longer supports it.
+    const tampered = await f.check();
+    assert.equal(tampered.outcome, "invalid");
+    assert.match(tampered.invalid.join("; "), /document navigation proof differs/i);
+  });
+});
+
+test("JS document replacement qualifies independently of same-document retirement", { timeout: 60000 }, async (t) => {
+  const profile = plan.cases.find((p) => p.key === "fixture-en-US-desktop-js");
+  await documentFixture(profile, async (cell, app) => {
+    const e = cell.evidence;
+    assert.deepEqual(e.failures, []);
+    assert.equal(e.functionalChecksPassed, true);
+    assert.equal(e.domChecksPassed, true);
+    const filter = e.steps.find((r) => r.action.kind === "filter");
+    assert.equal(filter.retired.probeAvailable, true, "Actual same-document root retirement remains measured");
+    assert.ok(filter.requests.some((r) => r.transport === "fetch"), "JS filter must really run");
+    assert.equal(cell.outcome, "captured", e.gaps.join("; "));
+    assert.equal(cell.qualificationPassed, true);
+    assert.equal(e.documentNavigationProof, undefined, "No-JS path must not run");
+    const actions = profile.steps.slice(1).filter((s) => s.kind !== "filter").map((s) => s.id);
+    assert.deepEqual(e.jsDocumentNavigationProof, { outcome: "proved", reason: null, actions, cleanup: true });
+    const { f, projected, report } = savedDocumentFixture(t, cell, app, profile);
+    assert.deepEqual(report.diagnostics, []);
+    assert.deepEqual(report.validation.cases.find((r) => r.case === profile.key), { case: profile.key, outcome: "captured",
+      functionalPassed: true, observedSteps: profile.steps.length });
+    assert.equal(projected.cleanup.kind, "platform-destruction");
+    for (const key of ["detached", "afterProbe", "probe", "dom"]) assert.equal(projected.cleanup[key], null);
+    for (const row of projected.steps.slice(1)) {
+      if (row.action.kind === "filter") {
+        assert.equal(row.retired[0].basis, undefined);
+        assert.ok(row.retired[0].owned && Object.values(row.retired[0].owned).every((n) => n === 0));
+        assert.ok(row.requests.some((r) => r.transport === "fetch"));
+      } else assert.deepEqual(row.retired.map((r) => [r.basis, r.owned]), [["platform-destruction", null]]);
+    }
+    assert.ok(projected.cleanup.network.some((r) => r.method === "GET" && r.path === "/fixture.js" && r.status === 200));
+    const before = treeHashes(f.folder), result = await f.check();
+    assert.deepEqual(result.invalid, []);
+    assert.equal(result.outcome, "blocked", "Fixture cannot attest an official matrix/container");
+    const replayed = result.cells.find((c) => c.app === app && c.case === profile.key);
+    assert.deepEqual(replayed.derived, { requestOutcome: "reconciled", upstreamOutcome: "reconciled",
+      retirement: actions.map((action) => ({ action, outcome: "proved" })), noJS: null });
+    assert.ok(!replayed.blocked.some((r) => /DOM\/probe cleanup proof unavailable|replacement unproved/.test(r)));
+    assert.deepEqual(treeHashes(f.folder), before);
+    for (const [name, remove] of [
+      ["old context terminal probe", (r) => { r.platformLifecycle.events = r.platformLifecycle.events.filter((v) => v.event !== "unique-context-read-probe"); }],
+      ["landing settlement", (r) => { delete r.nativeCleanup.landingSettledAt; }],
+      ["clean terminal landing", (r) => { delete r.nativeCleanup.terminalResources; }],
+      ["request membership", (r) => { r.nativeCleanup.requests.pop(); }],
+      ["terminal upstream sample", (r) => { r.upstreamLedger.terminal = null; }],
+      ["real same-document counts", (r) => { r.steps.find((s) => s.action.kind === "filter").retired.owned = null; }],
+    ]) {
+      const raw = structuredClone(e); remove(raw);
+      assert.equal(replayJSReplacement(raw, profile, settings).outcome, "unknown", name);
+    }
+    const sameDocumentLeak = structuredClone(cell);
+    sameDocumentLeak.evidence.steps.find((r) => r.action.kind === "filter").retired.owned.listeners = 1;
+    assert.throws(() => projectCase(sameDocumentLeak, profile, app, oracleSettings(settings)), /Native resources remain live/);
+    e.nativeCleanup.retired.owned = e.nativeCleanup.before.scopes[0].owned;
+    e.cleanup.nativePageScope = e.nativeCleanup;
+    f.save(false); // Keep the original successful projection; edited raw evidence must not support it.
+    const tampered = await f.check();
+    assert.equal(tampered.outcome, "invalid");
+    assert.match(tampered.invalid.join("; "), /stored JS document replacement proof differs/i);
+  });
+});
+
+test("JS journey with real live landing work survives saved replay only as unsupported", { timeout: 60000 }, async (t) => {
+  const profile = plan.cases.find((p) => p.key === "fixture-en-US-desktop-js");
+  await documentFixture(profile, async (cell, app) => {
+    const e = cell.evidence, c = e.nativeCleanup;
+    assert.equal(e.functionalChecksPassed, true);
+    assert.equal(e.domChecksPassed, true);
+    assert.equal(e.platformCleanupProof.outcome, "proved", "The old realm really was destroyed");
+    assert.equal(c.retired.owned, null);
+    assert.equal(c.terminalResources.unattributed.timers, 1, "Actual landing interval remains live");
+    assert.equal(cell.outcome, "unsupported");
+    assert.equal(cell.qualificationPassed, false);
+    assert.equal(e.jsDocumentNavigationProof.outcome, "unknown");
+    assert.match(e.jsDocumentNavigationProof.reason, /Live JS landing retains resources/);
+    const { f, projected } = savedDocumentFixture(t, cell, app, profile);
+    assert.equal(projected.outcome, "unsupported");
+    assert.equal(projected.cleanup, null);
+    const result = await f.check();
+    assert.deepEqual(result.invalid, []);
+    const replayed = result.cells.find((c) => c.app === app && c.case === profile.key);
+    assert.equal(replayed.outcome, "unsupported");
+    assert.ok(replayed.blocked.some((r) => /Native JS document replacement unproved: Live JS landing retains resources/.test(r)));
+  }, { busyLanding: true });
+});
+
+test("saved JS cleanup cannot hide a real post-settlement GET in a same-document action", { timeout: 60000 }, async (t) => {
+  const profile = plan.cases.find((p) => p.key === "fixture-en-US-desktop-js");
+  await documentFixture(profile, async (cell, app) => {
+    const e = cell.evidence, c = e.nativeCleanup;
+    assert.equal(cell.outcome, "unsupported");
+    assert.equal(e.functionalChecksPassed, true);
+    assert.equal(e.domChecksPassed, true);
+    const network = reconcileNativeNetwork(e, false);
+    assert.equal(network.outcome, "reconciled", network.reasons.join("; "));
+    const native = network.requests.find((r) => r.dispatch.path === "/late-cleanup");
+    assert.equal(native.dispatch.method, "GET");
+    assert.equal(native.response.status, 200);
+    assert.equal(native.terminal.event, "Network.loadingFinished");
+    assert.ok(native.dispatch.receivedAt > c.landingSettledAt);
+    assert.ok(native.body.receivedAt <= e.platformLifecycle.boundaries.endedAt);
+    const late = e.requestLedger.find((r) => r.path === "/late-cleanup");
+    assert.ok(late.completed);
+    assert.ok(!c.requests.some((r) => r.id === late.id));
+    assert.match(e.jsDocumentNavigationProof.reason, /Native request dispatched after JS cleanup landing settled/);
+    const { f } = savedDocumentFixture(t, cell, app, profile);
+    const honest = await f.check();
+    assert.deepEqual(honest.invalid, []);
+    const replayed = honest.cells.find((r) => r.app === app && r.case === profile.key);
+    assert.equal(replayed.outcome, "unsupported");
+    assert.ok(replayed.blocked.some((r) => /Native request dispatched after JS cleanup landing settled/.test(r)));
+
+    // Change the semantic assignment and refresh its derived claims, but leave the
+    // actual native dispatch/body/terminal receipts and landing cutoff intact.
+    const filter = e.steps.find((r) => r.action.kind === "filter");
+    assert.equal(filter.retired.probeAvailable, true);
+    filter.requests.push(late);
+    e.jsDocumentNavigationProof = { outcome: "proved", reason: null,
+      actions: e.steps.filter((r) => r.platformRetirement).map((r) => r.action.id), cleanup: true };
+    e.requestReconciliation = reconcileRequests(e, null, e.jsDocumentNavigationProof);
+    assert.equal(e.requestReconciliation.outcome, "reconciled");
+    e.gaps = [];
+    Object.assign(cell, { outcome: "captured", qualificationPassed: true, reason: undefined });
+    f.save();
+    const reassigned = await f.check();
+    assert.equal(reassigned.outcome, "invalid", JSON.stringify({ invalid: reassigned.invalid,
+      cell: reassigned.cells.find((r) => r.app === app && r.case === profile.key) }));
+    assert.match(reassigned.invalid.join("; "), /stored JS document replacement proof differs/i);
+  }, { lateLanding: true });
+});
+
 function failedRaw(summary, profile = plan.cases.find((p) => p.source === "api"), app = "nuxt") {
   const cell = summary.cells[app].find((c) => c.case === profile.key);
   Object.assign(cell, { outcome: "failed", reason: "Native apparatus deliberately unavailable", qualificationPassed: false, evidence: {

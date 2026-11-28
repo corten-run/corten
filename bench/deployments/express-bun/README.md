@@ -6,10 +6,10 @@ templates, Express JSON/form APIs, and its default or matched production middlew
 There is no `Bun.serve`, copied application, shared renderer, cached response,
 preformatted fixture, transpilation or alternative package resolution.
 
-`pins.json` pins Bun 1.4.4 and the Node 26.13.1 base by immutable registry digest, with
+`pins.json` pins Bun 1.4.5 and the Node 26.13.1 base by immutable registry digest, with
 the platform and verification date. Bun's [Express guide](https://bun.com/guides/ecosystem/express)
-documents ordinary Express execution; the [1.4.4 release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.4)
-and [release notes](https://bun.com/blog/bun-v1.4.4) identify the pinned stable release.
+documents ordinary Express execution; the [1.4.5 release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.5)
+and [release notes](https://bun.com/blog/bun-v1.4.5) identify the pinned stable release.
 This does not imply all Node policies are implemented: Bun's
 [compatibility document](https://bun.com/docs/runtime/nodejs-compat) records HTTP
 server differences, including ignored server keep-alive settings. The checks below
@@ -96,6 +96,12 @@ production capability gates are still required. No audit is invented by this
 apparatus. No load, startup or memory advantage is asserted. Standalone/bytecode
 and machine-AOT are not candidates here; they need separate actual artifacts,
 meaningful measurements and independent qualification before admission.
+
+The full-stack apps do not reuse an upstream connection idle for the upstreams' advertised 5 s
+keep-alive ([Caveats](../../fullstack/README.md#caveats), item 5). That policy is not applied or
+checked here: the shared Express source calls `fetch` unchanged, and Bun 1.4.5's keeps an idle
+connection for 5 minutes by default. Before any timed load under Bun, give it an equivalent bound
+and run `bench/fullstack/idle-close.mjs` against the image.
 
 Parent integration: retain this as `express-bun-normal`, alongside the Node Express
 baseline in the deployment catalog. Add the focused test command to the parent's

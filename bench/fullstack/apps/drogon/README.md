@@ -21,6 +21,21 @@ The request-owned trace is attached before starting the read. Fixture lookups,
 native parsing/serialization, existing POST validation and render-before-append
 ordering are unchanged. Legacy item and catalog pages are outside this change.
 
+With `PROFILE=matched`, the marketplace page, record JSON, alert readback and
+`/health/live` use the configured `HOSTS` list. It accepts comma-separated names
+or IP addresses with optional ports and defaults to `localhost,127.0.0.1,[::1]`.
+An unlisted authority gets 421. The page and JSON send strict CSP and accompanying
+response headers. Existing scripts load from the same origin, and marketplace
+links and forms still work without them. Marketplace source failures return a
+localized HTML 502 or 504 to page clients without changing JSON Problem Details.
+Liveness answers without reading the source. These settings do not apply to
+legacy item, catalog, live-stream or static routes.
+
+The Catalog Contract job invokes `tests/marketplace-matched.mjs` on its existing
+marketplace image with both sources. It uses the shared bounded qualification and
+checks that the normal browser scripts and alert form work under CSP, with
+independent HTTP readback. It does not measure load.
+
 With the native dependencies from the Dockerfile installed, run from this directory:
 
 ```sh
@@ -65,9 +80,14 @@ fetches an item nor creates, clears or refreshes a session, and sends `no-store`
 The first accepted POST sets host-only `marketplace_session`, with `Path=/`,
 `HttpOnly`, `SameSite=Lax` and no browser expiry. The credential is 32 bytes from
 OpenSSL's cryptographic random source, hex encoded; the existing Drogon dependency
-already links OpenSSL. `Secure` follows the native connection's TLS state, never
-forwarding headers. The existing connection-origin guard is unchanged apart from
-rejecting non-same-origin Fetch Metadata. TLS termination in a proxy is not inferred.
+already links OpenSSL. The form guard normally uses the connection's origin.
+With an exact `MARKETPLACE_PUBLIC_ORIGIN` (for example `https://localhost:8080`),
+a POST whose actual Host equals that authority must carry exactly that Origin,
+even if the edge forwards over HTTP. On that host, a configured HTTPS origin
+also marks the session cookie `Secure`. There is no HTTP fallback on that Host.
+Other hosts, including the direct HTTP preflight, still use the connection.
+The matched Host allowlist and Fetch Metadata are still checked separately,
+and no forwarding header is trusted.
 An unknown cookie is never adopted as a new session's credential.
 
 The mutex-protected process-local store expires sessions one hour after creation,
@@ -77,6 +97,9 @@ not durable or distributed storage. CTest includes concurrent store/cookie/capac
 checks. For fixture/API HTTP, real browser forms in JS/no-JS contexts, cookie-jar
 readback and isolation, run the compiled-native driver documented in
 `../gin/README.md` with `drogon` and the image under test.
+For the focused public-origin check, start the fixture-backed matched server
+with `MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080` and run
+`node tests/public-origin-http.mjs http://127.0.0.1:8080` from this app directory.
 
 POST source parsing requires one complete JSON document and the requested record
 identity. A successful native CSP response must be prepared before appending.
@@ -124,9 +147,10 @@ Context is a value passed to the native source read and applied to a new outboun
 request, not stored on either native client pool, a thread or a global current
 operation. Delayed callbacks may retain that value without borrowing the caller's
 header storage. Fixture reads still make no HTTP request; `/api/alerts` readback
-still makes no source read. Catalog, legacy routes, parsers, rendering, profiles
-and existing source deadlines are unchanged. Both `defaults` and `matched` are
-tested; Drogon currently has no profile-specific application middleware.
+still makes no source read. The tracing change leaves Catalog, legacy routes,
+parsers, rendering and existing source deadlines unchanged. Both `defaults`
+and `matched` are tested; `matched` now uses the marketplace route policy
+described above, independently of trace forwarding.
 
 CTest includes parent validation, all 256 possible tracestate bytes and delayed
 immutable capture after caller mutation/destruction. The actual HTTP driver runs

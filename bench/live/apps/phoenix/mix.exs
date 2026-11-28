@@ -9,9 +9,9 @@ defmodule NativeLive.MixProject do
       start_permanent: Mix.env() == :prod,
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       deps: [
-        {:phoenix, "~> 1.8.16"},
+        {:phoenix, "~> 1.8.17"},
         {:phoenix_html, "~> 4.4"},
-        {:phoenix_live_view, "~> 1.2.13"},
+        {:phoenix_live_view, "~> 1.2.15"},
         {:jason, "~> 1.4"},
         {:bandit, "~> 1.14.1"},
         {:esbuild, "~> 0.10", runtime: false}

@@ -42,6 +42,46 @@ A client closing an HTTP/1.1 connection mid-request is seen at once (an integrat
 the socket and waits for `Disconnected`). The deadline's timer starts only when a handler waits,
 so a page rendered from memory registers none.
 
+A connection `serve` accepted keeps one timer for its requests' deadlines once two requests of
+its have waited, rather than making one a request: the first two requests to wait make their own,
+the connection makes its timer at the second, and each after them sets the connection's again
+and leaves it set ([design.md, Choice 77](../design.md#choice-deadline-timer)). A connection
+whose only request waits, as a proxy that opens one for each request sends them, keeps none. A
+deadline fires when it did. What an app can see of the kept timer:
+
+- Every connection asks its allocator for 128 bytes more, and for 240 more from its second
+  request that waited until it closes. Those are bytes asked for, counted by DHAT on the
+  benchmark app built with `--cfg tokio_unstable`, not the memory a process holds: in a
+  default build with jemalloc, the resident memory of 5,000 connections that had each
+  answered one request read 8,471 to 8,473 bytes a connection without the kept timer and
+  8,471 with it, so a connection may hold less than 128 more, or nothing more
+  ([design.md, Choice 77](../design.md#choice-deadline-timer), cost 3). A connection that sits
+  idle after its third request that waited, or a later one, is woken once, for nothing, when
+  the time the last such request's deadline was set for comes.
+- While any connection's timer is set (from that connection's third request that waited until
+  the time its last such request's deadline was set for, 30 seconds after it by default), the
+  runtime that serves it works out a timeout each time the runtime's driver parks (the wait
+  for the next event, which one thread of the runtime makes when it has no work left): about
+  190 instructions each time, whichever connection is served next. A server whose driver
+  parks once a request pays that on every request: on one connection that never waits,
+  beside an idle one that had waited three times, 1% more instructions and 4% more of the
+  server's CPU time a request, about 0.7 microseconds (measured on one machine; no cycle run
+  has read it). A busy server pays less of it, one park serving many requests, and an app that
+  keeps a timer of its own waiting (a task that sleeps in a loop, a handler's timeout) paid it
+  before this and pays nothing more.
+- A test on tokio's paused clock (`start_paused`) that leaves a served connection open after
+  three requests of its have waited sees the clock move to that time when nothing else is due,
+  where it stood still before. A test that reads the clock closes the connection first or moves
+  the clock itself (`tokio::time::advance`).
+- `app.router()` served another way keeps no timer, and neither does a request a layer moved to
+  another task: each of their deadlines makes its own, as before.
+- A handler that serves a request on a runtime of its own, inside a connection `serve` polls
+  (`block_in_place` and `block_on`), has that request's deadline wait on the timer of the runtime
+  around it once two deadlines of the connection have waited, whichever requests they were. The
+  deadline still fires on time while that runtime runs; if it shuts down first, the request is
+  answered 500 where it would have gone on waiting to its deadline (a test serves such a request
+  and shuts the outer runtime down).
+
 Routes that start their answer later than pages should (an upstream that answers in minutes, a
 report, large uploads) get a deadline of their own where they are mounted, so the rest of the
 app keeps its short one:

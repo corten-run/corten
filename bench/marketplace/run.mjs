@@ -1,16 +1,16 @@
 // Marketplace-v2: official r17 onward; wN permits explicit development subsets/checks.
 // node bench/marketplace/run.mjs r17 --build --passes 3
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
-import { workload } from "./contract.mjs";
-import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
+import { afterPhase, cpuSettings, imageBuildTimeoutMs, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, statsPhaseErrors, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { locales, workload } from "./contract.mjs";
+import { admitted, boundedFeatureProfile, boundedQualificationSettings, validateActiveQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
+import { commandRunner } from "../catalog/output.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
 import { containerReceipt, evidenceVersion, imageReceipt, nodeImage, sourceTree } from "./raw-contract.mjs";
 import { retainLoadEvidence } from "./load-evidence.mjs";
@@ -36,53 +36,15 @@ const summary = { schema: resultSchema, evidenceVersion, workload, round: option
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
 const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
-if (options.group) Object.assign(summary.measurement, { featureProfile, qualificationSettings });
+if (options.group) Object.assign(summary.measurement, { featureProfile: boundedFeatureProfile, qualificationSettings: boundedQualificationSettings });
 const active = new Set();
 const created = [], removed = [], images = {}, toolImages = {};
 const retain = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
 const receipt = async (name) => containerReceipt(await inspect(name));
 let tree;
 let interrupted = false;
-const children = new Set();
-// This stops command clients, not browser descendants. Browsers run ONLY in
-// owned containers, which finally removes even when their docker client exited.
-function killCommand(child) {
-  if (process.platform === "win32" && child.pid) {
-    // Node's Windows kill terminates only the child; the check's browser would survive.
-    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", cwd: repo });
-    killer.on("error", () => child.kill("SIGKILL"));
-  } else if (child.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-  }
-  const force = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
-    else child.kill("SIGKILL");
-  }, 2000);
-  force.unref();
-}
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; for (const child of children) killCommand(child); });
-async function command(binary, args, { timeout = 30000, file, cleanup = false } = {}) {
-  if (interrupted && !cleanup) throw new Error("marketplace run interrupted");
-  const child = spawn(binary, args, { cwd: repo, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  children.add(child);
-  let output = "";
-  let error = "";
-  let killed = false;
-  const keep = (chunk, stderr) => {
-    const value = chunk.toString();
-    if (file) appendFileSync(file, value);
-    if (stderr) error = (error + value).slice(-65536); else output = (output + value).slice(-8 * 1024 * 1024);
-  };
-  child.stdout.on("data", (c) => keep(c, false));
-  child.stderr.on("data", (c) => keep(c, true));
-  const timer = setTimeout(() => { killed = true; killCommand(child); }, timeout);
-  try {
-    const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
-    if (code !== 0 || killed || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${error || output}`);
-    return output.trim();
-  } finally { clearTimeout(timer); children.delete(child); }
-}
+const { command, interrupt } = commandRunner({ cwd: repo, interrupted: () => interrupted, interruptMessage: "marketplace run interrupted" });
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; interrupt(); });
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
 // The app's container stopped during a load phase: its outcome under the profile, not a failure.
@@ -150,7 +112,7 @@ function appArgs(name, source, image) {
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${fixtureDir}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
     "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`,
-    ...(options.group ? ["--ulimit", "nofile=65536:65536", "-e", `PROFILE=${qualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`] : []), image];
+    ...(options.group ? ["--ulimit", "nofile=65536:65536", "-e", `PROFILE=${boundedQualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${boundedQualificationSettings.maxConnections}`] : []), image];
 }
 async function ready(base) {
   const deadline = Date.now() + options.startupTimeout * 1000;
@@ -170,7 +132,7 @@ async function ready(base) {
 async function coldStart(name, source, target, image, raw) {
   await owned(["create", ...appArgs(name, source, image)], name);
   const probe = `${name}-probe`;
-  const path = target === "json" ? "/api/marketplace/item_1" : `/marketplace/${summary.currentLocale}/item_1`;
+  const path = target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locales[0]}/item_1`;
   try {
     await owned(["run", "-d", "--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], probe);
     retain(join(raw, "probe-container.json"), await receipt(probe));
@@ -226,12 +188,9 @@ async function load(name, target, phase, seconds, raw, pass) {
     await docker(["start", "-a", container], { timeout: (seconds + 25) * 1000, file: join(raw, `${phase}.log`) });
   } catch (e) { failed(step, e); }
   finally {
-    // Each stats error keeps the time it happened, so phaseEnd can tell one the app's stop caused.
+    // Retain sampler failures even when the app itself stopped under load.
     try { if (sampler) stats = await sampler.stop(); }
-    catch (e) {
-      if (Array.isArray(e.errors)) for (const s of e.errors) errors.push({ step: "stats", error: new Error(s.message), at: s.at });
-      else failed("sampler", e);
-    }
+    catch (e) { for (const fault of statsPhaseErrors(e)) errors.push(fault); }
   }
   try {
     let appReceipt;
@@ -245,7 +204,7 @@ async function load(name, target, phase, seconds, raw, pass) {
         const lines = await docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${name}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
         return lines.split("\n").filter(Boolean).map((line) => ({ action: line.slice(0, line.lastIndexOf("|")), ms: Number(line.slice(line.lastIndexOf("|") + 1)) / 1e6 })).filter((e) => e.ms >= phaseStartMs);
       },
-    }, (e) => log(`${name} ${phase}: ${e.step} failed as the app stopped: ${String(e.error?.message ?? e.error).split("\n")[0]}`));
+    }, (e) => log(`${name} ${phase}: ${e.step} failed in a phase with an app stop: ${String(e.error?.message ?? e.error).split("\n")[0]}`));
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
     const upstreamReads = reads ? { before: reads, after: await upstreamCounters() } : null;
@@ -313,8 +272,8 @@ try {
         const buildCommit = await command("git", ["rev-parse", "HEAD"]);
         const buildDirty = (await command("git", ["status", "--porcelain"])).length > 0;
         await docker(["build", "--label", `run.corten.marketplace.commit=${buildCommit}`, "--label", `run.corten.marketplace.dirty=${buildDirty}`,
-          ...(options.group ? ["--label", `run.corten.marketplace.profile=${featureProfile}`, "--build-arg", `PROFILE=${qualificationSettings.nativeProfile}`] : []),
-          "-t", entry.image, "-f", dockerfile, context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
+          ...(options.group ? ["--label", `run.corten.marketplace.profile=${boundedFeatureProfile}`, "--build-arg", `PROFILE=${boundedQualificationSettings.nativeProfile}`] : []),
+          "-t", entry.image, "-f", dockerfile, context], { timeout: imageBuildTimeoutMs, file: join(folder, `build-${app}.log`) });
         assert.equal(await command("git", ["rev-parse", "HEAD"]), buildCommit, "HEAD changed during image build");
         assert.ok(buildDirty || !(await command("git", ["status", "--porcelain"])).length, "checkout became dirty during image build");
       }
@@ -322,8 +281,8 @@ try {
       images[app] = imageReceipt(image);
       retain(join(folder, "images.json"), images);
       Object.assign(entry, imageProvenance(image.Config.Labels, summary.commit, options.checkOnly));
+      if (options.group) assert.equal(image.Config.Labels["run.corten.marketplace.profile"], boundedFeatureProfile, "image lacks the required feature profile; rebuild with --build");
       entry.imageId = image.Id;
-      if (options.group) assert.equal(image.Config.Labels["run.corten.marketplace.profile"], featureProfile, "image lacks the required feature profile");
       entry.imageBytes = image.Size;
     } catch (e) { fail(app, null, "build/image", e); }
     save();
@@ -380,11 +339,12 @@ try {
         if (options.group) {
           const qualificationContainer = `${name}-qualification`;
           try {
-            await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "512m", "--ulimit", "nofile=65536:65536", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
+            await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "512m", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
               checker.Id, "node", "/repo/bench/marketplace/qualify.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/qualification.json"], qualificationContainer);
             await docker(["start", "-a", qualificationContainer], { timeout: 8 * 60000, file: join(out, "qualification.log") });
             retain(join(out, "qualification-container.json"), await receipt(qualificationContainer));
-            const q = validateQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
+            const q = validateActiveQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
+            assert.equal(q.source, source, "qualification came from a different source");
             (entry.qualification ??= {})[source] = q;
             if (!q.eligible) { log(`excluding ${app} ${source}: missing ${q.missing.join(", ")}`); save(); continue; }
           } finally { await remove(qualificationContainer); }

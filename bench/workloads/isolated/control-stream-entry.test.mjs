@@ -36,10 +36,10 @@ mock.module("./control-stream-remote.mjs", { exports: { async superviseControlSt
 mock.module("./campaign.mjs", { exports: { createCampaign({ authorize }) {
   const status = () => ({ campaign: handle.id, state, auditGroup: "json-api", auditSubjectSha256: "e".repeat(64) });
   return {
-    async begin(plan, options) { assert.equal(options.control.stream, stream); assert.equal(plan.group, "json-api"); order.push("begin"); return handle; }, status,
+    async begin(plan, options) { assert.equal(options.control.stream, stream); assert.equal(plan.group, mode === "failed-group" ? "localized-marketplace" : "json-api"); order.push("begin"); return handle; }, status,
     async advance() {
       if (mode === "lost-lease") { abort.abort(); return status(); }
-      if (!delivered) {
+      if (!delivered && mode !== "failed-group") {
         state = "blocked-review-needed"; writeFileSync(join(handle.directory, "json-audit-delivery-pending.json"), JSON.stringify({ subjectSha256: "e".repeat(64) }), { mode: 0o600 });
       } else { writeFileSync(join(handle.directory, "control-stream-seal.json"), "source-bound seal placeholder"); state = "finished"; }
       return status();
@@ -59,20 +59,24 @@ mock.module("./campaign.mjs", { exports: { createCampaign({ authorize }) {
   };
 } } });
 mock.module("./campaign-verify.mjs", { exports: { validateCampaign: async () => {
-  assert.ok(existsSync(join(handle.directory, "collection-manifest.json"))); order.push("verify"); return { status: "verified" };
+  assert.ok(existsSync(join(handle.directory, "collection-manifest.json"))); order.push("verify");
+  return mode === "failed-group" ? { status: "failed", collectionIntegrity: "manifest-verified",
+    commandLifecycle: "observed-terminal", uncollectedNativeRoots: [] } : { status: "verified" };
 } } });
 const { runCampaignEntry } = await import("./campaign-entry.mjs");
 
-for (const outcome of ["normal", "drain-failed", "lost-lease"]) test("fixed supervised entry lifecycle: " + outcome, async () => {
+for (const outcome of ["normal", "failed-group", "drain-failed", "lost-lease"]) test("fixed supervised entry lifecycle: " + outcome, async () => {
   mode = outcome; order = []; state = "active"; delivered = false;
   handle = { id: "r21-0123456789abcdef", directory: join(root, outcome) }; mkdirSync(handle.directory, { mode: 0o700 });
-  const invocation = ["r21", "--commit", binding.commit, "--state-dir", "/bench/campaign", "--group", "json-api"];
+  const invocation = ["r21", "--commit", binding.commit, "--state-dir", "/bench/campaign", "--group", outcome === "failed-group" ? "localized-marketplace" : "json-api"];
   if (outcome === "drain-failed") await assert.rejects(runCampaignEntry(invocation), /disappearance/);
-  else assert.equal(await runCampaignEntry(invocation), outcome === "normal" ? 0 : 2);
+  else assert.equal(await runCampaignEntry(invocation), outcome === "normal" ? 0 : outcome === "failed-group" ? 1 : 2);
   assert.equal(order.at(-1), "dispose");
   if (outcome === "normal") {
     for (const [first, last] of [["audit-pending", "admit-audit"], ["admit-audit", "submit-audit"], ["drain", "collect"], ["collect", "verify"]])
       assert.ok(order.indexOf(first) < order.indexOf(last));
+  } else if (outcome === "failed-group") {
+    assert.deepEqual(order, ["activate", "begin", "progress:active", "drain", "collect", "verify", "dispose"]);
   } else {
     assert.ok(!order.includes("collect") && !order.includes("verify")); assert.ok(!existsSync(join(handle.directory, "control-stream-drain.json")));
     if (outcome === "lost-lease") assert.ok(!order.includes("drain") && !order.includes("submit-audit"));

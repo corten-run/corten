@@ -8,19 +8,52 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { ownedContainerRecorder, ownedCleanupObservation, verifyOwnedCleanup, ownedResourceCleanup, verifyResourceCleanup, verifyContainerCommands } from "./lifecycle.mjs";
-import { budgets } from "./plan.mjs";
+import { budgets, parseArgs } from "./plan.mjs";
 import { buildNativeImage, committedInputs, digest, readyScript, savedFiles, verifyOwnedReceipts, verifyContainerLimit } from "./evidence.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
+import { fixtureGitEnv, withFixtureGitEnv } from "../../scripts/fixture-git.mjs";
+
+// committedInputs runs Git on the process's environment, so it reads a fixture only without the caller's selectors.
+const committed = (/** @type {string} */ root, /** @type {string} */ commit) => withFixtureGitEnv(() => committedInputs(root, commit));
+
+test("the control's committed inputs come from its own repository under a caller's GIT_DIR and GIT_WORK_TREE", (t) => {
+  // The read the opt-in control below makes, on a fixture beside a scratch caller with a commit of its own.
+  const folder = mkdtempSync(join(tmpdir(), "hardening-os-inputs-"));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const caller = join(folder, "caller"), elsewhere = join(folder, "caller-worktree"), repository = join(folder, "git");
+  for (const path of [caller, elsewhere, repository]) mkdirSync(path);
+  const git = (/** @type {string} */ cwd, /** @type {string[]} */ ...args) => {
+    const row = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true, timeout: 20000, env: fixtureGitEnv() });
+    assert.equal(row.status, 0, row.stderr); return row.stdout.trim();
+  };
+  const commitAll = (/** @type {string} */ cwd, /** @type {string} */ file, /** @type {string} */ body) => {
+    writeFileSync(join(cwd, file), body); git(cwd, "init", "--quiet"); git(cwd, "add", file);
+    git(cwd, "-c", "user.name=Apparatus Test", "-c", "user.email=apparatus@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", file);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+  commitAll(caller, "caller.txt", "caller\n");
+  const commit = commitAll(repository, "marker.txt", "committed apparatus build input\n");
+  const state = () => [readFileSync(join(caller, ".git", "config"), "utf8"), git(caller, "for-each-ref"), git(caller, "status", "--porcelain")];
+  const before = state(), saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+  Object.assign(process.env, { GIT_DIR: join(caller, ".git"), GIT_WORK_TREE: elsewhere });
+  let files;
+  try { files = committed(repository, commit); } finally {
+    for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  }
+  assert.deepEqual(files, [{ path: "marker.txt", mode: "100644", sha256: digest("committed apparatus build input\n") }]);
+  assert.deepEqual(state(), before, "the caller's config, refs and work tree are unchanged");
+});
 
 test("actual cached Docker build, charged worker lifetime and final cleanup replay", { skip: process.env.HARDENING_OS_PROOF !== "1", timeout: 120000 }, async () => {
   const folder = mkdtempSync(join(tmpdir(), "hardening-os-proof-")), repository = join(folder, "git"), result = join(folder, "saved");
   const runId = `hardening-proof-${randomBytes(6).toString("hex")}`, tag = `${runId}-corten`, target = `${runId}-control`;
-  const summary = { runId, startedAt: new Date().toISOString(), budget: budgets(), originalFolder: result, cleanupFailures: [],
-    cells: [{ key: "corten/fixture/direct/slow-headers", app: "corten", source: "fixture", mode: "direct", status: "not-run" }] };
+  const summary = { runId, startedAt: new Date().toISOString(), options: parseArgs(["w1", "--review", "apparatus-control"]),
+    budget: budgets(), originalFolder: result, cleanupFailures: [],
+    cells: [{ key: "corten/fixture/direct/request-limit", app: "corten", source: "fixture", phase: "request-limit", mode: "direct", status: "not-run" }] };
   mkdirSync(repository); mkdirSync(result);
   const execute = (binary, args, options = {}) => {
     const row = spawnSync(binary, args, { cwd: repository, input: options.input, windowsHide: true, timeout: Math.min(options.timeout ?? 20000, 60000),
-      maxBuffer: 8 * 1024 ** 2, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" } });
+      maxBuffer: 8 * 1024 ** 2, env: fixtureGitEnv({ GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" }) });
     if (options.receipt) Object.assign(options.receipt, { exitCode: row.status, timedOut: row.error?.code === "ETIMEDOUT", interrupted: !!row.signal });
     assert.equal(row.error, undefined, `${binary} command unavailable`);
     if (row.status !== 0) throw Object.assign(new Error(`${binary} ${args.slice(0, 2).join(" ")} failed`), {
@@ -33,21 +66,21 @@ test("actual cached Docker build, charged worker lifetime and final cleanup repl
   try {
     // No image pull or package install. The control Dockerfile has no RUN and
     // copies exactly one committed marker from the retained archive.
-    const base = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0];
+    const base = JSON.parse(await docker(["image", "inspect", "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067"]))[0];
     const dockerfile = "bench/marketplace/corten/Dockerfile"; mkdirSync(join(repository, "bench/marketplace/corten"), { recursive: true });
     writeFileSync(join(repository, "marker.txt"), "committed apparatus build input\n");
     const server = 'require("node:http").createServer((q,s)=>s.end("apparatus only")).listen(8080,"0.0.0.0")';
-    writeFileSync(join(repository, dockerfile), `FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1\nCOPY marker.txt /marker.txt\nCMD ${JSON.stringify(["node", "-e", server])}\n`);
+    writeFileSync(join(repository, dockerfile), `FROM node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067\nCOPY marker.txt /marker.txt\nCMD ${JSON.stringify(["node", "-e", server])}\n`);
     git(["init", "--quiet"]); git(["add", "."]);
     git(["-c", "user.name=Apparatus Test", "-c", "user.email=apparatus@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "apparatus inputs"]);
-    const commit = git(["rev-parse", "HEAD"]), files = committedInputs(repository, commit);
+    const commit = git(["rev-parse", "HEAD"]), files = committed(repository, commit);
     const context = await nativeBuildContext({ command: async (binary, args, options) => execute(binary, args, options) }, result, commit, "corten", files.map(({ path, sha256 }) => ({ path, sha256 })));
     const before = savedFiles(join(result, "corten-build-context")); built = true;
     const build = await buildNativeImage(docker, { context, runId, commit, source: digest(JSON.stringify(files)), tag, files });
     summary.builds = { corten: build }; summary.ownedImages = [tag];
     assert.equal(build.command.inputSha256, digest(readFileSync(join(result, "corten-build-context.tar"))));
     assert.deepEqual(savedFiles(join(result, "corten-build-context")), before);
-    assert.equal(JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0].Id, base.Id, "shared base tag changed");
+    assert.equal(JSON.parse(await docker(["image", "inspect", "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067"]))[0].Id, base.Id, "shared base tag changed");
     writeFileSync(join(result, "build.json"), JSON.stringify(build));
     const labels = ["--label", "agent.owner=codex", "--label", `agent.task=${runId}`, "--label", `run.corten.hardening=${runId}`];
     networkReserved = true; summary.ownedNetworks = [`${runId}-net`];

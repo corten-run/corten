@@ -16,8 +16,32 @@ are accepted; `same-site`, `cross-site`, invalid or duplicate values are rejecte
 The current HTTP-only runner needs no setting change.
 
 Marketplace JSON retains native serialization and JSON representations of its
-existing 404/502 outcomes. These repairs do not establish full production parity,
-upstream cancellation qualification or a new performance result.
+existing 404/502 outcomes. Unsupported methods on `/api/marketplace/{id}` return
+405 with problem JSON and Axum's `Allow` for GET and HEAD.
+
+In `PROFILE=matched`, `HOSTS` is a comma-separated list of HTTP hostnames or IP
+addresses. A host entry without a port allows any valid port; an entry with a port
+allows only that port. `localhost`, `127.0.0.1` and `[::1]` default to any port
+only when that host has no explicit entry. For example, `HOSTS=localhost:8443`
+does not allow `Host: localhost` or `Host: localhost:8444`. Equivalent IPv6
+spellings identify the same host, so `[0:0:0:0:0:0:0:1]:8443` also restricts
+`[::1]` to port 8443.
+Unknown hosts are rejected, and forwarding headers do not choose the host.
+Deployments that rewrite Host must allow the authority seen by Leptos. Set
+`MARKETPLACE_PUBLIC_ORIGIN` separately for browser form origin checks as above.
+`GET /health/live` reports that the process is serving HTTP, independently of the
+marketplace source. It is not a readiness check.
+
+Catalog Contract runs the focused native check against its `cb-marketplace-leptos`
+image in matched mode with a mounted fixture and with a separate HTTP upstream.
+To repeat it with that image already built:
+
+```sh
+node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-marketplace-leptos
+```
+
+This check covers the three HTTP cells, not full production qualification, other
+workload groups, or performance.
 
 ```sh
 cargo test --locked --features ssr --test marketplace_post --test marketplace_json

@@ -1,0 +1,15 @@
+[
+  ["<div id={AId}></div><tr id={BId}><td>\"1\"</td></tr>", "the <tr> is dropped when this whole patch begins with <div>"],
+  ["<p id={AId}></p><td id={BId}>\"1\"</td>", "the <td> is dropped when this whole patch begins with <p>"],
+  ["<base id={HId}><tr id={RId}><td>\"1\"</td></tr>", "the <tr> is dropped in Chromium and WebKit when this whole patch begins with <base>"],
+  ["<tr id={AId}></tr><tbody id={BId}></tbody>", "the <tbody> is dropped when this whole patch begins with <tr>"],
+  ["<tr id={AId}></tr><td id={BId}>\"1\"</td>", "the <td> is put in a <tr> the browser adds when this whole patch begins with <tr>"],
+  ["<td id={AId}></td><tr id={BId}></tr>", "the <tr> is dropped when this whole patch begins with <td>"],
+  ["<tbody id={AId}></tbody><tr id={BId}></tr>", "the <tr> is put in a <tbody> the browser adds when this whole patch begins with <tbody>"],
+  ["<caption id={AId}>\"x\"</caption><td id={BId}>\"1\"</td>", "the <td> is put in a <tbody> and a <tr> the browser adds when this whole patch begins with <caption>"],
+  ["<colgroup id={AId}></colgroup><col id={BId}>", "the <col> is put in a <colgroup> the browser adds when this whole patch begins with <colgroup>"],
+  ["<col id={AId}><link id={BId}>", "the <link> is dropped when this whole patch begins with <col>"],
+  ["<tr id={HId}><td>\"1\"</td></tr><p id={AId}>\"x\"</p><tr id={BId}><td>\"2\"</td></tr>", null],
+  ["<td id={AId}>\"1\"</td><th id={BId}>\"2\"</th><div id={CId}></div>", null],
+  ["<col id={AId}><col id={BId}><template id={TId} data-remove></template>", null]
+]

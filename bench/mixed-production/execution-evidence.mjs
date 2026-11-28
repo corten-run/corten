@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { mountSourceHash } from "./execution-inputs.mjs";
+import { nativeDeployment } from "./source-audit.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const digest = (value) => hash(JSON.stringify(value));
@@ -24,6 +25,17 @@ const kinds = {
   "image-tag-absence": "docker-query-failed", "volume-absence": "docker-query-failed",
   ...Object.fromEntries(["container", "network", "image", "volume"].map((type) => [`owned-${type}-inventory`, "docker-query-failed"])),
 };
+
+class ParticipantSetupError extends Error {}
+export function participantSetupCause(error) {
+  return error instanceof ParticipantSetupError ? error.message : undefined;
+}
+
+export async function createAttachedParticipant({ own, docker }, name, args) {
+  const id = await own(["create", ...args], name);
+  assert.ok(typeof id === "string" && containerId.test(id), "attached participant requires the full create ID");
+  return (options) => docker(["start", "-a", id], options);
+}
 
 export function bindExecutionParticipant(participants, context, observed) {
   const matches = participants.filter((p) => Object.entries(context).every(([key, value]) => p[key] === value));
@@ -82,11 +94,15 @@ function expectation(context, summary) {
 
 // Only public, bounded contract configuration is serialized. No command text,
 // arbitrary environment, Docker errors, cookies or control tokens are retained.
-export function executionParticipant(info, image) {
+export function executionParticipant(info, image, deployment = null) {
   const env = [];
   for (const entry of info.Config?.Env ?? []) {
     const at = entry.indexOf("="); assert.ok(at > 0);
     const key = entry.slice(0, at), value = entry.slice(at + 1);
+    if (deployment?.settings && key === "DJANGO_SETTINGS_MODULE") {
+      env.push([key, value === deployment.settings ? value : { sha256: hash(value) }]);
+      continue;
+    }
     if (!new Set(["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"]).has(key)) continue;
     const allowed = key === "MARKETPLACE_SOURCE" ? sources.includes(value) : key === "PROFILE" ? ["", "matched"].includes(value) : value === "/ms-playwright";
     env.push([key, allowed ? value : { sha256: hash(value) }]);
@@ -117,7 +133,7 @@ function list(raw, type) {
 }
 
 export function createExecutionEvidence({ folder, summary, docker }) {
-  const root = join(folder, "execution"), events = [], attempted = new Set(), observed = new Map(), volumes = new Set();
+  const root = join(folder, "execution"), events = [], attempted = new Set(), pending = new Set(), observed = new Set(), volumes = new Set();
   const originalIds = new Map(), removals = new Map(), originalNetworks = new Map();
   mkdirSync(join(root, "events"), { recursive: true });
   const manifest = { schema: "mixed-native-execution/v1", round: summary.round, runId: summary.runId,
@@ -145,43 +161,78 @@ export function createExecutionEvidence({ folder, summary, docker }) {
   const inspect = async (name, phase, id) => {
     const start = Date.now();
     try {
-      const info = JSON.parse(await docker(["inspect", "--type", "container", id], { cleanup: true }))[0];
-      same(info.Config?.Labels?.[label], summary.runId); same(info.Config?.Labels?.["agent.task"], summary.runId);
-      const image = JSON.parse(await docker(["image", "inspect", info.Image], { cleanup: true }))[0], value = executionParticipant(info, image);
-      assert.ok(containerId.test(value.id)); same(value.id, id);
-      assert.ok(typeof value.name === "string" && safeName.test(value.name)); if (phase === "created") same(value.name, name);
-      append(`participant-${phase}`, name, start, value); observed.set(name, value);
-      for (const mount of value.mounts) if (mount.type === "volume") { assert.ok(safeName.test(mount.volume)); volumes.add(mount.volume); }
+      const containers = JSON.parse(await docker(["inspect", "--type", "container", id], { cleanup: true }));
+      assert.ok(Array.isArray(containers) && containers.length === 1);
+      const [info] = containers, labels = info.Config?.Labels;
+      same([info.Id, labels?.[label], labels?.["agent.owner"], labels?.["agent.task"]], [id, summary.runId, "codex", summary.runId]);
+      const actualName = info.Name?.replace(/^\//, "");
+      assert.ok(typeof actualName === "string" && safeName.test(actualName));
+      if (phase === "created" || !observed.has(name)) same(actualName, name);
+      const images = JSON.parse(await docker(["image", "inspect", info.Image], { cleanup: true }));
+      assert.ok(Array.isArray(images) && images.length === 1); same(images[0].Id, info.Image);
+      const context = summary.options.djangoDeployment ? executionContext(name, summary) : null;
+      const value = executionParticipant(info, images[0], context?.role === "app" ? nativeDeployment(summary.options, context.app) : null);
+      const attached = value.mounts.filter((m) => m.type === "volume").map((m) => m.volume);
+      assert.ok(attached.every((v) => typeof v === "string" && safeName.test(v)));
+      append(`participant-${phase}`, name, start, value);
+      if (phase === "created") observed.add(name);
+      for (const volume of attached) volumes.add(volume);
       return value;
     } catch { append(`participant-${phase}`, name, start, null, "docker-inspect-failed"); return null; }
   };
   const absentContainer = (id) => query("container-absence", id, ["ps", "-a", "--no-trunc", "--filter", `id=${id}`, "--format", "{{.ID}}"]);
   const volumeQueries = async (names = volumes) => {
-    for (const name of names) await query("volume-absence", name, ["volume", "ls", "--filter", `name=^${name.replaceAll(".", "\\.")}$`, "--format", "{{.Name}}"], "volume");
+    let absent = true;
+    for (const name of names) {
+      const rows = await query("volume-absence", name, ["volume", "ls", "--filter", `name=^${name.replaceAll(".", "\\.")}$`, "--format", "{{.Name}}"], "volume");
+      if (rows?.length !== 0) absent = false;
+    }
+    return absent;
+  };
+  const create = async (name, operation) => {
+    executionContext(name, summary); assert.ok(!attempted.has(name)); attempted.add(name); pending.add(name);
+    const start = Date.now(); let result, cause;
+    try { result = await operation(); } catch { cause = "docker-create-command-failed"; }
+    if (!cause && (typeof result !== "string" || !containerId.test(result))) cause = "docker-create-id-unavailable";
+    if (!cause) originalIds.set(name, result);
+    append("container-create", name, start, cause ? null : { raw: result }, cause ? "docker-create-failed" : null);
+    const ids = await query("container-name", name, ["ps", "-a", "--no-trunc", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"]);
+    if (cause) throw new ParticipantSetupError(cause);
+    if (ids?.length !== 1 || ids[0] !== result) throw new ParticipantSetupError("docker-create-name-unconfirmed");
+    if (!await inspect(name, "created", result)) throw new ParticipantSetupError("docker-create-inspection-failed");
+    return result;
   };
   return {
-    async create(name, operation) {
-      executionContext(name, summary); assert.ok(!attempted.has(name)); attempted.add(name);
-      const start = Date.now(); let result, error;
-      try { result = await operation(); assert.ok(containerId.test(result)); originalIds.set(name, result); append("container-create", name, start, { raw: result }); }
-      catch (failure) { error = failure; append("container-create", name, start, null, "docker-create-failed"); }
-      const ids = await query("container-name", name, ["ps", "-a", "--no-trunc", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"]);
-      if (ids?.length && originalIds.has(name)) await inspect(name, "created", originalIds.get(name));
-      if (error) throw error;
-      assert.ok(ids?.length === 1 && ids[0] === result && observed.has(name), "actual participant inspection unavailable");
-      return result;
+    create,
+    async own(name, args) {
+      const detached = args[0] === "run";
+      assert.ok(detached ? args[1] === "-d" : args[0] === "create", "expected detached run or create");
+      const id = await create(name, () => docker(["create", "--name", name, "--label", `${label}=${summary.runId}`,
+        "--label", "agent.owner=codex", "--label", `agent.task=${summary.runId}`, ...args.slice(detached ? 2 : 1)]));
+      // Bind the create receipt before start so a failed start cannot strand an unacknowledged ID.
+      if (detached) try { await docker(["start", id]); }
+      catch { throw new ParticipantSetupError("docker-start-command-failed"); }
+      return id;
     },
+    pendingNames: () => [...pending].reverse(),
     async remove(name) {
       executionContext(name, summary);
+      if (!attempted.has(name)) return null;
       if (removals.has(name)) return removals.get(name);
+      // This lifecycle records one terminal inspection/removal, not retries with new identities.
+      pending.delete(name);
       const removal = (async () => {
         const id = originalIds.get(name);
-        assert.ok(attempted.has(name) && containerId.test(id ?? ""), "refusing cleanup without original create ID");
-        const p = await inspect(name, "terminal", id); assert.ok(p && p.id === id);
-        const start = Date.now(); let failure;
-        try { const raw = await docker(["rm", "-f", "-v", p.id], { cleanup: true }); same(raw, p.id); append("container-remove", p.id, start, { raw }); }
-        catch (error) { failure = error; append("container-remove", p.id, start, null, "docker-remove-failed"); }
-        await absentContainer(p.id); await volumeQueries(p.mounts.filter((m) => m.type === "volume").map((m) => m.volume)); if (failure) throw failure;
+        assert.ok(containerId.test(id ?? ""), "refusing cleanup without original create ID");
+        const p = await inspect(name, "terminal", id); assert.ok(p && p.id === id, "container ownership or terminal inspection unavailable");
+        const start = Date.now(); let raw = null;
+        try { const receipt = await docker(["rm", "-f", "-v", p.id], { cleanup: true }); same(receipt, p.id); raw = receipt; }
+        catch { /* Record only the fixed failure code, never Docker stderr. */ }
+        append("container-remove", p.id, start, raw === null ? null : { raw }, raw === null ? "docker-remove-failed" : null);
+        const containers = await absentContainer(p.id);
+        const volumesAbsent = await volumeQueries(new Set(p.mounts.filter((m) => m.type === "volume").map((m) => m.volume)));
+        assert.ok(raw !== null, "owned container removal failed");
+        assert.ok(containers?.length === 0 && volumesAbsent, "owned container or volume absence unconfirmed");
         return p;
       })();
       removals.set(name, removal); return removal;
@@ -308,6 +359,12 @@ export function replayExecution({ manifest, read, summary }) {
       if (expected.shmSize !== null && expected.shmSize !== undefined) fact(p.limits.ShmSize, expected.shmSize);
       fact(p.entrypointSha256, p.image.entrypointSha256);
       if (expected.cmd === null) fact(p.commandSha256, p.image.commandSha256); else fact(p.cmdSha256, digest(expected.cmd));
+      const deployment = context.role === "app" ? nativeDeployment(summary.options, context.app) : null;
+      if (deployment) {
+        fact(p.cmdSha256, digest(deployment.command));
+        fact(p.entrypointSha256, digest(deployment.entrypoint));
+        fact(p.commandSha256, digest({ entrypoint: deployment.entrypoint, cmd: deployment.command }));
+      }
       for (const value of [p.commandSha256, p.cmdSha256, p.entrypointSha256, p.image.commandSha256, p.image.entrypointSha256])
         if (value !== null) assert.match(value, /^[a-f0-9]{64}$/);
       if (p.restartCount === null) { resourceMissing = true; block("native-participant-inspection-incomplete"); }
@@ -323,9 +380,11 @@ export function replayExecution({ manifest, read, summary }) {
       }
       for (const key of ["StartedAt", "FinishedAt"]) assert.ok(typeof p.state[key] === "string" && Number.isFinite(Date.parse(p.state[key])));
       assert.ok(Array.isArray(p.env) && p.env.every((entry) => Array.isArray(entry) && entry.length === 2
-        && ["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"].includes(entry[0])) && new Set(p.env.map(([key]) => key)).size === p.env.length);
+        && (["MARKETPLACE_SOURCE", "PROFILE", "PLAYWRIGHT_BROWSERS_PATH"].includes(entry[0]) || deployment?.settings && entry[0] === "DJANGO_SETTINGS_MODULE"))
+        && new Set(p.env.map(([key]) => key)).size === p.env.length);
       if (context.role === "app") {
         const env = new Map(p.env); same(env.get("MARKETPLACE_SOURCE"), context.source); same(env.get("PROFILE"), summary.options.profile === "matched" ? "matched" : "");
+        if (deployment?.settings) same(env.get("DJANGO_SETTINGS_MODULE"), deployment.settings);
       }
       assert.ok(Array.isArray(p.mounts));
       for (const mount of p.mounts) {

@@ -26,6 +26,9 @@ test("public errors never evaluate accessors or reflect unknown diagnostic value
   assert.equal(publicError(inherited), base);
   for (const diagnostic of [{ code: "list-response-count", detail: raw },
     { code: "list-response-count", detail: "terminal-count-mismatch", raw },
+    { code: "bootstrap-marker" }, { code: "bootstrap-marker", detail: raw },
+    { code: "bootstrap-marker", detail: "local-control-uncertain", raw },
+    { code: "bootstrap-marker", get detail() { throw new Error(raw); } },
     { code: "get-http", httpStatus: 499 }, { get code() { throw new Error(raw); } }]) {
     assert.equal(publicError({ controllerStage: raw, providerDiagnostic: diagnostic }), base);
   }
@@ -38,4 +41,12 @@ test("public error status formatting stays closed and independent of stage valid
     `${publicError()} Controller stage: provider-settlement.`);
   assert.equal(publicError({ controllerStage: "controller-audit", providerDiagnostic: { code: "account-request" } }),
     `${publicError()} Controller stage: controller-audit. Provider failure: account-request.`);
+});
+
+test("public collect replay stages expose no private cause or success claim", () => {
+  for (const stage of ["collect-native-replay-start", "collect-native-replay-deadline", "collect-native-replay-interrupted",
+    "collect-native-replay-refused", "collect-native-report-refused", "collect-native-evidence-refused"]) {
+    assert.equal(publicError(Object.assign(new Error("PRIVATE_NATIVE_REPLAY"), { controllerStage: stage })),
+      `${publicError()} Controller stage: ${stage}.`);
+  }
 });

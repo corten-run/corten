@@ -8,6 +8,19 @@ export const guardianSource = source;
 export const guardianBootstrap = "import sys;length=int(sys.argv[1]);assert 0<length<=8388608;source=sys.stdin.buffer.read(length);assert len(source)==length;sys.argv=['corten-control','guard-stdin',sys.argv[2],source.hex()];exec(compile(source,'<corten-control>','exec'))";
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 export const guardianSha256 = hash(guardianSource);
+// A successful bootstrap seal acknowledges this complete, ordered invocation list,
+// including the final SSH no-op. A successful unrelated SSH command is not a seal.
+export function acknowledgedBootstrapSeal(ledger) {
+  const last = ledger.at(-1);
+  if (!last || last.code !== 0 || last.request.invocation.channel !== "ssh"
+    || last.request.invocation.requestSha256 !== hash("set -euo pipefail\n:\n")
+    || last.request.seal?.length !== ledger.length) return false;
+  return ledger.every(({ request, localTerminal }, i) => localTerminal === true
+    && request.epoch === "bootstrap" && request.sequence === i
+    && request.helperSha256 === guardianSha256 && (i === ledger.length - 1 || request.seal === undefined)
+    && last.request.seal[i]?.id === request.invocation.id
+    && last.request.seal[i]?.sha256 === hash(JSON.stringify(request.invocation)));
+}
 function helperPath(request) {
   assert.match(request.invocation.token, /^[a-f0-9]{16}$/);
   assert.ok(Number.isSafeInteger(request.sequence) && request.sequence >= 0 && request.sequence < 4096);

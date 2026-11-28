@@ -242,6 +242,20 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
     /// The typed route's answer is a patch in action mode.
     const ACTION_PATCHES: bool = false;
 
+    /// The typed route's answer is one that is the same for everyone (`Public`), a page or a
+    /// whole body (JSON, text, a file), which the app keeps and gives again
+    /// in the handler's place ([`crate::kept`]).
+    fn keeps(&self) -> Option<crate::kept::Shape> {
+        None
+    }
+
+    /// Of a typed route whose answer is `Public`: what it is kept as ([`Handler::keeps`]), or why
+    /// a release build never keeps it, known when the route is made. What `corten dev` says of
+    /// the route (`crate::kept::Verdict`); `None` for any other answer.
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        None
+    }
+
     /// The answer to `req`.
     fn call(self, req: Request, state: S) -> impl Future<Output = Response> + Send + 'static;
 }
@@ -280,13 +294,13 @@ macro_rules! handlers {
                     $(
                         let $ty = match $ty::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return rejection.into_response(),
+                            Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                         };
                     )*
                     let req = Request::from_parts(parts, body);
                     let $last = match $last::from_request(req, &state).await {
                         Ok(value) => value,
-                        Err(rejection) => return rejection.into_response(),
+                        Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                     };
                     self($($ty,)* $last,).await.into_response()
                 }

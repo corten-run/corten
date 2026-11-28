@@ -1,21 +1,21 @@
-import { remoteFiles as contractFiles, savedLoadLayout, validateState } from "./cloud-contract.mjs";
+import { remoteFiles as contractFiles, savedLoadLayout, savedPlacement, validateRemoteFileState } from "./cloud-contract.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { archiveLimit, expandedLimit } from "./cloud-local.mjs";
 import { custodyCommand, guardianSha256 } from "./cloud-control-runtime.mjs";
 
 export const sourceUrl = "https://github.com/corten-run/corten.git";
 export function bootstrapMarker(state) {
-  validateState(state, state.round);
+  validateRemoteFileState(state);
   return { schema: state.control ? "benchmark-common-bootstrap/v2" : "benchmark-common-bootstrap/v1", round: state.round, commit: state.commit,
     token: state.token, group: state.group ?? "all", ...(state.control ? { controlHelperSha256: guardianSha256 } : {}),
-    ...(state.control?.monitor ? { monitorId: state.control.monitor.id } : {}) };
+    ...(state.control?.monitor ? { monitorId: state.control.monitor.id } : {}),
+    ...(state.fleet?.single?.offlineHandoff ? { offlineHandoff: true } : {}) };
 }
 export const bootstrapReadScript = `if test ! -e /bench/bootstrap-ready.json; then exit 3; fi
 test -f /bench/bootstrap-ready.json && test ! -L /bench/bootstrap-ready.json
 test "$(stat -c '%s' -- /bench/bootstrap-ready.json)" -le 1024
 cat -- /bench/bootstrap-ready.json`;
 export function remoteFiles(state) {
-  validateState(state, state.round);
   const files = contractFiles(state), commit = quote(state.commit), round = quote(state.round);
   // Preserve the fixed packages, paths, unit and all-nine invocation from the contract.
   // Add source provenance before any native entry, rather than importing a sibling tree.
@@ -41,13 +41,14 @@ test "$(git rev-parse HEAD)" = ${state.commit}
 test -z "$(git status --porcelain --untracked-files=all)"`;
   const group = state.group === undefined ? "" : ` --group ${quote(state.group)}`;
   const loadLayout = savedLoadLayout(state);
-  const entry = `node bench/workloads/isolated/campaign-entry.mjs ${state.round} --commit ${state.commit} --state-dir /bench/campaign${state.group === undefined ? "" : ` --group ${state.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}`;
+  const placement = savedPlacement(state);
+  const entry = `node bench/workloads/isolated/campaign-entry.mjs ${state.round} --commit ${state.commit} --state-dir /bench/campaign${state.group === undefined ? "" : ` --group ${state.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}${placement ? ` --placement ${placement}` : ""}`;
   if (!files["job.sh"].includes(original) || files["job.sh"].split(entry).length !== 2)
     throw new Error("fixed provisioning contract changed; review adapter");
   files["job.sh"] = files["job.sh"].replace("set -Eeuo pipefail", "set -Eeuo pipefail\numask 077")
     .replace(original, provenance)
     .replace(entry,
-      `bootstrap_stage=campaign-directory\nmkdir -m 700 -- '/bench/campaign'\nbootstrap_stage=source-cleanliness\ntest -z "$(git status --porcelain --untracked-files=all)"\nbootstrap_stage=bootstrap-marker\nnode --input-type=module -e ${quote(`import { writeFileSync } from "node:fs"; writeFileSync("/bench/bootstrap-ready.json", ${JSON.stringify(`${JSON.stringify(bootstrapMarker(state))}\n`)}, { flag: "wx", mode: 0o600 });`)}\nbootstrap_stage=native-entry\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'${group}${loadLayout ? ` --load-layout ${quote(loadLayout)}` : ""}`);
+      `bootstrap_stage=campaign-directory\nmkdir -m 700 -- '/bench/campaign'\nbootstrap_stage=source-cleanliness\ntest -z "$(git status --porcelain --untracked-files=all)"\nbootstrap_stage=bootstrap-marker\nnode --input-type=module -e ${quote(`import { writeFileSync } from "node:fs"; writeFileSync("/bench/bootstrap-ready.json", ${JSON.stringify(`${JSON.stringify(bootstrapMarker(state))}\n`)}, { flag: "wx", mode: 0o600 });`)}\nbootstrap_stage=native-entry\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'${group}${loadLayout ? ` --load-layout ${quote(loadLayout)}` : ""}${placement ? ` --placement ${quote(placement)}` : ""}`);
   files["pack.sh"] = `#!/bin/bash
 set -euo pipefail
 umask 077

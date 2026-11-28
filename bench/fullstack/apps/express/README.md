@@ -104,14 +104,12 @@ Helmet, compression, body/connection/header limits and default profile behavior
 remain in place. The native HTTP test includes unavailable-source liveness,
 negative health paths, unknown/suffix/malformed hosts and forwarding spoofing.
 
-The current benchmark TLS edge rewrites Host to `fsw-target:8080` and does not
-provide an authenticated public-origin contract. That configured internal Host
-can serve reads, but a POST with an external HTTPS Origin is correctly rejected
-with 403. `trust proxy` stays off; neither arbitrary forwarding headers nor an
-allowlisted public hostname proves a safe same-origin write. The edge owner must
-preserve the public authority and configure a narrowly trusted scheme/forwarding
-contract before deployed-edge forms can qualify. This change does not edit that
-proxy or claim TLS deployment compatibility.
+Behind a TLS-terminating proxy, set `MARKETPLACE_PUBLIC_ORIGIN` to the exact
+public origin, including a non-default port. The proxy must preserve that
+authority in `Host`. At that authority the app checks a form's `Origin` against
+the configured origin and uses `Secure` for its alert session cookie when the
+configured origin is HTTPS. Other authorities retain the direct request check.
+`trust proxy` stays off; forwarding headers do not choose an allowed origin.
 
 ## Production Install
 

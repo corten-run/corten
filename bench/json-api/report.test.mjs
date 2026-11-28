@@ -2,17 +2,24 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { reader, writer } from "./artifacts.mjs";
-import { descriptor, sha256 } from "./contract.mjs";
+import { descriptor, k6Image, nodeImage, scheduledProducerMarker, sha256 } from "./contract.mjs";
 import { inspectJson, renderJson } from "./report.mjs";
 import { result, failedResult } from "./test-fixtures.mjs";
 
-test("a complete negative raw attempt retains all nine apps but no gated comparison", () => {
+test("strict JSON inspection refuses the retired roster before reading evidence", () => {
+  const group = descriptor("b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9");
+  assert.equal(group.apps.length, 9);
+  assert.throws(() => inspectJson({ group }, { commit: "a".repeat(40), load: assert.fail }), /this checkout's roster/);
+});
+
+test("a complete negative raw attempt retains all selected apps but no gated comparison", () => {
   for (const profile of descriptor().cases) {
-    const f = failedResult("corten", profile), report = inspectJson(f.summary, { load: f.load, commit: f.summary.commit });
+    const f = failedResult("corten", profile), report = inspectJson(f.summary, { load: f.load });
     assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true, report.warnings.join("\n"));
     assert.equal(report.functionalAttemptComplete, true);
     assert.deepEqual(report.outcomes, descriptor().apps.map((app) => ({ app, outcome: app === "corten" ? "failed" : "passed" })));
@@ -82,11 +89,11 @@ test("negative evidence cannot waive audits, raw completeness, identity, CPU, cl
 
 const base = result(), key = descriptor().cases[0].key, api = descriptor().cases[1].key;
 const copy = () => structuredClone(base.summary);
-const inspect = (s) => inspectJson(s, { load: base.load, commit: "a".repeat(40) });
+const inspect = (s) => inspectJson(s, { load: base.load });
 
-test("strict complete JSON baseline requires all 36 functional, audit and raw timing cells", () => {
+test("complete JSON baseline requires all 40 functional, audit and raw timing cells", () => {
   const report = inspect(copy()); assert.equal(report.baseline, true, report.warnings.join("\n"));
-  assert.equal(Object.keys(report.apps).length, 9);
+  assert.equal(Object.keys(report.apps).length, 10);
   assert.ok(Object.values(report.apps).every((rows) => Object.keys(rows).length === 4 && Object.values(rows).every((r) => r.complete)));
   const markdown = renderJson(report); assert.match(markdown, /aspnet-aot/); assert.match(markdown, /catalog-v1/); assert.match(markdown, /marketplace-v2/);
   assert.match(markdown, /Functional checks do not prove native serialization/);
@@ -153,6 +160,23 @@ test("wrong/dirty/changed commit, image, tools or CPU configuration are never co
   ]) { const s = copy(); change(s); assert.equal(inspect(s).baseline, false); }
 });
 
+test("a tool image that is not this checkout's pin names the pin and a valid measured commit, never the saved text", () => {
+  const configuration = (s) => inspect(s).warnings.filter((w) => w.startsWith("configuration:"));
+  const s = copy(); s.tools.node.image = "saved-image\nINJECTED";
+  const named = configuration(s);
+  assert.ok(named.some((w) => w.includes(`not this checkout's pin ${nodeImage}`) && w.includes(`the measured commit ${s.commit}`)), named.join("\n"));
+  assert.ok(named.every((w) => !w.includes("INJECTED")));
+  const bad = copy(); bad.tools.k6.image = "saved-image"; bad.commit = "not-a-commit\nINJECTED";
+  const unnamed = configuration(bad);
+  assert.ok(unnamed.some((w) => w.includes(`not this checkout's pin ${k6Image}`) && w.includes("its measured commit")), unnamed.join("\n"));
+  assert.ok(unnamed.every((w) => !w.includes("INJECTED") && !w.includes("saved-image")));
+  for (const commit of [["a".repeat(40)], { toString: null }]) {
+    const odd = copy(); odd.tools.node.image = "saved-image"; odd.commit = commit;
+    const warnings = configuration(odd);
+    assert.ok(warnings.some((w) => w.includes(`not this checkout's pin ${nodeImage}`) && w.includes("its measured commit")), warnings.join("\n"));
+  }
+});
+
 test("missing/corrupted/extra fixed and efficiency aggregates or individual runs cannot be trusted", () => {
   for (const change of [
     (s) => { delete s.apps.corten.aggregates[key]; }, (s) => { delete s.apps.corten.aggregates[key].fixed; },
@@ -186,7 +210,7 @@ test("raw checker observations, load summaries and native source snapshots are r
 test("read-only incomplete report preserves every selected member and labels partial evidence", () => {
   const s = copy(); delete s.apps["aspnet-aot"]; s.apps.corten.runs[key][0].complete = false;
   const report = inspect(s), markdown = renderJson(report);
-  assert.equal(report.baseline, false); assert.equal(Object.keys(report.apps).length, 9);
+  assert.equal(report.baseline, false); assert.equal(Object.keys(report.apps).length, 10);
   assert.match(markdown, /INCOMPLETE: not a baseline/); assert.match(markdown, /unverified partial/); assert.match(markdown, /pending/);
 });
 
@@ -210,10 +234,19 @@ test("rehashing raw fixture reads, runtime budgets or phase clocks cannot bypass
 test("portable report reads hash-bound artifacts, rejects unsafe paths and strictly fails incomplete evidence", () => {
   const folder = mkdtempSync(join(tmpdir(), "json-api-report-")), here = dirname(fileURLToPath(import.meta.url));
   try {
-    for (const [path, bytes] of base.artifacts) writeFileSync(join(folder, path), bytes);
-    const file = join(folder, "summary.json"); writeFileSync(file, JSON.stringify(base.summary));
-    const run = () => {
-      const child = spawnSync(process.execPath, [join(here, "report.mjs"), file, "--require-complete"], { encoding: "utf8", windowsHide: true, timeout: 15000 });
+    const noHooks = join(folder, "empty-hooks"); mkdirSync(noHooks);
+    const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${noHooks}`, ...args], {
+      cwd: folder, env: fixtureGitEnv(), timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    git("init", "-q");
+    git("commit", "--allow-empty", "-qm", "legacy benchmark source");
+    const commit = git("rev-parse", "HEAD"), legacy = result([], { commit });
+    for (const [path, bytes] of legacy.artifacts) writeFileSync(join(folder, path), bytes);
+    const file = join(folder, "summary.json"); writeFileSync(file, JSON.stringify(legacy.summary));
+    const run = (cwd = folder, expectedCommit = commit) => {
+      const child = spawnSync(process.execPath, [join(here, "report.mjs"), file, "--require-complete", "--commit", expectedCommit],
+        { cwd, encoding: "utf8", windowsHide: true, timeout: 15000 });
       assert.ifError(child.error);
       assert.equal(child.signal, null, `report child terminated by ${child.signal}: ${child.stderr}`);
       return child;
@@ -221,11 +254,21 @@ test("portable report reads hash-bound artifacts, rejects unsafe paths and stric
     const good = run(); assert.equal(good.status, 0, good.stderr); assert.match(good.stdout, /COMPLETE/);
     // Full-matrix rejection mutations are replayed above. The CLI also needs to
     // handle genuinely partial evidence without a second full successful replay.
-    const s = copy(); s.dirtyAfter = true; s.apps = {}; writeFileSync(file, JSON.stringify(s));
+    const s = structuredClone(legacy.summary); s.dirtyAfter = true; s.apps = {}; writeFileSync(file, JSON.stringify(s));
     const partial = run(); assert.equal(partial.status, 1, partial.stderr);
     assert.match(partial.stdout, /INCOMPLETE: not a baseline/);
     assert.match(partial.stdout, /provenance: tree dirty after run/);
     assert.ok(descriptor().apps.every((app) => partial.stdout.includes(`| ${app} |`)), "partial CLI report retains every selected app");
+    const nested = dirname(join(folder, scheduledProducerMarker));
+    mkdirSync(nested, { recursive: true }); writeFileSync(join(folder, scheduledProducerMarker), "scheduled producer\n");
+    git("add", "--", scheduledProducerMarker); git("commit", "-qm", "scheduled benchmark source");
+    const current = git("rev-parse", "HEAD"), claimed = result([], { commit: current });
+    for (const [path, bytes] of claimed.artifacts) writeFileSync(join(folder, path), bytes);
+    writeFileSync(file, JSON.stringify(claimed.summary));
+    const downgraded = run(nested, current);
+    assert.equal(downgraded.status, 1, "the nested CLI cannot qualify the wrong producer");
+    assert.ok(downgraded.stdout.includes("differs from the measured commit policy"), "strict producer refusal is reported");
+    writeFileSync(file, JSON.stringify(s));
     const load = reader(folder);
     for (const path of ["../summary.json", "a/../../summary.json", "D:/secret", "a\\b.json", "/absolute"]) assert.throws(() => load({ path, sha256: "0".repeat(64) }));
     mkdirSync(join(folder, "nested")); const put = writer(folder), ref = put("nested/test.json", { ok: true });

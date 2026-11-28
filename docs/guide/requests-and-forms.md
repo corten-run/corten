@@ -1097,7 +1097,11 @@ browser without JavaScript, a data client) is the same submission: the app answe
 it did the first time, and the user sees that and can send the change. A `data-patch` form's
 change made while its write is out waits for the answer instead, and goes under the new key
 (below). The key is the app's to store, next to the write (Corten keeps
-no store); `corten_cluster::begin` takes it as its idempotency key. A field that is not a UUID v4
+no store); `corten_cluster::begin` takes it as its idempotency key. It answers a write sent again
+as the one before only while the store keeps the key: `corten_cluster::prune` drops keys older than
+the age it is given, and a key sent after that is a new write. Its keys are unique across the whole
+cluster store, not per feed: while it is kept, a key a write to one feed used is refused on another
+(`corten_cluster::IdempotencyKeyReused`, which the app answers with a 422), never replayed there. A field that is not a UUID v4
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
 
@@ -1122,7 +1126,20 @@ inputs are checked as submit-key fields, not foreign elements named `input`. A s
 form already on the page, rather than a template, empties the copy's key field
 (`field.value = ""`) so the runtime gives it one. A field with no key draws nothing at random, so
 a page whose only key fields are a template's keeps its `ETag`, which `SubmitKey::field` takes
-away.
+away. A page that draws a key with `SubmitKey::field` is also never shared, whatever its route
+says: a cache that gave one visitor's page to the next would have the second visitor's submit
+taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
+without the CDN caching headers a middleware wrote (`CDN-Cache-Control`, `Surrogate-Control` and
+the others [caching](app.md#caching) lists), so the browser asks again before reusing it, the
+app does not keep it, and `corten dev` logs it; one that says `no-store` goes out `private,
+no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer it is drawn
+for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text carries no mark: a
+live stream's fragment
+(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A live
+stream whose fragments may draw a key is never `Public`, says `Cache-Control: private` itself and
+carries no CDN caching header ([live data](live-data.md)). Under `corten dev`, a stream is logged
+when a fragment it gives draws a key and its settled answer has no bare `private` in
+`Cache-Control` or carries one of the CDN caching headers [caching](app.md#caching) lists.
 
 An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
 reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
@@ -1130,7 +1147,9 @@ a retry, a malformed key is refused before the tool runs, and the tool gets a `S
 has no key field of its own, so the key is an argument, and a tool whose input requires one is
 marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
 when it stores it. Two differences from a form's key: the agent makes it, not the server,
-so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+so store it per caller and tool (an agent may reuse a key another sent), making it unique to that
+scope yourself, for example by prefixing the caller and tool to it, since a store such as
+`corten_cluster::begin`'s keeps one scope for every key; and answer a repeat
 whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
 and leave the field without a doc comment, which would replace the retry instruction in its
 description. A write that is idempotent already ("set the quantity to 5") needs no key and is
@@ -1197,13 +1216,39 @@ a redirect, not a bare `204` or `205`.
 When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
-one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its
-`failed` message, so no write fails silently; a screen that says it its own way (beside the
-form, as watchlist's watch form does with `on:corten:error={js::failed(..)}`, or by sending again
-from its script) calls `preventDefault()` in its handler (the event is cancelable), and the
-toaster says nothing. The form keeps what the user typed, so the page can say what happened and
-the user can send it again: with the same key after a 5xx or no whole answer,
-and with a new one after a whole answer below 500, as above. A script
+one or a navigation dispatches nothing. A read of the page can draw over the form while its write
+is out (a navigation started before the press, or the page reading itself again). A failure that
+comes while a navigation is on its way is said once none is left: each counts until it ends or is
+abandoned, and one that abandons another counts in its place. So the draw does not take away what
+the page says; a navigation that hangs (an answer or a stylesheet that never comes) holds it as long
+as it hangs. A form no navigation can draw over hears it at once: one outside `<main>` (in the
+layout's header, or a dialog there) and outside the layout's elements that are the page's (`page`
+in `html!`, or with an `id` one of them had, as a patch may draw one again without the mark),
+while no navigation on its way reads the whole page (one after a write). When the
+read drew over the form, the event goes to the form in its place: the one with its `id`, marked
+`data-patch`, with the same `action` and `method`, drawn with no navigation to another address
+since the press, that has sent no submit itself. A page a submit's answer draws (a `GET`
+`data-patch` form's `<main>`, a write's own page) is the page on screen, even while the address
+already shows a navigation still on its way, and these rules still pick the form. One limit follows:
+a `GET` `data-patch` form whose `action` is another path draws that path's `<main>` without counting
+as a navigation to another address, so a form there with the same `id`, `action` and `method`
+hears the failure of the page it drew over ([Choice 74](../design.md#choice-failure-in-place)). Any other form,
+one of another page with the same `id` among them, does not get it: the event goes to the
+document, where `on:document:corten:error` hears it, since an event on a form no longer in the
+page reaches no handler. corten-ui's
+`Toaster` in the layout says it with its `failed` message, so no write fails silently. A failure
+held for a navigation is said on the page that navigation draws, even one the user started after
+the write failed: the toaster closes a toast as a navigation starts, before this one is shown, so
+the failure is said on that page rather than lost. A screen
+that says it its own way (beside the form, as watchlist's watch form does with
+`on:corten:error={js::failed(..)}`, or by sending again from its script) calls
+`preventDefault()` in its handler (the event is cancelable), and the toaster says nothing. The
+form that sent it keeps what the user typed, so the page can say what happened and the user can
+send it again: with the same key after a 5xx or no whole answer, and with a new one after a whole
+answer below 500, as above. A form a read drew in its place keeps neither: it is the read's
+markup, with the values and the submit key the server drew, so sending it again is a new
+submission, which carries a new key, so the server cannot know it repeats the one that failed, and
+may apply both. A script
 that needs what the server decided on a submit that did draw (saved at version 4, refused,
 stale) gets it from the answer itself; see [Typed events](scripts.md#typed-events).
 
@@ -1318,11 +1363,17 @@ apart); an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..)
 (taken apart), and a `<form>` there that holds an element, where an element HTML's wherever it
 lands is in or around it (a form holding a `<div>`, or one in a `<div>`, but not one in an `<svg>`
 or `<math>`, which is theirs and kept as written), whose content is moved
-out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
-depends on what the patch began with or where the view is written, which a component's markup
-does not show: a `<p>` and then a `<tr>` lose the row on their own, but after a first `<tr>`
-both are kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>` as written, so a
-component that writes them compiles. Like every `html!` refusal, these rest only on the markup
+out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Other shapes depend on
+what the patch began with: a `<p>` and then a `<tr>` lose the row on their own, but after a first
+`<tr>` both are kept. Passing the first shape directly to `action.patch`, `action.patch_with_status`,
+`req.patch_or`, `req.invalid`, or `form.draw` fails when a build generates code for that call.
+`cargo check` alone does not run this check. A build checks the send even inside a literal
+`if false`; it does not wait for a request to take that branch. The doc-hidden
+`__private::PatchShape` is no longer dyn-compatible; supported APIs, including `dyn Patch`,
+are unchanged. The check also names the lost element when one kind of literal table part makes
+the browser drop or wrap another. The markup itself still compiles where
+it can be part of a larger view. Components, borrowed patches, collections and `corten::live`
+fragments are checked as drawn in debug builds. Like every `html!` refusal, these rest only on the markup
 between the two elements: with output the markup does not show before the lost element's start
 tag (an expression, a component, or a `<script>` or `<style>` whose text holds a `<`, in the
 first element, between the two, or in a later element that holds the lost one, before it), the
@@ -1335,7 +1386,7 @@ links Corten adds after its elements): the request fails with a 500, or the stre
 the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,
 `<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide, as a page's body would, so a patch
 with one is read both ways. A debug-build test of the app that draws such a patch fails with the
-500 too. A release build sends the patch as drawn, so a mix only some data
+500 too. A release build sends shapes the compiler cannot see as drawn, so a mix only some data
 draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
 covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
 end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
@@ -1923,7 +1974,9 @@ profile picture (`examples/watchlist/src/account.rs`) does both.
 A file the user downloads names itself on its `Media`: `.attachment("shipments-2026-10-29.csv")`
 to save it, `.inline("packing-slips.pdf")` to show it where the browser can and save it under
 that name. It stays private unless the handler says `Public`, so a user's export is not cached
-for anyone else. Corten writes a name that is not plain ASCII as `filename*=UTF-8''..` (RFC 6266),
+for anyone else; one that is `Public` and 1,024 bytes or more (a CSV, a PDF, a picture) is also kept
+by the app and given again without its handler until its lifetime ends
+([the pages the app keeps](app.md#the-pages-the-app-keeps)). Corten writes a name that is not plain ASCII as `filename*=UTF-8''..` (RFC 6266),
 which browsers read, and a quote or line break in a name taken from user data cannot change the
 header. The browser still cleans the name it saves (a `/`, a `:`, a control character), and an
 empty name lets it name the file from the URL. Link to a download with `download`
@@ -2196,8 +2249,30 @@ on the page it is in (a validation summary's link to the field it names, a skip 
 `href={FeedbackId.fragment()}`, a bare `#feedback` written the same way: it is a jump within the
 document, never a request, so it is an attribute value and not an address `req.redirect` takes.
 The browser scrolls to a route's place after a full load and after the runtime's navigation
-alike; the runtime fetches the page again even when only the `#id` differs from the address,
-since the write may have changed it.
+alike. A link, a form or a redirect the runtime follows (a push or a replace) runs the browser's
+own scroll to the fragment once the new page is drawn (the Navigation API's
+`NavigateEvent.scroll()`), so the element matches `:target` either way (a section CSS shows or
+highlights when linked to), an `<a name>` anchor is found as an `id` is, the fragment is
+percent-decoded as HTML decodes it, focus moves to the element when it can take focus, and a page
+without a place starts at its top. A focus handler runs in that scroll, as on a full load: the
+runtime neither scrolls nor moves focus after it, and an address it changes
+(`history.replaceState`) ends the navigation there. The runtime sees that focus moved by a
+`focus` listener it adds in the capture phase on `window` for the length of the scroll; a page
+listener added there earlier that stops the event (`stopImmediatePropagation`) and puts focus back
+hides the move, and the runtime may then scroll to the element again. Focus is then the Navigation API's to reset,
+as after any navigation the runtime draws, unless it moved during the navigation (to the element,
+or by the user while the page loaded), which stays. For an element that cannot take focus (a
+heading), a full load starts the next Tab from it; after a client swap, Chromium (159) starts it
+at the top instead, because the reset comes after the scroll and no browser API moves that
+starting point. Back and forward put back the scroll position instead, and a `data-keep-place`
+navigation keeps it.
+Firefox (159) may skip that scroll on a client swap, or leave `:target` unset or still on an
+element the swap left in place (outside `<main>`). The runtime then scrolls to the element itself
+when it is shown, but without the browser's steps that first reveal a target inside a hidden
+ancestor (`hidden="until-found"`), focus it and start the next Tab from it, which a full load at
+that address takes: such a target stays hidden. A section that must show when linked to does not
+rely on `:target` or `hidden="until-found"` alone there. The runtime fetches the page again even
+when only the `#id` differs from the address, since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment, and so does the whole page the
 runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser
@@ -2294,9 +2369,10 @@ whose status line would have said it shows it through `corten:notice` alone.
 
 A browser refuses a `Secure` cookie, and so a `__Host-` one, from a plain `http://` origin other
 than loopback: a tool served on the LAN as `http://automation.lan:3001` or `http://192.168.1.5`.
-Corten sees that in the write (an `Origin` of this host over `http://`, no `Sec-Fetch-Site`) and
-sets the notice in a plain `corten-notice` cookie instead (`HttpOnly`, `SameSite=Lax`, a minute),
-with nothing for the app to do. A page reads that one only from a request without
+Corten checks that the write has no `Sec-Fetch-Site` and that its `http://` `Origin` matches the
+[requested host and port](app.md#host-names): the target's authority when present, otherwise
+`Host`. For a matching non-loopback origin it sets the notice in a plain `corten-notice` cookie
+instead (`HttpOnly`, `SameSite=Lax`, a minute), with nothing for the app to do. A page reads that one only from a request without
 `Sec-Fetch-Site`, which current browsers send to every secure origin, so on HTTPS another site on
 the domain cannot plant a notice in it there; a browser too old to send it (Safari before 16.4,
 Firefox before 90) could be shown one, as text. An app served only over HTTPS says so with

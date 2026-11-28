@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { bindingFunctionText, bindingHash, indexBindingArtifact, bindingFunctionLocation } from "./binding-artifact.mjs";
 import { handlerIntrinsics, validateBindingIdentities } from "./binding-intrinsics.mjs";
 import { emittedModules, reactContract, frameworkInitializers, validateFrameworkClosure } from "./binding-modules.mjs";

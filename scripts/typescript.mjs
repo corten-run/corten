@@ -2,17 +2,17 @@
 // source virtual so checks of fixture text never write files or read an app's config.
 // The API is unstable, held to the exact compiler pin: docs/design.md#choice-handlers-checked-where-called.
 import { resolve, basename } from "node:path";
-import { API } from "typescript7/unstable/sync";
-import { createVirtualFileSystem } from "typescript7/unstable/fs";
-import { version } from "typescript7";
+import { API } from "typescript/unstable/sync";
+import { createVirtualFileSystem } from "typescript/unstable/fs";
+import { version } from "typescript";
 
-console.log(`TypeScript AST checks: ${version} (typescript7)`);
+console.log(`TypeScript AST checks: ${version}`);
 
 /**
  * @template T
  * @param {string} file
  * @param {string} text
- * @param {(source: import("typescript7/unstable/ast").SourceFile) => T} inspect
+ * @param {(source: import("typescript/unstable/ast").SourceFile) => T} inspect
  * @returns {T}
  */
 export function parse(file, text, inspect) {
@@ -23,7 +23,7 @@ export function parse(file, text, inspect) {
  * Parse a scan in one native process and snapshot, keeping files with the same basename distinct.
  * @template T
  * @param {{ file: string, text: string }[]} files
- * @param {(file: string, text: string, source: import("typescript7/unstable/ast").SourceFile) => T} inspect
+ * @param {(file: string, text: string, source: import("typescript/unstable/ast").SourceFile) => T} inspect
  * @returns {T[]}
  */
 export function parseFiles(files, inspect) {

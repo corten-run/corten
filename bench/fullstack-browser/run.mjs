@@ -7,18 +7,20 @@ import { createRequire } from "node:module";
 import { hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { candidates, emptyCells, parseOptions, publishPort, retainedFamilies, settings, sha256, validateTargets } from "./contract.mjs";
+import { browserContainers, browserCpus, candidates, emptyCells, parseOptions, publishPort, retainedFamilies, settings, sha256, validateTargets } from "./contract.mjs";
 import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { runJourney } from "./journey.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
+import { cleanupObserved } from "./document-navigation.mjs";
 import { recordSchema, retainCell, saveSummary } from "./cell-records.mjs";
 import { bindingArtifactFromImage } from "./binding-image.mjs";
 import { EvidenceStore } from "./native-evidence.mjs";
 import { captureSource, captureBuildContext, captureTools } from "./native-source.mjs";
-import { ExecutionLedger, participantSnapshot, collectDockerInventory } from "./native-execution.mjs";
+import { ExecutionLedger, participantSnapshot, participantLimitsMatch, collectDockerInventory } from "./native-execution.mjs";
 import { readRegular } from "../workloads/isolated/evidence.mjs";
+import { requireBrowserCommandCpuSet, requireBrowserContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -47,6 +49,7 @@ export async function command(binary, args, timeout = 30000, log = null, input =
 const docker = (args) => command("docker", args);
 const inspect = async (id) => JSON.parse(await docker(["inspect", id]))[0];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+class BrowserIsolationError extends Error {}
 export function captureLiveInputs(store, source) {
   return source.files.map((file) => {
     const body = readRegular(join(repo, file.path)), text = body.toString("utf8");
@@ -64,8 +67,8 @@ export function imageEvidence(info, commit) {
     buildContextSha256: labels["run.corten.browser.context-sha256"] ?? null };
 }
 export class OwnedDocker {
-  constructor(task, ledger = null) {
-    this.task = task; this.ledger = ledger; this.containers = new Set(); this.images = new Set(); this.network = null;
+  constructor(task, ledger = null, isolated = false) {
+    this.task = task; this.ledger = ledger; this.isolated = isolated; this.containers = new Set(); this.images = new Set(); this.network = null;
     this.participants = new Map(); this.volumes = new Map(); this.imageIds = new Map();
   }
   record(event) { return this.ledger?.append({ ...event, at: Date.now() }); }
@@ -99,6 +102,12 @@ export class OwnedDocker {
     const snapshot = participantSnapshot(info, image);
     this.record({ event: "participant", phase, ...meta, snapshot });
     this.volumes.set(id, snapshot.mounts.filter((m) => m.type === "volume").map((m) => m.volume));
+    if (this.isolated && meta.role !== "artifact" && phase !== "terminal") {
+      try {
+        assert.ok(participantLimitsMatch(snapshot, meta.role, true), "Docker resources differ");
+        if (phase === "running") requireBrowserContainerCpuSet(info, browserCpus[meta.role]);
+      } catch (error) { throw new BrowserIsolationError(`${meta.role}: ${error.message}`, { cause: error }); }
+    }
     return info;
   }
   get labels() { return ["--label", "agent.owner=codex", "--label", `agent.task=${this.task}`]; }
@@ -175,6 +184,11 @@ export class OwnedDocker {
     return errors;
   }
 }
+export function browserDockerLimits(role, isolated) {
+  assert.ok(Object.hasOwn(browserContainers, role), "not a timed browser container role");
+  const { cpu, memoryBytes } = browserContainers[role];
+  return ["--cpus", String(cpu), "--memory", String(memoryBytes), ...(isolated ? ["--cpuset-cpus", browserCpus[role]] : [])];
+}
 async function address(id) {
   const info = await inspect(id);
   const port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
@@ -218,7 +232,7 @@ export function groupQualificationPassed(summary, reports, readCell = (cell) => 
       const cell = readCell(matches[0], app), e = cell.evidence;
       return cell.outcome === "captured" && cell.qualificationPassed === true
         && e?.functionalChecksPassed === true && e.domChecksPassed === true && empty(e.failures) && empty(e.gaps)
-        && e.nativeCleanup?.outcome === "observed" && e.cleanup?.contextClosed === true && e.provenance?.stillSameProcess === true
+        && cleanupObserved(e) && e.cleanup?.contextClosed === true && e.provenance?.stillSameProcess === true
         && checked[0].outcome === "captured" && checked[0].functionalPassed === true;
     });
   });
@@ -227,6 +241,7 @@ export function groupQualificationPassed(summary, reports, readCell = (cell) => 
 export async function run(args) {
   const options = Array.isArray(args) ? parseOptions(args) : args;
   assert.match(options.round ?? "", /^w[1-9]\d*$/);
+  if (options.isolated) requireBrowserCommandCpuSet(browserCpus.browser);
   const targets = options.targets ? validateTargets(JSON.parse(readFileSync(resolve(options.targets), "utf8")))
     : Object.fromEntries(candidates.map((app) => [app, { image: `cb-marketplace-${app}` }]));
   for (const target of Object.values(targets)) target.readback ??= { path: "/api/alerts" };
@@ -254,7 +269,7 @@ export async function run(args) {
   save();
   const store = new EvidenceStore(folder), ledger = new ExecutionLedger(store, { task, commit, startedAt: Date.now() });
   const readCell = (cell) => cell.evidence === null ? cell : { ...cell, evidence: store.readJSON(cell.evidence) };
-  const owned = new OwnedDocker(task, ledger);
+  const owned = new OwnedDocker(task, ledger, options.isolated);
   const native = summary.native = { schema: "native-browser-run/v2", source: null, sourceBinding: null, inputsBefore: null, inputsAfter: null,
     toolsBefore: null, toolsAfter: null, execution: null, targets: store.record("targets", targets), contexts: [], browserTerminal: null, manifest: null };
   const observation = { store, contexts: native.contexts, byContext: new Map(), byRequest: new Map(), round: options.round };
@@ -314,11 +329,11 @@ export async function run(args) {
       save();
     }
     const network = await owned.createNetwork();
-    const upstreamImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0];
+    const upstreamImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067"]))[0];
     owned.record({ event: "created", kind: "image", id: upstreamImage.Id, owned: false });
     summary.upstreamImage = imageEvidence(upstreamImage, commit);
     const upstreamName = `${task}-upstream`;
-    const upstream = await owned.start(upstreamName, ["--network", network, "--cpus", "1", "--memory", "256m", "-p", "127.0.0.1::8080",
+    const upstream = await owned.start(upstreamName, ["--network", network, ...browserDockerLimits("upstream", options.isolated), "-p", "127.0.0.1::8080",
       "-v", `${here}:/runner:ro`, "-v", `${folder}:/fixtures:ro`], upstreamImage.Id, ["node", "/runner/upstream.mjs", "/fixtures/marketplace.json"]);
     const upstreamBase = await address(upstream);
     await ready(upstreamBase, "/__browser/counters", () => interrupted);
@@ -326,6 +341,7 @@ export async function run(args) {
       const r = await fetch(upstreamBase + "/__browser/counters", { signal: AbortSignal.timeout(5000) }); assert.equal(r.status, 200); return r.json();
     };
     const { chromium } = await import("@playwright/test");
+    if (options.isolated) requireBrowserCommandCpuSet(browserCpus.browser);
     browser = await chromium.launch({ headless: true });
     const executable = chromium.executablePath();
     native.toolsBefore = store.record("tools-before", captureTools(store, { browserExecutable: executable }));
@@ -354,7 +370,7 @@ export async function run(args) {
         const index = summary.cells[app].findIndex((c) => c.case === profile.key);
         try {
           const name = `${task}-${app}-${plan.cases.indexOf(profile)}`;
-          id = await owned.start(name, ["--network", network, "--cpus", "1", "--memory", "1g", "-p", publishPort(app),
+          id = await owned.start(name, ["--network", network, ...browserDockerLimits("application", options.isolated), "-p", publishPort(app),
             "-v", `${folder}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${profile.source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
             "-e", `API_BASE=http://${upstreamName}:8080`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`], image.Id, [], { role: "application", app, case: profile.key });
           const base = await address(id);
@@ -376,7 +392,10 @@ export async function run(args) {
           }
           summary.cells[app][index] = retainCell(store, app, index, cell);
           console.log(`${app} ${profile.key}: ${cell.outcome}; ${cell.evidence.steps.length} real actions; qualification=${cell.qualificationPassed}`);
-        } catch (e) { summary.cells[app][index] = { case: profile.key, outcome: "failed", reason: e.message, qualificationPassed: false, evidence: null }; }
+        } catch (e) {
+          if (e instanceof BrowserIsolationError) throw e;
+          summary.cells[app][index] = { case: profile.key, outcome: "failed", reason: e.message, qualificationPassed: false, evidence: null };
+        }
         finally {
           if (id) try { await owned.remove(id); } catch (e) { summary.cleanupFailures.push(e.message); }
           save();

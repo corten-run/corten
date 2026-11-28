@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { readRetiredDOM } from "./retired.mjs";
+import { replacedRealm } from "./lifecycle.mjs";
 
 // Installed before native scripts. It observes browser primitives, never removes
 // a native listener, clears a native timer, or supplies framework cleanup.
@@ -210,8 +211,7 @@ export class ResourceAudit {
   }
   retired(before, after) {
     if (!before?.scope || before.scope === after.scope) return null;
-    if (before.realm !== after.realm) return { scope: before.scope, owned: null, basis: "Native document realm replaced", probeAvailable: false,
-      reason: "A destroyed realm cannot supply a fresh retired-DOM observation; no zero counts or successful event probe are invented" };
+    if (before.realm !== after.realm) return replacedRealm(before, after);
     const found = after.scopes.find((s) => s.scope === before.scope);
     return { scope: before.scope, owned: found?.owned ?? null, connected: found?.connected ?? null, basis: "Document-start native primitive ledger", probeAvailable: Boolean(found) };
   }
@@ -227,8 +227,8 @@ export class ResourceAudit {
       const anchor = this.page.locator('header a[href="/"]').first();
       if (!await anchor.count()) throw new Error("No native navigation-away link is available for cleanup");
       evidence.navigation = { via: "native-header-link", path: "/", at: performance.now() };
-      await anchor.click();
-      const deadline = performance.now() + timeoutMs;
+      await anchor.click(this.javaScriptEnabled ? {} : { timeout: timeoutMs });
+      const deadline = (this.javaScriptEnabled ? performance.now() : evidence.navigation.at) + timeoutMs;
       let after;
       while (performance.now() < deadline) {
         try {
@@ -245,6 +245,21 @@ export class ResourceAudit {
       evidence.after = after;
       evidence.retired = this.retired(evidence.before, after);
       if (!evidence.retired?.probeAvailable) {
+        if (evidence.retired && evidence.before.realm !== after?.realm) {
+          // Commit proves replacement, not completion of the landing document's parser work.
+          const landingDeadline = evidence.navigation.at + timeoutMs;
+          await this.page.waitForLoadState("load", { timeout: Math.max(1, landingDeadline - performance.now()) });
+          if (this.javaScriptEnabled) {
+            const loaded = await this.checkpoint();
+            if (loaded.realm !== after.realm || !loaded.scope) throw new Error("Cleanup landing scope changed or is unavailable at load");
+            evidence.after = loaded;
+            evidence.retired = this.retired(evidence.before, loaded);
+          }
+          await network.settle(offset, landingDeadline);
+          const settledAt = performance.now();
+          if (settledAt > landingDeadline) throw new Error("Cleanup landing exceeded the request deadline");
+          evidence.landingSettledAt = settledAt;
+        }
         if (this.lifecycle && evidence.before.realm !== after?.realm) evidence.platformProbe = await this.lifecycle.probeRealm(evidence.before.realm);
         evidence.outcome = "unsupported";
         throw new Error(evidence.retired?.reason ?? "Native navigation did not retire the marketplace scope");

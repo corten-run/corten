@@ -5,15 +5,19 @@ import { join } from "node:path";
 import test from "node:test";
 import { inspectSaved } from "../workloads/isolated/adapters/hardening.mjs";
 import { records } from "../marketplace/fixtures.mjs";
-import { qualification, qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { boundedQualification } from "./qualification.mjs";
 import { livePaths } from "../fullstack/conformance.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
+import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
+import { boundedReadPlan } from "./bounded-requests.mjs";
 import { recoverySchedule } from "./dependency-recovery-contract.mjs";
-import { artifacts, digest, savedFiles, savedProofVersion } from "./evidence.mjs";
-import { terminalHealthPaths } from "./lifecycle.mjs";
+import { artifacts, digest, savedFiles, savedProofVersion, phaseInputs, verifyArtifacts } from "./evidence.mjs";
+import { ownedContainerRecorder, terminalHealthPaths } from "./lifecycle.mjs";
 import { assessNative } from "./native.mjs";
-import { apps, budgets, matrix, nativeGroup, parseArgs, registryDigest, schema } from "./plan.mjs";
+import { apps, budgets, matrix, nativeGroup, parseArgs, registryDigest, schema, boundedRequestsVersion, deploymentQualificationVersion, phases } from "./plan.mjs";
 import { verify } from "./verify.mjs";
+import { finalizeCell } from "./run.mjs";
 
 const budget = budgets(), phase = "dependency-recovery", commit = "a".repeat(40), subjectSha256 = "b".repeat(64);
 const origin = 1_000_000_000_000n, bootId = "01234567-89ab-cdef-0123-456789abcdef";
@@ -66,6 +70,80 @@ test("replays API recovery and fixture bypass without attack or defense results"
     assert.deepEqual(Object.keys(capture.resources), ["before", "during", "after"]);
     for (const field of ["attack", "defense", "targetOutcome", "sourceObservation"]) assert.ok(!Object.hasOwn(capture, field));
   }
+});
+
+test("bounded capture keeps a complete target failure and rejects a mixed legacy journal", () => {
+  const input = fixture("fixture");
+  const phase = input.settings.phase = "request-limit";
+  const config = boundedProbeConfig({ phase, source: input.source, mode: "direct" }, budget, "hardening-123456789abc");
+  const targetOrigin = config.target.origin, upstreamOrigin = config.upstream;
+  const { reads } = boundedReadPlan(phase, targetOrigin, upstreamOrigin);
+  const samples = reads.map((request, i) => ({ ...request, startMs: i * 20, endMs: i * 20 + 5,
+    receipt: i === 1 ? { ...receipt, status: 503, bodyBase64: "" } : receipt }));
+  const row = { type: "bounded-requests", version: boundedRequestsVersion, phase, source: input.source,
+    targetOrigin, upstreamOrigin, samples, upstream: null, completeAtMs: samples.at(-1).endMs };
+  const raw = [input.raw[0], row];
+  const capture = assembleBounded({ ...input, raw, config });
+  assert.equal(capture.schema, "native-bounded-requests-capture/v1");
+  assert.equal(capture.assessment.status, "target-failure"); assert.equal(capture.assessment.healthy, false);
+  assert.equal(capture.terminal.healthy, true);
+  assert.throws(() => assembleBounded({ ...input, raw: [...raw, { type: "attack" }], config }));
+  input.settings.terminalHealthPaths.application = null;
+  input.lifecycle.application.health = { path: null, response: null };
+  const missing = assembleBounded({ ...input, raw, config });
+  assert.equal(missing.assessment.status, "target-failure");
+  assert.equal(missing.terminal.disposition, "missing-liveness");
+});
+
+test("isolated runner finalizes a bounded cell using owned receipts, not the empty cleanup inventory", (t) => {
+  const folder = mkdtempSync(join(tmpdir(), "hardening-finalize-test-"));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const out = join(folder, "cell"); mkdirSync(out);
+  const input = fixture("fixture");
+  const cell = { key: "corten/fixture/direct/request-limit", mode: "direct", source: input.source, phase: "request-limit", status: "not-run" };
+  const runId = "hardening-123456789abc";
+  input.settings.phase = cell.phase;
+  input.config = boundedProbeConfig(cell, budget, runId);
+  const targetOrigin = input.config.target.origin, upstreamOrigin = input.config.upstream;
+  const samples = boundedReadPlan(cell.phase, targetOrigin, upstreamOrigin).reads.map((spec, i) =>
+    ({ ...spec, startMs: i * 20, endMs: i * 20 + 5, receipt }));
+  input.raw = [input.raw[0], { type: "bounded-requests", version: boundedRequestsVersion, phase: cell.phase, source: cell.source,
+    targetOrigin, upstreamOrigin, samples, upstream: null, completeAtMs: samples.at(-1).endMs }];
+
+  const recorder = ownedContainerRecorder({ folder, runId, command: () => assert.fail("offline finalization must not invoke Docker") });
+  const wall = Date.parse(input.raw[0].wallAtStart);
+  const before = {}, after = {};
+  for (const [i, [step, role, cpus]] of [["application", "applicationDirect", "1"], ["upstream", "upstream", "2"], ["probe", "apparatus", "4-5"]].entries()) {
+    const pid = 100 + i, service = input.lifecycle[step]?.before;
+    const created = service ? { ...service, State: { ...service.State, Pid: pid } }
+      : { Id: digest(step), Image: "sha256:" + digest("image " + step), State: { Pid: 0 } };
+    const startedAt = service?.State.StartedAt ?? new Date(wall - 10).toISOString();
+    const terminal = { State: { StartedAt: startedAt, FinishedAt: new Date(wall + 60).toISOString() } };
+    recorder.records.push({ intent: { cell: cell.key, step, role }, created, terminal });
+    const path = `/system.slice/docker-${created.Id}.scope`;
+    before[step] = { id: created.Id, imageId: created.Image, startedAt, pid, startTicks: "12345", path, atMs: wall - 5,
+      groups: [{ path, files: { "cgroup.procs": `${pid}\n`, "cpuset.cpus.effective": `${cpus}\n` } }] };
+    after[step] = { ...before[step], atMs: wall + 50 };
+  }
+  // A preceding cell's launch must not substitute for this cell's receipt.
+  recorder.records.unshift({ intent: { ...recorder.records[0].intent, cell: "previous-cell" } });
+  assert.deepEqual(input.cleanup.containers, []);
+  const cpuFile = join(out, "cpu-roles.json");
+  const cpuRoles = { schema: "native-hardening-cpu-roles/v1", before, after };
+  writeFileSync(cpuFile, JSON.stringify(cpuRoles));
+  assert.throws(() => finalizeCell(out, cell, true, input.cleanup.containers, input));
+  assert.equal(cell.status, "not-run");
+  finalizeCell(out, cell, true, recorder.records, input);
+  const capture = JSON.parse(readFileSync(join(out, "capture.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));
+  verifyArtifacts(out, manifest);
+  assert.ok(manifest.some((row) => row.path === "cpu-roles.json"));
+  assert.equal(cell.status, "observed");
+  assert.equal(cell.apparatusValid, true);
+  assert.equal(cell.capture, cell.key + "/capture.json");
+  assert.equal(capture.assessment.status, "accepted");
+  assert.deepEqual(cell.boundedRequests, capture.assessment);
+  assert.equal(cell.boundedTerminalHealthy, true);
 });
 
 function openCircuit(source = "api", boundarySuccess = false) {
@@ -176,57 +254,77 @@ test("rejects forged success, missing dependency evidence, and invalid native re
   assert.throws(() => assembleRecovery(input), /unexpected upstream counter delta/);
 });
 
-function apiQualification() {
+function apiQualification(missingLive) {
   const base = { ms: 5, status: 200, headers: {}, bodyLength: 0 };
   const page = Buffer.from("<p>marketplace</p>");
   const probes = Object.fromEntries(["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost",
-    "afterConnections", "bigHead", "page500", "json500", "afterUpstream", "slow"].map((key) => [key, base]));
+    "page500", "json500", "afterUpstream"].map((key) => [key, base]));
   const live = { ...base, path: healthPath };
-  return qualification({ ...probes, page: { ...base, body: page.toString("base64"), bodyLength: page.length }, form: "no native POST form",
-    live, liveness: [live], unfinishedHead: { closedMs: 500 }, cap: { below: 1, held: 2, releaseMs: 5,
-      belowHeld: 200, whileHeld: 429, afterwards: 200, afterRelease: 200 } }, "api");
+  return boundedQualification({ ...probes, page: { ...base, body: page.toString("base64"), bodyLength: page.length }, form: "no native POST form",
+    ...(missingLive ? { liveness: livePaths.map((path) => ({ ...base, path, status: 404 })) } : { live, liveness: [live] }) }, "api");
 }
 
-function apiControls() {
+function apiControls(missingLive) {
   const nonce = "a".repeat(24), changed = { ...expected, title: nonce };
   const controllers = ["reset-before", "mutate", "count-json", "reset-count", "count-page", "fault-503", "fault-302", "reset-after", "verify-reset"]
-    .map((step) => ({ step, response: response(200, JSON.stringify(step.startsWith("count-") ? { requests: { item_1: 1 } } : { status: 200, answers: {}, requests: {} })) }));
+    .map((step) => ({ step, response: response(200, JSON.stringify(step.startsWith("count-") ? { status: 200, answers: { 200: 1 }, requests: { item_1: 1 } } : { status: 200, answers: {}, requests: {} })) }));
   const responses = [["mutated-json", 200, JSON.stringify(changed)], ["mutated-page", 200, nonce], ["fault-json-503", 503], ["fault-page-503", 503],
-    ["live-503", 200], ["fault-json-302", 502], ["fault-page-302", 502], ["restored-json", 200, JSON.stringify(expected)]]
+    ...(missingLive ? [] : [["live-503", 200]]), ["fault-json-302", 502], ["fault-page-302", 502], ["restored-json", 200, JSON.stringify(expected)]]
     .map(([step, status, body]) => ({ step, response: response(status, body) }));
   return { schema: "native-hardening-controls/v1", source: "api", host: { allowed: response(200), denied: response(400) },
-    liveness: { path: healthPath, baseline: response(200), negative: response(404) }, api: { nonce, expected: changed, original: expected, controllers, responses } };
+    liveness: { path: missingLive ? null : healthPath, baseline: missingLive ? null : response(200), negative: response(404) },
+    api: { nonce, expected: changed, original: expected, controllers, responses } };
 }
 
-test("real offline replay feeds a recovered sample window with unhealthy terminal service to the adapter as an app failure", async (t) => {
+test("malformed controller counts are not an app failure; valid empty counters still are", () => {
+  const q = apiQualification(true), raw = apiControls(true);
+  const set = (step, data) => { raw.api.controllers.find(r => r.step === step).response = response(200, JSON.stringify(data)); };
+  set("count-json", { requests: {}, answers: {}, status: 200 });
+  assert.equal(assessNative(raw, q).sourceControl, "target-functional-failure");
+  for (const malformed of [{}, { requests: [], answers: {}, status: 200 }, { requests: { item_1: -1 }, answers: {}, status: 200 }]) {
+    set("count-page", malformed);
+    assert.throws(() => assessNative(raw, q), /controller counter/);
+  }
+});
+
+test("a server error during health discovery is not an absent endpoint", () => {
+  const q = apiQualification(true), raw = apiControls(true);
+  assert.equal(assessNative(raw, q).liveness, "missing");
+  q.probes.liveness[0].status = 503;
+  const assessment = assessNative(raw, boundedQualification(q.probes, "api"));
+  assert.deepEqual(assessment.targetFunctionalFailures, [{ control: "liveness-discovery", path: livePaths[0], status: 503 }]);
+  assert.notEqual(assessment.liveness, "missing");
+});
+
+test("real offline replay distinguishes an undiscovered endpoint from a terminal HTTP failure", async (t) => {
   const prefix = join(tmpdir(), "dependency-recovery-replay-"), folder = mkdtempSync(prefix);
   t.after(() => { assert.ok(folder.startsWith(prefix)); rmSync(folder, { recursive: true }); });
   const input = fixture(), cells = matrix(), cell = cells.find((c) => c.app === "corten" && c.phase === phase && c.mode === "direct" && c.source === "api");
-  const options = parseArgs(["w17", "--build", "--review", subjectSha256]), q = apiQualification(), controls = apiControls();
+  const options = parseArgs(["w17", "--build", "--review", subjectSha256]);
   const runId = "recovery-replay-fixture", tools = Object.fromEntries(["node", "checker", "edge", "cert"].map((name) => [name, { Id: "sha256:" + digest(name) }]));
-  const files = ["Cargo.lock", "Cargo.toml", "package.json", "package-lock.json", "bench/hardening/run.mjs", "bench/hardening/verify.mjs",
+  const files = [...new Set(["Cargo.lock", "Cargo.toml", "package.json", "package-lock.json", "bench/hardening/run.mjs", "bench/hardening/verify.mjs",
+    "bench/hardening/evidence.mjs", ...phases.flatMap(phaseInputs),
     "bench/hardening/dependency-recovery-capture.mjs", "bench/hardening/dependency-recovery-contract.mjs", "bench/hardening/dependency-recovery-probe.mjs",
-    "bench/hardening/dependency-recovery-upstream.mjs", "bench/hardening/resource-sample.mjs", "bench/marketplace/corten/Dockerfile"]
+    "bench/hardening/dependency-recovery-upstream.mjs", "bench/hardening/resource-sample.mjs", "bench/marketplace/corten/Dockerfile"])]
     .map((path) => ({ path, sha256: digest(path) }));
   const sourceHash = digest(JSON.stringify(files.filter((f) => /^(Cargo\.|bench\/marketplace\/corten\/)/.test(f.path)).map((f) => [f.path, f.sha256])));
   const out = join(folder, cell.key); mkdirSync(out, { recursive: true }); mkdirSync(join(folder, "fixtures"));
   const put = (name, value) => writeFileSync(join(out, name), JSON.stringify(value));
-  const writeSummary = (capture, terminalHealthy = capture.terminal.healthy) => {
+  const writeSummary = (capture, q, controls, terminalHealthy = capture.terminal.healthy) => {
     Object.assign(cell, { status: "observed", parity: "passed", apparatusValid: true, nativeMissingFeatures: q.missing, nativeAssessment: assessNative(controls, q),
       dependencyRecovery: capture.assessment, dependencyTerminalHealthy: terminalHealthy });
     writeFileSync(join(folder, "summary.json"), JSON.stringify({ schema, options, budget, cells, runId, tools, commit, registryDigest, complete: false,
       groupReady: false, failures: [], cleanupFailures: [], nativeGroup: nativeGroup(cells), fixtureSha256: digest(readFileSync(join(folder, "fixtures/marketplace.json"))),
-      savedProofVersion, semanticReceiptsVersion: 2, lifecycleVersion: 4, nativeControlsVersion: 1, deploymentQualificationVersion: 1 }));
+      savedProofVersion, boundedRequestsVersion, lifecycleVersion: 4, nativeControlsVersion: 1, deploymentQualificationVersion }));
     writeFileSync(join(folder, "run-manifest.json"), JSON.stringify(savedFiles(folder).filter((f) => f.path !== "run-manifest.json")));
   };
   writeFileSync(join(folder, "fixtures/marketplace.json"), JSON.stringify(records()));
-  assert.deepEqual(input.settings.terminalHealthPaths, terminalHealthPaths(q));
   const deployment = { processes: [], provenance: input.provenance, totalBudget: budget.resources, network: { Name: runId + "-net", Id: digest(runId), Containers: {} } };
   for (const p of input.settings.deployment.processes) {
     const life = input.lifecycle[p.id], origin = input.provenance.find(({ id }) => id === p.id), before = life.before;
     deployment.processes.push({ ...p, containerId: before.Id }); deployment.network.Containers[before.Id] = {};
     if (p.id === "application") {
-      before.Config = { Labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": q.profile,
+      before.Config = { Labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": featureProfile,
         "run.corten.hardening.source": sourceHash }, Env: [`PROFILE=${qualificationSettings.nativeProfile}`, `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`, "MARKETPLACE_SOURCE=api"] };
       origin.source = `${commit}:sha256:${sourceHash}`;
     } else {
@@ -236,26 +334,70 @@ test("real offline replay feeds a recovered sample window with unhealthy termina
     put(p.id + "-before.json", { info: before, top: "PID COMMAND\n42 fixture\n" });
     origin.config = digest(readFileSync(join(out, p.id + "-before.json")));
   }
-  put("settings.json", input.settings); put("deployment.json", deployment); put("qualification.json", q); put("native-controls.json", controls);
+  put("deployment.json", deployment);
   put("native-parity.json", input.parity); put("parity.json", input.parity); put("cleanup.json", input.cleanup);
   writeFileSync(join(out, "raw.jsonl"), input.raw.map((row) => JSON.stringify(row)).join("\n") + "\n");
   const binding = { request: { group: "hardening", round: "w17", commit, recipe: "native-defaults" }, subjectSha256,
     selection: { group: "hardening", apps, contractSha256: registryDigest }, sources: { commit, files },
     execution: { invocation: { executable: "node", argv: ["bench/hardening/run.mjs", "w17", "--build", "--review", subjectSha256],
       cwd: "repository-root", shell: false }, effectiveOptions: options, settings: budget }, resources: { budget: budget.resources } };
-  for (const [status, terminalHealthy, expectedOutcome] of [[200, true, "not-run"], [503, false, "failed"]]) {
-    input.lifecycle.application.health.response.status = status;
+  const applicationHealth = structuredClone(input.lifecycle.application.health);
+  for (const [missingLive, status, terminalDisposition, expectedOutcome] of [
+    [false, 200, "recovered", "not-run"], [false, 503, "not-recovered", "failed"],
+    [true, 200, "missing-liveness", "not-run"], [true, 503, "not-recovered", "failed"],
+  ]) {
+    const q = apiQualification(missingLive), controls = apiControls(missingLive);
+    const terminalHealthy = terminalDisposition === "recovered";
+    input.settings.terminalHealthPaths = terminalHealthPaths(q);
+    input.lifecycle.application.health = missingLive ? { path: null, response: null } : structuredClone(applicationHealth);
+    input.lifecycle[missingLive ? "upstream" : "application"].health.response.status = status;
+    put("settings.json", input.settings); put("qualification.json", q); put("native-controls.json", controls);
     for (const [id, life] of Object.entries(input.lifecycle)) put(id + "-lifecycle.json", life);
-    const capture = assembleRecovery(input); put("capture.json", capture); put("manifest.json", artifacts(out)); writeSummary(capture);
+    const capture = assembleRecovery(input); put("capture.json", capture); put("manifest.json", artifacts(out)); writeSummary(capture, q, controls);
     assert.equal(capture.assessment.status, "recovered");
-    assert.deepEqual(verify(folder).dependencyRecovery, [{ key: cell.key, assessment: capture.assessment, terminalHealthy }]);
+    const verified = verify(folder);
+    assert.equal(verified.connectionFloodResistance, "Connection-flood resistance: not measured.");
+    assert.deepEqual(verified.dependencyRecovery, [{ key: cell.key, assessment: capture.assessment, terminalHealthy, terminalDisposition }]);
     const result = await inspectSaved(binding, folder);
     assert.equal(result.status, "blocked", "one synthetic cell cannot qualify the native run");
     assert.deepEqual(result.outcomes.find((o) => o.app === cell.app), { app: cell.app, outcome: expectedOutcome });
-    if (!terminalHealthy) {
-      writeSummary(capture, true);
+    if (missingLive && status === 503) {
+      put("capture.json", { ...capture, terminal: { ...capture.terminal, disposition: "missing-liveness" } });
+      put("manifest.json", artifacts(out)); writeSummary(capture, q, controls);
+      assert.throws(() => verify(folder), /saved capture differs from raw observations/);
+      assert.equal((await inspectSaved(binding, folder)).status, "invalid");
+    } else if (!terminalHealthy) {
+      writeSummary(capture, q, controls, true);
       assert.throws(() => verify(folder), /saved dependency terminal health differs from replay/);
       assert.equal((await inspectSaved(binding, folder)).status, "invalid");
     }
   }
+
+  // No timing took place. Only the saved preflight responses establish a
+  // target failure; retaining or inventing a failure label is insufficient.
+  const partial = matrix(), stopped = partial.find(c => c.app === cell.app && c.phase === "request-limit" && c.source === "api" && c.mode === "deployed-edge");
+  const dir = join(folder, stopped.key); mkdirSync(dir, { recursive: true });
+  const persist = (path, value) => writeFileSync(join(dir, path), JSON.stringify(value));
+  const q = apiQualification(false), controls = apiControls(false);
+  controls.host.allowed = response(503);
+  Object.assign(stopped, { status: "invalid", failedStage: "edge-native-controls", failureKind: "target-functional-failure",
+    apparatusValid: false, edgeAssessment: assessNative(controls, q, "deployed-edge") });
+  persist("edge-qualification.json", q); persist("edge-native-controls.json", controls);
+  const failure = { kind: stopped.failureKind, stage: stopped.failedStage };
+  persist("failure.json", failure);
+  const summary = JSON.parse(readFileSync(join(folder, "summary.json")));
+  Object.assign(summary, { cells: partial, nativeGroup: nativeGroup(partial), failures: [{ key: stopped.key, ...failure }] });
+  writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
+  const seal = () => writeFileSync(join(folder, "run-manifest.json"), JSON.stringify(savedFiles(folder).filter(f => f.path !== "run-manifest.json")));
+  seal();
+  const result = await inspectSaved(binding, folder);
+  assert.equal(result.status, "blocked"); assert.equal(result.attemptComplete, false);
+  assert.equal(result.outcomes.find(o => o.app === stopped.app).outcome, "not-run", "unbound failure stays diagnostic");
+  for (const wrong of [{ url: "http://127.0.0.1:8080/marketplace/en-US/item_1" }, { method: "POST" }, { host: "127.0.0.1:8080" }]) {
+    controls.host.allowed = { ...response(503), url: "https://localhost:8080/marketplace/en-US/item_1", method: "GET", host: "localhost:8080", ...wrong };
+    persist("edge-native-controls.json", controls); seal();
+    assert.equal((await inspectSaved(binding, folder)).status, "invalid");
+  }
+  controls.host.allowed = response(200); persist("edge-native-controls.json", controls); seal();
+  assert.equal((await inspectSaved(binding, folder)).status, "invalid");
 });

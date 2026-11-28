@@ -184,25 +184,39 @@ unavailable Docker samples remain failures, not zero CPU or discarded rows.
 ## Qualification and credentials
 
 The existing fixed qualification-worker CLI still takes its settings JSON path.
-It calls unchanged marketplace `qualify`/`validateQualification` on original native
-probe answers in memory. It additionally writes adjacent
+It calls marketplace `qualify` on original native probe answers in memory under
+`marketplace-production/v2`, using only the async `conform-probe` entry for completed
+ordinary HTTP responses. It additionally writes adjacent
 `qualification-evidence.json` (`mixed-native-qualification-evidence/v1`). Identity
-is `app`, `source`, `imageId`, `nativeProfile`. An ordered `events` journal is saved
+is `app`, `source`, `imageId`, `nativeProfile` and the qualification `profile`.
+An ordered `events` journal is saved
 before/after each actual probe, retaining input/response hashes and filtered numeric,
 status, timing and contract-relevant response-header facts. Request bodies, request
 headers, discovered action URLs and raw page bodies are never serialized. A killed
 worker leaves `qualification-in-progress`; execution/filter failures retain fixed
 reasons and all preceding safe events. No arbitrary exception text is saved.
+For Trusted Types, the CSP projection retains only Corten's fixed policy name
+`corten`, never arbitrary names. Nonce and hash bytes remain masked. The projection
+also retains Corten's empty allowlists for Bluetooth, local fonts and window
+management; other values for those features are unfilterable.
 
 On completion, the sidecar also contains `qualification`, `rawProbeSha256`, original
 per-probe hashes, and `pageProjection` (original page hash and retained byte spans).
-The saved `qualification` is replayed through the unchanged current contract and
-must have exactly the original profile, source, cells, missing features and eligibility.
+The saved `qualification` is replayed through the bounded contract and must have exactly
+the original profile, source, cells, missing and unmeasured features, and eligibility.
+The profile is bound to the timing summary and worker receipt. The producer's source
+proof binds the shared bounded acquisition module, not the retired probe scripts.
+Archived v1 journals remain read-only evidence for their own profile and cannot
+qualify a v2 measurement. Full replay of a v1 run requires its original measured
+checkout and dependencies: the verifier checks that the source files match the
+run. Reading the archived journal in a newer checkout does not requalify it.
 Negative/unsupported features are retained, not turned into success. This is not an
 independent source audit or proof that arbitrary native code behaves correctly.
 The exact completed initial page/JSON unhealthy-response prefix can independently
 replay a rejecting qualification gate. Transport, filtering and interrupted probes
 do not become that target-failure variant.
+
+Connection-flood resistance: not measured.
 
 Filtering is deliberately restrictive and fails closed:
 

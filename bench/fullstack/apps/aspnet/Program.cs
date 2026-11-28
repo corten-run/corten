@@ -50,9 +50,15 @@ void Client(HttpClient c)
     c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080");
     if (matched) c.Timeout = TimeSpan.FromSeconds(10);
 }
-builder.Services.AddHttpClient<ItemSource>(Client);
+// Every upstream client drops a pooled connection idle for 4 s, under the 5 s keep-alive each
+// benchmark upstream advertises, so no read is written to a connection the upstream is closing
+// (bench/fullstack/README.md). The handler's own default is 1 minute.
+var upstreamIdle = TimeSpan.FromSeconds(4);
+builder.Services.AddHttpClient<ItemSource>(Client)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionIdleTimeout = upstreamIdle });
 builder.Services.AddSingleton<ItemSource>();
-builder.Services.AddHttpClient<CatalogSource>(Client);
+builder.Services.AddHttpClient<CatalogSource>(Client)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionIdleTimeout = upstreamIdle });
 builder.Services.AddSingleton<CatalogSource>();
 builder.Services.AddHttpClient<MarketplaceSource>(c =>
     {
@@ -60,8 +66,9 @@ builder.Services.AddHttpClient<MarketplaceSource>(c =>
         c.Timeout = Timeout.InfiniteTimeSpan;
     })
     // Do not drain a cancelled body for connection reuse after this request has ended.
-    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, MaxResponseDrainSize = 0 });
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, MaxResponseDrainSize = 0, PooledConnectionIdleTimeout = upstreamIdle });
 builder.Services.AddSingleton<MarketplaceSource>();
+builder.Services.AddSingleton(new MarketplacePublicOrigin(Environment.GetEnvironmentVariable("MARKETPLACE_PUBLIC_ORIGIN")));
 builder.Services.AddSingleton<LivePrices>();
 builder.Services.AddSingleton<AlertStore>();
 if (matched)

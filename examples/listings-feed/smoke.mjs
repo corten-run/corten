@@ -4,6 +4,7 @@ import http from "node:http";
 import { chromium } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
+import { ready } from "../../scripts/ready.mjs";
 
 const base = process.argv[2];
 if (!base) throw new Error("usage: node examples/listings-feed/smoke.mjs <base url>");
@@ -22,6 +23,10 @@ const snapshot = async () => {
   return { seq: body.seq, rows: new Map(body.rows.map((/** @type {any} */ r) => [r.id, r])) };
 };
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+// The app listens only once it has migrated, seeded and started its cluster, and until then the page
+// load would get nothing (#2140), so the smoke begins when the app says it is ready.
+await ready(base);
 
 const browser = steady(await chromium.launch());
 /** What the page holds and what it asked for that did not arrive, printed when a wait times out. */
@@ -90,10 +95,15 @@ try {
   };
   const before = await committed();
   const changesBefore = Number((await outputs()).changes);
+  // The status line's live region is on the page before the answer, and the patch puts the line
+  // inside it, so a screen reader reads it.
+  const region = await page.$("[role=status]");
   await page.click("form button");
   await page.waitForFunction(() => (document.querySelector("[role=status]")?.textContent ?? "") !== "");
   const after = await caughtUp();
   check("the form's write commits once and its answer patches the status line", after === before + 1, `${before} -> ${after}`);
+  const kept = await region?.evaluate((el) => el.isConnected && el === document.querySelector("[role=status]") && el.textContent !== "");
+  check("the answer lands inside the live region that was there before it", kept === true, await page.evaluate(() => document.querySelector("[role=status]")?.outerHTML ?? "none"));
   const wrong = await matches();
   check("each shown row is redrawn from the change the feed brings", wrong.length === 0, wrong.length ? wrong.slice(0, 5).join(", ") : `${Number((await outputs()).changes) - changesBefore} change(s)`);
 
@@ -117,6 +127,41 @@ try {
   check("a submit sent again with its key commits once", resent.every((s) => s < 300) && once === after + 5 + 1, `${resent} -> seq ${once}`);
   check("no console errors", errors.length === 0, errors.join(" | "));
 
+  // A submit whose key a write to another feed already used (seller s2's: the JSON route commits
+  // that write under the key, with nothing in it, since s2 has no listings) is refused, not
+  // answered as that write's replay: a 422 that moves nothing, said in the same live region, and
+  // the form gets a new key, so pressing again moves the lows.
+  const used = crypto.randomUUID();
+  const other = await fetch(`${base}/api/feeds/s2/market`, { method: "POST", headers: { "idempotency-key": used } });
+  check("another feed's write takes the key first", other.ok, `${other.status} ${await other.text()}`);
+  const keyField = "form input[data-submit]";
+  await page.$eval(keyField, (el, key) => void (/** @type {HTMLInputElement} */ (el).value = key), used);
+  const unmovedBefore = await committed();
+  const errorsBefore = errors.length;
+  const answered = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/sellers/${seller}/market`);
+  await page.click("form button");
+  const refusal = await answered;
+  // A refusal the page does not show fails the checks below, which say what it showed.
+  await page.waitForFunction(
+    ([field, key]) =>
+      (document.querySelector("[role=status]")?.textContent ?? "").startsWith("Nothing moved") &&
+      /** @type {HTMLInputElement | null} */ (document.querySelector(field))?.value !== key,
+    [keyField, used],
+    { timeout: 10_000 },
+  ).catch(() => {});
+  const unmoved = await committed();
+  check("a key another feed's write used is a 422 that moves nothing", refusal.status() === 422 && unmoved === unmovedBefore, `${refusal.status()}, seq ${unmovedBefore} -> ${unmoved}`);
+  const said = await region?.evaluate((el) => (el.isConnected && el === document.querySelector("[role=status]") ? el.textContent : null));
+  check("the refusal is said inside the live region that was there before it", said?.includes("already used for another write") === true, String(said));
+  const renewed = await page.$eval(keyField, (el) => /** @type {HTMLInputElement} */ (el).value);
+  check("the refused form gets a new key", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(renewed) && renewed !== used, renewed);
+  await page.click("form button");
+  await page.waitForFunction(() => (document.querySelector("[role=status]")?.textContent ?? "").startsWith("Market lows moved"));
+  const movedAgain = await caughtUp();
+  check("pressing again moves the lows with the new key", movedAgain === unmoved + 1, `${unmoved} -> ${movedAgain}`);
+  // The browser reports the 422 it was answered; nothing else is an error.
+  const unexpected = errors.slice(errorsBefore).filter((e) => !/status of 422/.test(e));
+  check("no other console errors", unexpected.length === 0, unexpected.join(" | "));
   // Without JavaScript the form posts, and the page it lands on shows the write.
   const plain = await (await browser.newContext({ javaScriptEnabled: false })).newPage();
   await plain.goto(`${base}/sellers/${seller}`);
@@ -145,7 +190,7 @@ try {
   const pageRes = await fetch(`${base}/sellers/${seller}`);
   check(
     "the unstaged sequence meets no middleware and says its own caching, with nosniff and a sandbox",
-    polled.ok && /^\d+$/.test(polledBody) && !("x-instance" in polledHeaders) && polledHeaders["cache-control"] === "no-store" &&
+    polled.ok && /^\d+$/.test(polledBody) && !("x-instance" in polledHeaders) && polledHeaders["cache-control"] === "private, no-store" &&
       polledHeaders["x-content-type-options"] === "nosniff" && polledHeaders["content-security-policy"] === "sandbox",
     `${polled.status} ${polledBody} ${JSON.stringify(polledHeaders)}`,
   );

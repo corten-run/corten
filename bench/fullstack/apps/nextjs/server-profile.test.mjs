@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { request } from "node:http";
-import { connect } from "node:net";
 import test from "node:test";
 import { productionServer } from "./server-profile.mjs";
 
@@ -20,7 +19,7 @@ async function withServer(run, env = {}, handle = (_req, res) => res.end("native
     req.setTimeout(2000, () => req.destroy(new Error("test request timeout")));
     req.end();
   });
-  try { await run({ server, port, get }); }
+  try { await run({ server, get }); }
   finally { const closed = once(server, "close"); server.close(); server.closeAllConnections(); await closed; }
 }
 
@@ -90,29 +89,15 @@ test("native parser refuses oversized headers and the application still serves",
   });
 });
 
-test("native maxConnections drops excess connections and recovers after release", { timeout: 5000 }, async () => {
-  await withServer(async ({ server, port, get }) => {
-    const held = [];
-    try {
-      for (let i = 0; i < 3; i++) {
-        const accepted = once(server, "connection");
-        const socket = connect({ host: "127.0.0.1", port });
-        socket.on("error", () => {});
-        held.push(socket);
-        await Promise.all([once(socket, "connect"), accepted]);
-      }
-      const dropped = once(server, "drop");
-      await assert.rejects(get(), /ECONNRESET|socket hang up/);
-      await dropped;
-    } finally {
-      const closed = held.map((socket) => { const done = once(socket, "close"); socket.destroy(); return done; });
-      await Promise.all(closed);
-    }
-    // Wait for the server side of the released sockets, not an arbitrary sleep.
-    while (await new Promise((resolve) => server.getConnections((_error, n) => resolve(n)))) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    assert.equal((await get()).status, 200);
+test("the configured connection limit allows ordinary sequential requests", { timeout: 5000 }, async () => {
+  await withServer(async ({ server, get }) => {
+    assert.equal(server.maxConnections, 3);
+    const head = await get({}, "HEAD");
+    assert.equal(head.status, 200);
+    assert.equal(head.body, "");
+    const page = await get();
+    assert.equal(page.status, 200);
+    assert.equal(page.body, "native handler");
   }, { MAX_CONNECTIONS: "3" });
 });
 

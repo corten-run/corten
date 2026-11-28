@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { groupNames } from "../registry.mjs";
-import { inspectEvidence, readRegular, tree } from "./evidence.mjs";
+import { checkMarketplaceContract, inspectEvidence, readRegular, tree } from "./evidence.mjs";
 import { admitted } from "../../marketplace/feature-contract.mjs";
 import { apparatusSources, workerAware } from "../../catalog/apparatus.mjs";
 
@@ -95,7 +95,7 @@ export async function inspectNative(binding, folder) {
       }
       if (group === "client-heavy" && result.attemptComplete) {
         const native = await (await import("../../client-heavy/verify.mjs")).validateSaved({ folder, round, commit });
-        assert.ok(["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3"].includes(native.schema));
+        assert.ok(["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3", "client-heavy-saved-verification/v4"].includes(native.schema));
         result = { ...result, hostSubject: { executionWindow: native.executionWindow, processWindows: native.processWindows,
           toolIdentities: native.toolIdentities, subjectSha256: native.subjectSha256, filesSha256: tree(folder).sha256 } };
       }
@@ -122,6 +122,7 @@ export async function inspectNative(binding, folder) {
       }
       result = missing(binding); result.blockers = ["native-replay-incomplete"];
       if (group === "localized-marketplace") {
+        checkMarketplaceContract(binding, summary);
         // This fixed native API returns its fully replayed summary, not a status
         // envelope. It includes observed excluded/stopped targets, not just winners.
         assert.ok(isDeepStrictEqual(saved, summary), "saved native summary differs"); assert.equal(saved.complete, true);

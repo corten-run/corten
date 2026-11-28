@@ -286,9 +286,25 @@ impl Policy {
         self
     }
 
-    /// Another origin allowed to send writes with the user's cookies (`https://admin.example.com`).
+    /// Another origin allowed to send writes with the user's cookies (`https://admin.example.com`):
+    /// a scheme, a host (an ASCII name, an IPv4 address or a bracketed IPv6 one) and a port
+    /// when it is not the scheme's default. A write is let through when its `Origin` is this
+    /// origin as a browser writes it there (RFC 6454): the scheme and host lowercase, and a
+    /// default port (`:443` for `https`, `:80` for `http`) and a trailing `/` left out, so
+    /// `https://Admin.example.com:443/` is `https://admin.example.com`. Another scheme is the
+    /// origin an app's webview or a browser extension sends, like `capacitor://localhost` or
+    /// `chrome-extension://<id>`, kept with any port it has
+    /// (docs/design.md#choice-allowed-origin-schemes).
+    /// Anything else, which no `Origin` could ever equal (no scheme, a path, a query, a user,
+    /// a wildcard, a list, `null`, or a scheme no page sends from: `file`, `data`, `blob`,
+    /// `javascript`, `about`, `ws`, `wss`, `ftp`), is a startup panic, and a name outside ASCII
+    /// is one that says to write it in its `xn--` form:
+    ///
+    /// ```should_panic
+    /// corten::security::Policy::new().allow_origin("https://*.example.com");
+    /// ```
     pub fn allow_origin(mut self, origin: &str) -> Self {
-        self.allowed_origins.push(origin.trim_end_matches('/').to_ascii_lowercase());
+        self.allowed_origins.push(allowed_origin("Policy::allow_origin", origin));
         self
     }
 
@@ -324,6 +340,9 @@ impl Policy {
     /// A name the app answers to (`shop.example`; `.shop.example` for it and every subdomain).
     /// By default a request is answered only when its `Host` is `localhost` (or a name under
     /// it), an IP address or missing; any other gets `421 Misdirected Request` before routing.
+    /// (A request with two `Host` lines or one that is no host at all, or an HTTP/1.1 request
+    /// the server read with none, is not one HTTP allows, and gets `400 Bad Request` whatever
+    /// names the app has.)
     /// Otherwise a page on a name someone else controls could point that name at this machine
     /// (DNS rebinding) and use every route as if it were the app's own origin, the same-origin
     /// check included, which matters most for an app on loopback, where "only this machine can
@@ -347,18 +366,19 @@ impl Policy {
         self
     }
 
-    /// Answers whatever `Host` a request names, for an app whose names are not known in advance
+    /// Answers whatever host a request asks for, for an app whose names are not known in advance
     /// (one served under each customer's own domain) and that checks them itself. See
-    /// [`Policy::host`] for what this gives up.
+    /// [`Policy::host`] for what this gives up. A request HTTP does not allow is still a `400`.
     pub fn any_host(mut self) -> Self {
         self.hosts = None;
         self
     }
 
-    /// True when the app answers to the request's host: `localhost` or a name under it, an IP
-    /// address, a name given to [`Policy::host`], or no host at all (HTTP/1.0; a test's request).
-    pub(crate) fn answers(&self, req: &Request) -> bool {
-        self.hosts.as_deref().is_none_or(|hosts| named(req, hosts))
+    /// What the request's target and `Host` say of it ([`Asked`]): one HTTP does not allow, one
+    /// for another host, or one for the app, whose hosts are `localhost` or a name under it, an
+    /// IP address, a name given to [`Policy::host`], or none at all (HTTP/1.0; a test's request).
+    pub(crate) fn asked(&self, req: &Request, origin: &mut Origin<'_>) -> Asked {
+        asked(req, || origin.host_lines(), self.hosts.as_deref())
     }
 
     /// The same check apart from the policy, for the routes that say `unstaged`.
@@ -1228,6 +1248,7 @@ fn names(line: &[u8], key: &[u8]) -> bool {
 /// Whether a `Content-Type` is a document a browser may run scripts in: HTML, or any XML (XHTML,
 /// SVG, `text/xml`, a `+xml` type), which runs an XHTML `<script>` in it; the media type is
 /// compared without case (RFC 9110 8.3.1).
+#[inline]
 fn html(kind: &[u8]) -> bool {
     // What Corten's own pages send, compared first.
     if kind == b"text/html; charset=utf-8" {
@@ -1322,12 +1343,13 @@ impl Applied {
     /// from a link, and a script's own `fetch` is held to `connect-src`. Only the request's
     /// headers are kept; the page and its policy are worked out for a redirect to another address.
     #[cfg(debug_assertions)]
-    pub(crate) fn form_check(&self, method: &Method, uri: &http::Uri, headers: &HeaderMap) -> Option<FormCheck> {
+    pub(crate) fn form_check(&self, req: &Request, origin: &mut Origin<'_>, action: bool) -> Option<FormCheck> {
         // A report-only policy stops nothing: the browser reports the redirect and follows it. A
         // form sends only GET and POST, and a GET form cannot be told from a link.
-        if self.report_only || *method != Method::POST {
+        if self.report_only || *req.method() != Method::POST {
             return None;
         }
+        let headers = req.headers();
         // A body a form cannot send (JSON from a webhook or a native client) is not a form's.
         let form_type = |kind: &[u8]| {
             let kind = kind.split(|&b| b == b';').next().unwrap_or(b"").trim_ascii();
@@ -1341,35 +1363,36 @@ impl Applied {
         // The runtime's `data-patch` submission is a `fetch` too, and is checked: the same form
         // without JavaScript is a submission the browser holds to `form-action`.
         let scripted = headers.get("sec-fetch-mode").is_some_and(|mode| mode.as_bytes() != b"navigate");
-        let action = headers.get(crate::page::MODE_HEADER).is_some_and(|mode| mode.as_bytes() == b"action");
         if scripted && !action {
             return None;
         }
         Some(FormCheck {
             forms: self.forms.clone(),
-            uri: uri.clone(),
-            host: headers.get(header::HOST).cloned(),
-            origin: headers.get(header::ORIGIN).cloned(),
+            uri: req.uri().clone(),
+            host: origin.host().cloned(),
+            origin: origin.value().cloned(),
             referer: headers.get(header::REFERER).cloned(),
-            site: headers.get("sec-fetch-site").cloned(),
+            site: origin.site().cloned(),
             action,
         })
     }
 
-    /// The 403 for a write another site sent, if this is one. `origins` are the extra origins
-    /// allowed for this request's route (an API mount's).
-    pub fn refuse(&self, method: &Method, headers: &HeaderMap, origins: &[String]) -> Option<Response> {
-        if self.same_origin(method, headers) || allowed(headers, origins) {
+    /// The 403 for a write another site sent. A mount's extra origins can send token-based writes,
+    /// never a write using ambient cookies.
+    pub fn refuse(&self, req: &Request, origin: &mut Origin<'_>, from_mount: bool) -> Option<Response> {
+        if !Origin::checks(req.method()) || from_mount || origin.permits(&self.allowed_origins, self.hsts, req.uri()) {
             return None;
         }
-        Some((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response())
+        Some(crate::cache::unshared((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response()))
     }
 
     /// The security headers. `csp` is the policy of the area at the request's path (the app's
     /// when it is in none), and `nonce` the request's nonce slot, or `None` for a response that is
     /// never a page (an API route, a misdirected request), which gets a CSP that allows nothing and
-    /// the app's opener policy, and still the area's referrer policy.
-    pub fn headers(&self, res: &mut Response, nonce: Option<&NonceSlot>, csp: &Csp) {
+    /// the app's opener policy, and still the area's referrer policy. `vary` says whether the
+    /// answer has a `Vary` already, as the app's last stage found when it settled the language
+    /// (`crate::page::vary_on_language`).
+    pub fn headers(&self, res: &mut Response, nonce: Option<&NonceSlot>, csp: &Csp, vary: bool) {
         let page = nonce.map(|nonce| (nonce, csp));
         let block = if page.is_some() { res.extensions_mut().remove::<StyleBlock>() } else { None };
         let headers = res.headers_mut();
@@ -1377,7 +1400,7 @@ impl Applied {
         // existing one, or added): the map grows at most once, and not at all when a page reserved
         // enough. Asking for more than this reallocates an error page's map for nothing. A
         // document's `Permissions-Policy` fits in what a page reserves (13), with room left.
-        headers.reserve(6 + usize::from(self.hsts) + usize::from(!headers.contains_key(header::VARY)));
+        headers.reserve(6 + usize::from(self.hsts) + usize::from(!vary));
         let csp_header =
             if self.report_only { header::CONTENT_SECURITY_POLICY_REPORT_ONLY } else { header::CONTENT_SECURITY_POLICY };
         let ours = csp.referrer;
@@ -1437,6 +1460,86 @@ impl Applied {
         }
     }
 
+    /// The lines [`Applied::headers`] and [`crate::cache::settle`] give an answer that brings none
+    /// of them and asks for nothing of its own (no nonce, no style block), made once for a scope:
+    /// `csp` is the scope's and `page` whether its answers can be pages (not an API's). Those two
+    /// write it, so it holds what they would insert, whatever the policy.
+    pub(crate) fn lines(&self, csp: &Csp, page: bool) -> HeaderMap {
+        let mut res = Response::new(crate::body::Body::empty());
+        let slot = page.then(NonceSlot::default);
+        self.headers(&mut res, slot.as_ref(), csp, false);
+        let seen = crate::cache::Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false };
+        crate::cache::settle(&mut res, seen, "");
+        res.into_parts().0.headers
+    }
+
+    /// Adds each of its scope's `lines` ([`Applied::lines`]) to `res`, in one pass, in place of
+    /// [`Applied::headers`], [`Applied::document`] and [`crate::cache::settle`], when those would
+    /// leave the same lines in the same order: an answer with no header, or its `Content-Type`
+    /// alone, that is not a document or a worker's script those give lines of its own, on a
+    /// request that took no nonce and drew no style block, and without a [`crate::cache::Cache`]
+    /// mark (one whose header a middleware took out is settled by its mark). `nonce` and `csp`
+    /// are what [`Applied::headers`] is given, and `caller` whether something read a [`crate::Caller`]: such
+    /// an answer is marked [`crate::cache::Personal`], as `settle` marks it, the one thing `settle`
+    /// does differently for who asked to an answer this takes. Returns whether it did; `res` is
+    /// untouched when not.
+    #[inline]
+    pub(crate) fn ready(
+        &self,
+        res: &mut Response,
+        lines: &HeaderMap,
+        nonce: Option<&NonceSlot>,
+        csp: &Csp,
+        caller: bool,
+    ) -> bool {
+        // A page brings more than its type: it is told apart here, without a call.
+        res.headers().len() <= 1 && self.give(res, lines, nonce, csp, caller)
+    }
+
+    /// [`Applied::ready`], for an answer with one header at most.
+    #[inline(never)]
+    fn give(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp, caller: bool) -> bool {
+        let kind = match res.headers().iter().next() {
+            None => None,
+            Some((name, kind)) if name == header::CONTENT_TYPE => Some(kind),
+            Some(_) => return false,
+        };
+        // A `Cache` answer whose header a middleware took out is settled by its mark.
+        if crate::cache::Typed::marked(res) {
+            return false;
+        }
+        if let Some(slot) = nonce {
+            if slot.taken().is_some() || res.extensions().get::<StyleBlock>().is_some() {
+                return false;
+            }
+            // What `document` adds to: a document, and a worker's script.
+            if self.adds_to_documents(csp)
+                && (kind.is_some_and(|kind| html(kind.as_bytes()))
+                    || res.extensions().get::<crate::pwa::WorkerScript>().is_some())
+            {
+                return false;
+            }
+        }
+        let headers = res.headers_mut();
+        // Room for them and one more (`Vary`), as `headers` reserves: the map grows at most once.
+        headers.reserve(lines.len() + 1);
+        for (name, value) in lines {
+            headers.append(name, value.clone());
+        }
+        // One visitor's, for an app that relays it inline ([`crate::cache::Personal`]).
+        if caller {
+            res.extensions_mut().insert(crate::cache::Personal);
+        }
+        true
+    }
+
+    /// Whether [`Applied::document`] has a line to add under `csp`: a feature to deny, or where
+    /// reports go. Read by it and by [`Applied::ready`], which leaves it the answers it adds to.
+    #[inline]
+    fn adds_to_documents(&self, csp: &Csp) -> bool {
+        csp.permissions.is_some() || self.reporting.is_some()
+    }
+
     /// `Permissions-Policy` ([`Feature`]) on a document, an HTML or XML answer that is not one the
     /// runtime swaps in (`corten-page`, `corten-patch`, to its own request): those are drawn into a
     /// page that keeps the policy it loaded with, and a stylesheet, a script or JSON has no features
@@ -1448,7 +1551,7 @@ impl Applied {
     /// `swap`: the request was the runtime's (a navigation or a patch), so its answer may be one
     /// it draws into the page; any other request's answer loads as what it is, whatever it says.
     pub(crate) fn document(&self, res: &mut Response, csp: &Csp, swap: bool) {
-        if csp.permissions.is_none() && self.reporting.is_none() {
+        if !self.adds_to_documents(csp) {
             return;
         }
         let headers = res.headers();
@@ -1522,15 +1625,18 @@ impl Policy {
     /// cannot set: `same-origin` is accepted as is (so a proxy that rewrites `Host` cannot break
     /// writes) and anything cross-site is refused. A browser sends it only to a secure origin
     /// (and Chromium and Firefox not on a WebSocket handshake); older browsers not at all. Then
-    /// `Origin` must be an `http` or `https` origin on `Host`: the same name and port (a missing
+    /// `Origin` must be an `http` or `https` origin on the requested authority (the target's,
+    /// or the `Host` line when the target has none): the same name and port (a missing
     /// one is the scheme's default), and over `https`, or on loopback, when the app is HTTPS only
     /// ([`Policy::hsts`]). A request with neither header is not from a browser (a native app, an
     /// agent, a webhook); those authenticate with tokens, not ambient cookies, so it passes.
-    pub fn same_origin(&self, method: &Method, headers: &HeaderMap) -> bool {
-        if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+    /// Pass the request's URI as received: a path-only URI compares `Origin` with `Host`
+    /// even if the original target had an authority.
+    pub fn same_origin(&self, method: &Method, uri: &http::Uri, headers: &HeaderMap) -> bool {
+        if !Origin::checks(method) {
             return true;
         }
-        write_allowed(&self.allowed_origins, self.hsts, headers)
+        write_allowed(&self.allowed_origins, self.hsts, uri, headers)
     }
 
     /// The other origins [`Policy::allow_origin`] lets write.
@@ -1548,35 +1654,77 @@ impl Policy {
 /// origins), or a client that is not a browser: [`Policy::same_origin`] past its methods, and
 /// what a switch to a WebSocket is held to ([`crate::upgrade::Upgrade`]). `https_only`: the app
 /// is served only over HTTPS ([`Policy::hsts`]).
-pub(crate) fn write_allowed(allowed: &[String], https_only: bool, headers: &HeaderMap) -> bool {
-    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()).map(|o| o.trim_end_matches('/').to_ascii_lowercase());
-    if let Some(origin) = &origin {
-        if allowed.iter().any(|allowed| allowed == origin) {
-            return true;
+pub(crate) fn write_allowed(allowed: &[String], https_only: bool, uri: &http::Uri, headers: &HeaderMap) -> bool {
+    Origin::new(headers).permits(allowed, https_only, uri)
+}
+
+/// The security checks' view of the original request. The host check, CORS and the debug form
+/// check can use the same values without looking up their names again, even when a header is absent.
+pub(crate) struct Origin<'a> {
+    headers: &'a HeaderMap,
+    value: Option<Option<&'a HeaderValue>>,
+    site: Option<Option<&'a HeaderValue>>,
+    host: Option<Option<&'a HeaderValue>>,
+}
+
+impl<'a> Origin<'a> {
+    pub(crate) fn new(headers: &'a HeaderMap) -> Self {
+        Self { headers, value: None, site: None, host: None }
+    }
+
+    pub(crate) fn value(&mut self) -> Option<&'a HeaderValue> {
+        *self.value.get_or_insert_with(|| self.headers.get(header::ORIGIN))
+    }
+
+    fn site(&mut self) -> Option<&'a HeaderValue> {
+        *self.site.get_or_insert_with(|| self.headers.get("sec-fetch-site"))
+    }
+
+    pub(crate) fn host(&mut self) -> Option<&'a HeaderValue> {
+        *self.host.get_or_insert_with(|| self.headers.get(header::HOST))
+    }
+
+    /// [`host_lines`], with the line kept for [`Origin::host`].
+    fn host_lines(&mut self) -> (Option<&'a HeaderValue>, bool) {
+        let (host, more) = host_lines(self.headers);
+        self.host = Some(host);
+        (host, more)
+    }
+
+    fn checks(method: &Method) -> bool {
+        !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+    }
+
+    fn permits(&mut self, allowed: &[String], https_only: bool, uri: &http::Uri) -> bool {
+        let origin = self.value().and_then(|v| v.to_str().ok()).map(|o| o.trim_end_matches('/').to_ascii_lowercase());
+        if let Some(origin) = &origin {
+            if allowed.iter().any(|allowed| allowed == origin) {
+                return true;
+            }
         }
-    }
-    match headers.get("sec-fetch-site").map(HeaderValue::as_bytes) {
-        // `none`: the user started it (typed URL, bookmark); no other site can cause it.
-        Some(b"same-origin" | b"none") => return true,
-        Some(_) => return false,
-        None => {}
-    }
-    match origin {
-        None => true,
-        Some(origin) if origin == "null" => false,
-        Some(origin) => origin_of_host(&origin, https_only, headers.get(header::HOST)),
+        match self.site().map(HeaderValue::as_bytes) {
+            // `none`: the user started it (typed URL, bookmark); no other site can cause it.
+            Some(b"same-origin" | b"none") => return true,
+            Some(_) => return false,
+            None => {}
+        }
+        match origin {
+            None => true,
+            Some(origin) if origin == "null" => false,
+            Some(origin) => origin_of_host(&origin, https_only, request_host(uri, || self.host())),
+        }
     }
 }
 
-/// Whether `origin` (an `Origin` header) is a page's on the request's `Host` ([`on_host`]), over
+/// Whether `origin` (an `Origin` header) is a page's on the requested authority ([`on_host`]), over
 /// `https` or loopback when the app is `https_only`. Without `https_only` the scheme is not
 /// compared: behind a proxy that ends TLS the app cannot tell which it is served over, so a
 /// plain-http page on its host passes (docs/design.md#limit-origin-scheme). Out of line: only a
 /// request without `Sec-Fetch-Site` comes here.
 #[cold]
 #[inline(never)]
-fn origin_of_host(origin: &str, https_only: bool, host: Option<&HeaderValue>) -> bool {
-    let host = host.and_then(|host| host.to_str().ok()).unwrap_or("");
+fn origin_of_host(origin: &str, https_only: bool, host: Option<RequestHost<'_>>) -> bool {
+    let host = host.and_then(RequestHost::text).unwrap_or("");
     match on_host(origin, host) {
         Some(("https", _)) => true,
         Some((_, at)) => !https_only || loopback(at),
@@ -1584,7 +1732,7 @@ fn origin_of_host(origin: &str, https_only: bool, host: Option<&HeaderValue>) ->
     }
 }
 
-/// `origin` (an `Origin` header) when it is a page's on `host` (a `Host` header): its scheme,
+/// `origin` (an `Origin` header) when it is a page's on the requested authority `host`: its scheme,
 /// `http` or `https`, and its `host[:port]`. The name and port must be `host`'s, a port left out
 /// being the scheme's default (`https://app.example` is on `app.example:443`). `None` for another
 /// scheme (an app's own, `capacitor://localhost`, is no page on this host) or an origin with a
@@ -1608,6 +1756,128 @@ pub(crate) fn on_host<'a>(origin: &'a str, host: &str) -> Option<(&'static str, 
     bare(scheme, at).eq_ignore_ascii_case(bare(scheme, host)).then_some((scheme, at))
 }
 
+/// `origin`, a setting naming another origin ([`Policy::allow_origin`],
+/// [`crate::Api::allow_origin`]), as a browser writes it in `Origin`, which a request's is
+/// compared with as it is; a startup panic naming `setting` when it is not one origin.
+pub(crate) fn allowed_origin(setting: &str, origin: &str) -> String {
+    match serialize_origin(origin) {
+        Ok(serialized) => serialized,
+        Err(NotOrigin::NonAsciiName) => panic!(
+            "corten: {setting} takes one origin with an ASCII name, as a browser sends it in Origin, not {origin:?}: write the name in its xn-- (punycode) form"
+        ),
+        Err(NotOrigin::Form) => panic!(
+            "corten: {setting} takes one origin, a scheme and a host with an optional port, like https://partner.example or capacitor://localhost (no path, query, user, wildcard or list), not {origin:?}"
+        ),
+        Err(NotOrigin::NeverSent { scheme, why }) => panic!(
+            "corten: {setting} takes one origin a browser sends in Origin, not {origin:?}: no browser sends a {scheme}: origin, since {why} (docs/design.md#choice-allowed-origin-schemes)"
+        ),
+    }
+}
+
+/// Why a setting is not an origin [`serialize_origin`] can write.
+#[derive(Debug, PartialEq)]
+enum NotOrigin {
+    /// Not `scheme://host[:port]`, or a part of it is malformed.
+    Form,
+    /// The name is well formed but for letters outside ASCII, which a browser sends as `xn--`.
+    NonAsciiName,
+    /// A scheme no `Origin` ever carries, with why.
+    NeverSent { scheme: &'static str, why: &'static str },
+}
+
+/// `scheme` (lowercase) and why a browser never sends it in `Origin`, for one it never does.
+fn never_an_origin(scheme: &str) -> Option<(&'static str, &'static str)> {
+    const NULL: &str = "a page loaded from it sends Origin: null";
+    const FILE: &str = "a browser sends Origin: null from it, and file:// would name every local file, not one app (an Electron app registers a standard scheme)";
+    const CREATOR: &str = "a document from it has the origin of the page that made it";
+    const NO_PAGE: &str = "no page is served from it";
+    Some(match scheme {
+        "file" => ("file", FILE),
+        "data" => ("data", NULL),
+        "blob" => ("blob", CREATOR),
+        "javascript" => ("javascript", CREATOR),
+        "about" => ("about", CREATOR),
+        "ws" => ("ws", NO_PAGE),
+        "wss" => ("wss", NO_PAGE),
+        "ftp" => ("ftp", NO_PAGE),
+        _ => return None,
+    })
+}
+
+/// `origin` serialized as RFC 6454 section 6.1 and the URL Standard's origin serializer write it
+/// for `http` and `https`: the scheme, `://`, the host and `:port` unless the port is the
+/// scheme's default. Another scheme (RFC 3986 section 3.1: a letter, then letters, digits, `+`,
+/// `-` and `.`) is kept the same way but with every port written, as an app's webview or a
+/// browser extension sends it (`capacitor://localhost`, `chrome-extension://<id>`;
+/// docs/design.md#choice-allowed-origin-schemes), except the schemes no `Origin` carries
+/// ([`never_an_origin`]: `file`, `data`, `blob`, `javascript`, `about`, `ws`, `wss` and
+/// `ftp`). The scheme and a name are lowercased, an
+/// address written in its standard form and the port as a number, and one trailing `/` is
+/// allowed. An error for anything else: no host, a user, a path, a query, a fragment, a name with
+/// other than letters, digits, `-`, `_` and `.`, a name ending in a number that is not an IPv4
+/// address, or a port that is not one.
+fn serialize_origin(origin: &str) -> Result<String, NotOrigin> {
+    let origin = origin.strip_suffix('/').unwrap_or(origin);
+    let (scheme, rest) = origin.split_once(':').ok_or(NotOrigin::Form)?;
+    if !is_scheme(scheme) {
+        return Err(NotOrigin::Form);
+    }
+    let scheme = scheme.to_ascii_lowercase();
+    if let Some((scheme, why)) = never_an_origin(&scheme) {
+        return Err(NotOrigin::NeverSent { scheme, why });
+    }
+    let at = rest.strip_prefix("//").ok_or(NotOrigin::Form)?;
+    let default_port = match scheme.as_str() {
+        "https" => Some(443),
+        "http" => Some(80),
+        _ => None,
+    };
+    let (host, port) = split_port(at);
+    let host = match host.strip_prefix('[') {
+        Some(address) => {
+            let address: std::net::Ipv6Addr =
+                address.strip_suffix(']').and_then(|address| address.parse().ok()).ok_or(NotOrigin::Form)?;
+            match address.to_ipv4_mapped() {
+                // Rust writes these `::ffff:1.2.3.4`; the URL Standard writes every piece in hex.
+                Some(_) => {
+                    let pieces = address.segments();
+                    format!("[::ffff:{:x}:{:x}]", pieces[6], pieces[7])
+                }
+                None => format!("[{address}]"),
+            }
+        }
+        None => {
+            let name = host.to_ascii_lowercase();
+            let labels = name.strip_suffix('.').unwrap_or(&name);
+            let letter = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+            if labels.split('.').any(|label| label.is_empty() || !label.bytes().all(letter)) {
+                // Wrong only for its letters outside ASCII: a name its author wrote in Unicode.
+                let unicode = !labels.is_ascii()
+                    && labels.split('.').all(|label| !label.is_empty() && label.bytes().all(|b| !b.is_ascii() || letter(b)));
+                return Err(if unicode { NotOrigin::NonAsciiName } else { NotOrigin::Form });
+            }
+            // A name whose last label is a number is an IPv4 address to a browser.
+            if labels.rsplit('.').next().is_some_and(|last| last.bytes().all(|b| b.is_ascii_digit())) {
+                labels.parse::<std::net::Ipv4Addr>().map_err(|_| NotOrigin::Form)?.to_string()
+            } else {
+                name
+            }
+        }
+    };
+    let port = match port {
+        None => None,
+        Some(port) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            let port: u16 = port.parse().map_err(|_| NotOrigin::Form)?;
+            (Some(port) != default_port).then_some(port)
+        }
+        Some(_) => return Err(NotOrigin::Form),
+    };
+    Ok(match port {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
 /// Whether `at` (`host[:port]`) is loopback, which a browser counts as secure over plain `http`:
 /// `localhost`, a name under it, `127.0.0.0/8` or `[::1]`.
 pub(crate) fn loopback(at: &str) -> bool {
@@ -1621,80 +1891,561 @@ pub(crate) fn loopback(at: &str) -> bool {
         || std::str::from_utf8(host).ok().and_then(|h| h.parse::<std::net::Ipv4Addr>().ok()).is_some_and(|ip| ip.is_loopback())
 }
 
-/// True when `host` (a `Host` header: a name or an address, and maybe a port) is `localhost` or a
-/// name under it, an IP address, or one of `names` (`.name`: it and its subdomains).
-fn answers(host: &[u8], names: &[String]) -> bool {
+/// What a request's target and `Host` say of it, before anything of the app runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Asked {
+    /// For a host the app answers to, or for none it has to name.
+    Here,
+    /// For a host that is not the app's: `421`.
+    Elsewhere,
+    /// Not a request HTTP allows: `400`.
+    Malformed,
+}
+
+impl Asked {
+    /// The answer to a request that goes no further, with a few words for a person who reads it.
+    /// Either is Corten's refusal ([`crate::cache::Unshared`]), for an app that relays it inline too.
+    ///
+    /// The `400` leaves the connection open, as the `421` does and as RFC 9112 lets it: the
+    /// server read the message's head and knows where its body ends, so the next request on the
+    /// connection is read as it would be after any other answer (9.3), and hyper closes one whose
+    /// request body it cannot finish reading, as after any answer that leaves a body unread. The
+    /// sections that have a server close after a `400` are those where the message's length is
+    /// in doubt (6.1, 6.3), and hyper answers those itself, as it does a request-line it cannot
+    /// parse (a target that is not UTF-8): its own `400`, and the connection closed.
+    #[inline]
+    pub(crate) fn refusal(self) -> Option<Response> {
+        match self {
+            Asked::Here => None,
+            Asked::Elsewhere => {
+                Some(crate::cache::unshared((StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()))
+            }
+            Asked::Malformed => Some(crate::cache::unshared((StatusCode::BAD_REQUEST, "Bad request.").into_response())),
+        }
+    }
+}
+
+/// The authority in its borrowed form. Host admission checks the original bytes of a line;
+/// origin comparisons use text, and a write can keep the authority for its answer.
+#[derive(Clone, Copy)]
+pub(crate) enum RequestHost<'a> {
+    Target(&'a http::uri::Authority),
+    Line(&'a HeaderValue),
+}
+
+impl<'a> RequestHost<'a> {
+    pub(crate) fn text(self) -> Option<&'a str> {
+        match self {
+            Self::Target(at) => Some(at.as_str()),
+            Self::Line(line) => line.to_str().ok(),
+        }
+    }
+
+    pub(crate) fn into_header(self) -> Option<HeaderValue> {
+        match self {
+            Self::Target(at) => HeaderValue::from_bytes(at.as_str().as_bytes()).ok(),
+            Self::Line(line) => Some(line.clone()),
+        }
+    }
+}
+
+/// The authority a request asks for, port included (RFC 9112 3.2.2). `line` can return the
+/// value already read while checking the Host line's grammar; it is not needed for a whole URL.
+#[inline]
+pub(crate) fn request_host<'a>(uri: &'a http::Uri, line: impl FnOnce() -> Option<&'a HeaderValue>) -> Option<RequestHost<'a>> {
+    match uri.authority() {
+        Some(at) => Some(RequestHost::Target(at)),
+        None => line().map(RequestHost::Line),
+    }
+}
+
+/// A request's `Host` line, and whether it has another. Most requests have one line to a name,
+/// which the map's two counts say without a look at any of them, and `Host` first, where a
+/// client writes it (RFC 9110 7.2 asks it to), so the line is taken without a search for it.
+#[inline]
+fn host_lines(headers: &HeaderMap) -> (Option<&HeaderValue>, bool) {
+    if headers.len() == headers.keys_len() {
+        return match headers.iter().next() {
+            Some((name, host)) if name == header::HOST => (Some(host), false),
+            _ => (headers.get(header::HOST), false),
+        };
+    }
+    let mut lines = headers.get_all(header::HOST).iter();
+    let host = lines.next();
+    (host, lines.next().is_some())
+}
+
+/// What `req` asks for ([`Asked`]): `lines` gives its `Host` line and whether it has another,
+/// and `hosts` is the names the app answers to, or `None` when it answers to any.
+///
+/// What RFC 9112 3.2 has a server answer `400`: more than one `Host` line, a `Host` that is not
+/// a host and maybe a port, and an HTTP/1.1 message with no `Host` line. Of the request-target
+/// one part is read, and held to the same: the host and port of a target that names its own
+/// ([`targeted`]), which is the host the request asks for, so it is read where `Host` would be
+/// and one that is no host and maybe a port is a `400` too, by Corten's choice. Nothing else of
+/// a target is read or refused here: what the same section says a server should answer `400`
+/// or a redirect, an invalid request-line (a byte no URI holds, as the parse lets through a
+/// `|`, a `%` before no hex and a byte outside ASCII that is UTF-8), is answered as before,
+/// and so are `*` with a method other than `OPTIONS` (3.2.4 names no answer) and a target
+/// that is a host alone with a method other than `CONNECT` (3.2.3). The `Host` is read once
+/// for these and for the names, so a request the app answers costs a look at whether any name
+/// has two lines and the read of its `Host`.
+#[inline]
+fn asked<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
+    match read(req, lines, hosts) {
+        Asked::Malformed => malformed(req),
+        asked => asked,
+    }
+}
+
+#[inline]
+fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, bool), hosts: Option<&[String]>) -> Asked {
+    let (host, more) = lines();
+    if more {
+        return Asked::Malformed;
+    }
+    // Keep the path-form check inline on unstaged routes; the choice of authority must agree with `request_host`.
+    match (req.uri().authority(), host) {
+        (None, Some(host)) => match hosts {
+            Some(names) => among(host.as_bytes(), names),
+            None => any(host.as_bytes()),
+        },
+        (None, None) => unnamed(req),
+        (Some(target), host) => targeted(target.as_str(), host, req, hosts),
+    }
+}
+
+/// Logs the first request of the process refused for each reason HTTP does not allow one
+/// ([`Refused`]): a health check written by hand, or a proxy that sends a second `Host`, is as
+/// likely to send one as a scanner is, and its `400`s take the app out of service with nothing
+/// else to say why. One line a reason, so a request refused for one does not use up the line of
+/// a request refused for another; a later one costs the look for its reason and no more.
+#[cold]
+#[inline(never)]
+fn malformed(req: &Request) -> Asked {
+    use std::sync::atomic::AtomicBool;
+    static LOGGED: [AtomicBool; Refused::COUNT] = [const { AtomicBool::new(false) }; Refused::COUNT];
+    if let Some(line) = Refused::first(req, &LOGGED) {
+        tracing::warn!("{line}");
+    }
+    Asked::Malformed
+}
+
+/// Why [`read`] refused a request, in the order it looks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Refused {
+    /// More than one `Host` line.
+    Lines,
+    /// An HTTP/1.1 message the server read with no `Host` line.
+    Unnamed,
+    /// A `Host` that is not a host and maybe a port.
+    Host,
+    /// A target whose own host is not one.
+    TargetHost,
+}
+
+impl Refused {
+    /// How many reasons there are, counted from the last. A reason added is named here, or this
+    /// does not compile, so the one who adds it sees that the last is the one counted from.
+    const COUNT: usize = {
+        let last = Refused::TargetHost;
+        match last {
+            Refused::Lines | Refused::Unnamed | Refused::Host | Refused::TargetHost => last as usize + 1,
+        }
+    };
+
+    /// The log's line for `req` when it is the first refused for its reason that `logged` has
+    /// seen, and nothing for a later one.
+    fn first(req: &Request, logged: &[std::sync::atomic::AtomicBool; Refused::COUNT]) -> Option<String> {
+        let reason = Refused::of(req);
+        let first = !logged[reason as usize].swap(true, std::sync::atomic::Ordering::Relaxed);
+        first.then(|| reason.line(req))
+    }
+
+    fn of(req: &Request) -> Refused {
+        let mut hosts = req.headers().get_all(header::HOST).iter();
+        match (hosts.next(), hosts.next()) {
+            (_, Some(_)) => Refused::Lines,
+            (None, _) if req.extensions().get::<Unnamed>().is_some() => Refused::Unnamed,
+            (Some(host), _) if named(host.as_bytes(), None) == Asked::Malformed => Refused::Host,
+            _ => Refused::TargetHost,
+        }
+    }
+
+    /// The log's line for `req`: its method, its path and the reason. Never its query, a user
+    /// in its target or in a `Host`, or what follows a `/` or a `?` there, any of which may hold
+    /// what no log should; of a host only what names it. A `Host` that is none for another
+    /// reason (a space in it, a port that is no number) is given as sent: an operator needs it
+    /// to see what sends it.
+    /// The method, the path and the host are given by their start ([`start`]), so a long
+    /// request does not make a long line.
+    fn line(self, req: &Request) -> String {
+        /// What a `Host` or an authority names, without a user before it or a path after it.
+        /// Nothing where an `@` follows a `/`, `?` or `#`: it may end a user whose password
+        /// holds one, or be in a path or a query, and neither reading is safe to print.
+        fn names(host: &[u8]) -> String {
+            let host = String::from_utf8_lossy(host);
+            let (host, after) = host.split_at(host.find(['/', '?', '#']).unwrap_or(host.len()));
+            if after.contains('@') {
+                return String::new();
+            }
+            format!(" (it names {})", start(host.rsplit('@').next().unwrap_or_default()))
+        }
+        let why = match self {
+            Refused::Lines => {
+                format!("it has {} Host lines, and HTTP allows one", req.headers().get_all(header::HOST).iter().count())
+            }
+            Refused::Unnamed => {
+                "it is HTTP/1.1 with no Host line: a client, a health check too, sends one or asks as HTTP/1.0".to_owned()
+            }
+            Refused::Host => {
+                let host = req.headers().get(header::HOST).map(|host| names(host.as_bytes())).unwrap_or_default();
+                format!("its Host is not a host and maybe a port alone{host}")
+            }
+            Refused::TargetHost => {
+                let host = req.uri().authority().map(|target| names(target.as_str().as_bytes())).unwrap_or_default();
+                format!("its request-target's host is not a host and maybe a port alone{host}")
+            }
+        };
+        // A method is a token, which needs no quotes: only one too long for a line is cut.
+        let method = req.method().as_str();
+        let method = if method.len() > LOGGED_BYTES { start(method) } else { method.to_owned() };
+        format!("corten: refused {method} {} (400): {why}", start(req.uri().path()))
+    }
+}
+
+/// `text` as a log line gives it, in quotes and escaped: all of it, or its first
+/// [`LOGGED_BYTES`] bytes (fewer where that would cut a character) and that it goes on. A
+/// method, a path and a `Host` can each be as long as a request's head may be, and a line of
+/// the log is read by a person.
+fn start(text: &str) -> String {
+    if text.len() <= LOGGED_BYTES {
+        return format!("{text:?}");
+    }
+    let mut end = LOGGED_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{:?}... ({} bytes)", &text[..end], text.len())
+}
+
+/// How much of a method, a path or a host a refused request's log line gives.
+const LOGGED_BYTES: usize = 200;
+
+/// On a request Corten's server read off a connection as an HTTP/1.1 message with no `Host`
+/// line ([`mark_unnamed`]). A layer of the app's that maps the request's body or moves it to
+/// another task keeps it; one that builds a request of its own and leaves the extensions behind
+/// loses it, as it does the connection's values the server put there. A test's request, and one
+/// a server of the app's own hands the router, never has it.
+#[derive(Clone, Copy)]
+pub(crate) struct Unnamed;
+
+/// Marks `req`, which the server has just read off a connection, when it is an HTTP/1.1 message
+/// with no `Host` line: only the server knows that of a request, and the host check answers it
+/// ([`unnamed`]). A client writes `Host` first (RFC 9110 7.2 asks it to), so the first name is
+/// looked at first, and only a request without one is given the mark. Where `Host` is not
+/// first it is most often near it, so the names are read in turn and not searched by hash.
+#[inline]
+pub(crate) fn mark_unnamed(req: &mut Request) {
+    if req.headers().keys().next() != Some(&header::HOST) {
+        mark_if_unnamed(req);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn mark_if_unnamed(req: &mut Request) {
+    if req.version() == http::Version::HTTP_11 && !req.headers().keys().any(|name| name == header::HOST) {
+        req.extensions_mut().insert(Unnamed);
+    }
+}
+
+/// A request with no `Host` line: HTTP/1.0's is for the app, and so is one Corten's server did
+/// not read off a connection (a test's, which has no host to name; one from a server of the
+/// app's own, which answers for what it read). An HTTP/1.1 message the server read is not one
+/// HTTP allows, and carries its mark ([`Unnamed`]).
+#[cold]
+#[inline(never)]
+fn unnamed(req: &Request) -> Asked {
+    match req.extensions().get::<Unnamed>() {
+        Some(Unnamed) => Asked::Malformed,
+        None => Asked::Here,
+    }
+}
+
+/// A request whose target names its host (`GET http://shop.example/ HTTP/1.1`, or `CONNECT`'s
+/// `shop.example:443`): the target's is the host asked for, whatever `Host` says (RFC 9112
+/// 3.2.2), but the message still needs its one `Host` line, with a host in it (3.2). `target` is
+/// the whole authority, and one with a user in it, a port that is no number or an address in
+/// brackets that is not IPv6 is refused as the same bytes in `Host` are, by Corten's choice:
+/// RFC 9110 4.2.4 says a recipient should treat a user there as an error, and 9112 3.2 that a
+/// server should answer an invalid request-target with a `400` or a redirect, each less than
+/// 3.2 says of `Host`. It is the one part of a target read here, since it is the name asked for.
+#[cold]
+#[inline(never)]
+fn targeted(target: &str, host: Option<&HeaderValue>, req: &Request, hosts: Option<&[String]>) -> Asked {
+    let line = match host {
+        Some(host) => named(host.as_bytes(), None),
+        None => unnamed(req),
+    };
+    match line {
+        Asked::Here => named(target.as_bytes(), hosts),
+        refused => refused,
+    }
+}
+
+/// What `host` names (a `Host` header, or a target's host: a name or an address, and maybe a
+/// port): [`Asked::Here`] for `localhost` or a name under it, an IP address, or one of `names`
+/// (`.name`: it and its subdomains), and for any host when there are no names to hold it to;
+/// [`Asked::Malformed`] when it is not RFC 9110 7.2's `uri-host [ ":" port ]`, with RFC 3986
+/// 3.2.2's host. That grammar allows a name of no bytes, and RFC 9112 3.3 lets a server put its
+/// own default name in its place; Corten has none to put there, and an `http` URI with an empty
+/// host is one a recipient rejects (RFC 9110 4.2.1), so here a `Host` of no bytes is malformed
+/// too, by choice and not by 3.2. An address in brackets is IPv6: 3986's `IPvFuture` has no
+/// version defined, and its text asks for an error; a zone (`[fe80::1%25eth0]`) is not in its
+/// grammar since RFC 9844 took back RFC 6874, which had put it there.
+///
+/// A name the app answers to as it is written (`localhost`, an IPv4 address, a name in
+/// `names`) is a `reg-name` since what it matched is one, so what is read byte by byte is only
+/// the part before a name the app holds subdomains under, a name it does not hold, and any name
+/// when it has none. A name refused as another host's is logged.
+fn named(host: &[u8], names: Option<&[String]>) -> Asked {
+    match names {
+        Some(names) => among(host, names),
+        None => any(host),
+    }
+}
+
+/// [`named`] with no names to hold the host to: whether it is a host and maybe a port at all.
+/// Every request to an app that answers to any host comes here, so it is in line where the
+/// request is read, and a `Host` of a name's own characters and a port is read once, its port
+/// from the end and a name of letters, digits, `-` and `.` sixteen bytes at a look
+/// ([`without_port`], [`reg_name`]).
+#[inline(always)]
+fn any(host: &[u8]) -> Asked {
     // `[::1]:3000`: an IPv6 address is always in brackets.
     if host.first() == Some(&b'[') {
-        return true;
+        return if ip_literal(host) { Asked::Here } else { Asked::Malformed };
     }
-    let name = match host.iter().rposition(|&b| b == b':') {
-        Some(colon) if host[colon + 1..].iter().all(u8::is_ascii_digit) => &host[..colon],
-        Some(_) => return false,
-        None => host,
-    };
-    let name = name.strip_suffix(b".").unwrap_or(name);
-    if name.eq_ignore_ascii_case(b"localhost") || ends_with(name, b".localhost") {
-        return true;
+    if reg_name(without_port(host)) {
+        Asked::Here
+    } else {
+        Asked::Malformed
+    }
+}
+
+/// `host` without its port: what is before its last colon when digits alone follow it (or
+/// nothing: `shop.example:` has an empty port), and all of `host` when it has no colon or
+/// something else follows its last one. It is read from the end, where a port is a few bytes,
+/// and not searched for a colon from the start, so the name's bytes are read by whoever reads
+/// the name and not here as well. A colon that is no port's is left in what this gives, and
+/// neither a `reg-name` nor a name the app answers to holds one, so [`any`] and [`among`] find
+/// such a `Host` malformed by the name's own rule.
+#[inline]
+fn without_port(host: &[u8]) -> &[u8] {
+    let mut name = host;
+    while let [rest @ .., b'0'..=b'9'] = name {
+        name = rest;
+    }
+    match name {
+        [name @ .., b':'] => name,
+        _ => host,
+    }
+}
+
+/// [`named`] in an app that names its hosts.
+fn among(host: &[u8], names: &[String]) -> Asked {
+    // `[::1]:3000`: an IPv6 address is always in brackets.
+    if host.first() == Some(&b'[') {
+        return if ip_literal(host) { Asked::Here } else { Asked::Malformed };
+    }
+    let name = without_port(host);
+    let bare = name.strip_suffix(b".").unwrap_or(name);
+    if bare.eq_ignore_ascii_case(b"localhost") {
+        return Asked::Here;
     }
     // An IPv4 address: digits and dots, which no DNS name a browser resolves is.
-    if !name.is_empty() && name.iter().all(|&b| b.is_ascii_digit() || b == b'.') {
-        return std::str::from_utf8(name).is_ok_and(|n| n.parse::<std::net::Ipv4Addr>().is_ok());
+    if !bare.is_empty() && bare.iter().all(|&b| b.is_ascii_digit() || b == b'.') {
+        if std::str::from_utf8(bare).is_ok_and(|n| n.parse::<std::net::Ipv4Addr>().is_ok()) {
+            return Asked::Here;
+        }
+        refused_host(host);
+        return Asked::Elsewhere;
     }
-    names.iter().any(|allowed| match allowed.strip_prefix('.') {
-        Some(domain) => name.eq_ignore_ascii_case(domain.as_bytes()) || ends_with(name, allowed.as_bytes()),
-        None => name.eq_ignore_ascii_case(allowed.as_bytes()),
-    })
+    // How much of the name's end is a name the app holds its subdomains under.
+    let mut held = if ends_with(bare, b".localhost") { Some(".localhost".len()) } else { None };
+    for allowed in names {
+        match allowed.strip_prefix('.') {
+            Some(domain) if bare.eq_ignore_ascii_case(domain.as_bytes()) => return Asked::Here,
+            Some(_) if ends_with(bare, allowed.as_bytes()) => held = Some(allowed.len()),
+            None if bare.eq_ignore_ascii_case(allowed.as_bytes()) => return Asked::Here,
+            _ => {}
+        }
+    }
+    match held {
+        Some(held) if reg_name(&bare[..bare.len() - held]) => Asked::Here,
+        None if reg_name(name) => {
+            refused_host(host);
+            Asked::Elsewhere
+        }
+        _ => Asked::Malformed,
+    }
 }
 
 fn ends_with(name: &[u8], suffix: &[u8]) -> bool {
     name.len() > suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
 }
 
-/// Logs the first refused host of the process: a deployed app that has not listed its name
-/// answers 421 to everyone, and this says why.
-#[cold]
-fn refused_host(host: &[u8]) {
-    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        let host = String::from_utf8_lossy(host);
-        tracing::warn!(
-            "corten: refused a request for host {host:?} (421): if the app is served under that name, list it with Policy::host"
-        );
+/// Whether `name` is a `reg-name` (RFC 3986 3.2.2) of at least one byte: unreserved characters,
+/// sub-delimiters and percent-encoded bytes. No colon, so a second one in a `Host` is not a port's.
+#[inline(always)]
+fn reg_name(name: &[u8]) -> bool {
+    // A name of 8 to 16 bytes, of the letters, digits, `-` and `.` most names are made of, is
+    // read in line sixteen bytes at a look, as its first eight and its last eight (which overlap
+    // in a name shorter than 16). Any other name is read out of line ([`spelled`]).
+    match (name.first_chunk::<8>(), name.last_chunk::<8>()) {
+        (Some(first), Some(last)) if name.len() <= 16 && unlike_a_name(first) | unlike_a_name(last) == 0 => true,
+        _ => spelled(name),
     }
 }
 
-/// [`Policy::answers`], held apart from the policy: the names the app answers to, or `None` when
+/// [`reg_name`] for a name it does not read in line: one longer than 16 bytes of letters,
+/// digits, `-` and `.` alone sixteen at a look ([`plain`]); a shorter one, and one with any
+/// other byte, by the table below, which says the same of these. The table reads on from the
+/// first byte no look before the one that found another byte read ([`plain`]), as the bytes
+/// before it are a name's as written and none is `%`.
+#[inline(never)]
+fn spelled(name: &[u8]) -> bool {
+    spelled_by(name, encoded)
+}
+
+/// [`spelled`], with the reader of percent-encoded bytes given ([`encoded`]; a test sees the
+/// bytes it is given: only those no look before the one that found another byte read).
+#[inline(always)]
+fn spelled_by(name: &[u8], encoded: impl FnOnce(&[u8]) -> bool) -> bool {
+    let from = match plain(name, unlike_a_name) {
+        Ok(()) => return true,
+        Err(from) => from,
+    };
+    let unread = &name[from..];
+    // Few names hold a percent-encoded byte, so the name is read first for the bytes it holds
+    // as they are, four to a look and then the one to three left over: a look at four costs
+    // little more than a look at one, and a name is some tens of bytes.
+    let written = |byte: &u8| AS_WRITTEN[usize::from(*byte)];
+    let (fours, rest) = unread.as_chunks::<4>();
+    if fours.iter().all(|[a, b, c, d]| written(a) & written(b) & written(c) & written(d)) && rest.iter().all(written) {
+        return !name.is_empty();
+    }
+    encoded(unread)
+}
+
+/// `Ok` when `name` is longer than 16 bytes and all letters, digits, `-` and `.`, each 16 from
+/// its start and then the last 16, which overlap the one before, looked at by `unlike`
+/// ([`unlike_a_name`]; a test counts the looks). It stops at the first look that finds another
+/// byte and gives the first byte no earlier look read: where that look starts, or, when the last
+/// 16 find it, the first byte after the whole sixteens, as the last 16 overlap the look before
+/// (32 for a name of 40, whose last 16 start at 24). Every byte before it is one of those, so a
+/// long `Host` is not read to its end before the table reads it, nor read again by the table up to
+/// there; 0 for a name of 16 bytes or fewer, which it does not look at.
+#[inline(always)]
+fn plain(name: &[u8], mut unlike: impl FnMut(&[u8; 16]) -> u8) -> Result<(), usize> {
+    let Some(last) = name.last_chunk::<16>().filter(|_| name.len() > 16) else { return Err(0) };
+    let (sixteens, _) = name.as_chunks::<16>();
+    match sixteens.iter().position(|each| unlike(each) != 0) {
+        Some(at) => Err(at * 16),
+        None if unlike(last) == 0 => Ok(()),
+        // The last 16 found it, so it is among the bytes after the whole sixteens.
+        None => Err(sixteens.len() * 16),
+    }
+}
+
+/// Nonzero when any of `bytes` is not a letter, a digit, `-` or `.`. Each byte is looked at with
+/// no early return, so the compiler reads them all at once: sixteen in one look, which two calls
+/// for eight are joined into.
+#[inline(always)]
+fn unlike_a_name<const N: usize>(bytes: &[u8; N]) -> u8 {
+    bytes.iter().fold(0, |unlike, &byte| {
+        let digit = byte.wrapping_sub(b'0') < 10;
+        let letter = (byte | 0x20).wrapping_sub(b'a') < 26;
+        let dash_or_dot = byte.wrapping_sub(b'-') < 2;
+        unlike | u8::from(!(digit | letter | dash_or_dot))
+    })
+}
+
+/// The bytes a `reg-name` holds as they are: unreserved characters and sub-delimiters.
+static AS_WRITTEN: [bool; 256] = {
+    let mut bytes = [false; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        bytes[byte] = (byte as u8).is_ascii_alphanumeric() || matches!(byte as u8, b'-' | b'.' | b'_' | b'~');
+        bytes[byte] |= matches!(byte as u8, b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=');
+        byte += 1;
+    }
+    bytes
+};
+
+/// [`reg_name`] for a name with a byte it does not hold as written: whether each such byte
+/// starts a percent-encoded one (`%` and two hex digits). Out of line: few names have one, and
+/// a `Host` that is none ends here.
+#[cold]
+#[inline(never)]
+fn encoded(name: &[u8]) -> bool {
+    let mut rest = name;
+    loop {
+        rest = match rest {
+            [] => break true,
+            [byte, rest @ ..] if AS_WRITTEN[usize::from(*byte)] => rest,
+            [b'%', high, low, rest @ ..] if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() => rest,
+            _ => break false,
+        };
+    }
+}
+
+/// Whether `host`, which starts with `[`, is an IPv6 address in brackets and maybe a port
+/// (`[::1]`, `[::1]:3000`).
+fn ip_literal(host: &[u8]) -> bool {
+    let Some(end) = host.iter().position(|&b| b == b']') else { return false };
+    let port = match &host[end + 1..] {
+        [] => true,
+        [b':', port @ ..] => port.iter().all(u8::is_ascii_digit),
+        _ => false,
+    };
+    port && std::str::from_utf8(&host[1..end]).is_ok_and(|address| address.parse::<std::net::Ipv6Addr>().is_ok())
+}
+
+/// Logs the first refused host of the process: a deployed app that has not listed its name
+/// answers 421 to everyone, and this says why.
+#[cold]
+#[inline(never)]
+fn refused_host(host: &[u8]) {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!("{}", refused_host_line(host));
+    }
+}
+
+/// The log's line for `host`, refused as another's: the name by its start ([`start`]), as a
+/// request HTTP does not allow is logged.
+fn refused_host_line(host: &[u8]) -> String {
+    let host = start(&String::from_utf8_lossy(host));
+    format!("corten: refused a request for host {host} (421): if the app is served under that name, list it with Policy::host")
+}
+
+/// [`Policy::asked`], held apart from the policy: the names the app answers to, or `None` when
 /// it answers to any.
 #[derive(Clone)]
 pub(crate) struct HostCheck(Option<Arc<[String]>>);
 
 impl HostCheck {
-    pub(crate) fn answers(&self, req: &Request) -> bool {
-        self.0.as_deref().is_none_or(|hosts| named(req, hosts))
+    pub(crate) fn asked(&self, req: &Request) -> Asked {
+        // Decided first, so the read for an app that answers to any host holds no names. The
+        // stages' check (`Policy::asked`) does not: there it made every staged request cost more
+        // (docs/design.md#choice-fixed-stages).
+        match self.0.as_deref() {
+            None => asked(req, || host_lines(req.headers()), None),
+            names => asked(req, || host_lines(req.headers()), names),
+        }
     }
-}
-
-/// Whether the request's host is one of `hosts` (or a name `answers` lets through), or it names
-/// none; a refusal is logged.
-fn named(req: &Request, hosts: &[String]) -> bool {
-    let host = match req.uri().host() {
-        Some(host) => host.as_bytes(),
-        None => match req.headers().get(header::HOST) {
-            Some(host) => host.as_bytes(),
-            None => return true,
-        },
-    };
-    let named = answers(host, hosts);
-    if !named {
-        refused_host(host);
-    }
-    named
-}
-
-/// The answer to a request for a host the app does not answer to.
-pub(crate) fn misdirected() -> Response {
-    (StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()
 }
 
 /// The `form-action` sources of the app's policy and of each area's that adds to it (innermost
@@ -1742,8 +2493,8 @@ impl FormCheck {
         fn text(value: &Option<HeaderValue>) -> Option<&str> {
             value.as_ref().and_then(|v| v.to_str().ok())
         }
-        let host = text(&self.host)
-            .or_else(|| self.uri.authority().map(|at| at.as_str()))
+        let host = request_host(&self.uri, || self.host.as_ref())
+            .and_then(RequestHost::text)
             .map(|at| at.rsplit_once('@').map_or(at, |(_, at)| at).to_ascii_lowercase());
         let origin = text(&self.origin).filter(|origin| *origin != "null").and_then(address);
         let ours = match &self.site {
@@ -1936,7 +2687,6 @@ fn address(to: &str) -> Option<Address> {
     (!at.is_empty()).then_some(Address { scheme, at, path, bare })
 }
 
-#[cfg(debug_assertions)]
 fn is_scheme(scheme: &str) -> bool {
     scheme.starts_with(|c: char| c.is_ascii_alphabetic())
         && scheme.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
@@ -2022,7 +2772,11 @@ pub mod cookie {
 
     /// The value of cookie `name` in the request, if present.
     pub fn get<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-        headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(';')).find_map(|pair| {
+        get_in(headers.get_all(header::COOKIE).iter(), name)
+    }
+
+    pub(crate) fn get_in<'a>(values: impl Iterator<Item = &'a HeaderValue>, name: &str) -> Option<&'a str> {
+        values.filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(';')).find_map(|pair| {
             let (k, v) = pair.trim().split_once('=')?;
             (k == name).then_some(v)
         })
@@ -2191,6 +2945,7 @@ mod tests {
         for host in [
             "localhost",
             "localhost:3000",
+            "localhost:",
             "LocalHost.",
             "app.localhost:8080",
             "127.0.0.1",
@@ -2198,13 +2953,18 @@ mod tests {
             "10.0.0.7:8080",
             "[::1]:3000",
             "[::1]",
+            "[::ffff:10.0.0.7]:",
+            "[2001:DB8::7]:443",
             "shop.example",
             "Shop.Example:443",
             "corp.example",
             "admin.corp.example",
         ] {
-            assert!(answers(host.as_bytes(), &names), "{host}");
+            assert_eq!(named(host.as_bytes(), Some(&names)), Asked::Here, "{host}");
+            assert_eq!(named(host.as_bytes(), None), Asked::Here, "{host}, in an app that answers to any host");
         }
+        // Hosts as HTTP writes them that are not the app's: a `reg-name` may hold more than a
+        // DNS name does (RFC 3986 3.2.2), a comma among it.
         for host in [
             "rebound.attacker.example:3917",
             "localhost.attacker.example",
@@ -2214,12 +2974,494 @@ mod tests {
             "www.shop.example",
             "shop.example.attacker.example",
             "xcorp.example",
+            "my_service:8080",
+            "a.example,b.example",
+            "caf%C3%A9.example",
+            ".",
+        ] {
+            assert_eq!(named(host.as_bytes(), Some(&names)), Asked::Elsewhere, "{host}");
+            assert_eq!(named(host.as_bytes(), None), Asked::Here, "{host}, in an app that answers to any host");
+        }
+        // Not a host and maybe a port, whatever names the app has, its own inside them too.
+        for host in [
+            "",
+            ":3000",
             "localhost:3000:1",
             "localhost:abc",
-            "",
+            "localhost:3000/path",
+            "localhost/path",
+            "user@localhost",
+            "user@127.0.0.1:8080",
+            "127.0.0.1:8080, other.example.com",
+            "shop.example, other.example",
+            "shop.example other.example",
+            "shop.example?x",
+            "shop.example#x",
+            "http://shop.example",
+            "x%zz.corp.example",
+            "x%4.corp.example",
+            "x y.corp.example",
+            "user@app.localhost",
+            "caf\u{e9}.example",
+            "[::1",
+            "[::1]x",
+            "[::1]:80a",
+            "[]",
+            "[localhost]",
+            "[127.0.0.1]",
+            "[v1.x]",
+            "[fe80::1%25eth0]",
+            "::1",
         ] {
-            assert!(!answers(host.as_bytes(), &names), "{host}");
+            assert_eq!(named(host.as_bytes(), Some(&names)), Asked::Malformed, "{host}");
+            assert_eq!(named(host.as_bytes(), None), Asked::Malformed, "{host}, in an app that answers to any host");
         }
+    }
+
+    /// RFC 9110 7.2's `uri-host [ ":" port ]` with RFC 3986 3.2.2's host and Corten's two
+    /// choices (a name of no bytes is none, and an address in brackets is IPv6 or none), read
+    /// from the start a byte at a time with no table: the other way round from [`any`], which
+    /// takes the port off the end and reads the name many bytes at a look.
+    fn is_host(host: &[u8]) -> bool {
+        fn port(rest: &[u8]) -> bool {
+            match rest {
+                [] => true,
+                [b':', digits @ ..] => digits.iter().all(u8::is_ascii_digit),
+                _ => false,
+            }
+        }
+        if let [b'[', inside @ ..] = host {
+            let Some(end) = inside.iter().position(|&b| b == b']') else { return false };
+            let address = std::str::from_utf8(&inside[..end]).ok().and_then(|a| a.parse::<std::net::Ipv6Addr>().ok());
+            return address.is_some() && port(&inside[end + 1..]);
+        }
+        let mut at = 0;
+        while at < host.len() {
+            at += match host[at] {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => 1,
+                b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=' => 1,
+                b'%' if host[at + 1..].len() >= 2 && host[at + 1].is_ascii_hexdigit() && host[at + 2].is_ascii_hexdigit() => 3,
+                _ => break,
+            };
+        }
+        at > 0 && port(&host[at..])
+    }
+
+    /// The reader's short cuts, the port taken off the end and the name read sixteen or four
+    /// bytes at a look, give what the grammar read a byte at a time gives ([`is_host`]): for
+    /// every value of up to four bytes of what a `Host` is made of and is not, and for names of
+    /// each length around those looks with each byte of them changed in turn. A name the app
+    /// does not hold is another host's when it is a host, and malformed when it is none.
+    #[test]
+    fn a_host_read_four_bytes_at_a_look_is_what_the_grammar_says() {
+        let names = ["shop.example".to_string(), ".corp.example".to_string()];
+        let mut read = 0;
+        let mut hold = |host: &[u8]| {
+            let shown = String::from_utf8_lossy(host);
+            let is = is_host(host);
+            assert_eq!(named(host, None), if is { Asked::Here } else { Asked::Malformed }, "{shown:?} ({host:?})");
+            assert_eq!(named(host, Some(&names)) == Asked::Malformed, !is, "{shown:?} ({host:?}), in an app with names");
+            read += 1;
+        };
+        // Every value of none to four of these bytes.
+        let bytes = [b'a', b'G', b'.', b'-', b'0', b'9', b':', b'[', b']', b'%', b'@', b'/', b' ', b',', 0xC3, 0xA9, 0xFF];
+        for length in 0..=4 {
+            for mut number in 0..bytes.len().pow(length) {
+                let mut host = Vec::new();
+                for _ in 0..length {
+                    host.push(bytes[number % bytes.len()]);
+                    number /= bytes.len();
+                }
+                hold(&host);
+            }
+        }
+        // A name of 1 to 20 bytes, of each kind a name holds as written, and its ports.
+        let whole = b"a1-b2.c3_d4~e5!f6$G7";
+        let ports: [&[u8]; 11] =
+            [b"", b":", b":8", b":80", b":8080", b":65535", b":0123456789", b":80a", b":a", b"::80", b":80:"];
+        let with = |name: &[u8], port: &[u8]| [name, port].concat();
+        for length in 1..=whole.len() {
+            let name = &whole[..length];
+            for (port, good) in ports.iter().zip([true, true, true, true, true, true, true, false, false, false, false]) {
+                let asked = if good { Asked::Here } else { Asked::Malformed };
+                assert_eq!(named(&with(name, port), None), asked, "{length} bytes and {:?}", String::from_utf8_lossy(port));
+                hold(&with(name, port));
+                for at in 0..length {
+                    // A byte no name holds, at each place in it: the first is a space.
+                    for bad in *b" /@:[%\"\\^`{|}<>#?\x00\x7F\x80\xFF" {
+                        let mut host = with(name, port);
+                        host[at] = bad;
+                        if bad == b' ' {
+                            assert_eq!(named(&host, None), Asked::Malformed, "a space at {at} of {length} bytes");
+                        }
+                        hold(&host);
+                    }
+                    // A percent-encoded byte there, whole, with a hex digit of each case in
+                    // each of its two places, and cut short (`%4` is whole or not by the byte
+                    // that follows it, so only the grammar says which).
+                    for (encoded, whole) in [
+                        (&b"%4a"[..], Some(true)),
+                        (b"%4A", Some(true)),
+                        (b"%aF", Some(true)),
+                        (b"%C3%A9", Some(true)),
+                        (b"%4", None),
+                        (b"%4g", Some(false)),
+                        (b"%g4", Some(false)),
+                    ] {
+                        let host = [&name[..at], encoded, &name[at..], port].concat();
+                        if let Some(whole) = whole {
+                            let asked = if whole && good { Asked::Here } else { Asked::Malformed };
+                            assert_eq!(named(&host, None), asked, "{:?}", String::from_utf8_lossy(&host));
+                        }
+                        hold(&host);
+                    }
+                }
+            }
+        }
+        // A name of letters, digits, `-` and `.` alone, which is read sixteen bytes at a look,
+        // of each length up to two looks and a half, with ports of a few lengths: each of the 256
+        // bytes at each place in it.
+        let plain = b"Shop-2.example-cdn.region-9.example.TEST";
+        let ports: [&[u8]; 7] = [b"", b":", b"1", b":8080", b":1234567", b":12345678", b"a:12345"];
+        for length in 1..=plain.len() {
+            for port in ports {
+                let host = with(&plain[..length], port);
+                hold(&host);
+                for at in 0..host.len() {
+                    for byte in 0..=255 {
+                        let mut host = host.clone();
+                        host[at] = byte;
+                        hold(&host);
+                    }
+                }
+                // A percent-encoded byte at each place, whole and cut short: the table reads on
+                // from the first byte no look before the one that found its `%` read.
+                for at in 0..=length {
+                    for encoded in [&b"%4a"[..], b"%C3%A9", b"%4", b"%4g", b"%g4"] {
+                        hold(&[&plain[..at], encoded, &plain[at..length], port].concat());
+                    }
+                }
+            }
+        }
+        // Each of the 256 bytes at each place in a name of up to nine.
+        for length in 1..=9 {
+            for at in 0..length {
+                for byte in 0..=255 {
+                    let mut host = whole[..length].to_vec();
+                    host[at] = byte;
+                    hold(&host);
+                }
+            }
+        }
+        assert!(read > 100_000, "{read} values read");
+    }
+
+    /// A long `Host` that is no name is read sixteen bytes at a look only as far as the first look
+    /// that finds a byte no plain name has: `@` and 4,095 `a` is one look, where the old
+    /// reader stopped at its first byte as well, and a name that is one is read to its end. The
+    /// table reads on from the first byte no earlier look read, so 4,095 `a` and `_` is read once
+    /// and not again by the table from its start.
+    #[test]
+    fn a_long_name_that_is_none_is_not_read_to_its_end() {
+        let looks = |name: &[u8]| {
+            let mut looks = 0;
+            let plain = plain(name, |each| {
+                looks += 1;
+                unlike_a_name(each)
+            });
+            (plain, looks)
+        };
+        let mut name = vec![b'a'; 4096];
+        assert_eq!(looks(&name), (Ok(()), 257));
+        assert!(reg_name(&name));
+        name[0] = b'@';
+        assert_eq!(looks(&name), (Err(0), 1));
+        assert!(!reg_name(&name));
+        assert_eq!(any(&name), Asked::Malformed);
+        // A byte a name holds as written but a plain one does not: the table reads the rest.
+        name[0] = b'_';
+        assert_eq!(looks(&name), (Err(0), 1));
+        assert!(reg_name(&name));
+        name[0] = b'a';
+        name[100] = b'@';
+        assert_eq!(looks(&name), (Err(96), 7));
+        assert!(!reg_name(&name));
+        name[100] = b'a';
+        name[4095] = b'@';
+        assert_eq!(looks(&name), (Err(4080), 256));
+        assert!(!reg_name(&name));
+        name[4095] = b'_';
+        assert_eq!(looks(&name), (Err(4080), 256));
+        assert!(reg_name(&name));
+        assert_eq!(any(&[&name[..], b":8080"].concat()), Asked::Here);
+        // Found by the last 16 alone, after two whole sixteens: the table reads from byte 32.
+        let mut name = vec![b'a'; 40];
+        name[39] = b'_';
+        assert_eq!(looks(&name), (Err(32), 3));
+        assert!(reg_name(&name));
+        // A percent-encoded byte found by a look, and one whose `%` ends the look before its
+        // digits: the table and the encoded bytes are read from the first byte no earlier look
+        // read, 32 where the last 16 (from 24) found it and 16 where the second look did.
+        for (at, encoded, whole, from) in
+            [(37, &b"%4a"[..], true, 32), (37, b"%4g", false, 32), (31, b"%4a", true, 16), (31, b"%g4", false, 16)]
+        {
+            let mut name = vec![b'a'; 40];
+            name[at..at + 3].copy_from_slice(encoded);
+            assert_eq!(looks(&name).0, Err(from), "{}", String::from_utf8_lossy(&name));
+            assert_eq!(reg_name(&name), whole, "{}", String::from_utf8_lossy(&name));
+        }
+        // 16 bytes or fewer are none of its: `reg_name` reads them in line or by the table.
+        assert_eq!(looks(&[b'a'; 16]), (Err(0), 0));
+        assert_eq!(looks(b""), (Err(0), 0));
+        assert!(!reg_name(b""));
+    }
+
+    /// The percent-encoded bytes of a long name are read from the look that found the `%`, not
+    /// from the name's start: for 4,093 `a` and `%4a`, [`encoded`] is given its last 16 bytes
+    /// alone. The `unstaged-any-encoded` cost case does not by itself catch a reader given the
+    /// whole name, as the merge base it is counted against reads the whole name twice; this does.
+    #[test]
+    fn a_long_names_encoded_bytes_are_read_from_the_look_that_found_them() {
+        // Where in `name` the bytes given to the reader start and end.
+        let given = |name: &[u8]| {
+            let mut given = None;
+            let whole = spelled_by(name, |unread| {
+                let start = unread.as_ptr() as usize - name.as_ptr() as usize;
+                given = Some(start..start + unread.len());
+                encoded(unread)
+            });
+            (whole, given)
+        };
+        let mut name = vec![b'a'; 4093];
+        name.extend_from_slice(b"%4a");
+        assert_eq!(given(&name), (true, Some(4080..4096)));
+        name[4095] = b'g';
+        assert_eq!(given(&name), (false, Some(4080..4096)));
+        // A name the table holds as written is not given to it at all.
+        name[4093..].copy_from_slice(b"__a");
+        assert_eq!(given(&name), (true, None));
+        // A short name, which no look reads, is given whole.
+        assert_eq!(given(b"a%4a"), (true, Some(0..4)));
+    }
+
+    /// What a request asks for where no connection brought it (a test's, as these are): its
+    /// target's host before its `Host`'s, one valid `Host` line at most, and none at all for
+    /// HTTP/1.0 and HTTP/1.1 alike. `tests::security` sends the same over a connection, where
+    /// an HTTP/1.1 request with no `Host` is refused.
+    #[test]
+    fn a_request_is_read_for_its_target_and_its_host_lines() {
+        let policy = Policy::new();
+        let any = Policy::new().any_host();
+        let asked = |policy: &Policy, method: &str, target: &str, hosts: &[&str]| {
+            let mut req = http::Request::builder().method(method).uri(target);
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            let req = req.body(crate::http::Body::empty()).unwrap();
+            let lane = policy.host_check().asked(&req);
+            assert_eq!(
+                policy.asked(&req, &mut Origin::new(req.headers())),
+                lane,
+                "{method} {target} {hosts:?}: a route outside the stages"
+            );
+            lane
+        };
+        for policy in [&policy, &any] {
+            assert_eq!(asked(policy, "GET", "/", &[]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "/", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "/", &["localhost", "localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "/", &["localhost", "other.example"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "/", &["localhost/"]), Asked::Malformed);
+            // Nothing of a target but its own host is refused: a byte outside ASCII in its path
+            // or query, and `*`, go on to the routes.
+            assert_eq!(asked(policy, "GET", "/caf\u{e9}", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "/?q=caf\u{e9}", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "/caf%C3%A9?q=caf%C3%A9", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "*", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "POST", "*", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "OPTIONS", "*", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "*", &["localhost", "localhost"]), Asked::Malformed);
+            // The target's host is the one asked for; `Host` is only held to being one.
+            assert_eq!(asked(policy, "GET", "http://localhost/", &[]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "http://localhost:3000/", &["other.example"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "http://[::1]:3000/", &["localhost"]), Asked::Here);
+            assert_eq!(asked(policy, "GET", "http://localhost/", &["a, b"]), Asked::Malformed);
+            // The target's own is held to being a host and maybe a port too: no user, no port
+            // that is no number, no address in brackets that is not IPv6, a host alone included.
+            assert_eq!(asked(policy, "GET", "http://user@localhost/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://user:word@localhost:3000/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://user@[::1]:3000/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://localhost:abc/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://[v1.x]/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://[fe80::1%25eth0]/", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "localhost:abc", &["localhost"]), Asked::Malformed);
+            assert_eq!(asked(policy, "GET", "http://localhost/", &["localhost", "localhost"]), Asked::Malformed);
+        }
+        assert_eq!(asked(&policy, "GET", "/", &["other.example"]), Asked::Elsewhere);
+        assert_eq!(asked(&any, "GET", "/", &["other.example"]), Asked::Here);
+        assert_eq!(asked(&policy, "GET", "http://other.example/", &["localhost"]), Asked::Elsewhere);
+        assert_eq!(asked(&any, "GET", "http://other.example/", &["localhost"]), Asked::Here);
+        assert_eq!(asked(&policy, "CONNECT", "other.example:443", &["other.example:443"]), Asked::Elsewhere);
+        let old = http::Request::builder().version(http::Version::HTTP_10).uri("/").body(crate::http::Body::empty()).unwrap();
+        assert_eq!(policy.host_check().asked(&old), Asked::Here);
+        // As the server marks a request it read off a connection, an HTTP/1.1 request needs its
+        // `Host`, wherever its line is among the others, and HTTP/1.0's still does not.
+        for (version, target, lines, asks) in [
+            (http::Version::HTTP_11, "/", &[][..], Asked::Malformed),
+            (http::Version::HTTP_11, "/", &[("accept", "*/*")][..], Asked::Malformed),
+            (http::Version::HTTP_11, "http://localhost/", &[][..], Asked::Malformed),
+            (http::Version::HTTP_11, "/", &[("host", "localhost")][..], Asked::Here),
+            (http::Version::HTTP_11, "/", &[("accept", "*/*"), ("host", "localhost")][..], Asked::Here),
+            (http::Version::HTTP_10, "/", &[][..], Asked::Here),
+            (http::Version::HTTP_10, "/", &[("accept", "*/*")][..], Asked::Here),
+            (http::Version::HTTP_10, "http://localhost/", &[][..], Asked::Here),
+        ] {
+            let mut read = http::Request::builder().version(version).uri(target);
+            for (name, value) in lines {
+                read = read.header(*name, *value);
+            }
+            let mut read = read.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut read);
+            assert_eq!(policy.host_check().asked(&read), asks, "{version:?} {target} {lines:?}");
+            assert_eq!(any.asked(&read, &mut Origin::new(read.headers())), asks, "{version:?} {target} {lines:?}");
+        }
+        // A `Host` on a later line, each name with one line, is found and held to the app's
+        // names as one on the first line is, by the stages and at a route outside them.
+        for (lines, asks) in [
+            (&[("accept", "*/*"), ("host", "other.example")][..], Asked::Elsewhere),
+            (&[("accept", "*/*"), ("user-agent", "x"), ("host", "other.example"), ("cookie", "a=b")][..], Asked::Elsewhere),
+            (&[("accept", "*/*"), ("host", "a, b")][..], Asked::Malformed),
+            (&[("accept", "*/*"), ("host", "LOCALHOST:3000")][..], Asked::Here),
+        ] {
+            let mut later = http::Request::builder().uri("/");
+            for (name, value) in lines {
+                later = later.header(*name, *value);
+            }
+            let mut later = later.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut later);
+            assert_eq!(policy.host_check().asked(&later), asks, "{lines:?}, at a route outside the stages");
+            assert_eq!(policy.asked(&later, &mut Origin::new(later.headers())), asks, "{lines:?}, by the stages");
+        }
+        // Another name with two lines does not make `Host` one with two, and hides no second.
+        let twice = |hosts: &[&str]| {
+            let mut req = http::Request::builder().uri("/").header("accept", "text/html").header("accept", "*/*");
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            policy.host_check().asked(&req.header("cookie", "a=b").body(crate::http::Body::empty()).unwrap())
+        };
+        assert_eq!(twice(&["localhost"]), Asked::Here);
+        assert_eq!(twice(&["other.example"]), Asked::Elsewhere);
+        assert_eq!(twice(&["localhost", "localhost"]), Asked::Malformed);
+        assert_eq!(twice(&[]), Asked::Here);
+    }
+
+    /// What the log says of a refused request: its reason, each with a line of its own, and
+    /// nothing of its query or of a user in its target.
+    #[test]
+    fn a_refused_request_is_logged_by_its_reason_without_its_query() {
+        let why = |method: &str, target: &str, hosts: &[&str], read: bool| {
+            let mut req = http::Request::builder().method(method).uri(target);
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            let mut req = req.body(crate::http::Body::empty()).unwrap();
+            if read {
+                mark_unnamed(&mut req);
+            }
+            assert_eq!(Policy::new().host_check().asked(&req), Asked::Malformed, "{method} {target} {hosts:?}");
+            let reason = Refused::of(&req);
+            let line = reason.line(&req);
+            assert!(!line.contains("secret") && !line.contains("hunter2") && !line.contains("token"), "{line}");
+            (reason, line)
+        };
+        assert_eq!(
+            why("DELETE", "/caf\u{e9}?token=secret", &["localhost", "user:hunter2@other.example"], true),
+            (Refused::Lines, "corten: refused DELETE \"/caf\u{e9}\" (400): it has 2 Host lines, and HTTP allows one".to_owned())
+        );
+        let (reason, line) = why("GET", "/health/live?token=secret", &[], true);
+        assert!(reason == Refused::Unnamed && line.contains("\"/health/live\" (400)") && line.contains("no Host line"), "{line}");
+        let (reason, line) = why("GET", "/?token=secret", &["user:hunter2@shop.example/x?token=secret"], true);
+        assert!(reason == Refused::Host && line.ends_with("(it names \"shop.example\")"), "{line}");
+        let (reason, line) = why("GET", "/", &["shop.example, other.example"], true);
+        assert!(reason == Refused::Host && line.ends_with("(it names \"shop.example, other.example\")"), "{line}");
+        let (reason, line) = why("GET", "http://user:hunter2@localhost:3000/items?token=secret", &["localhost"], false);
+        assert!(reason == Refused::TargetHost && line.contains("\"/items\" (400)"), "{line}");
+        assert!(line.ends_with("(it names \"localhost:3000\")"), "{line}");
+        // A target that names a host is still refused for its `Host` line first, as it is read.
+        let (reason, _) = why("GET", "http://localhost/", &["a, b"], false);
+        assert_eq!(reason, Refused::Host);
+        let (reason, _) = why("GET", "http://localhost/?token=secret", &[], true);
+        assert_eq!(reason, Refused::Unnamed);
+        // An `@` after a `/` or a `?` may end a user or be in a path: neither part is printed.
+        for host in ["shop.example/reset?to=ann@hunter2", "user:hun/ter2@shop.example", "shop.example?hunter2@x#y"] {
+            let (reason, line) = why("GET", "/", &[host], true);
+            assert!(reason == Refused::Host && line.ends_with("(400): its Host is not a host and maybe a port alone"), "{line}");
+        }
+        // A long path and a long host are given by their start, cut where a character ends.
+        let long = format!("/{}\u{e9}{}?token=secret", "a".repeat(LOGGED_BYTES - 2), "b".repeat(9000));
+        let host = format!("{} x", "h".repeat(9000));
+        let (reason, line) = why("GET", &long, &[host.as_str()], true);
+        assert_eq!(reason, Refused::Host);
+        assert_eq!(
+            line,
+            format!(
+                "corten: refused GET \"/{}\"... (9201 bytes) (400): its Host is not a host and maybe a port alone \
+                 (it names \"{}\"... (9002 bytes))",
+                "a".repeat(LOGGED_BYTES - 2),
+                "h".repeat(LOGGED_BYTES)
+            )
+        );
+        assert_eq!(start("/short"), "\"/short\"");
+        assert_eq!(start(&"a".repeat(LOGGED_BYTES)), format!("{:?}", "a".repeat(LOGGED_BYTES)));
+        // A long method too, which a request's head has room for; one that fits is as sent.
+        let (reason, line) = why(&"M".repeat(9000), "/", &["a, b"], true);
+        assert_eq!(reason, Refused::Host);
+        assert_eq!(
+            line,
+            format!(
+                "corten: refused \"{}\"... (9000 bytes) \"/\" (400): its Host is not a host and maybe a port alone \
+                 (it names \"a, b\")",
+                "M".repeat(LOGGED_BYTES)
+            )
+        );
+        let (_, line) = why(&"M".repeat(LOGGED_BYTES), "/", &["a, b"], true);
+        assert!(line.starts_with(&format!("corten: refused {} \"/\" (400): ", "M".repeat(LOGGED_BYTES))), "{line}");
+        // The line for a name that is another host's (the `421`) gives a long one the same way.
+        assert_eq!(
+            refused_host_line(format!("{}.example:8080", "h".repeat(9000)).as_bytes()),
+            format!(
+                "corten: refused a request for host \"{}\"... (9013 bytes) (421): \
+                 if the app is served under that name, list it with Policy::host",
+                "h".repeat(LOGGED_BYTES)
+            )
+        );
+        assert_eq!(
+            refused_host_line(b"shop.example"),
+            "corten: refused a request for host \"shop.example\" (421): \
+             if the app is served under that name, list it with Policy::host"
+        );
+
+        // The first request refused for a reason has a line, a later one for it none, and one
+        // refused for another reason still has its own.
+        let logged = [const { std::sync::atomic::AtomicBool::new(false) }; Refused::COUNT];
+        let refused = |target: &str, hosts: &[&str]| {
+            let mut req = http::Request::builder().uri(target);
+            for host in hosts {
+                req = req.header("host", *host);
+            }
+            let mut req = req.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut req);
+            Refused::first(&req, &logged)
+        };
+        assert!(refused("/", &[]).is_some_and(|line| line.contains("no Host line")));
+        assert_eq!(refused("/again", &[]), None);
+        assert!(refused("/", &["a, b"]).is_some_and(|line| line.contains("its Host is not a host")));
+        assert_eq!(refused("/", &["c, d"]), None);
+        assert!(refused("/", &["a", "b"]).is_some_and(|line| line.contains("2 Host lines")));
+        assert_eq!(refused("*", &["a", "b", "c"]), None);
+        assert!(refused("http://user@localhost/", &["localhost"]).is_some_and(|line| line.contains("request-target's host")));
+        assert_eq!(refused("http://user@localhost/", &["localhost"]), None);
     }
 
     #[test]
@@ -2261,49 +3503,359 @@ mod tests {
     }
 
     #[test]
+    fn the_target_supplies_its_authority_without_reading_the_host_line() {
+        let uri = http::Uri::from_static("https://shop.example:8443/items");
+        let host = request_host(&uri, || panic!("absolute-form needs no header lookup"));
+        assert_eq!(host.and_then(RequestHost::text), Some("shop.example:8443"));
+    }
+
+    #[test]
+    fn admission_and_request_host_agree_for_target_line_and_neither() {
+        for (uri, field, wanted) in [
+            ("http://listed.example/", Some("other.example"), Some("listed.example")),
+            ("http://listed.example:bad/", Some("other.example"), Some("listed.example:bad")),
+            ("/", Some("other.example"), Some("other.example")),
+            ("/", None, None),
+        ] {
+            let mut builder = http::Request::builder().uri(uri);
+            if let Some(host) = field {
+                builder = builder.header(header::HOST, host);
+            }
+            let mut req = builder.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut req);
+            let host = request_host(req.uri(), || req.headers().get(header::HOST)).and_then(RequestHost::text);
+            assert_eq!(host, wanted);
+            let names = [String::from("listed.example")];
+            for hosts in [Some(&names[..]), None] {
+                let expected = host.map_or(Asked::Malformed, |name| named(name.as_bytes(), hosts));
+                assert_eq!(read(&req, || host_lines(req.headers()), hosts), expected, "{uri} {field:?} {hosts:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_origin_check_reads_only_the_headers_needed_to_decide() {
+        let allowed = ["https://admin.example".to_string()];
+        let request = headers(&[("origin", "https://admin.example"), ("sec-fetch-site", "cross-site"), ("host", "localhost")]);
+        let mut origin = Origin::new(&request);
+        assert!(origin.permits(&allowed, false, &http::Uri::default()));
+        assert!(origin.site.is_none() && origin.host.is_none());
+        assert!(!origin.permits(&[], false, &http::Uri::default()));
+        assert!(origin.site.is_some() && origin.host.is_none());
+
+        let request = headers(&[("origin", "http://localhost"), ("host", "localhost")]);
+        let mut origin = Origin::new(&request);
+        assert!(origin.permits(&[], false, &http::Uri::default()));
+        assert_eq!(origin.site, Some(None), "an absent header is cached too");
+        assert!(origin.host.is_some());
+    }
+
+    #[test]
     fn writes_from_other_sites_are_refused_and_non_browsers_pass() {
         let p = Policy::new().allow_origin("https://admin.example.com/");
         let post = Method::POST;
-        assert!(p.same_origin(&Method::GET, &headers(&[("sec-fetch-site", "cross-site")])), "reads are not checked");
-        assert!(
-            p.same_origin(&post, &headers(&[("sec-fetch-site", "same-origin"), ("origin", "https://a.com"), ("host", "a.com")]))
-        );
+        let uri = http::Uri::default();
+        assert!(p.same_origin(&Method::GET, &uri, &headers(&[("sec-fetch-site", "cross-site")])), "reads are not checked");
+        assert!(p.same_origin(
+            &post,
+            &uri,
+            &headers(&[("sec-fetch-site", "same-origin"), ("origin", "https://a.com"), ("host", "a.com")])
+        ));
         assert!(
             p.same_origin(
                 &post,
+                &uri,
                 &headers(&[("sec-fetch-site", "same-origin"), ("origin", "https://a.com"), ("host", "app:8080")])
             ),
             "a proxy that rewrites Host does not break same-origin writes"
         );
         assert!(!p.same_origin(
             &post,
+            &uri,
             &headers(&[("sec-fetch-site", "cross-site"), ("origin", "https://evil.com"), ("host", "a.com")])
         ));
         assert!(!p.same_origin(
             &post,
+            &uri,
             &headers(&[("sec-fetch-site", "same-site"), ("origin", "https://sub.a.com"), ("host", "a.com")])
         ));
         assert!(
-            !p.same_origin(&post, &headers(&[("origin", "https://evil.com"), ("host", "a.com")])),
+            !p.same_origin(&post, &uri, &headers(&[("origin", "https://evil.com"), ("host", "a.com")])),
             "older browsers: Origin only"
         );
-        assert!(!p.same_origin(&post, &headers(&[("origin", "null"), ("host", "a.com")])), "sandboxed frames send null");
-        assert!(p.same_origin(&post, &headers(&[("origin", "http://localhost:8080"), ("host", "localhost:8080")])));
+        assert!(!p.same_origin(&post, &uri, &headers(&[("origin", "null"), ("host", "a.com")])), "sandboxed frames send null");
+        assert!(p.same_origin(&post, &uri, &headers(&[("origin", "http://localhost:8080"), ("host", "localhost:8080")])));
         assert!(p.same_origin(
             &post,
+            &uri,
             &headers(&[("sec-fetch-site", "same-site"), ("origin", "https://admin.example.com"), ("host", "a.com")])
         ));
-        assert!(p.same_origin(&post, &headers(&[])), "native apps and agents send neither header");
+        assert!(p.same_origin(&post, &uri, &headers(&[])), "native apps and agents send neither header");
     }
 
-    /// A write with no `Sec-Fetch-Site` is held to its whole origin against `Host`: under hsts
+    #[test]
+    fn an_allowed_origin_is_kept_as_a_browser_writes_it_in_origin() {
+        for (setting, serialized) in [
+            ("https://admin.example.com", "https://admin.example.com"),
+            ("https://admin.example.com/", "https://admin.example.com"),
+            ("HTTPS://Admin.Example.COM", "https://admin.example.com"),
+            ("https://admin_x.example.com", "https://admin_x.example.com"),
+            ("https://admin.example.com:443", "https://admin.example.com"),
+            ("http://admin.example.com:80", "http://admin.example.com"),
+            ("http://admin.example.com:443", "http://admin.example.com:443"),
+            ("https://admin.example.com:80", "https://admin.example.com:80"),
+            ("https://a.example:8443", "https://a.example:8443"),
+            ("https://a.example:08443/", "https://a.example:8443"),
+            ("https://a.example.", "https://a.example."),
+            ("http://localhost:3000", "http://localhost:3000"),
+            ("http://192.168.1.5", "http://192.168.1.5"),
+            ("http://192.168.1.5.:8080", "http://192.168.1.5:8080"),
+            ("https://[::1]", "https://[::1]"),
+            ("https://[::1]:443", "https://[::1]"),
+            ("http://[2001:DB8:0:0:0:0:0:1]:8080", "http://[2001:db8::1]:8080"),
+            ("http://[::ffff:192.168.1.5]", "http://[::ffff:c0a8:105]"),
+            // An app's webview or a browser extension: no default port to leave out.
+            ("capacitor://localhost", "capacitor://localhost"),
+            ("Capacitor://LocalHost/", "capacitor://localhost"),
+            ("tauri://localhost", "tauri://localhost"),
+            ("chrome-extension://abcdefghijklmnopabcdefghijklmnop", "chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+            ("moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b", "moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b"),
+            ("app+v1.x://localhost:443", "app+v1.x://localhost:443"),
+            ("capacitor://localhost:080", "capacitor://localhost:80"),
+            ("capacitor://[::1]:3000", "capacitor://[::1]:3000"),
+        ] {
+            assert_eq!(serialize_origin(setting).as_deref(), Ok(serialized), "{setting}");
+        }
+        for bad in [
+            "",
+            "*",
+            "admin.example.com",
+            "//admin.example.com",
+            "https://",
+            "https:///",
+            "https://admin.example.com/app",
+            "https://admin.example.com//",
+            "https://*.example.com",
+            "https://u@admin.example.com",
+            "https://u:p@admin.example.com",
+            "https://admin.example.com?x",
+            "https://admin.example.com#x",
+            "https://admin.example.com,https://b.example",
+            "https://admin.example.com https://b.example",
+            " https://admin.example.com",
+            "https://admin example.com",
+            "null",
+            "https://admin..example.com",
+            "https://.admin.example.com",
+            "https://b\u{fc} cher.example",
+            "https://1.2.3",
+            "https://999.1.1.1",
+            "https://admin.example.com:",
+            "https://admin.example.com:+443",
+            "https://admin.example.com:65536",
+            "https://admin.example.com:44a",
+            "https://[::1",
+            "https://[::1]x",
+            "https://[::1]:",
+            "https://[fe80::1%25eth0]",
+            "https://[1.2.3.4]",
+            "https://::1",
+            "capacitor://",
+            "capacitor:///",
+            "capacitor:localhost",
+            "capacitor://u@localhost",
+            "capacitor://localhost/app",
+            "capacitor://localhost?x",
+            "capacitor://localhost#x",
+            "capacitor://*",
+            "capacitor://localhost,tauri://localhost",
+            "capacitor://local host",
+            "capacitor://localhost:",
+            "capacitor://app.1",
+            "1app://localhost",
+            "+app://localhost",
+            "ca_p://localhost",
+            "cap acitor://localhost",
+            "://localhost",
+        ] {
+            assert_eq!(serialize_origin(bad), Err(NotOrigin::Form), "{bad:?}");
+        }
+        for unicode in ["https://b\u{fc}cher.example", "capacitor://b\u{fc}cher", "https://\u{fc}.example:8443"] {
+            assert_eq!(serialize_origin(unicode), Err(NotOrigin::NonAsciiName), "{unicode:?}");
+        }
+        for (never, scheme) in [
+            ("file:///", "file"),
+            ("file:///etc/passwd", "file"),
+            ("FILE://host/share", "file"),
+            ("data:text/html,x", "data"),
+            ("blob:https://admin.example.com/0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b", "blob"),
+            ("blob:https://admin.example.com", "blob"),
+            ("javascript:alert(1)", "javascript"),
+            ("about:blank", "about"),
+            ("about://localhost", "about"),
+            ("ws://admin.example.com", "ws"),
+            ("wss://admin.example.com:443", "wss"),
+            ("Ftp://admin.example.com", "ftp"),
+        ] {
+            assert!(
+                matches!(serialize_origin(never), Err(NotOrigin::NeverSent { scheme: refused, .. }) if refused == scheme),
+                "{never:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "no browser sends a wss: origin, since no page is served from it")]
+    fn an_allowed_origin_is_not_a_websocket_url() {
+        let _ = Policy::new().allow_origin("wss://admin.example.com");
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "no browser sends a file: origin, since a browser sends Origin: null from it, and file:// would name every local file"
+    )]
+    fn an_allowed_origin_is_not_a_file_url() {
+        let _ = Policy::new().allow_origin("file:///");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_a_scheme() {
+        let _ = Policy::new().allow_origin("admin.example.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_path() {
+        let _ = Policy::new().allow_origin("https://admin.example.com/app");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_is_no_wildcard() {
+        let _ = Policy::new().allow_origin("https://*.example.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_user() {
+        let _ = Policy::new().allow_origin("https://u@admin.example.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_has_no_query() {
+        let _ = Policy::new().allow_origin("https://admin.example.com?x");
+    }
+
+    #[test]
+    #[should_panic(expected = "corten: Policy::allow_origin takes one origin")]
+    fn an_allowed_origin_is_not_null() {
+        let _ = Policy::new().allow_origin("null");
+    }
+
+    #[test]
+    #[should_panic(expected = "write the name in its xn-- (punycode) form")]
+    fn an_allowed_origin_names_its_host_in_ascii() {
+        let _ = Policy::new().allow_origin("https://b\u{fc}cher.example");
+    }
+
+    /// An app's webview (Capacitor on iOS, Tauri) sends its own scheme in `Origin`; allowed,
+    /// its writes go through with the user's cookies, and only that exact origin's.
+    #[test]
+    fn an_allowed_origin_may_be_an_apps_own_scheme() {
+        let post = Method::POST;
+        let uri = http::Uri::default();
+        let from = |policy: &Policy, origin: &'static str| {
+            policy.same_origin(
+                &post,
+                &uri,
+                &headers(&[("origin", origin), ("sec-fetch-site", "cross-site"), ("host", "app.example")]),
+            )
+        };
+        let app = Policy::new().allow_origin("capacitor://localhost");
+        assert_eq!(app.allowed_origins(), ["capacitor://localhost"]);
+        assert!(from(&app, "capacitor://localhost"));
+        assert!(!from(&app, "tauri://localhost"));
+        assert!(!from(&app, "capacitor://localhost:8080"));
+        assert!(!from(&Policy::new(), "capacitor://localhost"), "not allowed, a cross-site write");
+    }
+
+    /// The setting as `Policy::allow_origin` keeps it, and the ones that do not start (which
+    /// used to when the setting was any `scheme://host`, or an `http` origin with a user, a
+    /// query, a name outside ASCII, an empty port or a numeric last label, or a scheme no
+    /// `Origin` carries).
+    #[test]
+    fn an_allowed_origin_is_kept_or_refused_at_startup() {
+        for (setting, kept) in [
+            ("HTTPS://Admin.Example.COM:443/", "https://admin.example.com"),
+            ("https://admin_x.example.com", "https://admin_x.example.com"),
+            ("http://[::1]:3000", "http://[::1]:3000"),
+            ("Capacitor://LocalHost", "capacitor://localhost"),
+            ("tauri://localhost", "tauri://localhost"),
+            ("chrome-extension://abcdefghijklmnopabcdefghijklmnop", "chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+            ("moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b", "moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b"),
+            ("capacitor://localhost:443", "capacitor://localhost:443"),
+        ] {
+            assert_eq!(Policy::new().allow_origin(setting).allowed_origins(), [kept], "{setting}");
+        }
+        for bad in [
+            "null",
+            "https://u@admin.example.com",
+            "https://admin.example.com?x",
+            "https://admin.example.com:",
+            "https://admin.example.1",
+            "https://b\u{fc}cher.example",
+            "file:///",
+            "wss://admin.example.com",
+            "ws://admin.example.com",
+            "ftp://admin.example.com",
+            "blob:https://admin.example.com",
+            "about:blank",
+            "capacitor://u@localhost",
+            "capacitor://localhost/app",
+            "capacitor://localhost?x",
+            "capacitor://*",
+            "capacitor://",
+            "1app://localhost",
+        ] {
+            let started = std::panic::catch_unwind(|| Policy::new().allow_origin(bad));
+            assert!(started.is_err(), "{bad:?}");
+        }
+    }
+
+    /// An allowed origin written with its default port matches the `Origin` a browser sends,
+    /// which never has one; another port is kept and must match.
+    #[test]
+    fn an_allowed_origin_with_its_default_port_lets_its_writes_through() {
+        let post = Method::POST;
+        let uri = http::Uri::default();
+        let from = |policy: &Policy, origin: &'static str| {
+            policy.same_origin(
+                &post,
+                &uri,
+                &headers(&[("origin", origin), ("sec-fetch-site", "cross-site"), ("host", "app.example")]),
+            )
+        };
+        let default_port = Policy::new().allow_origin("https://admin.example.com:443");
+        assert!(from(&default_port, "https://admin.example.com"));
+        assert!(!from(&default_port, "https://admin.example.com:8443"));
+        let other_port = Policy::new().allow_origin("https://a.example:8443");
+        assert!(from(&other_port, "https://a.example:8443"));
+        assert!(!from(&other_port, "https://a.example"));
+        let ipv6 = Policy::new().allow_origin("http://[::1]:3000");
+        assert!(from(&ipv6, "http://[::1]:3000"));
+    }
+
+    /// A write with no `Sec-Fetch-Site` is checked against the requested authority: under hsts
     /// a plain-http page on the app's host is another origin (#1212), and a default port is the
     /// same whether it is written or not.
     #[test]
     fn a_write_without_sec_fetch_site_is_held_to_its_scheme_and_port() {
         let post = Method::POST;
+        let uri = http::Uri::default();
         let write = |policy: &Policy, origin: &'static str, host: &'static str| {
-            policy.same_origin(&post, &headers(&[("origin", origin), ("host", host)]))
+            policy.same_origin(&post, &uri, &headers(&[("origin", origin), ("host", host)]))
         };
         let https_only = Policy::new().hsts();
         let either = Policy::new();
@@ -2312,14 +3864,15 @@ mod tests {
         assert!(write(&either, "http://app.example", "app.example"), "without hsts the public scheme is unknown");
         assert!(write(&either, "https://app.example", "app.example"));
         assert!(
-            https_only.same_origin(&post, &headers(&[("sec-fetch-site", "same-origin"), ("origin", "http://app.example")])),
+            https_only.same_origin(&post, &uri, &headers(&[("sec-fetch-site", "same-origin"), ("origin", "http://app.example")])),
             "Sec-Fetch-Site still decides when it is sent"
         );
         assert!(
-            Policy::new()
-                .hsts()
-                .allow_origin("http://legacy.example")
-                .same_origin(&post, &headers(&[("origin", "http://legacy.example"), ("host", "app.example")])),
+            Policy::new().hsts().allow_origin("http://legacy.example").same_origin(
+                &post,
+                &uri,
+                &headers(&[("origin", "http://legacy.example"), ("host", "app.example")])
+            ),
             "an origin the app allows is its own choice"
         );
 
@@ -2350,7 +3903,7 @@ mod tests {
         assert!(!write(&either, "http://app.example:443", "app.example"), "not http's default port");
         assert!(!write(&either, "http://app.example", "app.example:443"));
         assert!(!write(&https_only, "http://app.example:443", "app.example:443"), "the scheme, not only the port");
-        assert!(!https_only.same_origin(&post, &headers(&[("origin", "https://app.example")])), "no Host to match");
+        assert!(!https_only.same_origin(&post, &uri, &headers(&[("origin", "https://app.example")])), "no Host to match");
 
         // Under hsts a plain-http page is refused unless it is on loopback, which a browser
         // counts as secure but sends no `Sec-Fetch-Site` from over plain http.

@@ -16,6 +16,9 @@ import { beforeProvisioning, settlementControl } from "./test-fixtures/provider-
 
 const credential = "SYNTHETIC_ACCOUNT_DIAGNOSTICS_CREDENTIAL";
 const account = ["account", "get", "--output", "json", "--context", context];
+const create = ["compute", "droplet", "create", "corten-bench-groups-r83-0123456789abcdef", "--size", "c-8", "--region", "sfo3",
+  "--image", "ubuntu-24-04-x64", "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef",
+  "--wait", "--output", "json", "--context", context];
 const details = ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
   "response-status", "body-limit", "invalid-json", "deadline", "cancelled"];
 const state = () => ({ consumes: 0, calls: [], getters: 0, destroyed: 0 });
@@ -62,6 +65,7 @@ function fakeConnect(mode, observed, save = () => {}, stop = () => {}, local, be
         if (fail && mode === "response-error") { res.emit("error", hostile()); return; }
         if (fail && mode === "response-aborted") { res.emit("aborted"); return; }
         if (fail && mode === "body-limit") { res.emit("data", Buffer.alloc(16 * 1024 ** 2 + 1)); return; }
+        if (fail && mode === "invalid-json") { res.emit("data", Buffer.from(raw)); res.emit("end"); return; }
         let value;
         if (path === "/v2/account") value = mode === "missing-account" ? {} : { account: { uuid: fail && mode === "reflect" ? raw : "synthetic-user-0001", droplet_limit: 20 } };
         else if (path.startsWith("/v2/droplets?")) value = { droplets: created ? [created] : [], meta: { total: created ? 1 : 0 }, links: {} };
@@ -73,7 +77,7 @@ function fakeConnect(mode, observed, save = () => {}, stop = () => {}, local, be
         } else if (path === "/v2/actions/456") value = { action: { id: 456, resource_id: 123, resource_type: "droplet", type: "create", status: "completed" } };
         else if (path === "/v2/droplets/123") value = { droplet: created };
         else assert.fail("unexpected synthetic request");
-        res.emit("data", Buffer.from(fail && ["invalid-json", "http503"].includes(mode) ? raw : JSON.stringify(value)));
+        res.emit("data", Buffer.from(fail && mode === "http503" ? raw : JSON.stringify(value)));
         res.emit("end");
         if (mode === "post-response-cancel") stop();
       });
@@ -212,6 +216,24 @@ test("invalid account details in actual worker replies fail closed and never bec
     await assert.rejects(h.run.close(), (error) => checkFailure(error, undefined));
     assert.equal(h.observed().calls.length, 1); assert.equal(h.observed().consumes, 1);
   }
+});
+
+test("private worker keeps ambiguous create details through teardown and refuses another POST", async (t) => {
+  for (const detail of ["request-error", "invalid-json"]) await t.test(detail, async (t) => {
+    const h = worker(t, detail, undefined, undefined, "dedicated");
+    const check = (error) => {
+      assert.equal(error.controlTreeUncertain, true);
+      assert.equal(error.pendingCreate, undefined);
+      return checkFailure(error, { code: "create-request", detail });
+    };
+    await assert.rejects(h.run(create, workerActionTimeout, true), check);
+    await assert.rejects(h.run.close(), check);
+    await assert.rejects(h.run(create, workerActionTimeout, true), check);
+    assert.equal(h.launches, 1);
+    assert.deepEqual(h.observed().calls, [{ method: "POST", path: "/v2/droplets" }]);
+    assert.equal(h.observed().consumes, 1);
+    assert.equal(h.observed().getters, 0);
+  });
 });
 
 test("production finalizer preserves detail after allocation while retaining locks and refusing replay", async (t) => {

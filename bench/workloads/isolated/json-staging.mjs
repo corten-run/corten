@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { auditBundleSchemas, descriptor, identity, imageCommandEvidence, verifyImage, verifyNativeReceipt } from "../../json-api/contract.mjs";
-import { inspectJson } from "../../json-api/report.mjs";
+import { inspectBoundJson } from "../../json-api/report.mjs";
 import { timedCaseProjection } from "../../json-api/timed-outcomes.mjs";
 import { contained, reader } from "../../json-api/artifacts.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -15,13 +15,14 @@ import { dockerRead } from "./host-observation.mjs";
 export function inspectPreparation(binding, root) {
   const summary = JSON.parse(readRegular(join(root, "summary.json")));
   assert.equal(summary.round, binding.request.round); assert.equal(summary.commit, binding.request.commit);
-  verifyJsonProducer(binding, summary);
   assert.deepEqual(summary.options, binding.execution.effectiveOptions);
   assert.deepEqual(summary.measurement?.cpus, binding.resources.expectedCpus);
+  assert.equal(summary.measurement?.loadLayout, binding.resources.requestedCpuEnv?.JSON_API_LOAD_LAYOUT, "JSON API load layout differs from binding");
   assert.equal(summary.options.build, true); assert.equal(summary.options.checkOnly, true);
   assert.equal(summary.checksPassed, false); assert.equal(summary.complete, false); assert.equal(summary.attemptComplete, false);
   assert.deepEqual(summary.cleanupFailures, []);
-  const report = inspectJson(summary, { load: reader(root), commit: binding.request.commit });
+  const report = inspectBoundJson(summary, { load: reader(root), commit: binding.request.commit,
+    verifyBoundProducer: (value) => verifyJsonProducer(binding, value) });
   assert.equal(report.baseline, false);
   assert.equal(report.functionalAttemptComplete, true, "functional raw matrix/configuration incomplete");
   const group = descriptor(), rows = Object.values(report.apps).flatMap(Object.values);
@@ -53,6 +54,13 @@ export function inspectPreparation(binding, root) {
   return { summary, report };
 }
 
+function retainedImageConfig(config, execution) {
+  // Docker can omit WorkingDir. Preserve that omission in both the live subject and saved JSON.
+  const retained = { entrypoint: execution.Entrypoint, cmd: execution.Cmd };
+  if (Object.hasOwn(config, "WorkingDir")) retained.workingDir = config.WorkingDir;
+  return retained;
+}
+
 export function imageProof(summary) {
   const images = [];
   for (const app of descriptor().apps) for (const payload of descriptor().payloads) {
@@ -65,7 +73,7 @@ export function imageProof(summary) {
     assert.deepEqual(execution, saved.execution, "saved app execution differs from actual built image");
     // Preserve actual configuration without forwarding image Env, which may contain secrets.
     images.push({ app, payload, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
-      rootFS: info.RootFS, config: { entrypoint: execution.Entrypoint, cmd: execution.Cmd, workingDir: info.Config.WorkingDir },
+      rootFS: info.RootFS, config: retainedImageConfig(info.Config, execution),
       labels: saved.labels });
   }
   for (const tool of ["node", "k6"]) {
@@ -74,7 +82,7 @@ export function imageProof(summary) {
     const execution = imageCommandEvidence(info);
     assert.deepEqual(execution, summary.toolExecutions[tool], "saved execution differs from actual tool image");
     images.push({ tool, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
-      rootFS: info.RootFS, config: { entrypoint: execution.Entrypoint, cmd: execution.Cmd, workingDir: info.Config.WorkingDir } });
+      rootFS: info.RootFS, config: retainedImageConfig(info.Config, execution) });
   }
   return images;
 }

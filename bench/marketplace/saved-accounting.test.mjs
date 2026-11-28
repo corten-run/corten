@@ -27,17 +27,17 @@ function invalidEdit({ folder, args }, path, edit) {
     assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID", path);
   } finally { writeFileSync(join(folder, path), original); }
 }
-function stoppedFixture(t) {
-  const f = fixture(t), { folder, summary } = f, base = "api/corten/p3-neutral-json";
+function stoppedFixture(t, profile = "neutral-json") {
+  const f = fixture(t), { folder, summary } = f, base = `api/corten/p3-${profile}`;
   const path = `${base}/sat64-receipt.json`, raw = read(folder, path);
   raw.app.state = { ...raw.app.state, Running: false, OOMKilled: true, ExitCode: 137, FinishedAt: new Date(Date.parse(raw.seen.phaseStart) + 5000).toISOString() };
   raw.seen.app = raw.app.state; raw.after = {};
   raw.seen.sidecars = [raw.cpu, raw.upstream].map((c) => ({ name: c.name, startedAt: c.state.StartedAt, state: c.state }));
   raw.seen.events = [{ action: "oom", ms: Date.parse(raw.app.state.FinishedAt) }];
-  const a = summary.apps.corten, runs = a.runs["api-neutral-json"], run = runs[2];
+  const a = summary.apps.corten, key = `api-${profile}`, runs = a.runs[key], run = runs[2];
   run.complete = false; run.stopped = { pass: 3, phase: "sat64", exitCode: 137, oomKilled: true };
   delete run.phases.sat64; delete run.phases.sat256;
-  for (const phase of ["fixed", "sat64", "sat256"]) a.phases["api-neutral-json"][phase] = stageAggregate(runs, phase, 3);
+  for (const phase of ["fixed", "sat64", "sat256"]) a.phases[key][phase] = stageAggregate(runs, phase, 3);
   write(folder, path, raw); write(folder, `${base}/sat64-cpu.json`, {}); write(folder, "summary.json", summary);
   assert.equal(validateSaved(f.args).complete, true);
   return { ...f, base, path };
@@ -51,8 +51,8 @@ test("API load must perform a record read for each successful request, not just 
   });
 });
 
-test("a stopped app cannot hide an incomplete k6 summary", (t) => {
-  const f = stoppedFixture(t);
+for (const profile of ["neutral-json", "rotating-page"]) test(`a stopped ${profile} app cannot hide an incomplete k6 summary`, (t) => {
+  const f = stoppedFixture(t, profile);
   invalidEdit(f, `${f.base}/sat64.json`, (v) => { v.metrics = { http_reqs: v.metrics.http_reqs }; delete v.root_group; });
   for (const edit of [
     (v) => { delete v.metrics.http_req_duration; },
@@ -73,13 +73,14 @@ test("a stopped app cannot hide an incomplete k6 summary", (t) => {
     raw.upstreamReads.after.requests.item_1 = raw.upstreamReads.after.answers[200];
     write(f.folder, `${f.base}/sat64.json`, k6); write(f.folder, f.path, raw);
     assert.equal(validateSaved(f.args).complete, true);
+    if (profile === "rotating-page") invalidEdit(f, `${f.base}/sat64.json`, (v) => { delete v.metrics.marketplace_locale_fr_FR; });
     if (requests > failed) invalidEdit(f, f.path, (v) => { v.upstreamReads.after.answers[200]--; v.upstreamReads.after.requests.item_1--; });
   }
 });
 
 for (const participant of ["app", "upstream"]) test(`cumulative ${participant} CPU counters cannot rewind between serial phases`, (t) => {
   const f = fixture(t);
-  const path = participant === "app" ? "api/corten/p1-neutral-json/fixed-receipt.json" : "api/corten/p1-en-US-page/sat256-receipt.json";
+  const path = participant === "app" ? "api/corten/p1-neutral-json/fixed-receipt.json" : "api/corten/p1-rotating-page/sat256-receipt.json";
   invalidEdit(f, path, (v) => {
     const name = v[participant].name, delta = v.after[name] - v.before[name];
     v.before[name] += 10000000; v.after[name] += 10000000;
@@ -114,7 +115,7 @@ test("qualification and browser gates cannot precede their checked app's lifetim
 
 test("review regressions: complete request/check coverage and all latency exports, including stopped apps", (t) => {
   const f = stoppedFixture(t);
-  for (const path of ["fixture/corten/p1-en-US-page/fixed.json", `${f.base}/sat64.json`]) {
+  for (const path of ["fixture/corten/p1-rotating-page/fixed.json", `${f.base}/sat64.json`]) {
     for (const edit of [
       (v) => {
         v.metrics.checks = { passes: 1, fails: 0, value: 1 };
@@ -164,7 +165,7 @@ test("review regressions: shared dependencies must exist during their observatio
 });
 
 test("review regressions: healthy phases cannot contain stop-only sidecar or event observations", (t) => {
-  const f = fixture(t), path = "fixture/corten/p1-en-US-page/fixed-receipt.json";
+  const f = fixture(t), path = "fixture/corten/p1-rotating-page/fixed-receipt.json";
   for (const edit of [
     (v) => { v.seen.sidecars = [{ name: v.cpu.name, startedAt: v.cpu.state.StartedAt, state: { ...v.cpu.state, Running: false, ExitCode: 137 } }]; v.seen.events = [{ action: "kill", ms: Date.parse(v.seen.phaseStart) + 1000 }]; },
     (v) => { v.seen.sidecars = []; },

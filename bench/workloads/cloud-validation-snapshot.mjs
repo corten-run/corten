@@ -41,6 +41,7 @@ export const validationPaths = Object.freeze([
   "bench/fullstack-browser/capture.mjs",
   "bench/fullstack-browser/cell-records.mjs",
   "bench/fullstack-browser/contract.mjs",
+  "bench/fullstack-browser/document-navigation.mjs",
   "bench/fullstack-browser/json-records.mjs",
   "bench/fullstack-browser/ledger.mjs",
   "bench/fullstack-browser/lifecycle.mjs",
@@ -55,9 +56,11 @@ export const validationPaths = Object.freeze([
   "bench/fullstack-browser/verify.mjs",
   "bench/fullstack/apps.mjs",
   "bench/fullstack/conformance.mjs",
+  "bench/fullstack/edge.mjs",
   "bench/fullstack/inventory.mjs",
   "bench/fullstack/mixed.mjs",
   "bench/fullstack/passes.mjs",
+  "bench/hardening/bounded-requests.mjs",
   "bench/hardening/clock.mjs",
   "bench/hardening/dependency-recovery-capture.mjs",
   "bench/hardening/dependency-recovery-contract.mjs",
@@ -65,9 +68,8 @@ export const validationPaths = Object.freeze([
   "bench/hardening/lifecycle.mjs",
   "bench/hardening/native.mjs",
   "bench/hardening/plan.mjs",
-  "bench/hardening/probe.mjs",
-  "bench/hardening/receipts.mjs",
-  "bench/hardening/resource-sample.mjs",
+  "bench/hardening/qualification.mjs",
+  "bench/hardening/request-capture.mjs",
   "bench/hardening/verify.mjs",
   "bench/json-api/artifacts.mjs",
   "bench/json-api/contract.mjs",
@@ -75,6 +77,8 @@ export const validationPaths = Object.freeze([
   "bench/json-api/fixed-identity.mjs",
   "bench/json-api/fixed-prototype.mjs",
   "bench/json-api/fixed-stream.mjs",
+  "bench/json-api/load-resource-proof.mjs",
+  "bench/json-api/placement.mjs",
   "bench/json-api/process.mjs",
   "bench/json-api/production.mjs",
   "bench/json-api/report.mjs",
@@ -128,6 +132,7 @@ export const validationPaths = Object.freeze([
   "bench/mixed-production/stats.mjs",
   "bench/mixed-production/upstream-ledger.mjs",
   "bench/mixed-production/verify.mjs",
+  "bench/typescript.mjs",
   "bench/workloads/browser.mjs",
   "bench/workloads/client.mjs",
   "bench/workloads/cloud-audit.mjs",
@@ -164,6 +169,7 @@ export const validationPaths = Object.freeze([
   "bench/workloads/isolated/json-staging.mjs",
   "bench/workloads/isolated/mixed-staging.mjs",
   "bench/workloads/isolated/native-replay.mjs",
+  "bench/workloads/isolated/native-roles.mjs",
   "bench/workloads/isolated/participant-executables.mjs",
   "bench/workloads/isolated/process.mjs",
   "bench/workloads/isolated/raw-support.mjs",
@@ -176,9 +182,12 @@ export const validationPaths = Object.freeze([
   "bench/workloads/run.mjs",
   "scripts/steady.mjs"
 ]);
-export const typescriptPath = "node_modules/typescript/lib/typescript.js";
-// typescript@5.9.3, verified against the package-lock SHA-512 npm archive.
-export const typescriptSha256 = "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675";
+// The bench package's classic compiler (bench/package.json), not the root's TypeScript.
+export const typescriptPath = "bench/node_modules/typescript/lib/typescript.js";
+// typescript@6.0.3, verified against bench/package-lock.json's SHA-512 npm archive.
+export const typescriptSha256 = "569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39";
+// The measured commit's bench manifest and lock must pin exactly that archive.
+export const typescriptIntegrity = "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==";
 // semver@7.8.6 library closure, checked against the integrity-pinned npm archive.
 // The CLI and preload entry are not validator dependencies.
 export const semverIntegrity = "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==";
@@ -238,17 +247,35 @@ const hash = (source) => createHash("sha256").update(source).digest("hex");
 export const validationFailure = () => new Error("native campaign validation unavailable or invalid; evidence/host preserved");
 const text = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 const gitEnvironment = () => ({ ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" });
+const headFailure = (reason) => new Error(`Git HEAD validation failed: ${reason}`);
 function head(root, readGit = spawnSync) {
-  const result = readGit("git", ["--no-replace-objects", "-C", root, "rev-parse", "--verify", "HEAD^{commit}"], {
-    encoding: "utf8", timeout: 5000, maxBuffer: 1024, windowsHide: true, shell: false,
-    env: gitEnvironment(),
-  });
-  if (result.status !== 0 || result.error || !/^[a-f0-9]{40}\s*$/.test(result.stdout ?? "")) throw validationFailure();
+  let result;
+  try {
+    result = readGit("git", ["--no-replace-objects", "-C", root, "rev-parse", "--verify", "HEAD^{commit}"], {
+      encoding: "utf8", timeout: 5000, maxBuffer: 1024, windowsHide: true, shell: false,
+      env: gitEnvironment(),
+    });
+  } catch { throw headFailure("process error"); }
+  if (result.error) throw headFailure(result.error.code === "ETIMEDOUT" ? "timed out" : "process error");
+  if (result.status !== 0) throw headFailure("unsuccessful exit");
+  if (!/^[a-f0-9]{40}\s*$/.test(result.stdout ?? "")) throw headFailure("malformed output");
   return result.stdout.trim();
 }
 // Evidence may name a source identity, never select executable code. Default
 // replay accepts only this installed controller's commit, captured on import.
+// Only this import exposes the fixed HEAD diagnostic; captureValidation masks it.
 const installedCommit = head(checkout);
+
+// Root metadata pins semver; the bench package's pins the classic compiler.
+const packageMetadata = ["package.json", "package-lock.json", "bench/package.json", "bench/package-lock.json"];
+function pinnedPackage(manifest, lock, name, version, integrity) {
+  assert.equal(manifest.devDependencies[name], version);
+  assert.equal(lock.packages[""].devDependencies[name], version);
+  const pinned = lock.packages[`node_modules/${name}`];
+  assert.equal(pinned.version, version); assert.equal(pinned.integrity, integrity);
+  assert.equal(pinned.resolved, `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`);
+  assert.equal(Object.keys(pinned.dependencies ?? {}).length, 0);
+}
 
 function dependency(root, path, sha256, limit) {
   const fd = openSync(realpathSync(join(root, path)), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
@@ -262,6 +289,15 @@ function dependency(root, path, sha256, limit) {
   return { path, source: text(bytes), sha256 };
 }
 
+// Collection and fleet verification replay with this checkout's own bench compiler,
+// which only `npm --prefix bench ci` installs here; a host's install is not the
+// operator's. Preflights report this fixed hint, never an evidence-derived detail.
+export const localCompilerMissing = "local bench install missing or differs: run npm --prefix bench ci";
+export function localCompiler(root = checkout) {
+  try { dependency(realpathSync(root), typescriptPath, typescriptSha256, 16 * 1024 * 1024); return true; }
+  catch { return false; }
+}
+
 // Reading immutable Git objects, not checkout files, binds the entire executable
 // closure to the already-approved measured commit, including nested worker entry.
 // One process, bounded time/output, no fetch, filters, hooks or working-tree writes.
@@ -271,7 +307,7 @@ export function captureValidation(commit, { root = checkout, readGit = spawnSync
     assert.match(commit, /^[a-f0-9]{40}$/);
     root = realpathSync(root);
     assert.equal(commit, root === checkout ? installedCommit : head(root, readGit));
-    const paths = [...validationPaths, "package.json", "package-lock.json"];
+    const paths = [...validationPaths, ...packageMetadata];
     const result = readGit("git", ["--no-replace-objects", "-C", root, "cat-file", "--batch"], {
       input: paths.map((path) => `${commit}:${path}\n`).join(""),
       encoding: null, timeout: 5000, maxBuffer: 32 * 1024 * 1024,
@@ -294,16 +330,12 @@ export function captureValidation(commit, { root = checkout, readGit = spawnSync
       return { path, source: text(bytes), sha256: hash(bytes) };
     });
     assert.equal(offset, result.stdout.length);
-    const manifest = JSON.parse(objects.at(-2).source), lock = JSON.parse(objects.at(-1).source);
-    assert.equal(manifest.devDependencies.semver, "7.8.6");
-    assert.equal(lock.packages[""].devDependencies.semver, "7.8.6");
-    const pinned = lock.packages["node_modules/semver"];
-    assert.equal(pinned.version, "7.8.6"); assert.equal(pinned.integrity, semverIntegrity);
-    assert.equal(pinned.resolved, "https://registry.npmjs.org/semver/-/semver-7.8.6.tgz");
-    assert.equal(Object.keys(pinned.dependencies ?? {}).length, 0);
+    const [manifest, lock, benchManifest, benchLock] = objects.slice(-packageMetadata.length).map((row) => JSON.parse(row.source));
+    pinnedPackage(manifest, lock, "semver", "7.8.6", semverIntegrity);
+    pinnedPackage(benchManifest, benchLock, "typescript", "6.0.3", typescriptIntegrity);
     // Metadata comes from the measured commit; executable dependencies come
     // from pinned same-read bytes, never a package resolver or mutable manifest.
-    const sources = objects.slice(0, -2);
+    const sources = objects.slice(0, -packageMetadata.length);
     sources.push(dependency(root, typescriptPath, typescriptSha256, 16 * 1024 * 1024));
     for (const [path, sha256] of Object.entries(semverSources)) sources.push(dependency(root, path, sha256, 64 * 1024));
     return { root: pathToFileURL(root + "/").href, sources };
@@ -314,7 +346,8 @@ export function captureValidation(commit, { root = checkout, readGit = spawnSync
 // can supply a snapshot, worker implementation, module, command or package.
 export function validationTask(input, { snapshot = captureValidation(input.commit), WorkerClass = Worker } = {}) {
   try {
-    assert.deepEqual(Object.keys(input).sort(), ["commit", "folder", "round"]);
+    assert.deepEqual(Object.keys(input).sort(), input.action === "actor-role-preflight"
+      ? ["action", "commit", "group", "mode", "round"] : ["commit", "folder", "round"]);
     assert.match(input.commit, /^[a-f0-9]{40}$/);
     const { sources, root } = snapshot;
     assert.deepEqual(sources.map((row) => row.path), [...validationPaths, typescriptPath, ...Object.keys(semverSources)]);

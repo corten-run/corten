@@ -19,7 +19,8 @@ import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-led
 import { coveredSamples, resourceBoundary, resourceCoveragePolicy } from "./resources.mjs";
 import { sourceAuditIdentity, sourceSnapshot } from "./source-audit.mjs";
 import { runQualificationWorker } from "./qualify-worker.mjs";
-import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
+import { boundedFeatureProfile } from "../marketplace/feature-contract.mjs";
+import { boundedQualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { replayQualificationEvidence } from "./qualification-evidence.mjs";
 
 const records = fixture(), plan = createPlan({ seed: 42, clients: 2, repetitions: 1, records });
@@ -127,32 +128,38 @@ test("completed negative qualification never cleans up an uncreated CPU reader o
     const result = await measureNativeGroup({ summary, options, folder, repo, nativeBuildRoot: repo, runId, network: `${runId}-net`,
       nodeImage: { Id: imageId }, browserImage: { Id: imageId }, plan, records, captures: { corten: capture }, save() {},
       io: { command: async () => "" }, ready: async () => {},
-      own: async (_args, name) => {
+      own: async (args, name) => {
         assert.ok(!name.endsWith("measurement-cpu"), "qualification must reject before CPU reader creation");
         active.set(name, { Id: String(active.size + removed.length + 1).padStart(64, "0"), Image: imageId, RestartCount: 0,
           Config: { Env: ["PROFILE="] }, HostConfig: { Memory: 2 ** 30, NanoCpus: 1e9, CpusetCpus: "", NetworkMode: `${runId}-net` },
           State: { Running: true, Paused: false, OOMKilled: false, StartedAt: "2026-11-13T00:00:00Z" } });
+        if (name.endsWith("-worker")) {
+          const source = name.includes("-fixture-") ? "fixture" : "api";
+          assert.deepEqual(args.slice(0, 3), ["create", "--network", `container:${name.slice(0, -7)}`]);
+          assert.deepEqual(args.slice(-4), [imageId, "node", "bench/mixed-production/qualify-worker.mjs", `/out/measurement/corten/${source}/qualification/settings.json`]);
+        }
+        return active.get(name).Id;
       },
       inspect: async (name) => { assert.ok(active.has(name)); return active.get(name); },
       remove: async (name) => { assert.ok(active.has(name), "cleanup requires an actual creation receipt"); active.delete(name); removed.push(name); },
       docker: async (args) => {
         assert.deepEqual(args.slice(0, 2), ["start", "-a"]);
-        const source = args[2].includes("-fixture-") ? "fixture" : "api", dir = join(folder, "measurement/corten", source, "qualification");
+        const worker = [...active].find(([, { Id }]) => Id === args[2])?.[0];
+        assert.ok(worker?.endsWith("-worker"), "start exactly the qualification worker create ID");
+        const source = worker.includes("-fixture-") ? "fixture" : "api", dir = join(folder, "measurement/corten", source, "qualification");
         const config = JSON.parse(readFileSync(join(dir, "settings.json"))); config.output = join(dir, "qualification.json");
         config.upstream = `http://127.0.0.1:${upstream.address().port}`;
-        const p = qualificationProbes(); p.crossSite.status = 200;
+        const p = boundedQualificationProbes(source); p.crossSite.status = 200;
         const q = await runQualificationWorker(config, (script, input) => {
-          if (script === "conform-hold") return input.mode === "head" ? p.unfinishedHead : p.cap;
+          assert.equal(script, "conform-probe");
           const { path, headers, method } = input;
-          if (path.startsWith("/health")) return p.live;
+          if (path.startsWith("/health")) { const { path: _path, ...reply } = p.live; return reply; }
           if (path.endsWith("/missing")) return path.startsWith("/api") ? p.json404 : p.page404;
-          if (headers.host === "unrecognized.invalid") return p.badHost;
-          if (headers["x-qualification"]) return p.bigHead;
+          if (headers?.host === "unrecognized.invalid") return p.badHost;
           if (method === "POST" && path.startsWith("/api/marketplace/")) return p.json405;
-          if (method === "POST") return headers.origin !== config.base ? p.crossSite : input.body.length > 2 ** 20 ? p.bigBody : p.ownPost;
+          if (method === "POST") return headers.origin !== config.base ? p.crossSite : p.ownPost;
           if (method === "HEAD") return p.head;
-          if (headers["accept-encoding"] !== "identity") return path.startsWith("/api") ? p.jsonGzip : p.pageBr;
-          if (upstreamMode.hang) return p.slow;
+          if (headers?.["accept-encoding"]) return path.startsWith("/api") ? headers["accept-encoding"] === "gzip" ? p.jsonGzip : p.jsonBr : p.pageBr;
           if (upstreamMode.status) return path.startsWith("/api") ? p.json500 : p.page500;
           return path.startsWith("/api") ? p.json : p.page;
         });
@@ -164,6 +171,8 @@ test("completed negative qualification never cleans up an uncreated CPU reader o
       } });
     assert.equal(rejected.length, 2); assert.equal(result.qualified, false); assert.equal(result.calibrated, false);
     assert.equal(result.timingBlocked, true); assert.equal(result.comparisonEligible, false);
+    assert.equal(result.qualificationProfile, boundedFeatureProfile);
+    assert.equal(result.connectionFloodResistance, "Connection-flood resistance: not measured.");
     assert.deepEqual(summary.cleanupFailures, []); assert.equal(active.size, 0); assert.equal(removed.length, 6);
     for (const source of ["fixture", "api"]) {
       assert.equal(result.cells.corten[source].qualification.eligible, false);

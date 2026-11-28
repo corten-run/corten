@@ -13,12 +13,12 @@ use crate::{
     handler::Request,
     listener::Listener,
     middleware::Middleware,
-    page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
+    page::{self, default_error_page, error_page_fn, Asked, ErrorPageFn, Failure, RequestPage, Shared},
     pwa::Pwa,
     response::Response,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
     router::{get, Route, Router, Table},
-    security::{Applied, Csp, NonceSlot, Policy},
+    security::{Applied, Csp, NonceSlot, Origin, Policy},
     signal::{self, Watch},
     sse::Event,
     task::{Finishing, Running, Task},
@@ -512,6 +512,8 @@ pub struct App<M = ()> {
     access_log: bool,
     /// The values only the layout shows ([`App::layout_read`]).
     layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
+    /// How many bytes of `Public` answers the app keeps ([`App::kept_answers`]).
+    kept: usize,
     middleware: M,
 }
 
@@ -644,6 +646,7 @@ impl App {
             layers: Vec::new(),
             access_log: false,
             layout_reads: Vec::new(),
+            kept: crate::kept::BOUND,
             middleware: (),
         }
     }
@@ -685,6 +688,7 @@ impl App {
             layers: self.layers,
             access_log: self.access_log,
             layout_reads: self.layout_reads,
+            kept: self.kept,
             middleware,
         }
     }
@@ -924,6 +928,12 @@ impl<M: Middleware> App<M> {
     /// request's mode, like any page, with the failure's status; `failure.detail()` is the error,
     /// set only under `corten dev`. A JSON route's failures, and a data client's, are JSON instead.
     /// `corten new` writes one. Without it, Corten sends a plain document.
+    ///
+    /// In place of a handler's own failure the page keeps what a middleware wrote, a CDN's
+    /// caching headers included, so a middleware that tells a CDN to keep every answer must not
+    /// do so for an error page that reads the raw `Cookie` or `Authorization` itself: find who is
+    /// asking through a `Caller` (which makes the answer private) or leave failures uncached
+    /// (the guide's Error pages).
     pub fn error_page<H, T, S>(mut self, page: H, state: S) -> Self
     where
         H: ErrorPageFn<T, S>,
@@ -937,6 +947,41 @@ impl<M: Middleware> App<M> {
     /// and open pages reload when the server restarts. Never on in production.
     pub fn dev(mut self, dev: bool) -> Self {
         self.dev = Some(dev);
+        self
+    }
+
+    /// How many bytes of [`crate::Public`] answers the app keeps to give again (32 MiB unless
+    /// set; `0` keeps none): pages, and whole bodies of JSON, text or a file of 1,024 bytes or
+    /// more, whatever their type and the build's features. A route that says its
+    /// answer is the same for everyone names one any shared cache may keep for the lifetime it
+    /// gives, and the app is the first of them: the whole document, or such a body of a route
+    /// that answers JSON, text or a file, made for a `GET` with no cookie or `Authorization` is given to the
+    /// next such request in the handler's place until that lifetime ends (`s-maxage` where the
+    /// answer has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it,
+    /// the app's middleware too; what it saves is the handler, the render or the writing of the
+    /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
+    /// request, and what it reads may be that old when it is seen, as it already may be behind a
+    /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
+    /// a header the key does not cover. Neither is a relay, a stream or a feed, a file sent as
+    /// a stream or one at a URL
+    /// that names its content (`Public::immutable`); a file of a known size that a page route
+    /// answers in its page's place (`PageOr`) is kept as that page would be.
+    ///
+    /// Past the bound, a page not read since the last time room was made goes first, and one
+    /// larger than an eighth of the bound is not kept. Once the kept pages are within an
+    /// eighth of the bound, an answer is kept only when its URL was asked for before, so a
+    /// URL asked for once seldom takes a page's room and a page's handler runs twice before
+    /// its page is kept. A write to a page's path drops what is
+    /// kept there, whatever it is answered, and so does one that redirects to it; a
+    /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
+    /// under `corten dev`, where the log says instead, once for each route and verdict, whether a
+    /// release build would keep a `Public` route's answer to a `GET` that shows nothing about who
+    /// asks while its store has room, and if not the first reason (a bound of 0 among them); an
+    /// app with no `Public` route of a kind it keeps (a page, or JSON,
+    /// text or a file) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
+    /// compressed form made of it.
+    pub fn kept_answers(mut self, bytes: usize) -> Self {
+        self.kept = bytes;
         self
     }
 
@@ -1161,12 +1206,22 @@ impl<M: Middleware> App<M> {
     /// closes the connection: 60 seconds unless set, as nginx's `send_timeout`. A client that
     /// sends requests and stops reading their answers cannot hold its connection, and a live
     /// stream, a feed or a WebSocket to one ends (the route sees its write fail). It counts only
-    /// while a write waits: a download whose reader keeps freeing room and a stream quiet between
-    /// events are not cut, though a reader that takes a little each minute can be, since the
-    /// system reports room only once a good part of the buffer is free. A TLS connection's last
-    /// record, written as it closes, is held to it too. `None` removes it, for a server that only
-    /// a proxy which reads answers as they come reaches; with [`App::header_timeout`] also `None`,
-    /// the clock and its per-request work are gone.
+    /// while a write waits, from when the connection last reported room: a stream quiet between
+    /// events is not cut, and a download is cut only when its reader goes that long without the
+    /// system reporting room, which it does once a good part of the buffer is free, so a reader
+    /// that takes a little each minute can be. Over TLS a write or a flush stays pending while the
+    /// TLS library sends what it holds, and its wait starts over at each report of room too. What
+    /// decides how far apart the reports come is how the client takes bytes from its socket: one
+    /// that takes them in bursts (a TLS client reading whole records, `curl --limit-rate`) leaves
+    /// longer gaps than one that takes the same rate evenly, over TLS and plain HTTP alike, so a
+    /// short timeout can cut a slow reader that reads in bursts: with 16 KiB buffers and a
+    /// 2-second timeout, a tokio-rustls client taking 2 KiB every 125 ms was cut within 9 seconds,
+    /// and the same rate taken evenly from the socket was kept past 30, over TLS and plain HTTP.
+    /// While the connection's task has spent tokio's cooperative budget (a route reading a flood
+    /// of input), a report of room does not start the wait over. A TLS connection's last record,
+    /// written as it closes, is held to it too. `None` removes it, for a server that only a proxy
+    /// which reads answers as they come reaches; with [`App::header_timeout`] also `None`, the
+    /// clock and its per-request work are gone.
     pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.connections.send_timeout = timeout.into();
         self
@@ -1204,9 +1259,10 @@ impl<M: Middleware> App<M> {
     /// A tower layer around the whole app, outside the router and every stage of
     /// [`crate::middleware`], for what must see the raw request first: a cap on body size, a limit
     /// per address, a trace span. It sees the request before its route is matched (so with no
-    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router sets
-    /// the answer's `Content-Length` and empties a `HEAD`'s body after every layer, so a layer may
-    /// change the body. It is made once, around the whole app, so what it keeps (a concurrency
+    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router
+    /// empties a `HEAD`'s body after every layer, keeping its length, and the server writes any
+    /// other answer's `Content-Length` from the body it is handed, so a layer may change the
+    /// body. It is made once, around the whole app, so what it keeps (a concurrency
     /// limit's count) is the app's, not a route's. Layers added later go outside earlier ones. A step inside Corten's order
     /// (after its checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
     /// whose areas or APIs set deadlines of their own, a request a layer holds or answers itself,
@@ -1269,7 +1325,9 @@ impl<M: Middleware> App<M> {
     /// [layers](App::layer) included. For serving it another way, and for a test that sends what
     /// [`App::test`]'s client does not (a live stream it reads as it comes); it starts none of the
     /// app's [tasks](App::task). A connection loop of the app's own gives each request the client's
-    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from.
+    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from,
+    /// and writes each answer's `Content-Length` from its body's `size_hint`, as hyper's HTTP/1
+    /// server does: the router sets the header only on a `HEAD`, whose body it drops.
     pub fn router(mut self) -> Router {
         let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
         let bounds = self.drain().each;
@@ -1578,6 +1636,15 @@ impl<M: Middleware> App<M> {
         if let Some(unstaged) = unstaged {
             table = table.merge(unstaged);
         }
+        // An app with no route eligible to keep a page has none for a write to drop, so its writes
+        // are not counted. Under `corten dev` every load is the handler's, so a change shows on the
+        // next one: the store stands so the code that decides what it keeps runs as it does in a
+        // release build, but nothing is kept in it, and each `Public` route says in the log what
+        // a release build does with its answer (`crate::router::Telling`).
+        shared.kept = if !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
+        if dev {
+            table = table.telling();
+        }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
         let shared = Arc::new(shared);
@@ -1687,7 +1754,13 @@ where
 /// (rustls, native-tls) stays the app's, and so does its configuration: ALPN offers `http/1.1`,
 /// what Corten speaks. A step whose future borrows from what it captures clones it first:
 /// `move |tcp| { let acceptor = acceptor.clone(); async move { acceptor.accept(tcp).await } }`.
-/// The step's error is not read: the connection closes.
+/// The step's error is not read: the connection closes. The IO's flush must complete only once
+/// the bytes it holds have been written (tokio-rustls's does): the header timeout counts from the
+/// first flush that completes after an answer's body has been taken. And while a write, a flush
+/// or a close waits, the IO must wake the waker it was given only when it can take more (as
+/// tokio's TCP stream and tokio-rustls do): [`App::send_timeout`] takes each such wake as the
+/// client making room and starts its wait over, so an IO that also woke it to read, or woke
+/// itself, could keep a client that has stopped reading open.
 pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
 where
     L: Listener,
@@ -1934,6 +2007,28 @@ impl Closing {
     }
 }
 
+/// The waker a connection's wait for shutdown is polled with: it notes that the wait was woken
+/// and wakes the connection's task, which polls the wait again only then. Whatever a poll of the
+/// wait did to be polled again, it did with this waker: left it with the channel, which wakes it
+/// when shutdown begins or the server is gone, or woke it itself to be polled again soon (tokio
+/// does when the task's budget is spent, and when a task dump polls the task). So the task does
+/// not rest on which of those a poll did.
+struct Heard {
+    woken: std::sync::atomic::AtomicBool,
+    task: std::task::Waker,
+}
+
+impl std::task::Wake for Heard {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, std::sync::atomic::Ordering::Release);
+        self.task.wake_by_ref();
+    }
+}
+
 /// Accepts connections on `listener` and serves each until `stop` holds a [`Closing`]; then
 /// stops accepting, lets each connection finish the request it is in (an idle one closes) until
 /// the time it gives that connection, closes those still open then, and returns once all have
@@ -2002,12 +2097,39 @@ where
             };
             let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
-            let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
-            let closing = tokio::select! {
-                _ = conn.as_mut() => return,
-                closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
+            // With the timer its requests' deadlines wait on, kept from one to the next.
+            let mut conn = std::pin::pin!(crate::deadline::Keeps::new(http.serve_connection(io, service).with_upgrades()));
+            // The wait for shutdown has a waker of its own ([`Heard`]) and is polled only when
+            // that waker has fired, and at first. So a wake of the task for the connection (every
+            // read and write) asks only whether it has, one load, where polling the wait again
+            // took a lock connections on every thread share: the mutex of one of the lists the
+            // channel keeps its waiters in (tokio has eight, and a wait is put on one at random).
+            // The task is spawned above, so the waker it is polled with here is its own for as
+            // long as it runs.
+            let closing = {
+                let task = std::future::poll_fn(|cx| std::task::Poll::Ready(cx.waker().clone())).await;
+                let heard = Arc::new(Heard { woken: std::sync::atomic::AtomicBool::new(true), task });
+                let waker = std::task::Waker::from(heard.clone());
+                let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
+                let stopped = std::future::poll_fn(|cx| {
+                    if conn.as_mut().poll(cx).is_ready() {
+                        return std::task::Poll::Ready(None);
+                    }
+                    if !heard.woken.load(std::sync::atomic::Ordering::Acquire) {
+                        return std::task::Poll::Pending;
+                    }
+                    // Cleared before the poll, so a wake during it or after it is kept.
+                    heard.woken.store(false, std::sync::atomic::Ordering::Release);
+                    let mut cx = std::task::Context::from_waker(&waker);
+                    // A channel whose sender is gone is an error here, and ends the wait.
+                    stopping.as_mut().poll(&mut cx).map(|closing| Some(closing.ok().and_then(|closing| *closing)))
+                });
+                match stopped.await {
+                    Some(closing) => closing,
+                    None => return,
+                }
             };
-            conn.as_mut().graceful_shutdown();
+            conn.as_mut().conn().graceful_shutdown();
             // The server gone without a shutdown: close now.
             let Some(closing) = closing else {
                 let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;
@@ -2116,7 +2238,9 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        let mut req = req.map(crate::extract::arriving);
+        // An HTTP/1.1 message with no `Host` line, which only its reader knows of a request.
+        crate::security::mark_unnamed(&mut req);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
@@ -2165,9 +2289,20 @@ pub(crate) struct Scope {
     /// the policy, else the app's. An API's answers keep their own CSP and send its referrer policy.
     csp: Arc<Csp>,
     shell: u64,
+    /// The lines the stages give its answers that bring none of them ([`Applied::lines`]).
+    lines: http::HeaderMap,
+    /// What those say of an answer's tag ([`cache::tag`]).
+    beside_a_tag: cache::BesideATag,
     /// Its middleware, after the app's: each area's around it, outermost first, then its API's
     /// (with the APIs' around it).
     middleware: crate::middleware::Stack,
+}
+
+#[cfg(test)]
+impl Scope {
+    /// The offsets of `own` and `beside_a_tag`, for the router's test of a scope's layout.
+    pub(crate) const OWN_AND_BESIDE_A_TAG: (usize, usize) =
+        (std::mem::offset_of!(Scope, own), std::mem::offset_of!(Scope, beside_a_tag));
 }
 
 /// Every area's and API's scope and the app's, by path: for a request whose route cannot say
@@ -2195,15 +2330,24 @@ impl Scopes {
             around.sort_by_key(|area| area.prefix.len());
             around
         };
+        // A scope's lines, with what they say of an answer's tag: the one place both are made.
+        let scope_lines = |csp: &Csp, page| {
+            let lines = policy.lines(csp, page);
+            let beside_a_tag = cache::BesideATag::of(&lines);
+            (lines, beside_a_tag)
+        };
         let mut prefixed: Vec<(String, Arc<Scope>)> = Vec::with_capacity(areas.len() + mounts.len());
         for area in areas {
             let around = around(area.prefix);
             let (csp, shell) = policy.csp_for(area.prefix);
+            let (lines, beside_a_tag) = scope_lines(&csp, true);
             let scope = Scope {
                 own: false,
                 mount: None,
                 deadline: around.iter().rev().find_map(|area| area.deadline).unwrap_or(deadline),
                 body_limit: around.iter().rev().find_map(|area| area.body_limit).unwrap_or(body_limit),
+                lines,
+                beside_a_tag,
                 csp,
                 shell,
                 middleware: around.iter().flat_map(|area| area.middleware.iter().cloned()).collect(),
@@ -2220,13 +2364,26 @@ impl Scopes {
                 mount.body_limit.or_else(|| around.iter().rev().find_map(|area| area.body_limit)).unwrap_or(body_limit);
             let middleware = around.iter().flat_map(|area| area.middleware.iter()).chain(steps.iter()).cloned().collect();
             let prefix = mount.prefix.clone();
-            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, middleware };
+            let (lines, beside_a_tag) = scope_lines(&csp, false);
+            let scope =
+                Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, beside_a_tag, middleware };
             prefixed.push((prefix, Arc::new(scope)));
         }
         prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         let app = |own| {
             let csp = policy.csp.clone();
-            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, middleware: Default::default() })
+            let (lines, beside_a_tag) = scope_lines(&csp, true);
+            Arc::new(Scope {
+                own,
+                mount: None,
+                deadline,
+                body_limit,
+                csp,
+                shell: 0,
+                lines,
+                beside_a_tag,
+                middleware: Default::default(),
+            })
         };
         Scopes { own_paths, own: app(true), app: app(false), prefixed }
     }
@@ -2295,13 +2452,47 @@ struct At<S> {
     scope: Option<Arc<Scope>>,
 }
 
+/// A handle to the request held once in the stage future. Each stage moves it to the next,
+/// and dispatch consumes it, so neither can read the request after handing it off.
+pub(crate) struct Inbound<'a>(&'a mut Option<Request>);
+
+impl Inbound<'_> {
+    pub(crate) fn get(&mut self) -> &mut Request {
+        self.0.as_mut().expect("the stages have not dispatched the request yet")
+    }
+
+    pub(crate) fn take(self) -> Request {
+        self.0.take().expect("the stages have not dispatched the request yet")
+    }
+
+    /// An early answer drops the undispatched request before compression finishes the response.
+    fn discard(self) {
+        *self.0 = None;
+    }
+}
+
+// Check the private type in-crate. A second matching marker makes inference ambiguous if
+// Inbound ever implements Copy or Clone, either of which would allow reads after hand-off.
+#[cfg(test)]
+const _: fn() = || {
+    trait UniqueIfMoveOnly<Marker> {
+        fn check() {}
+    }
+    impl<T> UniqueIfMoveOnly<()> for T {}
+    impl<T: Copy> UniqueIfMoveOnly<u8> for T {}
+    impl<T: Clone> UniqueIfMoveOnly<u16> for T {}
+    <Inbound<'_> as UniqueIfMoveOnly<_>>::check();
+};
+
 /// The stages around each staged route, as the router runs them: one boxed future per request,
 /// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
 /// every request (`Next`) on top of the future.
 impl<S: Steps> crate::router::Stages for At<S> {
     fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
         let route = route.clone();
-        Box::pin(async move { self.layer.handle(req, route, self.scope.as_deref()).await })
+        // Capture the slot directly instead of moving a captured request into it.
+        let mut held = Some(req);
+        Box::pin(async move { self.layer.handle(Inbound(&mut held), route, self.scope.as_deref()).await })
     }
 }
 
@@ -2433,14 +2624,14 @@ struct Layer<S> {
 
 impl<S: Steps> Layer<S> {
     /// `scope` is the request's route's, when its route says it.
-    async fn handle(&self, req: Request, route: Route, scope: Option<&Scope>) -> Response {
+    async fn handle(&self, mut pending: Inbound<'_>, route: Route, scope: Option<&Scope>) -> Response {
         #[cfg(feature = "compress")]
-        let coding = crate::compress::negotiate(req.headers());
+        let coding = crate::compress::negotiate(pending.get().headers());
         #[cfg(feature = "compress")]
         let accepts_coding = coding.any();
         #[cfg(not(feature = "compress"))]
-        let accepts_coding = cache::accepts_a_coding(req.headers());
-        let res = self.secure(req, route, accepts_coding, scope).await;
+        let accepts_coding = cache::accepts_a_coding(pending.get().headers());
+        let res = self.secure(pending, route, accepts_coding, scope).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -2448,13 +2639,17 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, mut req: Request, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
-        // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
-        // page, no caller lookup.
-        if !self.policy.answers(&req) {
-            let mut res = crate::security::misdirected();
-            self.policy.headers(&mut res, None, &self.policy.csp);
+    async fn secure(&self, mut pending: Inbound<'_>, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
+        let req = pending.get();
+        let headers = req.headers();
+        let mut origin = Origin::new(headers);
+        // A request for another name (a DNS-rebound page), or one HTTP does not allow, runs
+        // nothing of the app's: no error page, no caller lookup.
+        if let Some(mut res) = self.policy.asked(req, &mut origin).refusal() {
+            let vary = res.headers().contains_key(header::VARY);
+            self.policy.headers(&mut res, None, &self.policy.csp, vary);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+            pending.discard();
             return res;
         }
         // The area or API the request is in: its route's, or, for an unknown URL or a route that
@@ -2472,45 +2667,67 @@ impl<S: Steps> Layer<S> {
         let body_limit = scope.body_limit;
         // The middleware of the area or API the request is in, where one has some.
         let steps = self.steps.scope(scope);
+        let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
         if let Some(mount) = mount {
-            if let Some(mut res) = mount.preflight(req.method(), req.headers()) {
-                self.policy.headers(&mut res, None, csp);
+            if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
+                let vary = res.headers().contains_key(header::VARY);
+                self.policy.headers(&mut res, None, csp, vary);
                 res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+                pending.discard();
                 return res;
             }
         }
-        // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
-        #[cfg(debug_assertions)]
-        if mount.is_none() {
-            if let Some(check) = self.policy.form_check(req.method(), req.uri(), req.headers()) {
-                req.extensions_mut().insert(check);
-            }
-        }
+        let mut page = RequestPage::read(headers, mount.is_none());
+        let (mode, fetched) = page.mode;
+        let credentials = cache::Credentials::read(headers);
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
         let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
+        if let Some(refused) = self.policy.refuse(req, &mut origin, cors.is_some() && !credentials.has_cookie()) {
+            let (mut refused, vary) = match mount {
+                Some(mount) => {
+                    let refused = crate::api::json_failure(refused, false, mount.errors.as_ref()).await;
+                    let vary = refused.headers().contains_key(header::VARY);
+                    (refused, vary)
+                }
+                None if page.refusal_wants_html(headers) => {
+                    page.credentials = credentials.for_error_page(headers);
+                    let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
+                    let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
+                    let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                    // The error page's language, as on any other answer (below).
+                    let asked = watch.0.asked_language();
+                    let mut page = signal::follow(page, watch, self.zoned());
+                    let vary = page::vary_on_language(asked, page.headers_mut());
+                    (page, vary)
+                }
+                None => (refused, false),
+            };
+            self.policy.headers(&mut refused, nonce.as_ref(), csp, vary);
+            if mount.is_none() {
+                self.policy.document(&mut refused, csp, mode.swaps());
+            }
+            cache::settle_refused(&mut refused);
+            pending.discard();
+            return refused;
+        }
+        let personal = if mount.is_none() && mode != Mode::Data {
+            page.credentials = credentials.for_error_page(headers);
+            // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
+            #[cfg(debug_assertions)]
+            {
+                page.form_check = self.policy.form_check(req, &mut origin, mode == Mode::Action);
+            }
+            credentials.personal(|| page.credentials.authorization.is_some())
+        } else {
+            credentials.personal(|| headers.contains_key(header::AUTHORIZATION))
+        };
+        let has = if !own && mount.is_none() { cache::request_tags(req.method(), headers, accepts_coding) } else { None };
+        let watch = Watch(self.signal(&credentials, body_limit));
+        let cors = cors.cloned();
         if let Some(nonce) = &nonce {
             req.extensions_mut().insert(nonce.clone());
         }
-        let origins = mount.map_or(&[][..], |mount| mount.origins());
-        if let Some(refused) = self.policy.refuse(req.method(), req.headers(), origins) {
-            let swap = page::Mode::of(req.headers()).swaps();
-            let mut refused = match mount {
-                Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
-                None => match self.cross_site(&mut req) {
-                    Some((asked, watch)) => {
-                        let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
-                        signal::follow(page, watch, self.zoned())
-                    }
-                    None => refused,
-                },
-            };
-            self.policy.headers(&mut refused, nonce.as_ref(), csp);
-            if mount.is_none() {
-                self.policy.document(&mut refused, csp, swap);
-            }
-            refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
-            return refused;
-        }
+        req.extensions_mut().insert(watch.0.clone());
         // Every path under an API's prefix is its own: a parameter or a catch-all of a route
         // outside it (a page's `/{*rest}`, or the API around it's `/api/{id}` for `/api/items`)
         // does not answer it. The request meets everything a route of the API would, and the API's
@@ -2526,29 +2743,28 @@ impl<S: Steps> Layer<S> {
             // It is an unknown URL of the API's, for middleware that reads the route too.
             req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
-        let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
-        let credentials = cache::credentials(req.headers());
-        // Skip the hash for a GET that accepts no coding and names no tag. A HEAD needs a
-        // validator so a cache cannot freshen a stale, untagged GET by matching its length alone
-        // (RFC 9111 section 4.3.5).
-        let tagged = !own
-            && mount.is_none()
-            && match *req.method() {
-                http::Method::GET => accepts_coding || req.headers().contains_key(header::IF_NONE_MATCH),
-                http::Method::HEAD => true,
-                _ => false,
-            };
-        let has: Vec<http::HeaderValue> = match tagged {
-            true => req.headers().get_all(header::IF_NONE_MATCH).iter().cloned().collect(),
-            false => Vec::new(),
-        };
         let path = self.shared.dev.then(|| req.uri().path().to_string());
+        // A write may change what a kept page shows: it is counted when it is answered, and
+        // when it is dropped before that, for its path once the app counts writes by path. Only for a method that is not safe, in
+        // an app that keeps answers.
+        let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &watch.0));
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
         // before someone has to measure every screen. It is timed until it is dropped, so a
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, body_limit, steps).await;
+        let next = Next { steps: &self.steps, scope: steps, route };
+        // The signal ends when this future is dropped, then when the response is dropped.
+        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        let caller = watch.0.is_personal();
+        let asked = watch.0.asked_language();
+        let mut res = signal::follow(res, watch, self.zoned());
+        // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
+        // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
+        let vary = page::vary_on_language(asked, res.headers_mut());
+        if let Some(wrote) = wrote {
+            wrote.answered(&res);
+        }
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2558,14 +2774,19 @@ impl<S: Steps> Layer<S> {
         if foreign {
             res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
         }
-        // First: the security headers reserve room for `Cache-Control` and `Vary` too.
-        self.policy.headers(&mut res, nonce.as_ref(), csp);
-        if mount.is_none() {
-            self.policy.document(&mut res, csp, mode.swaps());
+        // An answer that brings none of its scope's lines is given them all in one pass; any
+        // other has each inserted.
+        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp, caller);
+        if !ready {
+            // First: the security headers reserve room for `Cache-Control` and `Vary` too.
+            self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
+            if mount.is_none() {
+                self.policy.document(&mut res, csp, mode.swaps());
+            }
         }
         let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
         let seen = Seen {
-            credentials,
+            credentials: personal,
             caller,
             // A page route answers several forms at one URL; only the full document may be shared,
             // and not as the runtime fetched it (`corten: page`), whose redirect differs (#1034).
@@ -2575,33 +2796,25 @@ impl<S: Steps> Layer<S> {
         };
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
-        cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        if !ready {
+            cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        }
+        // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
+        // when its headers as sent let a shared cache keep it.
+        #[cfg(debug_assertions)]
+        if let Some(path) = &path {
+            crate::LiveShared::note(&res, path);
+        }
         // A body with this request's nonce differs every time, so its tag would never match.
-        if tagged && !nonced {
-            res = cache::tag(res, &has).await;
+        if !nonced {
+            if let Some(has) = has {
+                res = cache::tag(res, &has, ready.then_some(&scope.beside_a_tag)).await;
+            }
         }
         if let Some(mount) = mount {
             mount.cors(cors, &mut res);
         }
         res
-    }
-
-    /// A write another site sent, to a page route: the request for the error page when a browser
-    /// sent it ([`Failure::CrossSite`]), with the signal that ends with its answer; otherwise the
-    /// status line answers it.
-    fn cross_site(&self, req: &mut Request) -> Option<(Asked, Watch)> {
-        let (mode, fetched) = page::Mode::asked(req.headers());
-        let browser = matches!(mode, Mode::Navigation | Mode::Action)
-            || (mode == Mode::Document
-                && req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("text/html")));
-        if !browser {
-            return None;
-        }
-        // Refused before `run` gives the request its signal: the error page reads the app's
-        // state (its static files, head tags, import map, the visitor's zone) from it.
-        let watch = Watch(self.signal(req.headers(), crate::extract::BODY_LIMIT));
-        req.extensions_mut().insert(watch.0.clone());
-        Some((Asked::new(req, &self.shared, Credentials::of(req.headers()), (mode, fetched)), watch))
     }
 
     /// Whether a streamed answer's fragments are written in the visitor's zone
@@ -2616,36 +2829,14 @@ impl<S: Steps> Layer<S> {
     /// A request's signal in this app: the app's state, and the zone the browser reported when
     /// the app learns its visitors' zones (`req.zone()`; with `zoned_dates` the page and a live
     /// part's fragments are written in it, none for a `Public` answer, `Signal::zone`).
-    fn signal(&self, headers: &http::HeaderMap, body_limit: usize) -> Signal {
+    fn signal(&self, credentials: &cache::Credentials<'_>, body_limit: usize) -> Signal {
         #[cfg(feature = "zones")]
         if self.shared.client_zone {
-            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers), body_limit);
+            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(credentials.cookies()), body_limit);
         }
         #[cfg(not(feature = "zones"))]
-        let _ = headers;
+        let _ = credentials;
         Signal::for_app(self.shared.clone(), body_limit)
-    }
-
-    /// The response, whether anything read who is asking, and the request's mode with whether the
-    /// runtime sent it ([`page::Mode::asked`]).
-    async fn run<'a>(
-        &'a self,
-        mut req: Request,
-        route: Option<Route>,
-        api: Option<&Mount>,
-        deadline: Option<Duration>,
-        body_limit: usize,
-        scope: S::Scope<'a>,
-    ) -> (Response, bool, (Mode, bool)) {
-        // Dropped with this future if the client leaves first; then the response's. The zone the
-        // browser reported is read once, here.
-        let watch = Watch(self.signal(req.headers(), body_limit));
-        req.extensions_mut().insert(watch.0.clone());
-        let mode = page::Mode::asked(req.headers());
-        let next = Next { steps: &self.steps, scope, route };
-        let res = page::render_errors(&self.shared, req, next, deadline, &watch.0, api, mode).await;
-        let personal = watch.0.is_personal();
-        (signal::follow(res, watch, self.zoned()), personal, mode)
     }
 }
 

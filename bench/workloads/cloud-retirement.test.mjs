@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { fleetPlan, reservation, selection } from "./cloud-contract.mjs";
+import { fileURLToPath } from "node:url";
+import { bootstrapWorkspaceScript, fleetPlan, preloginUserData, reservation, selection } from "./cloud-contract.mjs";
 import { commit } from "./cloud-fixtures.mjs";
-import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { controlRequest, guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
+import { failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { digest } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 
@@ -63,6 +64,8 @@ class Entry:
             if self.path != present.get(mode): raise FileNotFoundError(self.path)
         return SimpleNamespace(st_mode=stat.S_IFREG)
     def iterdir(self):
+        if self.path == '/bench' and config.get('firstUpload'):
+            return [Entry('/bench/run.log')] + ([Entry('/bench/job.sh')] if mode == 'job-present' else [])
         if self.path == '/proc': return [Entry('/proc/' + pid) for pid in (['2', '3', '4', '5'] if mode == 'other-timeout' else ['2', '3', '4'])]
         if self.path == '/run' and mode == 'foreign-guardian': return [Entry('/run/corten-bench-control-foreign')]
         if self.path == '/run/systemd/transient' and mode == 'foreign-transient': return [Entry('/run/systemd/transient/corten-bench-control-foreign.service')]
@@ -72,6 +75,7 @@ class Entry:
         return []
     def glob(self, pattern): return [Entry('/etc/systemd/system/' + unit)] if mode == 'loaded' and self.path == '/etc/systemd/system' else []
     def read_bytes(self):
+        if self.path == '/bench/run.log': return b'output' if mode == 'worked' else b''
         if self.path == '/proc/4/cmdline': return parent_cmdline()
         if self.path == '/proc/5/cmdline': return parent_bytes
         assert self.path != '/proc/2/cmdline'
@@ -112,7 +116,7 @@ ${parentFixture}
 def readlink(path):
     assert str(path) == '/proc/4/exe'
     return parent_executable()
-with patch.object(pathlib, 'Path', Entry), patch.object(os.path, 'lexists', lambda p: mode in ['partial', 'file-mismatch', 'symlink', 'bench-data']), patch.object(os, 'getuid', lambda: 0, create=True), patch.object(os, 'getpid', lambda: 2), patch.object(os, 'getppid', parent_pid), patch.object(os, 'readlink', readlink), patch.object(urllib.request, 'urlopen', metadata), patch.object(subprocess, 'run', run), patch.object(time, 'time', lambda: 1000):
+with patch.object(pathlib, 'Path', Entry), patch.object(os.path, 'lexists', lambda p: config.get('firstUpload') or mode in ['partial', 'file-mismatch', 'symlink', 'bench-data']), patch.object(os, 'getuid', lambda: 0, create=True), patch.object(os, 'getpid', lambda: 2), patch.object(os, 'getppid', parent_pid), patch.object(os, 'readlink', readlink), patch.object(urllib.request, 'urlopen', metadata), patch.object(subprocess, 'run', run), patch.object(time, 'time', lambda: 1000):
     exec(compile(config['program'], '<fixed-unused-probe>', 'exec'))
 `;
 
@@ -171,6 +175,205 @@ test("unused retirement replays legacy proofs and requires the key digest for a 
   assert.throws(() => verifyUnusedEvidence({ ...pinned, knownHostsSha256: "not-a-digest" }, state));
   delete pinned.knownHostsSha256;
   assert.throws(() => verifyUnusedEvidence(pinned, state));
+});
+
+// Execute the emitted drain function with bounded synthetic observations. The
+// native unused-host program above independently exercises unit and file proof.
+const drainFixture = String.raw`import ast, hashlib, ipaddress, json, os, re, stat, sys
+from types import SimpleNamespace as S
+config = json.load(sys.stdin)
+requests = config['requests']
+functions = [n for n in ast.parse(config['program']).body if isinstance(n, ast.FunctionDef) and n.name in ('settled_receipts', 'refused_upload')]
+interrupted = config.get('interrupted', False)
+assert len(functions) == (2 if interrupted else 1)
+code = compile(ast.Module(body=functions, type_ignores=[]), '<emitted-drain>', 'exec')
+token = requests[0]['invocation']['token']
+host = {'hostname': 'fixture', 'bootId': 'fixture-boot'}
+binding = {**{k: requests[0]['invocation'][k] for k in ('round', 'commit', 'token')}, 'helperSha256': requests[0]['helperSha256']}
+root_name = 'corten-bench-control-' + token
+root_path = '/run/' + root_name
+def row(pid, parent, cgroup):
+    return {'pid': pid, 'parent': parent, 'startTicks': '100', 'cgroup': '0::' + cgroup + '\n', 'executable': {'device': '1', 'inode': '2'}}
+listener = row(10, 1, '/system.slice/ssh.service')
+probe = row(11, 10, '/user.slice/probe.scope')
+names = {'binding.json': binding, 'helper.py': {}, 'mutex': {}}
+units = []
+for n, request in enumerate(requests):
+    inv = request['invocation']
+    identifier = inv['id']
+    unit = root_name + '-' + identifier + '.service'
+    units.append(unit)
+    scope = '/user.slice/session-' + str(n) + '.scope'
+    child, escaped, observer = row(20+n, 10, scope), row(40+n, 1, '/escaped.scope'), row(60+n, 1, '/system.slice/' + unit)
+    registration = dict(invocation=inv, host=host, listener=listener, observer=observer, socket={'connection': str(n)},
+                        session=dict(scope=scope, chain=[child]))
+    result = {'transport': 'exited', 'code': 0}
+    for prefix, data in dict(request=request, start={'unit': unit}, launcher={'unit': unit, 'code': 0}, registration=registration,
+                             result=result, receipt=dict(schema='benchmark-control-session/v2', result=result, **registration,
+                                                          samples=[{'processes': [listener, observer, child, escaped]}])).items():
+        names[prefix+'-'+identifier+'.json'] = data
+first = requests[0]['invocation']['id']
+if interrupted:
+    suffix = '-' + requests[-1]['invocation']['id'] + '.json'
+    for prefix in ['registration', 'result', 'receipt']: del names[prefix+suffix]
+    names['start'+suffix] = dict(unit=units[-1], guardian=710, child=711, deadlineMonoNs='100', connection='192.0.2.1 45678 192.0.2.10 22')
+    names['watch-failure'+suffix] = {'helperLine': 1}
+class Path:
+    def __init__(self, value): self.value, self.name = value, value.rsplit('/', 1)[-1]
+    def __truediv__(self, child): return Path(self.value+'/'+child)
+    @property
+    def parent(self): return Path(self.value.rsplit('/', 1)[0])
+    def iterdir(self): return [self / name for name in records]
+    def lstat(self):
+        if mode == 'unknown-cgroup': raise PermissionError
+        if mode == 'populated': return S(st_mode=stat.S_IFDIR)
+        raise FileNotFoundError
+    def read_text(self):
+        assert self.name == 'cgroup.events'
+        return 'populated 1\n'
+    def glob(self, pattern):
+        assert pattern == 'corten-bench-control-*'
+        return [self / root_name] if self.value == '/run' else [self / units[0]] if mode == 'terminal' else []
+def terminal(root, identifier, receipt):
+    return None if mode == 'watcher' else {'unit': root_name + '-' + identifier + '.service'}
+def scope_read(scope, rows):
+    return {'exists': True, 'members': [], 'events': 'populated 1\n' if mode == 'scope' else 'populated 0\n'}
+def run(args, **kwargs):
+    if args[:3] == ['systemctl', 'show', '--all']:
+        assert args[3] == units[-1] and kwargs['check'] and kwargs['timeout'] == 5
+        values = dict(Id=args[3], LoadState='loaded', ActiveState='failed', SubState='failed', Restart='no',
+                      MainPID='0', ControlPID='0', NRestarts='0', Job='', Triggers='', TriggeredBy='', ExecMainCode='1', ExecMainStatus='254')
+        for case, key, value in [('live-watcher','MainPID','712'), ('trigger','TriggeredBy','later.timer'), ('pending-watch','Job','3'), ('retry','Restart','on-failure')]:
+            if mode == case: values[key] = value
+        return S(stdout='\n'.join(k+'='+values[k] for k in (a.removeprefix('--property=') for a in args[4:])))
+    assert args[-1] == 'corten-bench-control-*.service' and kwargs['timeout'] == 5
+    return S(returncode=0, stdout='foreign.service loaded active\n' if mode == 'foreign-watcher' else '')
+def raw(path): return json.dumps(records[path.name]).encode()
+def inventory():
+    rows = [listener, probe]
+    if mode == 'sftp': rows.append(dict(row(91, 1, '/other.scope'), executable=dict(device='33', inode='44')))
+    if mode == 'escaped': rows.append(row(40, 1, '/escaped.scope'))
+    if mode == 'other-session': rows.append(row(90, 10, '/unknown.scope'))
+    if mode == 'foreign-control': rows.append(row(90, 1, '/system.slice/corten-bench-control-foreign.service'))
+    if mode == 'changed-listener': rows[0] = dict(listener, startTicks='101')
+    return {p['pid']:p for p in rows}
+def load(root, name): return records[name]
+g = dict(private=lambda root: None, load=load, read=raw, ancestry=lambda *args: (listener, [probe], None),
+         host=lambda: host, watcher_terminal=terminal, inventory=inventory, key=lambda p: (p['pid'],p['startTicks']),
+         scope_read=scope_read, parent=lambda p: p['parent'])
+def os_stat(path):
+    if path == '/usr/lib/openssh/sftp-server': return S(st_dev=33, st_ino=44)
+    assert path in ('/proc/710','/proc/711')
+    if (mode, path) in [('guardian','/proc/710'), ('child','/proc/711')]: return S()
+    if mode == 'unreadable': raise PermissionError
+    raise FileNotFoundError
+g.update(ipaddress=ipaddress, address=ipaddress.ip_address, socket_rows=lambda: [(['0:', '192.0.2.10:0016','192.0.2.1:B26E'], '')] if mode == 'socket' else [])
+space = dict(hashlib=hashlib, json=json, stat=stat, os=S(getpid=os.getpid, environ={'SSH_CONNECTION':'fixture'}, stat=os_stat),
+             time=S(monotonic_ns=lambda: 99 if mode == 'before-deadline' else 101), source=b'fixture\n', re=re,
+             pathlib=S(Path=Path), subprocess=S(run=run))
+exec(code, space)
+for mode in ['terminal', 'missing', 'extra', 'wrong-host', 'wrong-request', 'partial-result', 'watcher', 'scope', 'escaped', 'other-session',
+             'foreign-control', 'foreign-watcher', 'changed-listener'] + (['guardian','child','sftp','unreadable','before-deadline','socket','populated',
+             'unknown-cgroup','live-watcher','trigger','pending-watch','retry','no-failure','late-registration','foreign-request','wrong-launcher'] if interrupted else []):
+    records = dict(names)
+    if mode == 'missing': del records['receipt-'+first+'.json']
+    if mode == 'extra': records['seal-bootstrap.json'] = {}
+    if mode == 'no-failure': del records['watch-failure'+suffix]
+    if mode == 'late-registration': records['registration'+suffix] = {}
+    if mode == 'foreign-request': records['request'+suffix] = requests[0]
+    if mode == 'wrong-launcher': records['launcher'+suffix] = dict(unit=units[0], code=0)
+    if mode == 'wrong-host': records['receipt-'+first+'.json'] = dict(records['receipt-'+first+'.json'], host={})
+    if mode == 'wrong-request': records['request-'+first+'.json'] = {}
+    if mode == 'partial-result':
+        records['result-'+first+'.json'] = {'code': 0}
+        records['receipt-'+first+'.json'] = dict(records['receipt-'+first+'.json'], result=records['result-'+first+'.json'])
+    try:
+        result = space['settled_receipts'](Path(root_path), binding, requests, g)
+    except (AssertionError, KeyError, PermissionError):
+        if mode == 'terminal': raise
+        continue
+    assert mode == 'terminal', mode
+    if interrupted:
+        result, refused = result
+        assert refused == dict(invocationId=requests[-1]['invocation']['id'],jobPresent=False,failureSha256=hashlib.sha256(raw(Path('watch-failure'+suffix))).hexdigest())
+    assert result == [hashlib.sha256(raw(Path('receipt-'+r['invocation']['id']+'.json'))).hexdigest() for r in (requests[:-1] if interrupted else requests)]
+print('drain fixtures passed')
+`;
+
+test("settled bootstrap probe requires exact requests, terminal watchers, dead sessions and no foreign actors", { skip: !available }, () => {
+  const state = { ...reservation({ round: "r21", commit, token: "0123456789abcdef" }), id: "123", ip: "192.0.2.10", status: "preparing",
+    createIntentAt: "2026-11-18T00:00:00.000Z", control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
+      monitor: { schema: "benchmark-supervised-control/v1", id: "a".repeat(32), phase: "pending" } } };
+  const steps = [["ssh", "true", 30000], ["ssh", "mkdir -m 700 /bench && touch /bench/run.log", 60000]];
+  for (const [name, content] of Object.entries(remoteFiles(state)).slice(0, 2))
+    steps.push(["scp", "/bench/" + name, 15 * 60000],
+      ["ssh", "printf '%s  %s\\n' '" + digest(content) + "' '/bench/" + name + "' | sha256sum --check --status", 60000]);
+  for (const [binary, payload, timeout] of steps) {
+    const request = controlRequest(state, binary, ["fixture", payload], timeout, "bootstrap");
+    state.control.ledger.push({ request, code: 0, localTerminal: true });
+  }
+  const script = unusedHostScript(state, { bootstrap: true });
+  const program = script.split("<<'CORTEN_UNUSED_HOST'\n")[1].split("\nCORTEN_UNUSED_HOST")[0];
+  const requests = state.control.ledger.map((row) => row.request);
+  const r = spawnSync(python, ["-I", "-c", drainFixture], { input: JSON.stringify({ program, requests }),
+    encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+  assert.equal(r.error, undefined); assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "drain fixtures passed");
+});
+
+function lostUploadState({ offline = false, prelogin = offline } = {}) {
+  const state = { ...firstGroupSetupState(offline), createIntentAt: "2026-11-18T00:00:00.000Z", status: "preparing", launchHostKeySha256: "e".repeat(64),
+    ...(prelogin ? { quietBootstrap: "prelogin" } : {}), ...(offline ? { gitSource: true } : {}),
+    control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, sealed: [], ledger: [],
+      ...(offline ? {} : { monitor: { schema: "benchmark-supervised-control/v1", id: "b".repeat(32), phase: "pending" } }) } };
+  delete state.archiveSha256; delete state.evidenceSha256;
+  for (const [binary, args, ms] of [["ssh", ["true"], 30000], ["ssh", [bootstrapWorkspaceScript(state, { launch: true })], 60000],
+    ["scp", ["/fixture/job.sh", "root@192.0.2.10:/bench/job.sh"], 900000]]) {
+    state.control.ledger.push({ request: controlRequest(state, binary, args, ms, "bootstrap"), localTerminal: binary === "ssh", ...(binary === "ssh" ? { code: 0 } : {}) });
+  }
+  return state;
+}
+
+for (const offline of [false, true]) test(`complete ${offline ? "offline" : "supervised"} lost-upload guest proof binds unused retirement`, { skip: !available }, () => {
+  const state = lostUploadState({ offline, prelogin: true });
+  const script = unusedHostScript(state, { bootstrap: true }), at = 1000000;
+  const requests = state.control.ledger.map(r => r.request);
+  const guest = fileURLToPath(new URL("./test-fixtures/unused-upload-guest.py", import.meta.url));
+  const run = mode => spawnSync(python, ["-I", guest], { input: JSON.stringify({ script, requests, guardianSource, preloginUserData,
+    hostId: state.id, unit: state.unit, mode }), encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+  const r = run("unused");
+  assert.equal(r.error, undefined); assert.equal(r.status, 0, r.stderr + r.stdout);
+  const record = unusedEvidence(r.stdout, state, script, at, at, state.launchHostKeySha256);
+  assert.deepEqual(record.observation.refusedUpload, { invocationId: requests[2].invocation.id, jobPresent: false,
+    failureSha256: digest('{"helperLine":318}\n') });
+  verifyUnusedEvidence(record, state);
+  if (offline) for (const mode of ["job-present", "unknown-file", "remote-seal", "started", "different-user-data"]) {
+    const refusal = run(mode);
+    assert.equal(refusal.error, undefined);
+    assert.equal(refusal.status, 1, `${mode}: ${refusal.stderr} ${refusal.stdout}`);
+    assert.deepEqual(JSON.parse(refusal.stdout), { schema: "benchmark-unused-host/v1", unused: false }, mode);
+    assert.throws(() => unusedEvidence(refusal.stdout, state, script, at, at, state.launchHostKeySha256), { name: "AssertionError" });
+  }
+});
+
+test("lost first upload requires an absent job and a dead, unregistered transfer on the bound guest", { skip: !available }, () => {
+  const state = lostUploadState();
+  const script = unusedHostScript(state, { bootstrap: true }), program = script.split("<<'CORTEN_UNUSED_HOST'\n")[1].split("\nCORTEN_UNUSED_HOST")[0];
+  assert.ok(script.startsWith(`/usr/bin/timeout 25 /usr/bin/python3 - '${state.id}' '${state.unit}' '{}'`));
+  const requests = state.control.ledger.map(r => r.request);
+  const check = (driver, input, status) => {
+    const r = spawnSync(python, ["-I", "-c", driver], { input: JSON.stringify(input), encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+    assert.equal(r.error, undefined); assert.equal(r.status, status, `${input.mode ?? "drain"}: ${r.stderr} ${r.stdout}`);
+    return r.stdout.trim();
+  };
+  assert.equal(check(drainFixture, { program, requests, interrupted: true }, 0), "drain fixtures passed");
+  // Exercise the actual filesystem/unit gates separately from the helper's mocked namespace.
+  const guest = program.split("\nimport re\ndef refused_upload(")[0];
+  assert.notEqual(guest, program);
+  for (const mode of ["empty", "job-present", "worked", "unit-job", "started", "loaded", "jobs", "wrong-host", "process"]) {
+    const out = check(fixture, { firstUpload: true, mode, unit: state.unit, id: state.id, manifest: "{}", files: {}, program: guest }, mode === "empty" ? 0 : 1);
+    if (mode !== "empty") assert.equal(JSON.parse(out).unused, false, mode);
+  }
 });
 
 const setupFixture = `import contextlib, io, json, os, pathlib, stat, subprocess, sys, time, urllib.request
@@ -343,14 +546,72 @@ test("setup evidence binds expected exit, fixed script, preserved hashes and bou
   assert.equal(setupEvidence(proof, state, script, 1, 985000, 1015000).exitCode, 1);
 });
 
-function firstGroupSetupState() {
+function firstGroupSetupState(offline = false) {
+  const single = offline ? { group: "json-api", checkout: fileURLToPath(new URL("../..", import.meta.url)),
+    indexSha256: "b".repeat(64), offlineHandoff: true } : undefined;
   const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), sshKey: "42",
     provider: { accountId: "user:synthetic", context: "synthetic-control" },
-    tokens: Object.fromEntries(selection().groups.map(({ group }, index) => [group, (index + 1).toString(16).padStart(16, "0")])) }, "2026-11-15T12:00:00.000Z");
+    tokens: Object.fromEntries(selection().groups.filter(({ group }) => !single || group === single.group)
+      .map(({ group }, index) => [group, (index + 1).toString(16).padStart(16, "0")])) },
+    "2026-11-15T12:00:00.000Z", undefined, single ? { stagedPlacement: true, single } : undefined);
   const { group, token } = fleet.jobs[0];
   return { ...reservation({ round: "r21", commit, token, group, fleet }), id: "123", ip: "192.0.2.10", status: "running",
     archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64) };
 }
+
+test("only new dedicated reservations require the exact fixed boot data in all three custody probes", {
+  skip: process.platform !== "linux",
+}, () => {
+  const s = { ...firstGroupSetupState(), quietBootstrap: "prelogin", control: { schema: "benchmark-control-ledger/v1",
+    helperSha256: guardianSha256, sealed: [], ledger: [], monitor: { schema: "benchmark-supervised-control/v1",
+      id: "b".repeat(32), phase: "pending" } } };
+  s.control.ledger.push({ localTerminal: true, code: 0, request: controlRequest(s, "ssh", ["true"], 30000, "bootstrap") });
+  const scripts = (saved) => [unusedHostScript(saved), terminalSetupScript(saved, 1),
+    failedNativeScript(saved, null, null, { roots: ["/bench/campaign"], host: {} })];
+  const [unused, setup, native] = scripts({ ...s, quietBootstrap: "after-start" });
+  assert.match(unused, /not user_data\.exists\(\) or user_data\.stat\(\)\.st_size == 0/);
+  assert.match(setup, /regular\(user_data, 0\)/);
+  assert.match(native, /data\(instance, 'user-data.txt', 0\) == b''/);
+  const programs = scripts(s);
+  const proof = programs[0].match(/cloud_binding = None[\s\S]*?            os\.close\(fd\)/)[0];
+  for (const program of programs) {
+    assert.ok(program.includes(proof));
+    assert.match(program, /^ *cloud_instance\(\)$/m);
+    assert.doesNotMatch(program, /regular\(user_data, 0\)|not user_data\.exists\(\)|data\(instance, 'user-data.txt', 0\)/);
+  }
+  // Redirect only the descriptor walk's root. The canonical absolute selector,
+  // inode checks, bounded reads and content comparisons are the generated probe.
+  const info = programs[0].match(/def info\(s\):\n    return \[[^\n]+\]/)[0];
+  const code = `import hashlib, os, pathlib, re, stat, tempfile
+${info}
+${proof.replace("directory(None, '/')", "directory(None, root)")}
+host_id = '123'
+with tempfile.TemporaryDirectory() as root:
+    cloud = pathlib.Path(root, 'var/lib/cloud')
+    inst = cloud / 'instances' / host_id
+    inst.mkdir(parents=True)
+    (cloud / 'data').mkdir()
+    (cloud / 'data/instance-id').write_text(host_id)
+    (cloud / 'instance').symlink_to('/var/lib/cloud/instances/' + host_id)
+    path = inst / 'user-data.txt'
+    fixed = ${JSON.stringify(preloginUserData)}.encode('ascii')
+    for data in [None, b'', fixed[:-1], b'x' + fixed[1:], fixed + b'x', fixed]:
+        cloud_binding = None
+        if data is not None: path.write_bytes(data)
+        try: cloud_instance()
+        except (AssertionError, FileNotFoundError):
+            assert data != fixed
+        else: assert data == fixed
+    path.rename(inst / 'other')
+    path.symlink_to('other')
+    cloud_binding = None
+    try: cloud_instance()
+    except OSError: pass
+    else: raise AssertionError('accepted a linked payload')
+`;
+  const result = spawnSync(python, ["-I", "-c", code], { encoding: "utf8", timeout: 3000 });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test("fixed failed-setup program accepts only exact common tooling markers without native work", { skip: !available }, () => {
   const base = firstGroupSetupState(), canonical = `${JSON.stringify(bootstrapMarker(base))}\n`;

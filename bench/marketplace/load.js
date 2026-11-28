@@ -1,7 +1,12 @@
 import http from "k6/http";
+import exec from "k6/execution";
+import { Counter } from "k6/metrics";
 import { check } from "k6";
 const target = __ENV.TARGET;
 if (!["page", "json"].includes(target)) throw new Error("TARGET must be page or json");
+const locales = ["en-US", "fr-FR", "de-DE"];
+if (target === "page" ? __ENV.LOCALE !== "rotating" : __ENV.LOCALE !== undefined) throw new Error("pages require rotating locales; JSON has no locale");
+const attempts = target === "page" ? locales.map((l) => new Counter("marketplace_locale_" + l.replace("-", "_"))) : [];
 const mode = __ENV.MODE;
 if (!["fixed", "closed"].includes(mode)) throw new Error("MODE must be fixed or closed");
 export const options = {
@@ -20,7 +25,9 @@ export function handleSummary(data) {
 }
 export default function () {
   const id = 1 + Math.floor(500 * Math.pow(Math.random(), 2));
-  const path = target === "json" ? "/api/marketplace/item_" : `/marketplace/${__ENV.LOCALE}/item_`;
+  const slot = target === "page" ? exec.scenario.iterationInTest % locales.length : null;
+  const path = slot === null ? "/api/marketplace/item_" : `/marketplace/${locales[slot]}/item_`;
+  if (slot !== null) attempts[slot].add(1);
   const response = http.get(`${__ENV.BASE}${path}${id}`, {
     headers: { "Accept-Encoding": "identity", Accept: target === "json" ? "application/json" : "text/html" },
     redirects: 0, timeout: "10s", tags: { name: target === "json" ? "/api/marketplace/:id" : "/marketplace/:id" },

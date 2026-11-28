@@ -9,6 +9,7 @@ import { registerHooks } from "node:module";
 import { deploymentSha256 } from "../deployments.mjs";
 import { digest, tree } from "./evidence.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
+import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
 
 // Verbatim native build-context.mjs from 288d10fcba8db3ec2de22f9875f80898c4d4930a.
 // Keep this immutable test dependency portable before the parent routes that commit.
@@ -26,17 +27,21 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
 } });
 test.after(() => hooks.deregister());
 
-async function fixture(t) {
+async function fixture(t, deployment = null) {
   const root = mkdtempSync(join(tmpdir(), "isolated-mixed-audit-")), repo = join(root, "repo"), sources = join(root, "sources"); mkdirSync(repo);
   t.after(() => { assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true }); });
-  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
   git("init", "--quiet"); git("config", "user.name", "Offline Test"); git("config", "user.email", "test@example.invalid"); git("config", "core.autocrlf", "false");
-  for (const path of ["Cargo.toml", "bench/marketplace/corten/Dockerfile", "bench/fullstack/apps/express/server.mjs"] ) {
+  const otherApp = deployment === "webflux" ? "spring" : deployment === "asgi" ? "django" : "express";
+  for (const path of ["Cargo.toml", "bench/marketplace/corten/Dockerfile", `bench/fullstack/apps/${otherApp}/Dockerfile`,
+    ...(deployment === "webflux" ? ["bench/fullstack/apps/spring/Dockerfile.mixed", "bench/fullstack/apps/spring/mixed/pom.xml"] : [])]) {
     mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), `synthetic ${path}\n`);
   }
   git("add", "."); git("commit", "--quiet", "-m", "synthetic sources");
   const commit = git("rev-parse", "HEAD"), binding = { request: { group: "mixed-production", round: "w17", commit },
-    selection: { apps: ["corten", "express"], contractSha256: "a".repeat(64) }, execution: { effectiveOptions: { profile: "matched" } } };
+    selection: { apps: ["corten", otherApp], contractSha256: "a".repeat(64) }, execution: { effectiveOptions: { profile: "matched",
+      ...(deployment === "asgi" && { build: true, djangoDeployment: "django-granian-asgi" }),
+      ...(deployment === "webflux" && { build: true, springDeployment: "spring-webflux" }) } } };
   const plan = { commit, campaignSha256: "b".repeat(64), bindings: [binding] }, subject = await prepareMixedAudit(plan, repo, sources);
   const delivery = { schema: "benchmark-mixed-audit-delivery/v1", subjectSha256: subject.subjectSha256,
     review: { reviewer: "synthetic-independent-reviewer", reviewedAt: "2026-11-13T12:00:00Z", subjectSha256: subject.subjectSha256, findings: [], decision: "approved" },
@@ -55,12 +60,37 @@ test("exact committed mixed contexts and independent delivery replay without cla
   assert.ok(f.subject.requests[0].sourceFiles.some((f) => f.path === "Cargo.toml"), "Corten uses the whole actual tracked context");
   assert.equal(f.subject.requests[1].sourceFiles.length, 1);
 });
+test("the staged Django ASGI source audit differs from WSGI at the same source and context", async (t) => {
+  const f = await fixture(t, "asgi");
+  const django = f.subject.requests.find((r) => r.identity.app === "django");
+  assert.equal(django.identity.nativeDeployment, "django-granian-asgi");
+  assert.equal(django.identity.buildProfile, "matched-asgi");
+  assert.ok(!Object.hasOwn(f.subject.requests[0].identity, "nativeDeployment"));
+  assert.deepEqual(await replayMixedSubject(f.plan, f.subject, f.repo, f.sources), f.subject);
+  assert.deepEqual(validateMixedDelivery(f.delivery, f.subject, f.sources), f.delivery);
+  const wrong = structuredClone(f.delivery), audit = wrong.bundle.receipts.find((r) => r.identity.app === "django");
+  delete audit.identity.nativeDeployment; delete audit.identity.buildProfile;
+  assert.throws(() => validateMixedDelivery(wrong, f.subject, f.sources));
+});
+test("staged Spring audit binds the WebFlux deployment and all inputs including the alternate Dockerfile", async (t) => {
+  const f = await fixture(t, "webflux"), spring = f.subject.requests[1];
+  assert.equal(spring.identity.app, "spring");
+  assert.equal(spring.identity.nativeDeployment, "spring-webflux");
+  assert.equal(spring.identity.buildProfile, "matched-webflux");
+  assert.deepEqual(spring.sourceFiles.map(({ path }) => path), [
+    "bench/fullstack/apps/spring/Dockerfile", "bench/fullstack/apps/spring/Dockerfile.mixed", "bench/fullstack/apps/spring/mixed/pom.xml"]);
+  assert.deepEqual(await replayMixedSubject(f.plan, f.subject, f.repo, f.sources), f.subject);
+  assert.deepEqual(validateMixedDelivery(f.delivery, f.subject, f.sources), f.delivery);
+  const wrong = structuredClone(f.delivery);
+  delete wrong.bundle.receipts[1].identity.nativeDeployment; delete wrong.bundle.receipts[1].identity.buildProfile;
+  assert.throws(() => validateMixedDelivery(wrong, f.subject, f.sources), /mixed audit identity differs/);
+});
 test("the native Docker output-file archive convention produces the exact retained review contexts", async (t) => {
   const f = await fixture(t), { nativeBuildArchiveArgs } = await import(nativeUrl);
   for (const app of f.binding.selection.apps) {
     const output = join(f.root, `${app}-native-build-context.tar`);
     execFileSync("git", nativeBuildArchiveArgs(f.plan.commit, app, { output }), { cwd: f.repo, windowsHide: true,
-      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+      env: fixtureGitEnv({ GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }), stdio: ["ignore", "pipe", "pipe"] });
     assert.deepEqual(readFileSync(output), readFileSync(join(f.sources, `contexts/${app}.tar`)));
   }
 });

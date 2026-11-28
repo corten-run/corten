@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/inventory.mjs";
+import { allApps, catalogPeers, jsonPeers } from "../fullstack/inventory.mjs";
 import { locales } from "../marketplace/contract.mjs";
+
+export const springWebflux = Object.freeze({
+  recipe: "mixed-production-asgi-webflux",
+  deployment: "spring-webflux",
+  buildProfile: "matched-webflux",
+  dockerfile: "Dockerfile.mixed",
+  entrypoint: Object.freeze(["java", "-jar", "marketplace-mixed.jar"]),
+  command: null,
+});
 
 export const registrySchema = "benchmark-groups/v1";
 const freeze = (value) => {
@@ -10,25 +19,26 @@ const freeze = (value) => {
 };
 const group = (title, popular, performant, capabilities, cases) => ({ title, popular, performant, capabilities, cases });
 const sources = ["fixture", "api"];
-const records = (payload, targets, localized = false) => sources.flatMap((source) => targets.flatMap((target) =>
-  (localized && target === "page" ? locales : [null]).map((locale) => ({
+const records = (payload, targets, pageLocales = [null]) => sources.flatMap((source) => targets.flatMap((target) =>
+  (target === "page" ? pageLocales : [null]).map((locale) => ({
     key: `${payload}-${source}-${locale ?? "neutral"}-${target}`, payload, source, locale, target,
   }))));
 
 // Reviewed challenger selection, not a ranking or an implementation-status filter.
 // Keep old marketplace group identities in marketplace/groups.mjs immutable for saved rounds.
 export const groups = freeze({
-  "catalog-page": { ...group("Catalog page", ["aspnet", "express", "fastapi"], ["axum-maud", "drogon", "gin"],
+  "catalog-page": { ...group("Catalog page", ["aspnet", "express", "fastapi"], ["axum-maud", "drogon", "gin", "proa"],
     ["typed-record", "escaped-fields-and-links", "get-filter", "request-time-source", "no-output-cache"], records("catalog-v1", ["page"])),
     documentHeaders: "catalog-document-headers/v1" },
-  "json-api": group("JSON API", ["aspnet", "fastapi", "express", "spring"], ["axum-maud", "drogon", "gin", "aspnet-aot"],
+  "json-api": group("JSON API", ["aspnet", "fastapi", "express", "spring"], ["axum-maud", "drogon", "gin", "aspnet-aot", "ntex"],
     ["typed-complete-schema", "numeric-json", "tested-errors", "fetch-parse-reserialize", "no-output-cache"],
     ["catalog-v1", "marketplace-v2"].flatMap((payload) => records(payload, ["json"]))),
-  "localized-marketplace": group("Localized marketplace", ["nextjs", "aspnet", "django"], ["topcoat", "leptos", "gin", "drogon"],
-    ["complete-marketplace", "request-time-localization", "filter-sort", "valid-invalid-forms", "js-and-no-js", "production-http"],
-    records("marketplace-v2", ["page", "json"], true)),
+  "localized-marketplace": { ...group("Localized marketplace", ["nextjs", "aspnet", "django"], ["topcoat", "leptos", "gin", "drogon"],
+    ["complete-marketplace", "request-time-localization", "filter-sort", "valid-invalid-forms", "js-and-no-js", "bounded-production-http/v2"],
+    records("marketplace-v2", ["page", "json"], ["rotating"])),
+    parityCases: records("marketplace-v2", ["page", "json"], locales), nativeResultSchema: "marketplace-results/v6" },
   "mixed-production": group("Mixed production traffic", ["aspnet", "spring", "django", "express", "fastapi"], ["topcoat", "gin", "drogon"],
-    ["localized-reads", "numeric-json", "listings", "accepted-rejected-writes", "write-readback", "slow-upstream", "production-http"],
+    ["localized-reads", "numeric-json", "listings", "accepted-rejected-writes", "write-readback", "slow-upstream", "bounded-production-http/v2"],
     sources.flatMap((source) => locales.map((locale) => ({ key: `${source}-${locale}-mix`, source, locale, target: "mix" })))),
   "fullstack-browser": group("Full-stack browser experience", ["nextjs", "nuxt", "react-router", "rails", "laravel"],
     ["sveltekit", "astro", "tanstack-start", "leptos"],
@@ -45,11 +55,50 @@ export const groups = freeze({
     ["equal-initial-state", "disconnect", "gap-detection", "replay-or-resnapshot", "no-duplicate-effects", "final-keyed-state", "bounded-slow-client", "cleanup"],
     [{ key: "recovery", target: "live" }]),
   hardening: group("Resilience and hardening", ["aspnet", "spring", "nextjs", "django", "express"], ["gin", "drogon", "topcoat"],
-    ["equal-legitimate-traffic", "declared-deployment-budget", "slow-headers-bodies-readers", "dependency-recovery", "oversized-requests", "useful-service", "recovery"],
+    ["equal-legitimate-traffic", "declared-deployment-budget", "bounded-client-deadline", "bounded-request-limit", "dependency-recovery", "useful-service", "recovery"],
     [{ key: "direct", target: "hardening" }, { key: "deployed-edge", target: "hardening" }]),
 });
 
 export const groupNames = Object.freeze(Object.keys(groups));
+const runners = Object.freeze({
+  "catalog-page": ["bench/catalog/run.mjs", "--group", "catalog-page"],
+  "json-api": ["bench/json-api/run.mjs", "--group", "json-api"],
+  "localized-marketplace": ["bench/marketplace/run.mjs", "--group", "localized-marketplace"],
+  "mixed-production": ["bench/mixed-production/run.mjs"],
+  "fullstack-browser": ["bench/fullstack-browser/run.mjs"],
+  "client-heavy": ["bench/client-heavy/run.mjs"],
+  "live-delivery": ["bench/live/run.mjs", "--group", "live-delivery"],
+  "recoverable-live": ["bench/recoverable-live/run.mjs"],
+  hardening: ["bench/hardening/run.mjs"],
+});
+export function runnerFor(group) {
+  definition(group);
+  const [entry, ...selection] = runners[group];
+  return { entry, selection };
+}
+
+export function campaignRounds(round) {
+  assert.equal(typeof round, "string"); assert.match(round, /^r[1-9]\d*$/);
+  const n = Number(round.slice(1));
+  assert.ok(Number.isSafeInteger(n) && n >= 17 && n <= 1000000000, "official campaign round must be r17..r1000000000");
+  return Object.fromEntries(groupNames.map((group) => [group, group === "catalog-page" ? `c${n}`
+    : group === "json-api" ? `j${2 * n + 1}` : group === "localized-marketplace" ? round
+      : ["live-delivery", "recoverable-live"].includes(group) ? round : `w${n}`]));
+}
+export const jsonPreparationRound = (round) => `j${2 * Number(round.slice(1))}`;
+export const jsonPreparationInvocation = (round) => ({
+  executable: "node", argv: ["bench/json-api/run.mjs", jsonPreparationRound(round), "--group", "json-api", "--build", "--check-only"],
+});
+export const jsonTimingInvocation = (round, receiptPath) => ({
+  executable: "node", argv: ["bench/json-api/run.mjs", round, "--group", "json-api", "--receipts", receiptPath],
+});
+export function nativeArtifactRoot(group, round) {
+  const directory = group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group;
+  return group === "client-heavy" ? `bench/client-heavy/work/${round}`
+    : group === "fullstack-browser" ? `bench/fullstack-browser/work/${round}`
+      : group === "live-delivery" ? `bench/live/results/parity/${round}` : `bench/${directory}/results/${round}`;
+}
+
 export function definition(name) {
   assert.ok(Object.hasOwn(groups, name), `unknown workload group: ${name}`);
   return groups[name];
@@ -83,7 +132,7 @@ export const retainedFamilies = freeze([
 ]);
 
 export function validateInventory() {
-  const allowed = new Set([...Object.keys(allApps), "react", "vue", "solid", "svelte", "remix"]);
+  const allowed = new Set([...Object.keys(allApps), ...Object.keys(catalogPeers), ...Object.keys(jsonPeers), "react", "vue", "solid", "svelte", "remix"]);
   for (const name of groupNames) {
     const d = definition(name), selected = selectedApps(name);
     assert.ok(selected.every((app) => allowed.has(app)), `${name}: unknown adapter`);

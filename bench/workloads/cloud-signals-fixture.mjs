@@ -77,7 +77,7 @@ try {
   let approval;
   const spawn = (...args) => { externalEffect(); return fakeCommand(...args); };
   const request = syntheticProviderRequest(h, (binary, argv, timeout) => fakeCommand(binary, argv, { timeout }));
-  const deps = { spawn, streamSpawn: () => { externalEffect(); assert.fail("unexpected monitor connection"); },
+  const deps = { spawn, roleCheck: () => [], streamSpawn: () => { externalEffect(); assert.fail("unexpected monitor connection"); },
     providerRequest: (options) => { externalEffect(); return request(options); }, repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, interrupted: signals.interrupted,
     write: (value) => { approval = JSON.parse(value).approvalSha256; } };
   deps.providerFactory = ({ repo, interrupted, createMode }) => Object.assign(createProviderEngine({ repo, interrupted, createMode, spawn, request: deps.providerRequest, sleep: deps.sleep }), { close: async () => {} });

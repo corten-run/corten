@@ -317,9 +317,15 @@ function networkCoverage(journal, requests, sockets = []) {
   return reasons;
 }
 
+export function replacedRealm(before, after) {
+  if (!before?.scope || !after || before.scope === after.scope || before.realm === after.realm) return null;
+  return { scope: before.scope, owned: null, basis: "Native document realm replaced", probeAvailable: false,
+    reason: "A destroyed realm cannot supply a fresh retired-DOM observation; no zero counts or successful event probe are invented" };
+}
+
 // Reuse the native redirect/clock/commit coverage rules without interpreting
 // JavaScript or assigning a Playwright request to a native dispatch.
-export function nativeNetworkRequests(journal) {
+export function nativeNetworkRequests(journal, preNetworkBlocks = new Set()) {
   const requests = [], reasons = [], live = new Map(), events = journal?.events, b = journal?.boundaries;
   if (!Array.isArray(events) || !b || ![b.startedAt, b.applicationStartedAt, b.terminalStartedAt, b.endedAt].every((v, i, all) => Number.isFinite(v) && v >= 0 && (!i || all[i - 1] <= v)))
     return { requests, reasons: ["Native network journal/window unavailable"] };
@@ -353,6 +359,12 @@ export function nativeNetworkRequests(journal) {
   const clock = events.find((e) => e.event === "native-clock-sample" && e.phase === "initial-native-clock"), endClock = events.find((e) => e.event === "native-clock-sample" && e.phase === "terminal-native-clock");
   for (const [request, chain] of chains) {
     const stack = extras.get(request) ?? [];
+    // A classified disabled preload can stop before it reaches the HTTP stack.
+    // Only its independently observed browser-side dispatch/failure survives.
+    if (preNetworkBlocks.has(request)) {
+      if (chain.length !== 1 || stack.length !== 0) reasons.push("Blocked preload has conflicting native stack/redirect receipts");
+      continue;
+    }
     if (stack.length !== chain.length) { reasons.push("Native/network-stack dispatch multiplicity differs"); continue; }
     stack.forEach((e, i) => {
       const r = chain[i], requestTime = r.response?.timing?.requestTime ?? r.terminal?.response?.timing?.requestTime;

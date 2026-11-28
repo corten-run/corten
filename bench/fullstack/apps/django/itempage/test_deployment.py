@@ -22,3 +22,13 @@ class DeploymentTests(SimpleTestCase):
         for value in ["0", "-1", "", "unlimited", "1.5"]:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 command({"MAX_CONNECTIONS": value})
+
+    def test_mixed_asgi_keeps_matched_transport_limits(self):
+        env = {"MAX_CONNECTIONS": "1200"}
+        wsgi, asgi = command(env), command(env, asgi=True)
+        for flag in ("--workers", "--host", "--port", "--backpressure", "--runtime-threads",
+                     "--runtime-blocking-threads", "--http", "--http1-header-read-timeout", "--http1-buffer-size"):
+            self.assertEqual(asgi[asgi.index(flag) + 1], wsgi[wsgi.index(flag) + 1], flag)
+        self.assertEqual(asgi[asgi.index("--interface") + 1], "asgi")
+        self.assertEqual(asgi[asgi.index("--blocking-threads") + 1], "1")
+        self.assertEqual(asgi[-2:], ["--no-ws", "itempage.mixed_asgi:application"])

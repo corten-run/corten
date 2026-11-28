@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { composePhase } from "./composition.mjs";
-import { latestStableSchema, candidateLatestStableSchema, unsupportedSolidReason } from "../latest-stable.mjs";
+import { evaluateLatestStable, latestStableSchema, latestStableSources, candidateLatestStableSchema, unsupportedSolidReason } from "../latest-stable.mjs";
 import { selectedApps } from "../registry.mjs";
 import { readLatestStable } from "../../client-heavy/build.mjs";
+import { comparisonProfile } from "../../client-heavy/contract.mjs";
 const policy = (group, status = "not-applicable") => ({ schema: latestStableSchema, group, valid: true, status, groupComparisonEligible: status === "not-applicable" ? null : false });
 const binding = { request: { group: "live-delivery" }, latestStable: policy("live-delivery"), preparation: { fixtures: [] }, selection: { apps: ["a", "b", "c"] } };
 const native = { status: "failed", attemptComplete: true, cleanupComplete: true, resources: "verified",
@@ -128,8 +130,15 @@ test("native flags, partial commands, missing OS proof, abort or invalid audit c
 });
 test("client's real diagnostic exit two is not fabricated failure or exit zero", () => {
   const b = { ...binding, request: { group: "client-heavy" }, latestStable: policy("client-heavy", "blocked") }, n = { ...native, status: "verified", outcomes: native.outcomes.map((r) => ({ ...r, outcome: "passed" })) };
-  assert.equal(composePhase(b, n, { cleanupComplete: true, resources: "verified" }, [{ ...command, code: 2 }]).outcome, "native-validated");
-  assert.notEqual(composePhase(b, n, { cleanupComplete: true, resources: "verified" }, [{ ...command, code: 0, success: true }]).outcome, "native-validated");
+  const host = { cleanupComplete: true, resources: "verified" };
+  const observed = [{ ...command, code: 2 }];
+  assert.equal(composePhase(b, n, host, observed).outcome, "native-validated");
+  const probed = composePhase(b, n, host, observed, true, 1);
+  assert.equal(probed.outcome, "blocked");
+  assert.equal(probed.report.timingBlockedByPreLoginProbes, true);
+  assert.ok(probed.appOutcomes.every(({ comparisonEligible }) => !comparisonEligible));
+  assert.equal(composePhase(b, n, host, [{ ...command, code: 137 }], true, 1).outcome, "failed");
+  assert.notEqual(composePhase(b, n, host, [{ ...command, code: 0, success: true }]).outcome, "native-validated");
 });
 
 test("latest-stable blockers preserve complete native outcomes but never qualify comparisons", () => {
@@ -147,39 +156,98 @@ test("latest-stable blockers preserve complete native outcomes but never qualify
   }
 });
 
-test("candidate policy keeps all six rows, explicit unsupported Solid and the bounded native ranking gate", () => {
-  const p = readLatestStable(), apps = p.candidates.map((r) => r.app);
+test("client comparison preserves the historical unsupported Solid row and gates each other candidate", () => {
+  const solid1Commit = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2";
+  const inputs = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) =>
+    [key, execFileSync("git", ["show", `${solid1Commit}:${path}`], { cwd: new URL("../../../", import.meta.url) })]));
+  const p = evaluateLatestStable({ group: "client-heavy", ...inputs }), apps = p.candidates.map((r) => r.app);
+  assert.equal(p.valid, true, JSON.stringify(p.errors));
   const b = { ...binding, request: { group: "client-heavy" }, selection: { apps }, latestStable: p };
   const n = { ...native, outcomes: apps.map((app) => ({ app, outcome: app === "solid" ? "unsupported" : "passed" })), rankingEligible: false, comparisonEligibleApps: apps };
   const host = { cleanupComplete: true, resources: "verified" };
   const current = composePhase(b, n, host, [command]);
   assert.equal(current.outcome, "native-validated"); assert.equal(current.appOutcomes.length, 6);
   assert.ok(current.appOutcomes.every((r) => !r.comparisonEligible));
-  // Hypothetical independently admitted future recipe. This is NOT a current
-  // native result or permission to promote the one-measurement runner.
+  const comparisonBinding = { ...b, request: { ...b.request, recipe: comparisonProfile } };
   const qualified = structuredClone(p), react = qualified.candidates.find((r) => r.app === "react");
   Object.assign(react, { status: "satisfied", latestStableEligible: true, blockers: [] });
   assert.equal(composePhase({ ...b, latestStable: qualified }, n, host, [command]).appOutcomes.find((r) => r.app === "react").comparisonEligible, false);
-  const future = { ...n, rankingEligible: true, comparisonEligibleApps: ["react"] };
-  const result = composePhase({ ...b, latestStable: qualified }, future, host, [command]);
+  const comparison = { samples: 3, actions: [{ operation: "unit", kind: "unit", minMs: 1, medianMs: 2, maxMs: 3 }] };
+  const replicated = { ...n, rankingEligible: true, comparisonEligibleApps: ["react"], comparisons: { react: comparison } };
+  const result = composePhase({ ...comparisonBinding, latestStable: qualified }, replicated, host, [command]);
   assert.deepEqual(result.appOutcomes.map((r) => r.comparisonEligible), [false, true, false, false, false, false]);
-  // Even independent native admission cannot waive the actual forced Remix edge.
-  const allAdmitted = { ...future, comparisonEligibleApps: apps };
-  const gated = composePhase(b, allAdmitted, host, [command]);
-  assert.equal(gated.appOutcomes.find((r) => r.app === "remix").comparisonEligible, false);
-  assert.equal(p.candidates.find((r) => r.app === "remix").status, "blocked");
+  assert.deepEqual(result.appOutcomes.find((r) => r.app === "react").comparison, comparison);
+  assert.ok(composePhase(b, replicated, host, [command]).appOutcomes.every((r) => !r.comparisonEligible && !r.comparison));
+  // Only comparison-eligible current rows are emitted. Native admission
+  // still cannot waive a historical or other candidate freshness blocker.
+  const allAdmitted = { ...replicated, comparisonEligibleApps: apps, comparisons: Object.fromEntries(apps.map((app) => [app, comparison])) };
+  const fresh = composePhase(comparisonBinding, allAdmitted, host, [command]);
+  assert.equal(fresh.appOutcomes.find((r) => r.app === "remix").comparisonEligible, true);
+  assert.equal(fresh.appOutcomes.find((r) => r.app === "solid").comparison, undefined);
+  const blocked = structuredClone(p);
+  Object.assign(blocked.candidates.find((r) => r.app === "remix"), {
+    status: "blocked", latestStableEligible: false, blockers: ["incompatible-dependency:node_modules/@remix-run/test:esbuild"],
+  });
+  const gated = composePhase({ ...comparisonBinding, latestStable: blocked }, allAdmitted, host, [command]);
+  const remix = gated.appOutcomes.find((r) => r.app === "remix");
+  assert.equal(remix.comparisonEligible, false);
+  assert.equal(remix.comparison, undefined);
   assert.equal(gated.appOutcomes.find((r) => r.app === "react").comparisonEligible, true);
   for (const [policy, hostState, audit] of [
     [null, host, true], [undefined, host, true], [{ ...qualified, schema: latestStableSchema }, host, true],
     [{ ...qualified, group: "json-api" }, host, true], [{ ...qualified, valid: false }, host, true],
     [{ ...qualified, candidates: qualified.candidates.slice(1) }, host, true],
     [{ ...qualified, candidates: [...qualified.candidates, react] }, host, true],
-    [qualified, { ...host, cleanupComplete: false }, true], [qualified, host, false],
-  ]) assert.ok(composePhase({ ...b, latestStable: policy }, future, hostState, [command], audit).appOutcomes.every((r) => !r.comparisonEligible));
+    [qualified, { ...host, cleanupComplete: false }, true], [qualified, { ...host, resources: "blocked" }, true], [qualified, host, false],
+  ]) assert.ok(composePhase({ ...comparisonBinding, latestStable: policy }, replicated, hostState, [command], audit)
+    .appOutcomes.every((r) => !r.comparisonEligible && !r.comparison));
   assert.equal(qualified.schema, candidateLatestStableSchema);
   assert.equal(qualified.candidates.find((r) => r.app === "solid").reason, unsupportedSolidReason);
   for (const edit of [(r) => { r.outcome = "passed"; }, (r) => { r.measurement = {}; }]) {
     const bad = structuredClone(n); edit(bad.outcomes.find((r) => r.app === "solid"));
     assert.throws(() => composePhase(b, bad, host, [command]), /unsupported client/);
+  }
+});
+
+test("current Solid policy permits comparison only behind the native, recipe and host gates", () => {
+  const p = readLatestStable(), apps = selectedApps("client-heavy");
+  assert.equal(p.status, "blocked");
+  assert.equal(p.groupComparisonEligible, false);
+  const row = p.candidates.find((r) => r.app === "solid");
+  assert.equal(row.status, "satisfied");
+  assert.equal(row.latestStableEligible, true);
+  assert.deepEqual(row.blockers, []);
+  assert.equal(row.measurements, null);
+  const b = { ...binding, request: { group: "client-heavy", recipe: comparisonProfile }, selection: { apps }, latestStable: p };
+  const comparison = { samples: 3, actions: [{ operation: "test-only", kind: "test-only", minMs: 1, medianMs: 2, maxMs: 3 }] };
+  const n = { ...native, status: "verified", outcomes: apps.map((app) => ({ app, outcome: "passed" })),
+    rankingEligible: true, comparisonEligibleApps: ["solid"], comparisons: { solid: comparison } };
+  const host = { cleanupComplete: true, resources: "verified" }, commands = [{ ...command, code: 2 }];
+  const run = ({ bind = b, replay = n, apparatus = host, exits = commands, audit = true, preLoginProbes = 0 } = {}) =>
+    composePhase(bind, replay, apparatus, exits, audit, preLoginProbes);
+  const result = run();
+  assert.equal(result.outcome, "native-validated");
+  assert.deepEqual(result.appOutcomes.filter((r) => r.comparisonEligible),
+    [{ app: "solid", outcome: "passed", comparisonEligible: true, comparison }]);
+  const blocked = structuredClone(p);
+  blocked.candidates.find((r) => r.app === "solid").blockers.push("test-only");
+  for (const failure of [
+    { bind: { ...b, request: { group: "client-heavy" } } },
+    { bind: { ...b, latestStable: blocked } },
+    { replay: { ...n, attemptComplete: false } },
+    { replay: { ...n, cleanupComplete: false } },
+    { replay: { ...n, rankingEligible: false } },
+    { replay: { ...n, comparisonEligibleApps: [] } },
+    { replay: { ...n, comparisons: {} } },
+    { replay: { ...n, outcomes: n.outcomes.map((r) => r.app === "solid" ? { ...r, outcome: "failed" } : r) } },
+    { apparatus: { ...host, resources: "blocked" } },
+    { apparatus: { ...host, cleanupComplete: false } },
+    { exits: [command] },
+    { audit: false },
+    { preLoginProbes: 1 },
+  ]) {
+    const observed = run(failure).appOutcomes.find((r) => r.app === "solid");
+    assert.equal(observed.comparisonEligible, false);
+    assert.equal(observed.comparison, undefined);
   }
 });

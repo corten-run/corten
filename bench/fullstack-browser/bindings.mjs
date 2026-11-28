@@ -1,4 +1,4 @@
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { createHash } from "node:crypto";
 import { createBindingArtifact, indexBindingArtifact, bindingHash, bindingFunctionLocation } from "./binding-artifact.mjs";
 import { checkBindingEffects } from "./binding-effects.mjs";
@@ -413,8 +413,10 @@ export function discoverReactEndpoint(candidates, linked = null, diagnostics = [
     if (urls.length !== 1 || shadowed || mutated) continue;
     let url, action;
     try { url = new URL(urls[0], candidate.base); action = new URL(candidate.action); } catch { continue; }
+    const recordRoute = `/api/marketplace/${candidate.recordId}`;
+    // Keep replaying native proofs from builds that posted to the record itself.
     if (url.origin !== action.origin || action.pathname !== `/marketplace/${candidate.locale}/${candidate.recordId}`
-      || url.pathname !== `/api/marketplace/${candidate.recordId}` || url.searchParams.get("locale") !== candidate.locale
+      || (url.pathname !== recordRoute && url.pathname !== recordRoute + "/alerts") || url.searchParams.get("locale") !== candidate.locale
       || [...url.searchParams.keys()].some((key) => key !== "locale")) continue;
     return { path: url.pathname, transport: "fetch", basis: candidate.basis, recordId: candidate.recordId, locale: candidate.locale,
       handlerSha256: createHash("sha256").update(candidate.handlerSource).digest("hex"),

@@ -44,7 +44,6 @@ export function replayV2(pass, app, phase, workload, settings, timeoutMs, nodeOr
     else {
       need(finite(deadline.firedAt) && deadline.firedAt >= deadline.scheduledAt + timeoutMs - 1
         && deadline.firedAt <= deadline.cancelledAt && deadline.aborted === true && life.close.startedAt >= deadline.firedAt, "invalid-deadline-abort");
-      closed = false;
     }
   }
   keys(timing, ["schema", "clock", "timeOrigin", "mount", "operations"]);
@@ -84,14 +83,14 @@ export function replayV2(pass, app, phase, workload, settings, timeoutMs, nodeOr
     need(timing.operations.length === recorded || (pass.failure?.phase === workload.operations[recorded]?.id
       && timing.operations.length === recorded + 1), "missing-raw-operation-clocks");
   }
-  const functional = oracle.functionalPassed === true, passed = functional && closed;
+  const functional = oracle.functionalPassed === true, passed = functional && closed && deadline.firedAt === null;
   if (functional) need(readyMs !== null && actions.length === workload.operations.length, "incomplete-success-timing");
   if (passed) need(pass.readyMs === readyMs && same(pass.actions, phase === "measurement" ? actions : null), "timings-differ-from-endpoint-recomputation");
   else need(pass.readyMs === null && pass.actions === null, "failed-pass-has-timings");
   // Reuse the reviewed legacy structural/partial-record checks, not its proof
   // policy or scalar timings. These temporary fields never escape as measurements.
   const { timing: _timing, lifecycle: _lifecycle, requests: _requests, ...legacy } = pass;
-  if (functional && !closed) { legacy.readyMs = readyMs; legacy.actions = phase === "measurement" ? actions : null; }
+  if (functional && !passed) { legacy.readyMs = readyMs; legacy.actions = phase === "measurement" ? actions : null; }
   if (pass.failure?.phase === "context") {
     need(pass.capture.outcome === "failed" && pass.capture.reason === "native-context-failed", "invalid-context-failure");
     legacy.capture = { ...pass.capture, reason: "native-load-failed" };

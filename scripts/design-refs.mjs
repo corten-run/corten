@@ -15,7 +15,7 @@
 // code (an example in prose) is checked only for its anchors. A web link to design.md on main is
 // checked as a relative one is; one pinned to a commit is left alone, since it names that
 // commit's items; a link to a tag, to a branch whose name has a slash, or with a query
-// (`?plain=1`) is not written today and not handled. Not read: CHANGELOG.md (a record of what
+// (`?plain=1`) is not written today and not handled. Not read: changelogs (a record of what
 // each release said), choices.test.mjs's fixtures and this file.
 //
 // And each commit the repository's Markdown cites: a code span of 7 to 40 hex digits alone
@@ -37,6 +37,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isChangelog } from "./docs.mjs";
 
 /** A commit cited in Markdown: a code span of 7 to 40 lower-case hex digits alone, or one written
  * as a repository named corten's (`corten-run/corten@sha`, in any case), which is refused. */
@@ -62,12 +63,14 @@ export function cited(text) {
  * The problems with the commits cited at `found` (`at` is `file:line`) in the clone at `root`:
  * one for a shallow clone, which cannot show them, or one for each citation that writes Corten's
  * commit as a repository's, names no commit on HEAD's history or under an evidence tag, or starts
- * more than one's name, and then how to fetch the evidence tags.
- * @param {string} root @param {{ at: string, sha: string, as?: string }[]} found @returns {string[]}
+ * more than one's name, and then how to fetch the evidence tags. Git runs with `env`, by default this
+ * process's environment, which a test passes without the caller's GIT_DIR to read its own repository.
+ * @param {string} root @param {{ at: string, sha: string, as?: string }[]} found
+ * @param {NodeJS.ProcessEnv} [env] @returns {string[]}
  */
-export function unresolved(root, found) {
+export function unresolved(root, found, env = process.env) {
   if (found.length === 0) return [];
-  const git = (/** @type {string[]} */ args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe", maxBuffer: 1 << 26 });
+  const git = (/** @type {string[]} */ args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe", maxBuffer: 1 << 26, env });
   /** @type {string[]} */
   const problems = [];
   const own = found.filter((c) => !c.as);
@@ -155,7 +158,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     .split("\0")
     // Listed once each (a file with a merge conflict is listed per stage). This script's own comment
     // shows the forms, and a test's fixtures are documents of their own.
-    .filter((file, i, all) => file && all.indexOf(file) === i && !["CHANGELOG.md", "scripts/design-refs.mjs", "scripts/choices.test.mjs"].includes(file));
+    .filter((file, i, all) => file && all.indexOf(file) === i && !isChangelog(file) &&
+      !["scripts/design-refs.mjs", "scripts/choices.test.mjs"].includes(file));
   const capital = /\b(?:Choices?|Limits?|Rules?),? \d+\b/;
   const lowerDesign = /\bdesign (?:choices?|rules?|limits?),? \d+\b/i;
   let links = 0;

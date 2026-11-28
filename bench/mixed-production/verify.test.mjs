@@ -8,10 +8,10 @@ import { fileURLToPath } from "node:url";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 import { expectedPage, labels } from "../marketplace/records.mjs";
 import { createPlan } from "../workloads/mixed.mjs";
-import { contractSha256, definition, retainedFamilies, selectedApps } from "../workloads/registry.mjs";
+import { contractSha256, definition, registrySchema, retainedFamilies, selectedApps } from "../workloads/registry.mjs";
 import { cpuSettings } from "../catalog/contract.mjs";
 import { summarizeSamples } from "../catalog/stats.mjs";
-import { qualification as qualifyProbes } from "../marketplace/feature-contract.mjs";
+import { boundedFeatureProfile, featureProfile, qualification as qualifyProbes } from "../marketplace/feature-contract.mjs";
 import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { captureSource, checkCell, combine, expectedOutcome, oracle, sha256, unsent } from "./capture.mjs";
 import { loadCycle } from "./load-capture.mjs";
@@ -19,7 +19,8 @@ import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.m
 import { resourceCoveragePolicy, mergeResourceSamples } from "./resources.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 import { parseArgs } from "./run.mjs";
-import { validateSaved } from "./verify.mjs";
+import { mixedQualificationProfile, validateSaved } from "./verify.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { createServer } from "node:http";
 import { chromium } from "@playwright/test";
 import { nativeTransport } from "./native.mjs";
@@ -33,11 +34,29 @@ const git = (args, input) => {
   assert.equal(r.status, 0); return r.stdout;
 };
 const commit = git(["rev-parse", "HEAD"]).toString().trim(), inventory = selectedApps("mixed-production");
+const group = "mixed-production", currentDefinition = definition(group);
+const archivedDefinition = { ...currentDefinition, capabilities: currentDefinition.capabilities.map((key) =>
+  key === "bounded-production-http/v2" ? "production-http" : key) };
+const archivedIdentity = { definition: archivedDefinition, contractSha256: sha256(JSON.stringify({
+  registry: registrySchema, group, definition: archivedDefinition, apps: inventory,
+})) };
 const records = fixtureRecords(), plan = createPlan({ seed: 42, clients: 2, repetitions: 1, records });
 let folder, summary, functional, tracked;
 const save = (path, data) => { const full = join(folder, path); mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, Buffer.isBuffer(data) ? data : JSON.stringify(data)); };
 const read = (path) => JSON.parse(readFileSync(join(folder, path), "utf8"));
 const ref = (path) => ({ path, sha256: sha256(readFileSync(join(folder, path))) });
+
+test("only the exact historical registry contract can describe an archived mixed qualification", () => {
+  const current = { definition: currentDefinition, contractSha256: contractSha256(group),
+    timing: { qualificationProfile: boundedFeatureProfile, connectionFloodResistance: "Connection-flood resistance: not measured." } };
+  const archived = { ...archivedIdentity, timing: {} };
+  assert.equal(mixedQualificationProfile(current), boundedFeatureProfile);
+  assert.equal(mixedQualificationProfile(archived), featureProfile);
+  assert.throws(() => mixedQualificationProfile({ ...archived, timing: current.timing }));
+  assert.throws(() => mixedQualificationProfile({ ...current, timing: {} }));
+  assert.throws(() => mixedQualificationProfile({ ...current, definition: archivedDefinition }));
+  assert.throws(() => mixedQualificationProfile({ ...archived, contractSha256: "1".repeat(64) }));
+});
 
 // Synthetic transport vectors ONLY. They test replay/file handling, never native parity.
 function transport(source, { redirects = false } = {}) {
@@ -488,7 +507,7 @@ async function addWindow({ redirects = false } = {}) {
     rawProbeSha256: sha256(JSON.stringify(actualProbes)) };
   save(`measurement/${app}/${source}/qualification/qualification.json`, qualification);
   timing.cells.corten.fixture.qualification = { eligible: true, failure: null, missing: [], artifact: ref(`measurement/${app}/${source}/qualification/qualification.json`) };
-  save("summary.json", summary); return dir;
+  save("summary.json", { ...summary, ...archivedIdentity }); return dir;
 }
 
 test("saved windows rederive metrics and retain v1 proof blockers despite asserted qualification", async () => {
@@ -555,7 +574,7 @@ test("review invalid API and CLI identities never echo canaries", async () => {
 });
 
 function localGit(cwd, args, input) {
-  const result = spawnSync("git", args, { cwd, input, encoding: "utf8", windowsHide: true, timeout: 30000 });
+  const result = spawnSync("git", args, { cwd, input, encoding: "utf8", windowsHide: true, timeout: 30000, env: fixtureGitEnv() });
   assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
 }
 function smallRound(dir, identity) {

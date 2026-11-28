@@ -7,14 +7,17 @@ import { serveProviderWorker } from "./cloud-provider-worker.mjs";
 
 const [mode, trace, hostsPath, stateDir, group, userId] = process.argv.slice(2);
 assert.equal(process.argv.length, 8);
-assert.ok(["success", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create"].includes(mode));
+assert.ok(["success", "overlap", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create",
+  "startup-refusal", "catalog-denial", "catalog-count", "catalog-shape", "catalog-pagination", "catalog-disconnect"].includes(mode));
 assert.ok(getHeapStatistics().heap_size_limit <= 128 * 1024 ** 2);
 delete process.env.NODE_OPTIONS;
 process.stdin.resume(); // Drain the transport's actual captured bootstrap bytes.
 const record = (event) => appendFileSync(trace, `${JSON.stringify({ group, ...event })}\n`);
+if (mode === "startup-refusal") { record({ boundary: "before-provider-boot" }); process.exit(2); }
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
-let clock = 0;
+const later = mode === "overlap" && group !== "catalog-page";
+let clock = 0, accountsAfterRegions, firstInventoryPage = true;
 serveProviderWorker({
   now: () => clock,
   spawn(binary, argv) {
@@ -26,14 +29,58 @@ serveProviderWorker({
   request({ method, path, body, credential }) {
     assert.equal(credential, "SYNTHETIC_FLEET_CREDENTIAL");
     record({ boundary: "provider", method, path, body });
+    if (path === "/v2/regions?page=1&per_page=200") accountsAfterRegions = 0;
+    if (path === "/v2/account" && accountsAfterRegions !== undefined && ++accountsAfterRegions === 2 && existsSync(hostsPath + ".late-lock"))
+      writeFileSync(readFileSync(hostsPath + ".late-lock", "utf8"), "sibling started during the create account check", { flag: "wx" });
     if (path === "/v2/account") return mode === "provider-failure" ? { status: 403, value: null }
-      : { status: 200, value: { account: { uuid: userId, droplet_limit: 20 } } };
+      : { status: 200, value: { account: { uuid: userId,
+        droplet_limit: existsSync(hostsPath + ".limit") ? Number(readFileSync(hostsPath + ".limit", "utf8")) : 20 } } };
+    if (method === "GET" && path === "/v2/sizes?page=1&per_page=200") {
+      if (mode === "catalog-disconnect") process.exit(2);
+      if (mode === "catalog-denial") return { status: 403, value: { private: credential } };
+      if (mode === "catalog-count") return { status: 200, value: { sizes: [], meta: { total: 1 } } };
+      if (mode === "catalog-shape") return { status: 200, value: { sizes: { private: credential } } };
+      if (mode === "catalog-pagination") return { status: 200, value: {
+        sizes: [{ slug: "c-8", available: true, regions: ["sfo2"] }], meta: { total: 2 },
+        links: { pages: { next: "https://api.digitalocean.com/v2/sizes?page=2&per_page=200" } },
+      } };
+      const sizes = [{ slug: "c-8", available: true, regions: later ? ["lon1"] : ["sfo2", "sfo3"] }];
+      if (!later) sizes.push({ slug: "c-16", available: true, regions: ["sfo2"] });
+      return { status: 200, value: { sizes, meta: { total: sizes.length } } };
+    }
+    if (mode === "catalog-pagination" && method === "GET" && path === "/v2/sizes?page=2&per_page=200")
+      return { status: 200, value: { sizes: [{ slug: "c-16", available: true, regions: ["sfo2"] }], meta: { total: 3 } } };
+    if (method === "GET" && path === "/v2/regions?page=1&per_page=200") {
+      const regions = [{ slug: "sfo2", available: true, sizes: later ? [] : ["c-8", "c-16"] },
+        { slug: "sfo3", available: true, sizes: later ? [] : ["c-8"] },
+        { slug: "lon1", available: true, sizes: later ? ["c-8"] : [] },
+        { slug: "blr1", available: true, sizes: [] }];
+      return { status: 200, value: { regions, meta: { total: regions.length } } };
+    }
     if (method === "GET" && path.startsWith("/v2/droplets?")) {
+      if (existsSync(hostsPath + ".census-next")) {
+        const match = JSON.parse(readFileSync(hostsPath + ".census-next", "utf8"));
+        if (path === "/v2/droplets?page=2&per_page=200") return { status: 200, value: { droplets: [], meta: { total: 1 } } };
+        if (firstInventoryPage) {
+          firstInventoryPage = false;
+          return { status: 200, value: { droplets: [match], meta: { total: 2 },
+            links: { pages: { next: "https://api.digitalocean.com/v2/droplets?page=2&per_page=200" } } } };
+        }
+        return { status: 200, value: { droplets: [{ ...match, name: "renamed", tags: [] }], meta: { total: 1 } } };
+      }
+      if (existsSync(hostsPath + ".census-first")) {
+        const rows = JSON.parse(readFileSync(hostsPath + ".census-first", "utf8"));
+        if (firstInventoryPage) {
+          firstInventoryPage = false;
+          return { status: 200, value: rows };
+        }
+        return { status: 200, value: { droplets: [], meta: { total: 0 } } };
+      }
       const droplets = hosts(); return { status: 200, value: { droplets, meta: { total: droplets.length }, links: {} } };
     }
     if (method === "POST" && path === "/v2/droplets") {
       const saved = state(); assert.equal(saved.status, "creating"); assert.ok(saved.createIntentAt);
-      const droplets = hosts(), id = droplets.length + 101;
+      const droplets = hosts(), id = droplets.length + (later ? 102 : 101);
       const droplet = { id, name: body.name, tags: body.tags, size_slug: body.size, region: { slug: body.region },
         networks: { v4: [{ type: "public", ip_address: `192.0.2.${id - 100}` }] } };
       writeFileSync(hostsPath, JSON.stringify([...droplets, { ...droplet, id: mode === "host-id-mismatch" ? id + 100 : id }]));

@@ -1,5 +1,8 @@
 # Native App-Owner Handoff
 
+These are historical observations from the earlier hardening contract, not results
+from the bounded request and recovery group. See the [current contract](README.md).
+
 These are observations from clean, immutable native images, not inferred framework
 limitations or default-tier results. App changes belong to their native authors;
 the hardening driver does not install defenses or replace their server/renderer.
@@ -98,26 +101,9 @@ TLS receiving controls. The original native receipt is not rewritten. Effective
 qualification's separate TLS client already kept SNI independent, so its observed
 unknown-Host 200 remains valid. No qualified edge performance is claimed.
 
-For a bounded app-author regression, use a fresh local round, for example:
-
-```sh
-node bench/hardening/run.mjs w11 --review approved-native-app-change --build --verify-app express --verify-source api --verify-case deployed-edge --verify-phase slow-bodies
-node bench/hardening/verify.mjs bench/hardening/results/w11
-```
-
-The unchanged full 216-cell execution, after author changes are committed, is:
-
-```sh
-node bench/hardening/run.mjs w12 --review approved-complete-group --build
-node bench/hardening/verify.mjs bench/hardening/results/w12
-```
-
-An existing pinned dependency install can be supplied with `--node-modules PATH`.
-Every cell starts fresh native processes and repeats production and complete
-browser/content gates. The full matrix is a multi-hour operation, not a 216-times
-13.5-second smoke test. Verification filters retain all other cells as `not-run`
-and can never set `groupReady`. Missing production defenses do not exclude an app
-from hardening observation or turn unqualified observations into numeric parity.
+The [historical native procedure](https://github.com/corten-run/corten/blob/ab40c8b1d60ada54c33e959cae73f3ef8c1768f8/bench/hardening/NATIVE-GAPS.md)
+describes the earlier 216-cell matrix. Those commands do not apply to the
+[current bounded workload](README.md).
 
 ## Five-finding repair verification
 

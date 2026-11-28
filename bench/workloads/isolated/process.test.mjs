@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { limits, supervise } from "./process.mjs";
+import { limits, startupOutcome, supervise } from "./process.mjs";
 import { fakeChild } from "./test-fixtures/process.mjs";
 
 const cwd = fileURLToPath(new URL("../../../", import.meta.url));
@@ -53,6 +53,70 @@ test("ready IPC cannot extend a hung observation setup to the native runtime dea
     { readyMs: 10, runMs: 10000, stopMs: 10, killMs: 10 });
   assert.equal(starts, 0); assert.equal(result.cancelled, true); assert.equal(result.success, false);
 });
+
+for (const mode of ["on time", "late setup", "late ready", "caller cancelled first", "leader exited first"]) {
+  test(`startup cutoff without dispatching timers: ${mode}`, { timeout: 3000 }, async (t) => {
+    const deadlines = { readyMs: 20, runMs: 250, stopMs: 80, killMs: 20 };
+    let elapsed = 100;
+    t.mock.method(performance, "now", () => elapsed);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const abort = new AbortController(), messages = [];
+    const child = fakeChild((c) => c.close(0), { ready: mode !== "late ready" });
+    const send = child.send.bind(child);
+    child.send = (message, callback) => {
+      messages.push(message.type);
+      if (message.type === "cancel") queueMicrotask(() => child.close(0));
+      send(message, callback);
+    };
+    t.mock.method(childProcess, "spawn", () => child);
+    const running = supervise(plan("never"), { cwd, env: {}, log() {}, signal: abort.signal,
+      onStart() {
+        if (mode === "caller cancelled first") abort.abort();
+        if (mode === "leader exited first") child.close(0);
+        if (mode !== "late ready") elapsed += deadlines.readyMs - (mode === "on time" ? 1 : 0);
+      },
+    }, deadlines);
+    if (mode === "late ready") {
+      await new Promise((resolve) => setImmediate(resolve));
+      elapsed += deadlines.readyMs;
+      child.emit("message", { type: "ready" });
+    }
+    const result = await running;
+    assert.deepEqual(messages, mode === "on time" ? ["start"] : mode === "leader exited first" ? [] : ["cancel"]);
+    assert.equal(result.success, mode === "on time");
+    assert.equal(startupOutcome(result), mode === "late setup" ? "deadline"
+      : mode.endsWith("first") ? "interrupted" : "accepted");
+    if (mode === "late setup") assert.equal(result.error, "native host observation setup incomplete");
+    if (mode.endsWith("first")) assert.equal(result.error, "native leader closed before host observation setup");
+  });
+}
+
+for (const cause of ["caller abort", "leader exit"]) for (const elapsed of [19, 20, 21]) {
+  test(`pending startup: ${cause} at ${elapsed}ms against a 20ms cutoff`, async (t) => {
+    const deadlines = { readyMs: 20, runMs: 250, stopMs: 80, killMs: 20 };
+    let now = 100, complete;
+    t.mock.method(performance, "now", () => now);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const abort = new AbortController(), messages = [];
+    const gate = new Promise((resolve) => { complete = resolve; });
+    const child = fakeChild(() => { throw new Error("native command must remain gated"); });
+    const send = child.send.bind(child);
+    child.send = (message, callback) => { messages.push(message.type); send(message, callback); };
+    t.mock.method(childProcess, "spawn", () => child);
+    const running = supervise(plan("never"), { cwd, env: {}, log() {}, signal: abort.signal, onStart: () => gate }, deadlines);
+    await new Promise((resolve) => setImmediate(resolve));
+    now += elapsed;
+    if (cause === "caller abort") abort.abort();
+    child.close(0);
+    complete();
+    const result = await running;
+    assert.equal(result.terminal, true);
+    assert.equal(result.success, false);
+    assert.equal(startupOutcome(result), elapsed >= deadlines.readyMs ? "deadline" : "interrupted");
+    if (elapsed >= deadlines.readyMs) assert.equal(result.error, "native host observation setup incomplete");
+    assert.deepEqual(messages, cause === "caller abort" || elapsed >= deadlines.readyMs ? ["cancel"] : []);
+  });
+}
 
 test("an early child close retains setup ownership only until its original deadline", { timeout: 3000 }, async (t) => {
   const child = fakeChild(() => { throw new Error("native code must remain gated"); });

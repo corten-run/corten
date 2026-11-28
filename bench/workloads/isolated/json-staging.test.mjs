@@ -14,6 +14,7 @@ import { inspectNative } from "./native-replay.mjs";
 import { composePhase } from "./composition.mjs";
 import { latestStableSchema } from "../latest-stable.mjs";
 import { jsonSources as boundSources, saveJsonFixture } from "./test-fixtures/json.mjs";
+import { c16Env } from "../../json-api/placement.mjs";
 
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-json-stage-test-"));
 const native = join(temporary, "native"), source = join(temporary, "sources"); mkdirSync(native); mkdirSync(source);
@@ -47,15 +48,18 @@ const sourceFiles = [...new Map(receipts.flatMap((r) => r.sourceFiles).map((f) =
 const manifest = snapshotSources({ sources: { files: sourceFiles } }, source, sealedSources);
 const plan = { campaignSha256: "campaign", commit: s.commit, sourceSha256: "sources" };
 const subject = auditSubject(plan, { summary: s }, tree(native), manifest, images);
-const delivery = () => ({ schema: "benchmark-json-audit-delivery/v1", subjectSha256: subject.subjectSha256,
-  review: { reviewer: "synthetic-independent", reviewedAt: "2026-11-12T12:00:00Z", subjectSha256: subject.subjectSha256, findings: [], decision: "approved" },
+const delivery = (target = subject) => ({ schema: "benchmark-json-audit-delivery/v1", subjectSha256: target.subjectSha256,
+  review: { reviewer: "synthetic-independent", reviewedAt: "2026-11-12T12:00:00Z", subjectSha256: target.subjectSha256, findings: [], decision: "approved" },
   bundle: { schema: "json-api-native-audits/v2", receipts } });
 test("actual native raw functional replay can stage only an honestly blocked check-only build", () => {
   const prepared = inspectPreparation(binding, native);
   assert.equal(prepared.report.baseline, false); assert.equal(s.options.build, true); assert.equal(s.options.checkOnly, true);
   assert.equal(auditSubject(plan, prepared, tree(native), manifest, images).subjectSha256, subject.subjectSha256);
-  assert.equal(subject.qualified, false); assert.equal(subject.identities.length, 36);
+  assert.equal(subject.qualified, false); assert.equal(subject.identities.length, 40);
   assert.throws(() => inspectPreparation({ ...binding, sources: undefined }, native), /producer commit/);
+  // An unmarked preparation cannot stage under a binding that requested the c-16 layout.
+  assert.throws(() => inspectPreparation({ ...binding, resources: { ...binding.resources, requestedCpuEnv: c16Env } }, native),
+    /JSON API load layout differs from binding/);
   for (const mutate of [(x) => { x.schema = "json-api-results/v1"; }, (x) => { x.attemptComplete = true; },
     (x) => { x.apps.corten.projections[descriptor().cases[0].key] = {}; }, (x) => { x.apps.corten.aggregates[descriptor().cases[0].key].fixed = {}; },
     (x) => x.cleanupFailures.push({ resource: "leaked" }), (x) => x.failures.pop(),
@@ -83,21 +87,50 @@ test("replayed negative preparation can await the same independent image/source 
   assert.equal(prepared.report.apps.corten[descriptor().cases[0].key].functional, false);
   const target = auditSubject({ campaignSha256: "campaign", commit: summary.commit, sourceSha256: "sources" }, prepared, tree(folder),
     { files: sourceFiles }, []);
-  assert.equal(target.qualified, false); assert.equal(target.identities.length, 36);
+  assert.equal(target.qualified, false); assert.equal(target.identities.length, 40);
   delete summary.cleanup; save(); assert.throws(() => inspectPreparation(b, folder), "missing cleanup must not stage");
 });
-test("exact current built image identity is required, not generic source presence", () => {
+test("sealed JSON preparation with Docker-omitted WorkingDir reaches the exact independent audit", () => {
+  let change;
   const inspect = mock.method(childProcess, "execFileSync", (binary, args, options) => {
     assert.equal(binary, "docker"); assert.deepEqual(args.slice(0, 2), ["image", "inspect"]); assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1");
     const saved = images.find((i) => i.imageId === args[2]);
-    return JSON.stringify([{ Id: saved.imageId, Config: { Labels: saved.labels, Entrypoint: saved.config.entrypoint,
-      ...(saved.tool === "k6" ? {} : { Cmd: saved.config.cmd }), Env: ["SECRET=not-retained"] }, RootFS: { Layers: [] } }]);
+    const config = { Labels: saved.labels, Entrypoint: saved.config.entrypoint, Env: ["SECRET=not-retained"] };
+    if (saved.tool !== "k6") config.Cmd = saved.config.cmd;
+    // As in r24, the Corten payload images and Node tool omit the field; other images report it.
+    if (saved.app !== "corten" && saved.tool !== "node") config.WorkingDir = saved.tool === "k6" ? "/home/k6" : "/app";
+    const info = { Id: saved.imageId, Config: config, Created: "2026-11-21T17:45:00Z",
+      Architecture: "amd64", Os: "linux", RootFS: { Type: "layers", Layers: [`sha256:${"1".repeat(64)}`] } };
+    change?.(info, saved);
+    return JSON.stringify([info]);
   });
   syncBuiltinESMExports();
   try {
-    const images = imageProof(s); assert.equal(images.length, 20); assert.ok(!JSON.stringify(images).includes("SECRET"));
-    assert.equal(JSON.parse(JSON.stringify(images)).find((image) => image.tool === "k6").config.cmd, null,
-      "Docker's omitted optional k6 Cmd must survive the audit subject as explicit null");
+    const prepared = inspectPreparation(binding, native), sealed = tree(native);
+    const proof = imageProof(prepared.summary);
+    const target = auditSubject(plan, prepared, sealed, manifest, proof);
+    const replayed = JSON.parse(JSON.stringify(proof));
+    assert.deepEqual(proof, replayed, "the live proof must be identical to the saved image evidence");
+    assert.deepEqual(target, auditSubject(plan, prepared, sealed, manifest, replayed));
+    assert.equal(target.qualified, false); assert.equal(target.identities.length, 40);
+    assert.equal(proof.length, descriptor().apps.length * descriptor().payloads.length + 2); assert.ok(!JSON.stringify(proof).includes("SECRET"));
+    assert.equal(proof.filter(({ config }) => !Object.hasOwn(config, "workingDir")).length, 3);
+    assert.ok(proof.filter(({ app, tool }) => app === "corten" || tool === "node")
+      .every(({ config }) => !Object.hasOwn(config, "workingDir")));
+    assert.deepEqual(proof.find(({ tool }) => tool === "k6").config,
+      { entrypoint: s.toolExecutions.k6.Entrypoint, cmd: null, workingDir: "/home/k6" });
+    const review = delivery(target);
+    assert.equal(validateAuditDelivery(review, target, sealedSources).bundle.receipts.length, 40);
+
+    change = (info, saved) => { if (saved.tool === "k6") info.Config.WorkingDir = ""; };
+    const changed = auditSubject(plan, prepared, sealed, manifest, imageProof(prepared.summary));
+    assert.equal(changed.images.find(({ tool }) => tool === "k6").config.workingDir, "");
+    assert.notEqual(changed.subjectSha256, target.subjectSha256, "working directory changes the exact image subject");
+    assert.throws(() => validateAuditDelivery(review, changed, sealedSources), { code: "ERR_ASSERTION" });
+    change = (info, saved) => { if (saved.tool === "node") delete info.Created; };
+    assert.throws(() => auditSubject(plan, prepared, sealed, manifest, imageProof(prepared.summary)), /plain JSON object required/);
+    change = undefined;
+
     for (const [owner, key] of [[s.apps.express.images[descriptor().payloads[0]], "execution"], [s.toolExecutions, "node"], [s.toolExecutions, "k6"]]) {
       const before = owner[key];
       owner[key] = { ...before, Cmd: ["/unreviewed/node", "--eval", "process.exit(1)"] };
@@ -224,11 +257,11 @@ test("k6 execution rewrites cannot pass the actual accepted-audit and core bridg
   assert.notEqual(compose(changed, audited).outcome, "native-validated");
 });
 
-test("independent review data must match all 36 actual subjects and sealed source bytes", () => {
+test("independent review data must match all 40 actual subjects and sealed source bytes", () => {
   const delivery = { schema: "benchmark-json-audit-delivery/v1", subjectSha256: subject.subjectSha256,
     review: { reviewer: "independent-human", reviewedAt: "2026-11-12T12:00:00Z", subjectSha256: subject.subjectSha256, findings: [], decision: "approved" },
     bundle: { schema: "json-api-native-audits/v2", receipts } };
-  assert.equal(validateAuditDelivery(delivery, subject, sealedSources).bundle.receipts.length, 36);
+  assert.equal(validateAuditDelivery(delivery, subject, sealedSources).bundle.receipts.length, 40);
   for (const mutate of [(d) => { d.subjectSha256 = "stale"; }, (d) => { d.operatorAuthorized = true; },
     (d) => d.bundle.receipts.pop(), (d) => { d.bundle.receipts[1] = d.bundle.receipts[0]; },
     (d) => { d.bundle.receipts[0].identity.imageId = "sha256:wrong"; },

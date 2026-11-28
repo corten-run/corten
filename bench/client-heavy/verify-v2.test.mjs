@@ -6,22 +6,65 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { Evidence, json, sha256 } from "./evidence.mjs";
-import { options, sourceRoots, buildOptions, documentMarkup } from "./contract.mjs";
+import { options, sourceRoots, buildOptions, documentMarkup, comparisonProfile } from "./contract.mjs";
 import { committed, validateSaved } from "./verify.mjs";
 import { selectedApps, definition } from "../workloads/registry.mjs";
+import { validateClientCapture } from "../workloads/client.mjs";
 import { fixturePass, workload, settings } from "./replay-fixture.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
 import { admitSaved } from "./admission.mjs";
 import { hostFixture } from "./host-fixture.mjs";
 import { evaluateLatestStable, latestStableSources } from "../workloads/latest-stable.mjs";
-import { replayCandidatePolicy, replayCandidateDisposition, replayProducerSchema } from "./verify-v2.mjs";
+import { replayCandidatePolicy, replayCandidateDisposition, replayProducerSchema, replaySolidCompiler } from "./verify-v2.mjs";
+import { solidCompilerFiles, solidManifestFiles, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
 
-const currentCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), apps = selectedApps("client-heavy");
+const solid1Commit = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2", apps = selectedApps("client-heavy");
 const producerRoot = "/producer", outputPath = "bench/client-heavy/work/unit";
+
+test("Solid 2 replay requires the exact compiler, package manifests and bundled browser runtime", () => {
+  const target = "linux-x64-gnu", files = solidCompilerFiles(target, "linux");
+  const receipt = { version: "2.0.2", target, files };
+  const dependencies = new Map(Object.entries(files).map(([path, sha256]) => [path, { sha256 }]));
+  const manifests = Object.entries(solidManifestFiles(target));
+  for (const [path, sha256] of manifests) if (sha256 !== null) dependencies.set(path, { sha256 });
+  const inputs = new Map(Object.entries(solidRuntimeFiles).map(([path, sha256]) => [solidRuntimePrefix + path, { sha256 }]));
+  const check = (value = receipt, deps = dependencies, build = inputs) => replaySolidCompiler(value, "linux", deps, build);
+  assert.doesNotThrow(() => check());
+  assert.throws(() => check(null), /missing-solid-compiler-receipt/);
+  assert.throws(() => check({ ...receipt, version: "2.0.1" }), /solid-compiler-differs-from-locked-install/);
+  assert.throws(() => check({ ...receipt, target: "win32-x64-msvc" }), /unreviewed-solid-compiler-target/);
+  for (const path of Object.keys(files)) {
+    const missing = new Map(dependencies); missing.delete(path);
+    assert.throws(() => check(receipt, missing), /solid-compiler-differs-from-locked-install/);
+  }
+  for (const [path, sha256] of manifests) {
+    const changed = new Map(dependencies).set(path, { sha256: "0".repeat(64) });
+    assert.throws(() => check(receipt, changed), /missing-or-modified-solid-package-manifest/);
+    if (sha256 === null) continue;
+    changed.delete(path);
+    assert.throws(() => check(receipt, changed), /missing-or-modified-solid-package-manifest/);
+  }
+  const nested = "@solidjs/signals/dist/prod/package.json";
+  assert.equal(solidManifestFiles(target)[nested], null);
+  assert.throws(() => check(receipt, new Map(dependencies).set(nested.toUpperCase(), { sha256: "0".repeat(64) })),
+    /missing-or-modified-solid-package-manifest/);
+  // Leave both top-level entries intact when changing an imported module.
+  for (const path of ["solid-js/dist/solid.js", "solid-js/dist/internal.js", "@solidjs/signals/dist/prod/core/graph.js"]) {
+    const changed = new Map(inputs), input = solidRuntimePrefix + path;
+    assert.ok(changed.has(input));
+    changed.set(input, { sha256: "0".repeat(64) });
+    assert.throws(() => check(receipt, dependencies, changed), /missing-or-modified-solid-runtime-build-input/);
+  }
+  const published = "@solidjs/signals/dist/prod/index.js";
+  const normal = solidRuntimePrefix + published, shadow = solidRuntimePrefix + "solid-js/node_modules/" + published;
+  const missing = new Map(inputs); missing.delete(normal);
+  for (const changed of [missing, new Map(missing).set(shadow, inputs.get(normal)), new Map(inputs).set(shadow, inputs.get(normal))])
+    assert.throws(() => check(receipt, dependencies, changed), /missing-or-modified-solid-runtime-build-input/);
+});
 // Completely synthetic source/build/browser receipts. Their successful intrinsic
 // replay MUST NOT authenticate them or create a real review receipt.
 async function fixture(t, version = 2) {
-  const commit = version === 3 ? currentCommit : "e006be831cd69e423bfd3e159362b54746597b96";
+  const commit = version >= 3 ? solid1Commit : "e006be831cd69e423bfd3e159362b54746597b96";
   const folder = await mkdtemp(join(tmpdir(), "client-v2-unit-")), e = new Evidence(process.cwd(), folder);
   t.after(async () => { const r = relative(tmpdir(), folder); assert.ok(r && !isAbsolute(r) && !r.startsWith("..")); await rm(folder, { recursive: true, force: true }); });
   const write = async (p, b) => { await mkdir(dirname(join(folder, p)), { recursive: true }); await writeFile(join(folder, p), b); };
@@ -33,16 +76,19 @@ async function fixture(t, version = 2) {
   sources.sort((a, b) => a.path.localeCompare(b.path, "en"));
   const empty = await e.blob(Buffer.alloc(0)), module = await e.blob(Buffer.from("// synthetic dependency, never executed\n"));
   const source = new Map(sources.map((s) => [s.path, s]));
-  const config = options(["unit", "--rows", "8", "--large", "10", "--append", "1", "--cards", "2", "--cleanup-ms", "10", "--observation-ms", "5"], producerRoot, "linux");
-  assert.deepEqual(config.workload, workload); assert.deepEqual(config.settings, settings);
-  const plan = { schema: "client-heavy-plan/v1", round: "unit", commit, invocation: config.invocation, workload, settings, timeoutMs: 30000,
+  const config = options(version === 4 ? ["unit", "--profile", comparisonProfile]
+    : ["unit", "--rows", "8", "--large", "10", "--append", "1", "--cards", "2", "--cleanup-ms", "10", "--observation-ms", "5"], producerRoot, "linux");
+  if (version < 4) { assert.deepEqual(config.workload, workload); assert.deepEqual(config.settings, settings); }
+  const { workload: spec, settings: limits, measurementOrder } = config;
+  const plan = { schema: "client-heavy-plan/v1", round: "unit", commit, invocation: config.invocation, workload: spec, settings: limits, timeoutMs: 30000,
+    ...(measurementOrder ? { measurementOrder } : {}),
     selectedApps: [...apps], definition: definition("client-heavy"), sourceBefore: "evidence/source-before.json", root: producerRoot, platform: "linux",
     nodeClock: { clock: "node-performance", timeOrigin: 1000 }, inheritedConfigurationNames: ["PATH"] };
-  const output = { schema: `client-heavy-native/v${version}`, group: "client-heavy", round: "unit", effectiveWorkload: workload, settings, timeoutMs: 30000,
+  const output = { schema: `client-heavy-native/v${version}`, group: "client-heavy", round: "unit", effectiveWorkload: spec, settings: limits, timeoutMs: 30000,
     selectedApps: [...apps], definition: definition("client-heavy"), builds: {}, cells: {}, passed: true, readyForLoad: false, cleanupFailures: [],
     collection: { accounting: "complete", proof: "blocked", blockers: ["external-trusted-execution-source-build-and-host-admission-required"], isolation: "unknown", rankingEligible: false, reviewSubject: "review-subject.json" },
     provenance: { commit, sourceBefore: "evidence/source-before.json", sourceAfter: "evidence/source-after.json", node: "unit", platform: "linux", release: "unit", cpu: "unit", logicalCpus: 1,
-      browser: "unit", browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 2, note: "SYNTHETIC UNIT ONLY" },
+      browser: "unit", browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 1 + (measurementOrder?.length ?? 1), note: "SYNTHETIC UNIT ONLY" },
     terminal: { clock: "node-performance", timeOrigin: 1000, signals: [], resources: ["browser", "server"].map((resource, i) => ({ resource,
       startedAt: 10000 + i * 2, endedAt: 10001 + i * 2, returned: true, observed: true, failure: null })) } };
   const dependencyEntries = {};
@@ -88,7 +134,7 @@ async function fixture(t, version = 2) {
     const inputs = inputPaths.map((path) => ({ path, ...(source.has(path) ? (({ path: _, ...ref }) => ref)(source.get(path)) : module) }));
     const raw = Buffer.from(`throw new Error('saved code must not run'); // ${app}`), code = Buffer.concat([raw, Buffer.from("\n")]), bundle = app === "corten" ? "client.js" : "app.js";
     const meta = { inputs: Object.fromEntries(inputPaths.map((p) => [p, {}])), outputs: { "stdout.js": { bytes: raw.length, entryPoint: entry, imports: [], inputs: Object.fromEntries(inputPaths.map((p) => [p, { bytesInOutput: 0 }])) } } };
-    const bytes = { "index.html": Buffer.from(documentMarkup(app, workload, "<section>Synthetic unit</section>")), [bundle]: code };
+    const bytes = { "index.html": Buffer.from(documentMarkup(app, spec, "<section>Synthetic unit</section>")), [bundle]: code };
     if (app === "corten") Object.assign(bytes, { "runtime.js": Buffer.from(await readFile(join(folder, source.get("crates/corten/js/dist/corten.js").blob))), "views.js": Buffer.from("// synthetic views") });
     const artifactHashes = Object.fromEntries(Object.entries(bytes).map(([p, b]) => [p, sha256(b)]));
     for (const [p, b] of Object.entries(bytes)) await write(`native/${app}/${p}`, b);
@@ -101,28 +147,34 @@ async function fixture(t, version = 2) {
     const buildAt = 10 + apps.indexOf(app) * 2;
     await saveJson(`native/${app}/build-receipt.json`, { schema: "client-heavy-build-receipt/v1", app, startedAt: app === "corten" ? 4 : buildAt, endedAt: buildAt + 1, esbuild: { version: "0.28.2", entry: module },
       optionsSha256: sha256(json(opts)), metafileSha256: sha256(json(meta)), rawBundle: await e.blob(raw), footer: empty, inputs, artifacts: artifactHashes });
-    output.cells[app] = { outcome: "passed", qualification: fixturePass(app, false), measurement: fixturePass(app, true), readyForMeasurement: true };
-    for (const phase of ["qualification", "measurement"]) {
-      const p = output.cells[app][phase], start = 100 + apps.indexOf(app) * 1000 + (phase === "measurement" ? 200 : 0);
+    function capture(measured, start, elapsedMs = 0.25) {
+      const p = fixturePass(app, measured, spec, limits);
       p.lifecycle.contextCreatedAt = start; p.lifecycle.deadline.scheduledAt += start; p.lifecycle.deadline.cancelledAt += start;
       p.lifecycle.close.startedAt += start; p.lifecycle.close.endedAt += start; p.timing.timeOrigin += start + 10;
       p.timing.operations.forEach((s) => { s.timeOrigin += start + 10; });
+      if (measured) { p.timing.operations[0].endedAt = p.timing.operations[0].startedAt + elapsedMs; p.actions[0].elapsedMs = elapsedMs; }
       p.requests = Object.entries(bytes).map(([name, b], id) => ({ id, path: `/${app}/${name}`,
         method: "GET", resourceType: name.endsWith("html") ? "document" : "script", startedAt: start + 2 + id, endedAt: start + 3 + id, status: 200, body: { bytes: b.length, sha256: sha256(b) }, failure: null }));
+      return p;
     }
+    const start = 100 + apps.indexOf(app) * (measurementOrder ? 350 : 1000);
+    output.cells[app] = { outcome: "passed", qualification: capture(false, start), readyForMeasurement: true,
+      ...(measurementOrder ? { measurements: measurementOrder.map((block, i) => capture(true, 100 + (apps.length * (i + 1) + block.indexOf(app)) * 350, [0.75, 0.25, 0.5][i])) }
+        : { measurement: capture(true, start + 200) }) };
   }
-  if (version === 3) {
+  if (version >= 3) {
     const inputs = Object.fromEntries(await Promise.all(Object.entries(latestStableSources).map(async ([key, path]) =>
       [key, await readFile(join(folder, source.get(path).blob))])));
     output.latestStable = evaluateLatestStable({ group: "client-heavy", ...inputs });
     const row = output.latestStable.candidates.find((r) => r.app === "solid");
     await remove("native/solid");
     output.builds.solid = { outcome: "not-run", reason: row.reason };
-    output.cells.solid = { outcome: "unsupported", reason: row.reason, qualification: null, measurement: null, readyForMeasurement: false };
+    output.cells.solid = { outcome: "unsupported", reason: row.reason, qualification: null, readyForMeasurement: false,
+      ...(measurementOrder ? { measurements: [] } : { measurement: null }) };
     output.passed = false;
   }
   const seal = async () => {
-    await saveJson("plan.json", plan); await saveJson("result.json", output); await saveJson("native/workload.json", workload); await saveJson("native/build.json", output.builds);
+    await saveJson("plan.json", plan); await saveJson("result.json", output); await saveJson("native/workload.json", spec); await saveJson("native/build.json", output.builds);
     for (const app of apps) await saveJson(`${app}.json`, output.cells[app]);
     await rm(join(folder, "review-subject.json"), { force: true }); await e.seal({ group: "client-heavy", round: "unit", commit });
   };
@@ -148,7 +200,79 @@ test("v3 public replay preserves unsupported Solid and qualified diagnostic peer
   assert.equal(r.cells.solid.outcome, "unsupported"); assert.equal(r.cells.solid.qualification, null); assert.equal(r.cells.solid.measurement, null);
   assert.equal(r.cells.solid.build.bytes, null);
   assert.equal(r.cells.react.replayPassed, true); assert.ok(r.cells.react.measurement.timings);
-  assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === !["solid", "remix"].includes(row.app)));
+  assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === (row.app !== "solid")));
+});
+
+test("v4 replays each block and recomputes summaries for native and policy passes only", async (t) => {
+  const f = await fixture(t, 4), r = await f.validate();
+  assert.equal(r.schema, "client-heavy-saved-verification/v4");
+  assert.equal(r.status, "failed", JSON.stringify(r.errors));
+  assert.equal(r.intrinsic.complete, true); assert.equal(r.rankingEligible, false);
+  const attemptedOrder = f.plan.measurementOrder.map((block) => block.filter((app) => app !== "solid"));
+  assert.deepEqual(r.cells.react.comparison, { samples: 3, attemptedOrder, actions: f.plan.workload.operations.map(({ id, kind }, i) =>
+    ({ operation: id, kind, medianMs: i === 0 ? 0.5 : 0.25, minMs: 0.25, maxMs: i === 0 ? 0.75 : 0.25 })) });
+  assert.equal(r.cells.remix.replayPassed, true); assert.deepEqual(r.cells.remix.comparison, r.cells.react.comparison);
+  assert.equal(r.cells.solid.outcome, "unsupported"); assert.deepEqual(r.cells.solid.measurements, []);
+  assert.deepEqual(r.processWindows.filter((w) => w.phase === "measurement").map((w) => w.app),
+    attemptedOrder.flat());
+});
+
+test("v4 refuses resealed missing, reused or tampered sample receipts", async (t) => {
+  const f = await fixture(t, 4), samples = f.output.cells.react.measurements;
+  for (const [replacement, reason] of [
+    [samples.slice(0, 2), "missing-measurement-attempt-receipt"],
+    [[samples[0], samples[0], samples[2]], "context-before-build-or-previous-close"],
+    [[samples[1], samples[0], samples[2]], "context-before-build-or-previous-close"],
+    [[samples[0], samples[1], { ...samples[2], actions: [] }], "timings-differ-from-endpoint-recomputation"],
+  ]) {
+    f.output.cells.react.measurements = replacement;
+    await f.seal();
+    const r = await f.validate();
+    assert.equal(r.status, "invalid"); assert.ok(r.errors.some((entry) => entry.reason === reason), JSON.stringify(r.errors));
+    assert.ok(Object.values(r.cells).every((cell) => cell.comparison === undefined));
+  }
+});
+
+test("resealed v4 needs an observed qualification for each built app before comparing healthy peers", async (t) => {
+  const f = await fixture(t, 4), vue = f.output.cells.vue, qualification = vue.qualification;
+  assert.equal(f.output.builds.vue.outcome, "built");
+  Object.assign(vue, { outcome: "failed", readyForMeasurement: false, measurements: [], qualification: null, reason: "runner-failed-before-adapter" });
+  await f.seal();
+  const missing = await f.validate();
+  assert.equal(missing.intrinsic.complete, false);
+  assert.ok(missing.errors.some((e) => e.at === "vue:cell" && e.reason === "missing-qualification-attempt-receipt"));
+  assert.equal(missing.cells.react.replayPassed, true);
+  assert.ok(Object.values(missing.cells).every((cell) => cell.comparison === undefined));
+
+  f.output.failure = { reason: "runner-failed", name: "Error", diagnosticSha256: sha256("synthetic interruption") };
+  await f.seal();
+  const interrupted = await f.validate();
+  assert.equal(interrupted.status, "blocked", JSON.stringify(interrupted.errors));
+  assert.equal(interrupted.intrinsic.complete, false); assert.equal(interrupted.cells.react.comparison, undefined);
+
+  // A retained readiness failure with an observed context close IS an attempt.
+  delete f.output.failure; delete vue.reason; vue.qualification = qualification;
+  const records = qualification.capture.records.slice(0, 2);
+  Object.assign(qualification.capture, { outcome: "failed", reason: "native-readiness-failed", records: null });
+  qualification.failure = { phase: "readiness", diagnostic: "Error", diagnosticSha256: sha256("synthetic readiness failure"), records, errors: [] };
+  qualification.oracle = validateClientCapture(f.plan.workload, qualification.capture, f.plan.settings);
+  qualification.readyMs = null; qualification.timing.operations = [];
+  await f.seal();
+  const observed = await f.validate();
+  assert.equal(observed.status, "failed", JSON.stringify(observed.errors));
+  assert.equal(observed.intrinsic.complete, true);
+  assert.equal(observed.cells.vue.qualification.passed, false); assert.equal(observed.cells.vue.qualification.closurePassed, true);
+  assert.equal(observed.cells.vue.comparison, undefined);
+  assert.equal(observed.cells.solid.outcome, "unsupported"); assert.equal(observed.cells.solid.qualification, null);
+  assert.equal(observed.cells.react.comparison.samples, 3);
+  assert.deepEqual(observed.cells.react.comparison.attemptedOrder, f.plan.measurementOrder.map((block) =>
+    block.filter((app) => app !== "vue" && app !== "solid")));
+
+  qualification.lifecycle.close.observed = false;
+  await f.seal();
+  const unclosed = await f.validate();
+  assert.ok(unclosed.blockers.includes("comparison-context-not-closed"));
+  assert.equal(unclosed.intrinsic.complete, false); assert.equal(unclosed.cells.react.comparison, undefined);
 });
 
 for (const [name, mutate] of [
@@ -162,7 +286,8 @@ for (const [name, mutate] of [
   ["attempted Solid build", (f) => { f.paths.push("native/solid/failure.log"); }],
   ["unsupported peer without observation", (f) => { f.cells.react = structuredClone(f.cells.solid); }],
 ]) test(`v3 production replay gates refuse ${name}`, async () => {
-  const source = new Map(await Promise.all(Object.values(latestStableSources).map(async (path) => [path, await readFile(new URL(`../../${path}`, import.meta.url))])));
+  const source = new Map(Object.values(latestStableSources).map((path) => [path, execFileSync("git", ["show", `${solid1Commit}:${path}`],
+    { cwd: new URL("../../", import.meta.url) })]));
   const latestStable = evaluateLatestStable({ group: "client-heavy", ...Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, source.get(path)])) });
   assert.equal(latestStable.valid, true);
   const reason = latestStable.candidates.find((r) => r.app === "solid").reason;
@@ -243,26 +368,26 @@ test("native v2 CLI completes verified and blocked replay with exact exit codes"
   });
 });
 
-test("oversized blobs require the checked browser executable reference", async (t) => {
+test("oversized blobs require a checked tool executable reference", async (t) => {
   const f = await fixture(t), browserPath = "evidence/browser.json", nodePath = "evidence/node.json";
   const browser = JSON.parse(await readFile(join(f.folder, browserPath))), node = JSON.parse(await readFile(join(f.folder, nodePath)));
   const ref = await f.e.blob(Buffer.alloc(128 * 1024 ** 2 + 1), 512 * 1024 ** 2);
-  for (const role of ["unreferenced", "nonbrowser", "other-reference"]) await t.test(role, async () => {
+  for (const role of ["unreferenced", "other-reference"]) await t.test(role, async () => {
     await f.saveJson(browserPath, browser); await f.saveJson(nodePath, node);
     const path = "evidence/configuration-after.json";
     await f.saveJson(path, role === "other-reference" ? { names: ["PATH"], oversized: ref } : { names: ["PATH"] });
-    if (role === "nonbrowser") await f.saveJson(nodePath, { ...node, executable: ref });
     await f.seal(); const r = await f.validate(); assert.equal(r.status, "invalid", JSON.stringify(r.errors));
-    assert.ok(r.errors.some((e) => e.at === "artifacts" && e.reason === "oversized-blob-not-browser-executable"), JSON.stringify(r.errors));
+    assert.ok(r.errors.some((e) => e.at === "artifacts" && e.reason === "oversized-blob-not-tool-executable"), JSON.stringify(r.errors));
   });
   await f.saveJson("evidence/configuration-after.json", { names: ["PATH"] });
   await f.saveJson(nodePath, node); await f.saveJson(browserPath, { ...browser, executable: ref });
   await f.seal(); const good = await f.validate(); assert.equal(good.status, "verified", JSON.stringify(good.errors));
   assert.equal(good.readyForLoad, false);
-  // Sharing the allowed browser blob does not enlarge another reference's bound.
+  await f.saveJson(browserPath, browser);
   await f.saveJson(nodePath, { ...node, executable: ref }); await f.seal();
-  const shared = await f.validate(); assert.equal(shared.status, "invalid");
-  assert.ok(shared.errors.some((e) => e.at === nodePath && e.reason === "invalid-blob-reference"));
+  const capturedNode = await f.validate(); assert.equal(capturedNode.status, "verified", JSON.stringify(capturedNode.errors));
+  assert.equal(capturedNode.toolIdentities.node, ref.sha256);
+  assert.equal(capturedNode.readyForLoad, false);
 });
 
 test("raw relative compiler input binds the metadata root package, not repository cwd", async (t) => {

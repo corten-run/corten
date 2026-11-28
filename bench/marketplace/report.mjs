@@ -3,14 +3,31 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { steadySampleWindow, summarizeSamples } from "../catalog/stats.mjs";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
-import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
-import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
+import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureProfile, qualificationSettings, validateActiveQualification, validateQualification } from "./feature-contract.mjs";
+import { aggregateCold, cpuSettings, inventory, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v3Schema, v5Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
+import { maxStatsSamples } from "./raw-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
+/**
+ * A cold start as a timed round saves it (bench/catalog/cold.mjs's result, timed from the app
+ * container's StartedAt): its first 200 at or after that start and within the startup timeout, the
+ * path the probe polled, at least one attempt, a request time and a body of at least one byte. A
+ * steady pass (steady-run.mjs) checks its own cold start with this too.
+ */
+export function validateColdStart(cold, path, startupTimeout) {
+  const coldStart = time(cold.containerStartedAt), first = time(cold.first200At);
+  assert.ok(first >= coldStart);
+  assert.equal(cold.first200MsFromContainerStart, first - coldStart);
+  assert.ok(cold.first200MsFromContainerStart <= startupTimeout * 1000);
+  assert.equal(cold.path, path);
+  assert.ok(Number.isSafeInteger(cold.attempts) && cold.attempts > 0);
+  finite(cold.successfulRequestMs); assert.ok(Number.isSafeInteger(cold.bytes) && cold.bytes > 0);
+}
 function loadEvidence(p) {
   assert.ok(Number.isSafeInteger(p.requests) && p.requests > 0);
   finite(p.rps, Number.MIN_VALUE);
@@ -44,10 +61,29 @@ const stopText = (s) => `its container ${s.oomKilled ? `was OOM-killed (${s.exit
 // spread takes the lower value in each column on its own (req/s and p95 may come from different
 // passes), and one pass has no range.
 const stoppedMark = (n, asked) => n >= asked ? "" : ` (stopped: ${n} of ${asked} passes${n === 2 ? "; the lower of two values per column, not a median" : n === 1 ? "; one pass, no range" : ""})`;
-function statsEvidence(p) {
+function roundedQuotient(mean, count) {
+  const product = mean * count, quotient = product / count;
+  if (quotient === mean) return true;
+  // If the nearest binary64 product rounds back past the mean, only the
+  // adjacent positive float on the other side can still divide to the mean.
+  const float = new Float64Array([product]), bits = new BigUint64Array(float.buffer);
+  bits[0] += quotient > mean ? -1n : 1n;
+  return float[0] / count === mean;
+}
+function statsEvidence(p, allowRoundedMemory) {
   finite(p.cpuAvgPct); finite(p.cpuMaxPct); assert.ok(p.cpuMaxPct >= p.cpuAvgPct);
-  finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, p.memAvgMiB);
+  finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, Number.MIN_VALUE);
   assert.ok(Number.isSafeInteger(p.samples) && p.samples > 0);
+  if (p.memAvgMiB > p.memMaxMiB) {
+    assert.ok(allowRoundedMemory && p.samples <= maxStatsSamples, "missing/invalid measurement");
+    // Floating-point addition and division are monotone here. No sequence with
+    // this sample count and peak can yield a larger mean than an all-peak history.
+    // Native replay still requires exact agreement with the actual Docker samples.
+    const upper = summarizeSamples(Array(p.samples).fill({ cpu: 0, mem: p.memMaxMiB })).memAvgMiB;
+    assert.ok(Number.isFinite(upper) && p.memAvgMiB <= upper, "missing/invalid measurement");
+    const [start, end] = steadySampleWindow(p.samples);
+    assert.ok(roundedQuotient(p.memAvgMiB, end - start), "missing/invalid measurement");
+  }
   assert.ok(Number.isSafeInteger(p.cpuUsec) && p.cpuUsec > 0);
 }
 function hostEvidence(host, tools) {
@@ -55,11 +91,24 @@ function hostEvidence(host, tools) {
   assert.match(host.onlineCpus, /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/);
   for (const tool of ["upstream", "checker", "k6"]) assert.match(tools[tool].imageId, /^sha256:[a-f0-9]{64}$/);
 }
+// The round's profile selects one contract for every source, candidate and split part.
+export function qualificationValidator(measurement) {
+  switch (measurement.featureProfile) {
+    case featureProfile:
+      assert.deepEqual(measurement.qualificationSettings, qualificationSettings, "wrong historical qualification settings");
+      return validateQualification;
+    case boundedFeatureProfile:
+      assert.deepEqual(measurement.qualificationSettings, boundedQualificationSettings, "wrong bounded qualification settings");
+      return validateActiveQualification;
+    default:
+      assert.fail(`unknown marketplace feature profile ${measurement.featureProfile}`);
+  }
+}
 // A round split across droplets (#816): its parts must be the split of its named group, each with
 // its own Corten, host and window, and each a comparison by itself: a feature-qualified Corten and
 // at least one admitted peer on that droplet, each finished and clean, with its own run, and all
 // run at once. Returns the window each candidate was measured in.
-function splitEvidence(s, v3, start, end) {
+function splitEvidence(s, v3, start, end, validateQualificationRecord) {
   const { split } = s;
   assert.deepEqual(Object.keys(split ?? {}).sort(), ["droplets", "parts"], "a split round records its droplets and parts");
   const shares = splitApps(s.options.group, split.droplets);
@@ -76,7 +125,7 @@ function splitEvidence(s, v3, start, end) {
     const partStart = time(p.startedAt), partEnd = time(p.finishedAt);
     assert.ok(partStart >= start && partEnd > partStart && partEnd <= end, `d${p.index}'s window is outside the round's`);
     hostEvidence(p.host, p.tools);
-    validateApp(s, p.corten, partStart, partEnd, v3);
+    validateApp(s, p.corten, partStart, partEnd, v3, validateQualificationRecord);
     assert.ok(admitted(p.corten) && p.apps.some((app) => app !== splitSubject && admitted(s.apps[app])), `d${p.index} needs a feature-qualified Corten and peer: a part whose peers are all excluded is no comparison`);
     for (const app of p.apps) windows[app] ??= [partStart, partEnd];
   });
@@ -87,14 +136,17 @@ function splitEvidence(s, v3, start, end) {
   assert.deepEqual(split.parts[0].corten, s.apps[splitSubject], "the round's corten is d1's");
   return windows;
 }
-function validateApp(s, a, start, end, v3) {
+function validateApp(s, a, start, end, v3, validateQualificationRecord) {
+  // A merged summary carries the parts' measurements but not their raw-receipt version.
+  const allowRoundedMemory = s.schema === v5Schema || s.schema === resultSchema;
+  const timedProfiles = s.measurement.profiles;
   assert.match(a.imageId, /^sha256:[a-f0-9]{64}$/);
   assert.equal(a.builtCommit, s.commit);
   assert.equal(a.builtDirty, false);
   assert.ok(!a.failures?.length, "per-app failures contradict complete status");
-  if (s.options.group) {
+  if (validateQualificationRecord) {
     assert.deepEqual(Object.keys(a.qualification).sort(), [...sources].sort());
-    for (const source of sources) { const q = validateQualification(a.qualification[source]); assert.equal(q.source, source); }
+    for (const source of sources) { const q = validateQualificationRecord(a.qualification[source]); assert.equal(q.source, source); }
     if (!admitted(a)) {
       assert.deepEqual(a.runs, {}, "an excluded candidate cannot have load runs");
       assert.deepEqual(a.phases, {}, "an excluded candidate cannot have aggregates");
@@ -121,19 +173,15 @@ function validateApp(s, a, start, end, v3) {
         assert.ok(runStart >= start && runEnd > runStart && runEnd <= end);
         const cold = run.cold, coldStart = time(cold.containerStartedAt), first = time(cold.first200At);
         assert.ok(coldStart >= runStart && first >= coldStart && first <= runEnd);
-        assert.equal(cold.first200MsFromContainerStart, first - coldStart);
         assert.equal(cold.measuredBeforeReadinessOrWarmup, true);
-        assert.ok(cold.first200MsFromContainerStart <= s.options.startupTimeout * 1000);
-        assert.equal(cold.path, target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`);
-        assert.ok(Number.isSafeInteger(cold.attempts) && cold.attempts > 0);
-        finite(cold.successfulRequestMs); assert.ok(Number.isSafeInteger(cold.bytes) && cold.bytes > 0);
+        validateColdStart(cold, target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? locales[0] : locale}/item_1`, s.options.startupTimeout);
         if (run.stopped?.phase !== "warmup") loadEvidence(run.warmup);
         if (!run.stopped) assert.deepEqual(Object.keys(run.phases).sort(), [...phases].sort(), "unexpected/missing run phases");
         for (const phase of phases.filter((p) => run.phases[p])) {
           const p = run.phases[phase];
-          loadEvidence(p); statsEvidence(p); finite(p.perCpuSecond, Number.MIN_VALUE);
+          loadEvidence(p); statsEvidence(p, allowRoundedMemory); finite(p.perCpuSecond, Number.MIN_VALUE);
           assert.ok(Math.abs(p.perCpuSecond - p.requests / (p.cpuUsec / 1e6)) < 1e-6, "CPU efficiency contradicts raw counter");
-          if (source === "api") { statsEvidence(p.upstream); assert.equal(p.upstream.highCpu, p.upstream.cpuAvgPct >= 80); }
+          if (source === "api") { statsEvidence(p.upstream, allowRoundedMemory); assert.equal(p.upstream.highCpu, p.upstream.cpuAvgPct >= 80); }
           else assert.equal(p.upstream, null);
         }
       }
@@ -158,7 +206,7 @@ export function validateSummary(s) {
   // A v3 round is read as v4 with no stop records: under v3 an app that stopped failed the round.
   const v3 = s.schema === v3Schema;
   assert.equal(s.workload, workload); roundIdentity(s.round);
-  assert.deepEqual(s.measurement.profiles, timedProfiles, "timed profile matrix must contain localized pages and locale-neutral JSON only");
+  assert.deepEqual(s.measurement.profiles, timedProfilesFor(s.schema), "timed profile matrix differs from the result schema");
   assert.match(s.commit, /^[a-f0-9]{40}$/); assert.equal(s.dirty, false);
   assert.equal(s.finishedCommit, s.commit); assert.equal(s.finishedDirty, false);
   assert.equal(s.complete, true); assert.equal(s.checksPassed, true);
@@ -181,25 +229,54 @@ export function validateSummary(s) {
   assert.deepEqual([...s.options.apps].sort(), [...selected].sort());
   assert.deepEqual(Object.keys(s.apps).sort(), [...selected].sort());
   assert.equal(s.fixtureSha256, createHash("sha256").update(JSON.stringify(records())).digest("hex"));
+  let validateQualificationRecord;
   if (s.options.group) {
-    assert.equal(s.schema, "marketplace-results/v5", "named feature groups require the v5 schema");
-    assert.equal(s.measurement.featureProfile, featureProfile);
-    assert.deepEqual(s.measurement.qualificationSettings, qualificationSettings);
+    assert.ok(s.schema === v5Schema || s.schema === resultSchema, "named feature groups require v5 or newer");
+    if (s.schema === resultSchema) assert.equal(s.measurement.featureProfile, boundedFeatureProfile, "v6 named groups require bounded qualification");
+    validateQualificationRecord = qualificationValidator(s.measurement);
     // A merged split round checks this on each droplet (splitEvidence).
     if (s.split === undefined) assert.ok(admitted(s.apps.corten) && Object.values(s.apps).filter(admitted).length > 1, "a group needs a feature-qualified Corten and peer");
   }
-  const windows = s.split === undefined ? {} : splitEvidence(s, v3, start, end);
-  for (const app of selected) validateApp(s, s.apps[app], ...(windows[app] ?? [start, end]), v3);
+  const windows = s.split === undefined ? {} : splitEvidence(s, v3, start, end, validateQualificationRecord);
+  for (const app of selected) validateApp(s, s.apps[app], ...(windows[app] ?? [start, end]), v3, validateQualificationRecord);
   return s;
 }
-export function report(s) {
+/**
+ * The limits run.mjs states in every round it saves (measurement.upstream and cpuWindow), as this
+ * checkout writes them. report.test.mjs checks that run.mjs still writes these exact strings.
+ */
+export const checkoutLimits = Object.freeze({
+  upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
+  cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU",
+});
+/** An adapter's label as this checkout defines it (run-contract.mjs inventory), or a fixed text for one it does not name. */
+export function checkoutLabel(app) {
+  return Object.hasOwn(inventory, app) && typeof inventory[app].label === "string" ? inventory[app].label : "an adapter this checkout does not name";
+}
+/** What a report with a convergence pass prints in place of a host's CPU model. */
+export const convergenceHostCpu = "not printed with --convergence (report.mjs without it prints the model)";
+/**
+ * A validated round as Markdown. `convergence(round, apps)` returns the lines stating a saved
+ * convergence pass (steady-contract.mjs convergenceLines); without it the report says none was
+ * provided to it (#1851): that one line is the only change to the default output. The CLI loads
+ * steady-contract.mjs only for --convergence, so validating or reporting a round without a pass
+ * never imports it. With a pass, no host's CPU model text is printed (convergenceHostCpu says so in
+ * its place; a pass compares CPU models by their digest); without one it prints as saved.
+ * With a pass, saved text the validator checks only for being nonempty is not printed: each
+ * adapter's label is this checkout's (checkoutLabel), and each saved limit prints only when it is
+ * this checkout's text (checkoutLimits), otherwise a fixed sentence says it is not printed.
+ * @param {object} s a saved round
+ * @param {{convergence?: ((round: object, apps: string[]) => string[]) | null}} [options]
+ */
+export function report(s, { convergence = null } = {}) {
+  const hostCpu = convergence !== null ? () => convergenceHostCpu : (text) => text;
   validateSummary(s);
   const part = s.options.part, split = s.split;
   // A part's candidates are its share; a whole or merged round's are its group's.
   const candidates = part ? s.options.apps : groupApps(s.options.group);
   const apps = candidates.filter((a) => !s.options.group || admitted(s.apps[a]));
   const identity = roundIdentity(s.round);
-  const cpu = (host) => `${host.cpu} (online CPUs ${host.onlineCpus})`;
+  const cpu = (host) => `${hostCpu(host.cpu)} (online CPUs ${host.onlineCpus})`;
   const gate = split ? "Every measured adapter passes both sources and twelve browser profiles on its own droplet before that droplet's load."
     : "Every measured adapter passes both sources and twelve browser profiles before any load.";
   const lines = [`# Marketplace v2 ${s.round}${part ? ` part d${part.index} of ${part.of}` : split ? ` (split across ${split.droplets} droplets)` : ""}${identity.kind === "development" ? " (development)" : ""}`, "",
@@ -209,7 +286,7 @@ export function report(s) {
     ...(part ? [`This part qualifies its share of the group's candidates (${candidates.join(", ")}); the round's other droplets qualify the rest.`] : []),
     "A new localized baseline, not a change from marketplace r16 or catalog c1.", "",
     "Every number is the median [min-max] of three measured passes, not a confidence interval, except in a row marked stopped, which has fewer: of two passes each number is the lower of the two values in its column, of one pass that pass. Overlapping ranges do not establish a speed difference.",
-    `Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. ${gate}`,
+    `${s.schema === resultSchema ? `Timed page requests rotate through ${locales.join("/")}; each source reports one combined result, not per-locale throughput. The cold page probe uses ${locales[0]}.` : "Pages cover all three locales;"} JSON is locale-neutral and timed once per source/pass. ${gate}`,
     `Fixed load asks for ${s.options.rate} requests/second. Closed-loop 64/256-user results are observed throughput and latency, not proven maximum capacity. Warmup ${s.options.warmup}s; each phase ${s.options.duration}s; identity encoding.`,
     "CPU % is sampled app-container usage (100% = one core). CPU us/request and requests/CPU-second use counted whole-container cgroup CPU, not instructions or handler-only time. CPU % and steady memory average the central 15%-95% of samples; peak memory is the sampled maximum, not an unsampled high-water mark.",
     "These load results do not measure browser interactivity, bytes, build cost or instructions.",
@@ -217,9 +294,13 @@ export function report(s) {
     "A stage marked (stopped: n of 3 passes) is also the app's outcome: its container exited or was OOM-killed during a load phase (warmup included), and the line below the table says when. That profile's later phases and passes were not run, so the stage's numbers come from the n passes before the stop, or none. A 200 of the wrong content type, an app that stopped during its cold start or before a phase began, or an upstream error fails the run instead."];
   const cell = (r, digits = 2) => `${r.median.toFixed(digits)} [${r.min.toFixed(digits)}-${r.max.toFixed(digits)}]`;
   const label = (v) => v.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+  const checkout = convergence !== null;
+  const appLabel = (app, a) => label(checkout ? checkoutLabel(app) : a.label);
   if (s.options.group) {
-    lines.push("", `Feature contract: ${featureProfile}. Popular and performance-oriented candidate cohorts are deduplicated; candidates are not a current speed ranking. ETag/conditional GET and downstream readiness are not required by this workload, and are not claimed equivalent. Logging remains native, not normalized.`,
-      "", "## Feature Qualification", "", `| Candidate |${split ? " Droplet |" : ""} Result | Missing required work |`, `|---|${split ? "---|" : ""}---|---|`);
+    lines.push("", `Feature contract: ${s.measurement.featureProfile}. Popular and performance-oriented candidate cohorts are deduplicated; candidates are not a current speed ranking. ETag/conditional GET and downstream readiness are not required by this workload, and are not claimed equivalent. Logging remains native, not normalized.`);
+    if (s.measurement.featureProfile === boundedFeatureProfile) lines.push("", "Connection-flood resistance: not measured.",
+      "The bounded gate also does not assess incomplete request headers, oversized requests or downstream deadlines.");
+    lines.push("", "## Feature Qualification", "", `| Candidate |${split ? " Droplet |" : ""} Result | Missing required work |`, `|---|${split ? "---|" : ""}---|---|`);
     // A split round's Corten qualified on every droplet; each other candidate on its own.
     const qualified = split ? split.parts.flatMap((p) => p.apps.map((app) => ({ app, a: app === splitSubject ? p.corten : s.apps[app], droplet: ` ${s.round}-d${p.index} |` })))
       : candidates.map((app) => ({ app, a: s.apps[app], droplet: "" }));
@@ -232,29 +313,33 @@ export function report(s) {
   if (s.options.duration < 60) warnings.push(`Short ${s.options.duration}s phase windows (${s.options.warmup}s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.`);
   if (Object.values(s.measurement.cpus).some((c) => !c.cpuset)) warnings.push("CPU quotas without disjoint pinning do not prove CPU isolation.");
   for (const warning of warnings) lines.push("", `Warning: ${warning}`);
+  const convergenceText = convergence ? convergence(s, apps)
+    : [`Convergence evidence: none provided to this report (it was run without --convergence), which does not say whether a pass exists. This report does not establish whether this round's ${s.options.warmup}s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.`];
+  for (const line of convergenceText) lines.push("", line);
   // The rows of every table: a split round's, each droplet's Corten and its admitted candidates,
   // each beside its own Corten (#816); otherwise the measured adapters, in the group's order.
   const rows = split ? split.parts.flatMap((p) => p.apps.filter((app) => app === splitSubject || admitted(s.apps[app])).map((app) => ({ app, a: app === splitSubject ? p.corten : s.apps[app],
     droplet: `${s.round}-d${p.index}`, at: `@${s.round}-d${p.index}`, corten: p.corten })))
     : apps.map((app) => ({ app, a: s.apps[app], droplet: null, at: "", corten: null }));
-  if (split) lines.push(...betweenLines(s, cell));
-  for (const locale of [...locales, null]) {
-    lines.push("", `## ${locale ?? "Locale-neutral JSON"}`);
+  if (split) lines.push(...betweenLines(s, cell, hostCpu));
+  const timedProfiles = s.measurement.profiles;
+  for (const locale of new Set(timedProfiles.map((p) => p.locale))) {
+    lines.push("", `## ${locale === "rotating" ? `Rotating pages (${locales.join("/")})` : locale ?? "Locale-neutral JSON"}`);
     for (const { key, source } of timedProfiles.filter((p) => p.locale === locale)) {
       lines.push("", `### ${source === "fixture" ? "Memory source" : "HTTP source"}`);
       lines.push("", "#### Cold start", "", "Docker-host container StartedAt to first complete HTTP 200, before readiness/warmup; not process-exec or browser-interactive time.", "",
         `| Framework |${split ? " Droplet |" : ""} First 200 from container start ms | Successful request ms |`, `|---|${split ? "---|" : ""}---:|---:|`);
-      for (const { a, droplet } of rows) {
+      for (const { app, a, droplet } of rows) {
         const runs = a.runs[key], cold = aggregateCold(runs);
         const mark = stoppedMark(runs.length, 3);
-        lines.push(`| ${label(a.label)}${mark} |${droplet ? ` ${droplet} |` : ""} ${cell(cold.first200MsFromContainerStart)} | ${cell(cold.successfulRequestMs)} |`);
+        lines.push(`| ${appLabel(app, a)}${mark} |${droplet ? ` ${droplet} |` : ""} ${cell(cold.first200MsFromContainerStart)} | ${cell(cold.successfulRequestMs)} |`);
       }
       for (const { app, a, at } of rows) for (const r of a.runs[key]) if (r.warmup?.appOutcome) lines.push("", `App outcome in warmup (not measured): ${app}${at} ${key} pass ${r.pass}: ${outcomeText(r.warmup)}.`);
       for (const phase of phases) {
         lines.push("", `#### ${phase === "fixed" ? `Fixed ${s.options.rate} req/s` : `${phase === "sat64" ? 64 : 256}-user closed loop`}`, "",
           `| Framework |${split ? " Droplet |" : ""} req/s | p50 ms | p95 ms | p99 ms | CPU % | CPU us/request | Steady MiB | Peak MiB | Requests/CPU-second | Failed % |${split ? " req/s ratio to Corten | CPU us/request ratio to Corten |" : ""}`,
           `|---|${split ? "---|" : ""}---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|${split ? "---:|---:|" : ""}`);
-        for (const { a, droplet, corten } of rows) {
+        for (const { app, a, droplet, corten } of rows) {
           const p = a.phases[key][phase];
           const mark = (p.appOutcomes ? ` * (${p.appOutcomes} of ${p.passes} passes)` : "") + (p.stopped ? stoppedMark(p.passes, p.asked) : "");
           const metrics = ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond"];
@@ -263,7 +348,7 @@ export function report(s) {
           // number is not a median of three passes, so a ratio with it on either side is "-".
           const c = corten?.phases[key][phase];
           const ratios = !corten ? "" : ["rps", "cpuPerRequestUsec"].map((m) => ` ${p.passes && c.passes && !p.stopped && !c.stopped ? (p[m].median / c[m].median).toFixed(2) : "-"} |`).join("");
-          lines.push(`| ${label(a.label)}${mark} |${droplet ? ` ${droplet} |` : ""} ${p.passes ? `${metrics.map((metric) => cell(p[metric])).join(" | ")} | ${cell(failed)}` : Array(metrics.length + 1).fill("-").join(" | ")} |${ratios}`);
+          lines.push(`| ${appLabel(app, a)}${mark} |${droplet ? ` ${droplet} |` : ""} ${p.passes ? `${metrics.map((metric) => cell(p[metric])).join(" | ")} | ${cell(failed)}` : Array(metrics.length + 1).fill("-").join(" | ")} |${ratios}`);
         }
         for (const { app, a, at } of rows) {
           const p = a.phases[key][phase];
@@ -279,18 +364,20 @@ export function report(s) {
       }
     }
   }
-  lines.push("", "## Limits", "", s.measurement.upstream, s.measurement.cpuWindow);
+  const limit = (key, what) => (!checkout || s.measurement[key] === checkoutLimits[key] ? s.measurement[key]
+    : `This round's saved ${what} limit is not this checkout's text, so it is not printed here; report.mjs without --convergence prints it.`);
+  lines.push("", "## Limits", "", limit("upstream", "upstream"), limit("cpuWindow", "CPU window"));
   return lines.join("\n") + "\n";
 }
 // A split round's droplets, and how Corten's own numbers differ between them (#816).
-function betweenLines(s, cell) {
+function betweenLines(s, cell, hostCpu) {
   const { split } = s, check = betweenDroplets(s);
   const name = (index) => `${s.round}-d${index}`;
   const value = (c) => (c.range ? cell(c.range) : "-");
   const lines = ["", "## Between droplets", "",
     `This round ran on ${split.droplets} droplets started together. Each ran Corten beside its share of the group's candidates, and timed those it admitted, so each candidate's ratio to Corten uses the Corten on its own droplet. Compare candidates on different droplets by those ratios: their raw numbers also carry any difference between the droplets' machines. Only Corten runs on every droplet, so nothing here checks that a ratio carries from one droplet's machine to another's.`,
     "", "| Droplet | CPU | Online CPUs | Candidates |", "|---|---|---|---|",
-    ...split.parts.map((p) => `| ${name(p.index)} | ${p.host.cpu.replace(/\|/g, "\\|")} | ${p.host.onlineCpus} | ${p.apps.join(", ")} |`),
+    ...split.parts.map((p) => `| ${name(p.index)} | ${hostCpu(p.host.cpu).replace(/\|/g, "\\|")} | ${p.host.onlineCpus} | ${p.apps.join(", ")} |`),
     "", "Corten's own numbers on each droplet, for req/s and CPU us/request: median [min-max] over the passes. Two droplets whose ranges do not overlap differ by more than the noise, the rule this report uses for every range; that stage is flagged, and raw numbers of candidates on those droplets are not like for like there.",
     "", check.flagged.length ? `Flagged: ${check.flagged.length} of ${check.stages.length} stages (${[...new Set(check.flagged.map((r) => differText(r.differ)))].join("; ")}).` : `Flagged: none. Corten's numbers on no two droplets differ by more than the noise in any of the ${check.stages.length} stages.`,
     "", `| Profile | Phase | Metric |${split.parts.map((p) => ` d${p.index} |`).join("")} Flag |`, `|---|---|---|${split.parts.map(() => "---:|").join("")}---|`,
@@ -298,6 +385,19 @@ function betweenLines(s, cell) {
   return lines;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  assert.equal(process.argv.length, 3, "usage: node bench/marketplace/report.mjs summary.json");
-  console.log(report(JSON.parse(readFileSync(process.argv[2], "utf8"))));
+  const args = process.argv.slice(2);
+  assert.ok(args.length === 1 || (args.length === 3 && args[1] === "--convergence"), "usage: node bench/marketplace/report.mjs summary.json [--convergence convergence-summary.json]");
+  if (args.length === 1) console.log(report(JSON.parse(readFileSync(args[0], "utf8"))));
+  else {
+    // With a pass, nothing read from either file reaches the output unless it validated or matches
+    // the pattern its kind is saved by: the round's JSON and validation errors are fixed messages
+    // (the default command prints the reason), and its CPU model text is not printed at all.
+    const { convergenceLines, parseSaved } = await import("./steady-contract.mjs");
+    const pass = parseSaved(readFileSync(args[2], "utf8"));
+    const text = readFileSync(args[0], "utf8");
+    let round;
+    try { round = JSON.parse(text); } catch { throw new Error("the saved round is not JSON"); }
+    try { validateSummary(round); } catch { throw new Error("the saved round does not validate; report.mjs without --convergence prints why"); }
+    console.log(report(round, { convergence: (r, apps) => convergenceLines(r, apps, pass) }));
+  }
 }

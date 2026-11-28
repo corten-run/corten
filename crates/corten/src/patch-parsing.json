@@ -267,6 +267,13 @@
       "lost": "the area's stylesheet (<link rel=\"stylesheet\" href=\"/s.css\" data-corten-style>), which Corten writes after the patch's elements, is dropped"
     },
     {
+      "html": "<col id=\"a\"><link id=\"b\">",
+      "parsed": [
+        "col#a"
+      ],
+      "lost": "<link id=\"b\"> is dropped, since <col id=\"a\"> comes first"
+    },
+    {
       "html": "<tr id=\"a\"></tr><div id=\"b\"><table><tr><td>1</td></tr></table></div>",
       "parsed": [
         "tr#a",

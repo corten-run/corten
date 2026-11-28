@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
-import { options, qualifyAndMeasure, finishRun, serve, run } from "./run.mjs";
+import { options, qualifyAndMeasure, captureComparison, finishRun, serve, run } from "./run.mjs";
 import { here, root } from "./build.mjs";
 import { Evidence } from "./evidence.mjs";
 import { selectedApps } from "../workloads/registry.mjs";
@@ -69,6 +69,52 @@ test("explicit bounded round/fixture inputs and no contender filter", () => {
   assert.equal(o.workload.largeRowCount, 194);
   assert.deepEqual(selectedApps("client-heavy"), ["corten", "react", "vue", "solid", "svelte", "remix"]);
   for (const args of [[], ["../x"], ["x", "--apps", "corten"], ["x", "--rows", "0"], ["x", "--rows", "8", "--rows", "8"], ["x", "--observation-ms", "0"], ["x", "--timeout-ms", "1"], ["x", "--rows"]]) assert.throws(() => options(args));
+});
+
+test("comparison profile is fixed and does not change diagnostic defaults", () => {
+  const diagnostic = options(["diagnostic"]);
+  const comparison = options(["comparison", "--profile", "client-heavy-comparison-v1"]);
+  assert.equal(diagnostic.workload.rowCount, 14);
+  assert.equal(comparison.workload.rowCount, 100);
+  assert.equal(comparison.workload.largeRowCount, 1000);
+  assert.equal(comparison.workload.appendCount, 100);
+  assert.equal(comparison.workload.dashboardCount, 200);
+  for (const override of [["--rows", "14"], ["--seed", "99"], ["--timeout-ms", "60000"], ["--cargo", "other"]])
+    assert.throws(() => options(["comparison", "--profile", "client-heavy-comparison-v1", ...override]));
+});
+
+test("comparison completes qualification first, rotates the full roster and never retries a failed sample", async () => {
+  const apps = selectedApps("client-heavy"), { measurementOrder } = options(["comparison", "--profile", "client-heavy-comparison-v1"]);
+  assert.deepEqual(measurementOrder, [apps, [...apps.slice(2), ...apps.slice(0, 2)], [...apps.slice(4), ...apps.slice(0, 4)]]);
+  const output = { selectedApps: apps, builds: Object.fromEntries(apps.map((app) => [app, { outcome: app === "solid" ? "not-run" : "built" }])),
+    cells: { solid: { outcome: "unsupported", measurements: [] } } }, calls = [];
+  await captureComparison(output, measurementOrder, async (app, phase) => {
+    calls.push({ app, phase });
+    return { oracle: { functionalPassed: !(app === "vue" && phase === "qualification") },
+      lifecycle: { ...lifecycle(), contextCreatedAt: calls.length, deadline: { firedAt: app === "react" && calls.length === 7 ? 1 : null } } };
+  }, () => {});
+  assert.deepEqual(calls, [
+    ...apps.filter((app) => app !== "solid").map((app) => ({ app, phase: "qualification" })),
+    ...measurementOrder.flat().filter((app) => app !== "solid" && app !== "vue").map((app) => ({ app, phase: "measurement" })),
+  ]);
+  assert.equal(output.cells.vue.measurements.length, 0);
+  assert.equal(output.cells.react.measurements.length, 3); assert.equal(output.cells.react.outcome, "failed");
+  assert.equal(output.cells.corten.measurements.length, 3); assert.equal(output.cells.corten.outcome, "passed");
+  assert.equal(output.cells.solid.outcome, "unsupported");
+});
+
+test("comparison retains an unclosed sample and does not start another context", async () => {
+  const apps = selectedApps("client-heavy"), { measurementOrder } = options(["comparison", "--profile", "client-heavy-comparison-v1"]);
+  const output = { selectedApps: apps, builds: Object.fromEntries(apps.map((app) => [app, { outcome: "built" }])), cells: {} };
+  const closed = { ...lifecycle(), contextCreatedAt: 1 };
+  let measured = 0;
+  await assert.rejects(captureComparison(output, measurementOrder, async (_app, phase) => ({
+    oracle: { functionalPassed: true }, lifecycle: phase === "qualification" ? closed
+      : { ...closed, contextCreatedAt: ++measured, close: { returned: true, observed: false } },
+  }), () => {}), /native-context-not-closed/);
+  assert.equal(measured, 1);
+  assert.equal(output.cells[apps[0]].measurements.length, 1);
+  assert.equal(output.cells[apps[0]].readyForMeasurement, false);
 });
 
 test("unqualified native journey is never measured", async () => {

@@ -9,9 +9,11 @@ import { fileURLToPath } from "node:url";
 import { definition, selectedApps } from "../workloads/registry.mjs";
 import { createClientWorkload, validateClientCapture } from "../workloads/client.mjs";
 import { cliOptions, validateSaved } from "./verify.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const git = (args, input) => execFileSync("git", args, { cwd: root, input, maxBuffer: 64 * 1024 ** 2 });
+const fixtureGit = (repository, args, input) => execFileSync("git", args, { cwd: repository, input, env: fixtureGitEnv() });
 const commit = git(["rev-parse", "HEAD"]).toString().trim(), apps = selectedApps("client-heavy");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const sources = new Map();
@@ -554,15 +556,15 @@ test("Git replacement refs cannot substitute exact source bytes even when inheri
     await rm(scratch, { recursive: true, force: true });
   });
   const repository = join(scratch, "repository"), path = "bench/client-heavy/apps/react.jsx", replacement = "// Replaced Git unit source, never native evidence\n";
-  git(["init", "--quiet", repository]);
+  fixtureGit(scratch, ["init", "--quiet", repository]);
   const objects = git(["rev-parse", "--path-format=absolute", "--git-path", "objects"]).toString().trim().replaceAll("\\", "/");
   await writeFile(join(repository, ".git/objects/info/alternates"), objects + "\n");
   const original = git(["rev-parse", `${commit}:${path}`]).toString().trim();
-  const substituted = git(["-C", repository, "hash-object", "-w", "--stdin"], replacement).toString().trim();
-  git(["-C", repository, "replace", original, substituted]);
+  const substituted = fixtureGit(repository, ["hash-object", "-w", "--stdin"], replacement).toString().trim();
+  fixtureGit(repository, ["replace", original, substituted]);
   f.result.builds.react.inputs.find((entry) => entry.path === path).sha256 = hash(replacement); await f.save();
   const invoke = (enabled) => {
-    const env = { ...process.env, GIT_DIR: join(repository, ".git"), GIT_WORK_TREE: root };
+    const env = fixtureGitEnv({ GIT_DIR: join(repository, ".git"), GIT_WORK_TREE: root });
     delete env.GIT_NO_REPLACE_OBJECTS;
     if (!enabled) env.GIT_NO_REPLACE_OBJECTS = "1";
     const result = spawnSync(process.execPath, [join(root, "bench/client-heavy/verify.mjs"), f.folder, "--round", "test-round", "--commit", commit],
@@ -585,17 +587,17 @@ test("offline Git disables inherited promisor lazy fetch for an absent commit", 
     await rm(scratch, { recursive: true, force: true });
   });
   const repository = join(scratch, "repository"), trace = join(scratch, "git-trace.jsonl"), absent = "1".repeat(40);
-  git(["init", "--quiet", repository]);
+  fixtureGit(scratch, ["init", "--quiet", repository]);
   await mkdir(join(scratch, "hooks"));
-  git(["-C", repository, "-c", "user.name=Verifier fixture", "-c", "user.email=fixture@example.invalid",
+  fixtureGit(repository, ["-c", "user.name=Verifier fixture", "-c", "user.email=fixture@example.invalid",
     "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${join(scratch, "hooks")}`, "commit", "--quiet", "--allow-empty", "-m", "Fixture"]);
   f.result.provenance.commit = absent; await f.save();
   const result = spawnSync(process.execPath, [join(root, "bench/client-heavy/verify.mjs"), f.folder,
-    "--round", "test-round", "--commit", absent], { encoding: "utf8", timeout: 30000, env: { ...process.env,
+    "--round", "test-round", "--commit", absent], { encoding: "utf8", timeout: 30000, env: fixtureGitEnv({
     GIT_DIR: join(repository, ".git"), GIT_WORK_TREE: repository, GIT_TRACE2_EVENT: trace,
     GIT_NO_LAZY_FETCH: "0", GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "extensions.partialClone", GIT_CONFIG_VALUE_0: "missing",
     GIT_CONFIG_KEY_1: "remote.missing.promisor", GIT_CONFIG_VALUE_1: "true",
-    GIT_CONFIG_KEY_2: "remote.missing.url", GIT_CONFIG_VALUE_2: join(scratch, "nonexistent-local-remote") } });
+    GIT_CONFIG_KEY_2: "remote.missing.url", GIT_CONFIG_VALUE_2: join(scratch, "nonexistent-local-remote") }) });
   assert.equal(result.status, 1, result.stderr);
   assert.equal(JSON.parse(result.stdout).status, "invalid");
   const events = (await readFile(trace, "utf8")).trim().split("\n").map((line) => JSON.parse(line));

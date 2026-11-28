@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir, realpath } from "node:fs/promises";
-import { join, resolve, relative, extname, isAbsolute, dirname, basename } from "node:path";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { join, resolve, relative, extname, isAbsolute, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { cpus, platform, release } from "node:os";
 import { selectedApps, definition } from "../workloads/registry.mjs";
@@ -10,10 +10,11 @@ import { buildApps, readLatestStable, root, here, sha256 } from "./build.mjs";
 import { installObserver } from "./observer.mjs";
 import { Evidence, closeObserved, clock, json, failure } from "./evidence.mjs";
 import { options, configurationNames } from "./contract.mjs";
-import { launchBrowser, browserIdentity } from "./launch.mjs";
+import { launchBrowser, browserIdentity, nodeIdentity } from "./launch.mjs";
 export { options, defaults } from "./contract.mjs";
 
 export const schema = "client-heavy-native/v3";
+export const comparisonSchema = "client-heavy-native/v4";
 
 export async function serve(directory) {
   const base = resolve(directory);
@@ -158,22 +159,49 @@ export async function journey(browser, url, app, workload, settings, timeoutMs, 
     clearTimeout(timer); lifecycle.deadline.cancelledAt = clock();
     if (context) lifecycle.close = await closeContext();
   }
-  if (!pass.oracle.functionalPassed || !closedPass({ lifecycle })) { pass.readyMs = null; pass.actions = null; }
+  if (!passReady({ oracle: pass.oracle, lifecycle })) { pass.readyMs = null; pass.actions = null; }
   for (const receipt of http) if (receipt.endedAt === null) {
     receipt.endedAt = clock(); receipt.failure = { name: "RequestIncomplete", diagnosticSha256: sha256("context-closed-before-response") };
   }
   return { ...pass, timing, lifecycle, requests: http };
 }
 
-export const closedPass = (pass) => pass.lifecycle?.close?.returned === true && pass.lifecycle.close.observed === true
-  && pass.lifecycle.deadline?.firedAt === null;
+const contextCloseObserved = (life) => life?.close?.returned === true && life.close.observed === true && life.close.failure == null;
+const passReady = ({ oracle, lifecycle }) => oracle.functionalPassed === true && contextCloseObserved(lifecycle) && lifecycle.deadline?.firedAt === null;
 
 export async function qualifyAndMeasure(capture) {
   const qualification = await capture("qualification");
-  if (!qualification.oracle.functionalPassed || !closedPass(qualification)) return { qualification, measurement: null, readyForMeasurement: false };
+  if (!passReady(qualification)) return { qualification, measurement: null, readyForMeasurement: false };
   const measurement = await capture("measurement");
-  return { qualification, measurement, readyForMeasurement: !!measurement.oracle.functionalPassed && closedPass(measurement) };
+  return { qualification, measurement, readyForMeasurement: passReady(measurement) };
 }
+
+const stopOnUnclosedContext = (pass) => assert.ok(pass.lifecycle.contextCreatedAt === null
+  || contextCloseObserved(pass.lifecycle), "native-context-not-closed");
+
+export async function captureComparison(output, order, capture, checkActive) {
+  for (const app of output.selectedApps) {
+    checkActive();
+    if (output.builds[app].outcome !== "built") continue;
+    const cell = output.cells[app] = { outcome: "failed", qualification: null, measurements: [], readyForMeasurement: false };
+    cell.qualification = await capture(app, "qualification");
+    stopOnUnclosedContext(cell.qualification);
+  }
+  for (const block of order) for (const app of block) {
+    checkActive();
+    const cell = output.cells[app];
+    if (!cell?.qualification || !passReady(cell.qualification)) continue;
+    const measurement = await capture(app, "measurement");
+    cell.measurements.push(measurement);
+    stopOnUnclosedContext(measurement);
+    if (cell.measurements.length === order.length && cell.measurements.every(passReady)) {
+      cell.outcome = "passed";
+      cell.readyForMeasurement = true;
+    }
+  }
+}
+
+const unmeasured = (output) => output.schema === comparisonSchema ? { measurements: [] } : { measurement: null };
 
 export async function finishRun(output, out, { browser, server, closeBrowser = () => browser.close(), interruptCleanup, isInterrupted, signals = [] }) {
   output.cleanupFailures = [];
@@ -195,7 +223,7 @@ export async function finishRun(output, out, { browser, server, closeBrowser = (
   for (const app of output.selectedApps) {
     const buildFailed = output.builds?.[app]?.outcome === "failed";
     output.cells[app] ??= { outcome: buildFailed ? "failed" : "not-run", reason: buildFailed ? "native-build-failed"
-      : interrupted ? "native-runner-interrupted" : "runner-failed-before-adapter", qualification: null, measurement: null, readyForMeasurement: false };
+      : interrupted ? "native-runner-interrupted" : "runner-failed-before-adapter", qualification: null, ...unmeasured(output), readyForMeasurement: false };
     await writeFile(join(out, `${app}.json`), json(output.cells[app]));
   }
   await writeFile(join(out, "result.json"), json(output));
@@ -203,14 +231,16 @@ export async function finishRun(output, out, { browser, server, closeBrowser = (
 
 export async function run(args) {
   const config = options(args);
+  const order = config.measurementOrder;
   // Refuse reuse: stale artifacts must never become evidence for this invocation.
   await mkdir(dirname(config.out), { recursive: true });
   await mkdir(config.out, { recursive: false });
   const evidence = new Evidence(root, config.out);
   const provenance = { commit: null, sourceBefore: "evidence/source-before.json", sourceAfter: "evidence/source-after.json",
     node: process.version, platform: platform(), release: release(), cpu: cpus()[0]?.model ?? "unknown", logicalCpus: cpus().length,
-    browser: null, browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 2, note: "Bounded local verification on an uncontrolled host; no throughput or ranking claim. No OS CPU or memory isolation." };
-  const output = { schema, group: "client-heavy", round: config.round, effectiveWorkload: config.workload, settings: config.settings, timeoutMs: config.timeoutMs, provenance,
+    browser: null, browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 1 + (order?.length ?? 1),
+    note: "Native capture only; no throughput, ranking or OS isolation claim without independent admission." };
+  const output = { schema: order ? comparisonSchema : schema, group: "client-heavy", round: config.round, effectiveWorkload: config.workload, settings: config.settings, timeoutMs: config.timeoutMs, provenance,
     latestStable: null,
     selectedApps: selectedApps("client-heavy"), definition: definition("client-heavy"),
     builds: Object.fromEntries(selectedApps("client-heavy").map((app) => [app, { outcome: "not-run", reason: "runner-failed-before-build" }])),
@@ -231,7 +261,7 @@ export async function run(args) {
   try {
     output.latestStable = readLatestStable();
     for (const row of output.latestStable.candidates.filter((row) => row.status === "unsupported")) output.cells[row.app] = {
-      outcome: "unsupported", reason: row.reason, qualification: null, measurement: null, readyForMeasurement: false };
+      outcome: "unsupported", reason: row.reason, qualification: null, ...unmeasured(output), readyForMeasurement: false };
     await evidence.save("native/workload.json", config.workload);
     await evidence.save("native/build.json", output.builds);
     sourceBefore = await evidence.source("before"); provenance.commit = sourceBefore.commit;
@@ -239,13 +269,9 @@ export async function run(args) {
     await evidence.save("plan.json", { schema: "client-heavy-plan/v1", round: config.round, commit: provenance.commit,
       invocation: config.invocation, workload: config.workload, settings: config.settings, timeoutMs: config.timeoutMs,
       selectedApps: output.selectedApps, definition: output.definition, sourceBefore: provenance.sourceBefore,
-      root, platform: process.platform,
+      root, platform: process.platform, ...(order ? { measurementOrder: order } : {}),
       nodeClock: { clock: "node-performance", timeOrigin: performance.timeOrigin }, inheritedConfigurationNames });
-    try {
-      const executablePath = await realpath(process.execPath);
-      await evidence.save("evidence/node.json", { version: process.version, requestedExecutable: process.execPath, executablePath,
-        executable: await evidence.file(dirname(executablePath), basename(executablePath)) });
-    }
+    try { await evidence.save("evidence/node.json", await nodeIdentity(evidence)); }
     catch { evidence.blockers.push("node-executable-bytes-unavailable"); }
     const cargoIdentity = await evidence.tool(config.cargo, ["--version", "--verbose"], "cargo-version");
     assert.ok(cargoIdentity.receipt.status === 0 && cargoIdentity.receipt.failure === null, "native-cargo-unavailable");
@@ -258,7 +284,7 @@ export async function run(args) {
     assert.ok(!interrupted, "native-runner-interrupted");
     // Keep build failures even when no browser can be launched for the other apps.
     for (const app of output.selectedApps) if (output.builds[app].outcome === "failed") output.cells[app] = {
-      outcome: "failed", reason: "native-build-failed", qualification: null, measurement: null, readyForMeasurement: false };
+      outcome: "failed", reason: "native-build-failed", qualification: null, ...unmeasured(output), readyForMeasurement: false };
     const { chromium } = await import("playwright");
     server = await serve(nativeDirectory);
     const launched = await launchBrowser(chromium);
@@ -269,7 +295,10 @@ export async function run(args) {
       await evidence.save("evidence/browser.json", await browserIdentity(evidence, launched));
     }
     catch { evidence.blockers.push("browser-executable-bytes-unavailable"); }
-    for (const app of output.selectedApps) {
+    if (order) await captureComparison(output, order,
+      (app, phase) => journey(browser, server.url, app, config.workload, config.settings, config.timeoutMs, undefined, phase === "measurement"),
+      () => assert.ok(!interrupted, "native-runner-interrupted"));
+    else for (const app of output.selectedApps) {
       assert.ok(!interrupted, "native-runner-interrupted");
       if (output.cells[app]?.outcome === "unsupported") {
         assert.equal(output.builds[app].reason, output.cells[app].reason, "unsupported-disposition-differs-from-build");

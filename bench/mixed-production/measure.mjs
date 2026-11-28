@@ -4,7 +4,7 @@ import { join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { cpuSettings } from "../catalog/contract.mjs";
 import { sampleStats } from "./stats.mjs";
-import { qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { boundedFeatureProfile, boundedQualificationSettings } from "../marketplace/feature-contract.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { afterFunctionalGate, sha256, sleep } from "./capture.mjs";
 import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.mjs";
@@ -12,6 +12,9 @@ import { resourceBoundary, resourceCoveragePolicy, mergeResourceSamples } from "
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
 import { sourceAuditIdentity, sourceSnapshot, verifySourceAudit } from "./source-audit.mjs";
 import { cpuBoundary, participantEvidence } from "./producer-evidence.mjs";
+import { producerEvidenceFiles, qualificationScope } from "./qualification-evidence.mjs";
+import { createAttachedParticipant } from "./execution-evidence.mjs";
+import { executionMountArgs } from "./execution-inputs.mjs";
 
 export function savedRelative(root, path) {
   const value = relative(root, path).replaceAll("\\", "/");
@@ -29,22 +32,21 @@ export async function measureNativeGroup(context) {
   const cpus = cpuSettings(Object.fromEntries(["APP", "LOAD", "API"].map((role) => [`CATALOG_${role}_CPUS`, process.env[`MIXED_PRODUCTION_${role}_CPUS`]])));
   const root = join(folder, "measurement"); mkdirSync(root);
   const result = summary.timing = { schema: "mixed-native-measurement/v1", complete: false, qualified: false, calibrated: false,
-    timingBlocked: true, comparisonEligible: false, nativeProfile: options.profile, planSha256: plan.sha256,
+    timingBlocked: true, comparisonEligible: false, nativeProfile: options.profile, qualificationProfile: boundedFeatureProfile, planSha256: plan.sha256,
+    connectionFloodResistance: qualificationScope,
     cpus, calibrationPolicy, resourceCoveragePolicy, interpretation: "Equal-plan closed-loop achieved load, not saturation/capacity; comparisons require explicit disjoint CPU placement and complete repeated native windows.",
     cells: Object.fromEntries(summary.inventory.map((app) => [app, Object.fromEntries(["fixture", "api"].map((source) => [source, {
       qualification: null, calibration: null, passes: Array.from({ length: options.passes }, (_, i) => ({ pass: i + 1, outcome: "not-run", metrics: null })),
     }]))])), sourceAudits: {}, failures: [] };
   summary.provenance.measurementHarnessFiles = Object.fromEntries(["measure.mjs", "metrics.mjs", "load-capture.mjs", "load-worker.mjs", "load-upstream.mjs", "upstream-ledger.mjs", "resources.mjs", "source-audit.mjs", "qualify-worker.mjs"].map((f) => [f, sha256(readFileSync(join(repo, "bench/mixed-production", f)))]));
-  const mount = ["-v", `${nativeBuildRoot}:/src:ro`, "-v", `${join(folder, "execution/dependencies")}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
+  const mount = executionMountArgs(nativeBuildRoot, folder);
   const outputPath = (path) => `/out/${savedRelative(folder, path)}`;
-  const env = options.profile === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`] : ["-e", "PROFILE="];
+  const env = options.profile === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${boundedQualificationSettings.maxConnections}`] : ["-e", "PROFILE="];
   const failure = (app, source, stage) => { result.failures.push({ app, source, stage }); save(); };
   const record = (path, value) => { writeFileSync(path, JSON.stringify(value, null, 2)); return { path: savedRelative(folder, path), sha256: sha256(readFileSync(path)) }; };
   record(join(root, "producer-provenance.json"), { schema: "mixed-native-producer-evidence/v1",
     commit: summary.provenance.commit,
-    files: Object.fromEntries(["bench/mixed-production/producer-evidence.mjs", "bench/mixed-production/qualification-evidence.mjs",
-      "bench/catalog/cgroup.mjs", "bench/marketplace/qualify.mjs", "bench/marketplace/feature-contract.mjs",
-      "bench/fullstack/conformance.mjs", "bench/fullstack/conform-probe.mjs", "bench/fullstack/conform-hold.mjs"].map((file) =>
+    files: Object.fromEntries(producerEvidenceFiles(boundedFeatureProfile).map((file) =>
       [file, sha256(readFileSync(join(repo, file)))])) });
   let receipts = [], invalidBundle = false;
   if (options.nativeAudits) try {
@@ -98,12 +100,13 @@ export async function measureNativeGroup(context) {
       await own(appArgs(appName, source, up, imageId), appName); await ready(appName, "/marketplace/en-US/item_1", probes, "app");
       const settings = { app, source, imageId, nativeProfile: options.profile, base: "http://127.0.0.1:8080", upstream: `http://${up}:8080`, output: outputPath(join(dir, "qualification.json")) };
       record(join(dir, "settings.json"), settings);
-      await own(["create", "--network", `container:${appName}`, ...cpus.load.args, "--memory", "1g", "--ulimit", "nofile=65536:65536", ...mount,
-        browserImage.Id, "node", "bench/mixed-production/qualify-worker.mjs", outputPath(join(dir, "settings.json"))], worker);
+      const startWorker = await createAttachedParticipant({ own, docker }, worker, ["--network", `container:${appName}`, ...cpus.load.args, "--memory", "1g", "--ulimit", "nofile=65536:65536", ...mount,
+        browserImage.Id, "node", "bench/mixed-production/qualify-worker.mjs", outputPath(join(dir, "settings.json"))]);
       let failed = false;
-      try { await docker(["start", "-a", worker], { timeout: 8 * 60000 }); } catch { failed = true; }
+      try { await startWorker({ timeout: 8 * 60000 }); } catch { failed = true; }
       const raw = JSON.parse(readFileSync(join(dir, "qualification.json"), "utf8"));
-      assert.deepEqual([raw.schema, raw.app, raw.source, raw.imageId, raw.nativeProfile], ["mixed-native-qualification/v1", app, source, imageId, options.profile]);
+      assert.deepEqual([raw.schema, raw.app, raw.source, raw.imageId, raw.nativeProfile, raw.profile],
+        ["mixed-native-qualification/v1", app, source, imageId, options.profile, boundedFeatureProfile]);
       raw.eligible = !failed && raw.eligible === true && raw.failure === null;
       const participants = { app: await participant(dir, "qualification", appName, imageId, "app"), upstream: await participant(dir, "qualification", up, nodeImage.Id, "upstream") };
       return { eligible: raw.eligible, missing: raw.missing ?? [], failure: raw.failure, artifact: record(join(dir, "qualification.json"), raw),

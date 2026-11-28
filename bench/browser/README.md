@@ -9,6 +9,8 @@ on its own as first measured (2,291 B after the fixes below). Nothing in the fra
 
 Every app renders the same rows (the js-framework-benchmark word lists, the same 32-bit LCG and
 the same markup), and the harness measures all of them from outside with the same code.
+The versions in this table describe the historical setup, not the current
+[browser lock](package-lock.json). Updating that lock does not relabel the results below.
 
 | App | What it is | Code |
 |---|---|---|
@@ -23,8 +25,11 @@ the same markup), and the harness measures all of them from outside with the sam
 | vue | Vue 3.5 single-file component, written like the js-framework-benchmark's keyed Vue app (a `shallowRef` of rows, `triggerRef`, `v-memo`) | [apps/vue](apps/vue/App.vue) |
 
 Each app is one esbuild bundle, minified, built for production (`NODE_ENV=production` and the
-`production` export condition, as Vite does). Solid's JSX goes through `babel-preset-solid`,
-Svelte through `svelte/compiler` and Vue through `vue/compiler-sfc` with the template inlined;
+`production` export condition, as Vite does). This historical suite keeps Solid 1.9.19
+under a local package alias and compiles its JSX with the same DOM plugin and options as
+`babel-preset-solid` 1.9.19. The [dedicated workload](../client-heavy/README.md#candidate-freshness)
+uses a separate Solid 2 compile path in the same npm install.
+Svelte uses `svelte/compiler` and Vue uses `vue/compiler-sfc` with the template inlined;
 the server-rendered pages come from each framework's own server renderer (`renderToString`,
 `svelte/server`, `vue/server-renderer`) and hydrate with its own client.
 
@@ -32,7 +37,7 @@ the server-rendered pages come from each framework's own server renderer (`rende
 
 ```sh
 cd bench/browser
-npm install
+npm ci
 node build.mjs          # out/<app>/: index.html and app.js, and sizes (runs gen/ with cargo for the view apps)
 node list-check.mjs     # list() against 3,000 random edits in a real DOM
 node view-check.mjs     # rows() (corten/views) against 3,000 random edits, some made without it

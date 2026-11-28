@@ -3,9 +3,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { durable, syncDirectory } from "../workloads/cloud-local.mjs";
+import { providerAccount, providerIdentity } from "../workloads/cloud-options.mjs";
+import { providerTransport } from "../workloads/cloud-provider.mjs";
 import { leftoverDroplets, nightly, ownedDroplet, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, terminalUnit, validatePlan, validateState } from "./droplet-contract.mjs";
 import { validateSummary } from "./report.mjs";
 import { groupApps, scheduledGroup } from "./groups.mjs";
@@ -28,17 +32,95 @@ function controlDir(stateDir, repo) {
   return local;
 }
 const benchTagged = (droplets) => droplets.some((d) => d.tags?.some((t) => ["corten-bench", "corten-marketplace"].includes(t)));
+const hasDeletionRecord = (state) => ["deletionTarget", "deletionIntentAt", "destroyedAt"].some((key) => Object.hasOwn(state, key));
+const beforeStart = (state) => ["creating", "preparing"].includes(state.status);
+function openCollection(context, { providerFactory = providerTransport, repo, interrupted }) {
+  assert.match(context ?? "", /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/, "collection requires an explicit saved doctl --context");
+  const run = providerFactory({ repo, interrupted });
+  const call = (args, timeout = 10000, allowFail = false) => run([...args, "--context", context], timeout, allowFail);
+  const json = (result) => {
+    assert.equal(result?.status, 0, "provider read did not succeed");
+    try { return JSON.parse(result.stdout); } catch { throw new Error("provider returned invalid JSON"); }
+  };
+  const account = async (timeout) => providerAccount(json(await call(["account", "get", "--output", "json"], timeout)));
+  const confirmedAbsent = new Set();
+  return {
+    confirmedAbsent,
+    async list() { return json(await call(["compute", "droplet", "list", "--output", "json"])); },
+    async observe(id, expected, budget = () => 10000) {
+      assert.ok(/^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)), "exact droplet ID required; absence unconfirmed");
+      const scope = await account(budget());
+      assert.ok(expected === undefined || scope === expected, "provider account changed; absence unconfirmed");
+      const result = await call(["compute", "droplet", "get", id, "--output", "json"], budget(), true);
+      let droplet;
+      if (!(result?.status === 1 && result.providerDiagnostic?.code === "get-http" && result.providerDiagnostic.httpStatus === 404)) {
+        const rows = json(result);
+        assert.ok(Array.isArray(rows) && rows.length === 1 && rows[0]?.id === Number(id), "provider GET did not return the exact ID");
+        droplet = rows[0];
+      }
+      assert.ok(await account(budget()) === scope, "provider account changed; absence unconfirmed");
+      budget();
+      if (droplet) confirmedAbsent.delete(id);
+      else {
+        assert.ok(expected !== undefined, `droplet ${id} absence unconfirmed: no saved account binding for this ID`);
+        confirmedAbsent.add(id);
+      }
+      return { droplet, account: scope };
+    },
+    async delete(id) {
+      const result = await call(["compute", "droplet", "delete", id, "--force"], 30000, true);
+      assert.equal(result?.status, 0, "provider did not acknowledge DELETE");
+    },
+    close: run.close,
+  };
+}
+function publishWindowsIntent(directory) {
+  const root = process.env.SystemRoot;
+  assert.ok(root && isAbsolute(root), "Windows system PowerShell is unavailable");
+  const result = spawnSync(join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-File", fileURLToPath(new URL("publish-delete-intent.ps1", import.meta.url)), directory],
+    { windowsHide: true, shell: false, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000, maxBuffer: 16384 });
+  assert.ok(!result.error && result.status === 0 && result.stdout.trim() === "intent committed",
+    `Windows intent publication not confirmed: ${result.error?.code ?? (result.stderr?.trim() || "missing write-through receipt")}`);
+}
+function saveDeletionIntent(path, state, sync = syncDirectory) {
+  const directory = dirname(path), temp = `${path}.delete-intent.tmp`;
+  const bytes = `${JSON.stringify(state, null, 2)}\n`;
+  if (process.platform !== "win32") sync(directory); // Prove directory fsync is supported.
+  durable(temp, bytes);
+  if (process.platform === "win32") publishWindowsIntent(directory);
+  else { renameSync(temp, path); sync(directory); }
+  assert.ok(!existsSync(temp) && readFileSync(path, "utf8") === bytes, "published intent does not match the staged bytes");
+}
+function preflightIntent(local, publish) {
+  try {
+    const probe = mkdtempSync(join(local, ".intent-probe-")), path = join(probe, "state.json");
+    try {
+      writeFileSync(path, "{}\n", { flag: "wx" }); // Exercise replacement on the reservation's filesystem.
+      publish(path, { probe: "marketplace-delete-intent" });
+    } finally {
+      for (const file of [path, `${path}.delete-intent.tmp`]) if (existsSync(file)) unlinkSync(file);
+      rmdirSync(probe);
+    }
+  } catch (cause) {
+    throw new Error(`durable publisher preflight failed; no droplet created. Restore supported local storage and publisher access before launch: ${cause.message}`, { cause });
+  }
+}
 /**
  * One droplet's launcher: the whole round, or with options.part one droplet's part of a split
  * round (#816), whose checkout checks and measured commit (options.commit) the split launcher
  * made once for every droplet.
  */
-export function controller(options, { run = command, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), repo = checkout, interrupted = () => null } = {}) {
+export function controller(options, { run = command, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), repo = checkout,
+  interrupted = () => null, now = () => performance.now(), providerFactory, syncIntentDirectory, publishIntent = saveDeletionIntent } = {}) {
   const local = controlDir(options.stateDir, repo);
   const part = options.part ?? null;
   const statePath = join(local, "state.json");
   let state = existsSync(statePath) ? validateState(JSON.parse(readFileSync(statePath, "utf8")), options.round) : null;
-  const save = () => { writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2) + "\n"); renameSync(`${statePath}.tmp`, statePath); };
+  const save = () => {
+    writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2) + "\n");
+    renameSync(`${statePath}.tmp`, statePath);
+  };
   const list = () => JSON.parse(run("doctl", ["compute", "droplet", "list", "--output", "json"]).stdout);
   const own = () => ownedDroplet(list(), state);
   const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${join(local, "known_hosts").replaceAll("\\", "/")}`,
@@ -53,6 +135,7 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
     assert.match(commit, /^[a-f0-9]{40}$/);
     if (!part) {
       assert.equal(run("git", ["status", "--porcelain"]).stdout.trim(), "", "launch requires clean measured commit");
+      preflightIntent(local, publishIntent);
       assert.ok(!benchTagged(list()), "a nightly benchmark droplet already exists; do not overlap nightly rounds");
     }
     const name = `corten-marketplace-${partName(options.round, part)}`, group = options.group ?? scheduledGroup(options.round);
@@ -99,29 +182,88 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
     get state() { return state; },
     sshOptions,
     async launch() { await create(); return start(); },
-    async collect() {
+    async collect(sharedCollection) {
       assert.ok(state, "missing launch reservation");
       const lock = join(local, "collect.lock");
       writeFileSync(lock, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+      let collection = sharedCollection, failed = false;
       try {
-        const verifyArchive = () => assert.equal(createHash("sha256").update(readFileSync(state.resultArchive)).digest("hex"), state.archiveSha256);
+        // A controller constructed before a prior collector saved intent must not use its old state.
+        state = validateState(JSON.parse(readFileSync(statePath, "utf8")), options.round);
+        const verifyArchive = () => assert.equal(createHash("sha256").update(readFileSync(state.resultArchive)).digest("hex"),
+          state.archiveSha256, "saved archive hash mismatch; refusing deletion or confirmation");
+        const checkInterrupted = () => {
+          const signal = interrupted();
+          assert.ok(!signal, `${signal} received; preserve state and evidence`);
+        };
+        const session = () => collection ??= openCollection(options.context, { repo, interrupted, providerFactory });
         const deleted = () => {
           verifyArchive();
-          state.destroyedAt ??= new Date().toISOString(); save();
+          if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
           console.log(`${state.complete ? "all done" : `partial results (the round did not finish): ${state.validationError}`}\nresults in ${state.resultFolder}\ndroplet ${state.id} deletion confirmed`);
           return state.complete ? 0 : 1;
         };
-        if (state.destroyedAt) {
-          assert.ok(!list().some((d) => String(d.id) === state.id), "previously deleted droplet still present");
-          return deleted();
+        const reconcile = async (disposition) => {
+          const target = state.deletionTarget;
+          assert.ok(state.collectedAt && state.deletionIntentAt && /^[1-9]\d*$/.test(state.id ?? "")
+            && Number.isSafeInteger(Number(state.id)) && target?.id === state.id && target.account && target.context,
+          "deletion record has no bound ID/account/context or collected archive; preserve state for operator review, never repeat DELETE");
+          providerIdentity({ accountId: target.account, context: target.context });
+          assert.ok(options.context === target.context, "collection context differs from saved deletion intent");
+          if (Object.hasOwn(state, "collectionTarget")) assert.deepEqual(target, state.collectionTarget, "saved deletion and collection bindings differ");
+          verifyArchive();
+          const pending = `droplet ${target.id} deletion not confirmed (${disposition}); preserve state and evidence, retry --collect for read-only confirmation`;
+          const deadline = now() + 120000;
+          const budget = (max = 10000) => {
+            checkInterrupted();
+            const ms = Math.floor(deadline - now());
+            assert.ok(ms > 0, "two-minute confirmation deadline elapsed");
+            return Math.min(ms, max);
+          };
+          for (;;) {
+            let droplet, wait;
+            try {
+              ({ droplet } = await session().observe(target.id, target.account, budget));
+              wait = budget(3000);
+            } catch (cause) { throw new Error(`${pending}: ${cause.message}`, { cause }); }
+            // Tags can disappear during removal. While the exact ID is present we know only
+            // that its absence is unconfirmed, not that another delete is allowed.
+            if (!droplet) return deleted();
+            await sleep(wait);
+          }
+        };
+        if (hasDeletionRecord(state)) return await reconcile("saved intent, no DELETE attempted");
+        checkInterrupted();
+        const neverStarted = part && beforeStart(state), target = state.collectionTarget;
+        if (Object.hasOwn(state, "collectionTarget")) {
+          assert.ok(target?.id && target.id === state.id, "saved collection binding differs from the exact ID");
+          providerIdentity({ accountId: target.account, context: target.context });
+          assert.ok(options.context === target.context, "collection context differs from saved account binding");
         }
-        if (state.deletionIntentAt && state.collectedAt && !list().some((d) => String(d.id) === state.id)) {
-          // A delete may succeed even when its acknowledgement or the next list is lost.
-          // The intent was saved only after owned-terminal checks and verified collection.
-          return deleted();
+        let id = state.id;
+        if (!id) {
+          // A lost create acknowledgement can be discovered by unique tag, never disproved by a list.
+          const rows = (await session().list()).filter((d) => d.name === state.name && d.tags?.includes(state.tag));
+          assert.ok(rows.length, "no exact droplet ID found for this reservation; absence unconfirmed");
+          id = String(ownedDroplet(rows, state).id);
         }
-        const d = own();
-        state.id = String(d.id); state.ip = d.networks.v4.find((n) => n.type === "public")?.ip_address; save(); validateState(state, options.round);
+        const { droplet, account } = await session().observe(id, target?.account);
+        if (!droplet) {
+          assert.ok(part && (neverStarted || state.status === "starting"),
+            `droplet ${id} is absent in the saved account, but this reservation has no deletion receipt`);
+          console.log(`${partName(state.round, part)} ${neverStarted ? "never started its round" : "may have started its round"}, but its exact droplet ${id} is absent in the saved account; nothing to collect`);
+          return "missing";
+        }
+        const d = ownedDroplet([droplet], { ...state, id });
+        const binding = { id, account, context: options.context };
+        if (neverStarted) {
+          Object.assign(state, { id, collectionTarget: binding }); save();
+          console.error(`${partName(state.round, part)}: droplet ${id} was created but never started its round (its launch stopped before systemctl start); nothing to collect. Delete it: doctl compute droplet delete ${id} --force --context ${options.context}`);
+          return 2;
+        }
+        const ip = d.networks.v4.find((n) => n.type === "public")?.ip_address;
+        assert.ok(ip && (!state.ip || state.ip === ip), "owned droplet's public IP differs from reservation or is missing");
+        Object.assign(state, { id, ip, collectionTarget: binding }); validateState(state, options.round); save();
         if (!terminalUnit(unit())) {
           console.log(`round ${state.round} is still running\n${ssh("tail -n 8 /bench/run.log").stdout}`);
           return 3;
@@ -159,14 +301,32 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
           Object.assign(state, { resultFolder: existsSync(source) ? source : extracted, evidenceFolder: extracted,
             collectedAt: new Date().toISOString(), status: state.complete ? "done" : "failed" }); save();
         }
-        // Repeat identity + terminal checks after the download, including cleanup retries.
+        // Only a fresh intent permits DELETE. Recheck identity and terminal state after custody.
         verifyArchive();
-        own(); assert.ok(terminalUnit(unit()), "unit became active; refusing deletion");
-        state.deletionIntentAt ??= new Date().toISOString(); save();
-        run("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
-        assert.ok(!list().some((item) => String(item.id) === state.id), "droplet deletion not confirmed");
-        return deleted();
-      } finally { unlinkSync(lock); }
+        const currentHost = (await session().observe(id, account)).droplet;
+        assert.ok(currentHost, "owned droplet disappeared before DELETE; no deletion receipt");
+        const current = ownedDroplet([currentHost], state);
+        assert.equal(current.networks.v4.find((n) => n.type === "public")?.ip_address, state.ip, "owned droplet's public IP changed; refusing deletion");
+        assert.ok(terminalUnit(unit()), "unit became active; refusing deletion");
+        await yieldToSignals();
+        checkInterrupted();
+        Object.assign(state, { deletionIntentAt: new Date().toISOString(), deletionTarget: binding });
+        try { publishIntent(statePath, state, syncIntentDirectory); }
+        catch (cause) {
+          throw new Error(`durable intent not confirmed for droplet ${id}; no DELETE sent by this invocation. Preserve state and evidence for operator review: ${cause.message}`, { cause });
+        }
+        let disposition = "DELETE acknowledgement unavailable";
+        try {
+          await session().delete(state.id);
+          disposition = "DELETE acknowledged";
+        } catch { /* An unsuccessful response cannot establish whether the request took effect. */ }
+        return await reconcile(disposition);
+      } catch (error) { failed = true; throw error; }
+      finally {
+        try { if (!sharedCollection) await collection?.close(); }
+        catch (error) { if (!failed) throw error; }
+        finally { unlinkSync(lock); }
+      }
     },
   };
 }
@@ -202,20 +362,21 @@ export function launcherSignals() {
  * @param {object} [deps] as controller takes them, plus interrupted() naming a received signal
  */
 export function splitController(options, deps = {}) {
-  const { run = command, repo = checkout, interrupted = () => null } = deps;
+  const { run = command, repo = checkout, interrupted = () => null, publishIntent = saveDeletionIntent } = deps;
   const local = controlDir(options.stateDir, repo);
   assert.ok(!existsSync(join(local, "state.json")), "this state directory holds a one-droplet round; use another for a split round");
   const planPath = join(local, "split.json");
   let plan = existsSync(planPath) ? validatePlan(JSON.parse(readFileSync(planPath, "utf8")), options.round) : null;
   const partDir = (k) => join(local, `d${k}`);
   const list = () => JSON.parse(run("doctl", ["compute", "droplet", "list", "--output", "json"]).stdout);
-  const task = (p) => controller({ round: options.round, stateDir: partDir(p.index), sshKey: options.sshKey, part: { index: p.index, of: plan.droplets }, group: plan.group, commit: plan.commit }, deps);
+  const task = (p) => controller({ round: options.round, stateDir: partDir(p.index), sshKey: options.sshKey, context: options.context,
+    part: { index: p.index, of: plan.droplets }, group: plan.group, commit: plan.commit }, deps);
   const stateOf = (p) => {
     const file = join(partDir(p.index), "state.json");
     return existsSync(file) ? validateState(JSON.parse(readFileSync(file, "utf8")), options.round) : null;
   };
   const name = (p) => `${options.round}-d${p.index}`;
-  const collectCommand = `node bench/marketplace/droplet.mjs ${options.round} --state-dir "${local}" --collect`;
+  const collectCommand = `node bench/marketplace/droplet.mjs ${options.round} --state-dir "${local}" --collect --context ${options.context ?? "<saved-context>"}`;
   // A launch holds launch.lock with its pid until it ends, by any path, so collect can tell a
   // stopped launch from a live one.
   const lockPath = join(local, "launch.lock");
@@ -264,6 +425,7 @@ export function splitController(options, deps = {}) {
     const results = join(repo, "bench", "marketplace", "results", options.round);
     assert.ok(!existsSync(results), `${results} exists; never reuse a result folder`);
     for (let k = 1; k <= options.droplets; k++) assert.ok(!existsSync(partDir(k)), `${partDir(k)} exists; use a new state directory for ${options.round}`);
+    preflightIntent(local, publishIntent);
     const droplets = list();
     assert.ok(!benchTagged(droplets), "a nightly benchmark droplet already exists; do not overlap nightly rounds");
     const account = JSON.parse(run("doctl", ["account", "get", "--output", "json"]).stdout);
@@ -294,42 +456,31 @@ export function splitController(options, deps = {}) {
     console.log(`running ${options.round} on ${plan.droplets} droplets, each by itself; collect with: ${collectCommand}`);
     return plan;
   }
-  async function collectUnlocked() {
+  async function collectUnlocked(collection) {
     const codes = [], neverStarted = new Set();
     for (const p of plan.parts) {
       const s = stateOf(p), signal = interrupted();
       console.log(`== ${name(p)} ==`);
       if (signal) { console.error(`${signal} received: ${name(p)} not collected`); codes.push(2); continue; }
       if (!s) { console.log(`${name(p)} was never created: the launch stopped before it`); codes.push("missing"); continue; }
-      // Listed under this part's id, or with no id its name and run tag; owned, as ownedDroplet
-      // checks, only with its name and every ownership tag too.
-      const listed = (d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag);
-      const owned = (d) => listed(d) && d.name === s.name && ["corten-bench", "corten-marketplace", s.tag].every((tag) => d.tags?.includes(tag));
+      if (beforeStart(s)) neverStarted.add(p.index);
       try {
-        // creating or preparing: the launch stopped before systemctl start (starting is saved
-        // just before it, and the unit has no [Install], so nothing else starts it).
-        if (["creating", "preparing"].includes(s.status)) {
-          neverStarted.add(p.index);
-          const found = list().filter(listed);
-          for (const d of found) {
-            if (owned(d)) console.error(`${name(p)}: droplet ${d.id} was created but never started its round (its launch stopped before systemctl start); nothing to collect. Delete it: doctl compute droplet delete ${d.id} --force`);
-            else console.error(`${name(p)}: droplet ${d.id} is listed for this part but lacks its name or ownership tags; not ours to delete: check it`);
-          }
-          if (!found.length) console.log(`${name(p)} never started its round and has no droplet`);
-          codes.push(found.length ? 2 : "missing"); continue;
-        }
-        if (s.status === "starting" && !list().some(listed)) {
-          console.log(`${name(p)} may have started its round, but its droplet is gone; nothing to collect`); codes.push("missing"); continue;
-        }
-        // Its controller collects it, and refuses a missing or unloaded unit.
-        codes.push(await task(p).collect());
+        // The same exact-ID checks apply to every reserved part, including interrupted launches.
+        codes.push(await task(p).collect(collection));
       } catch (e) { console.error(`${name(p)}: collection error; its droplet and evidence are preserved: ${e.message}`); codes.push(2); }
     }
     const states = plan.parts.map(stateOf);
     let leftovers = [], unlisted = 0;
-    try { leftovers = leftoverDroplets(list(), plan, states); }
-    catch (e) { unlisted = 1; console.error(`the droplet list failed, so leftover droplets are unknown: ${e.message}`); }
-    for (const d of leftovers) console.error(`leftover droplet ${d.id} (${d.name}) belongs to no live part of ${options.round}; check it is not another run's, then delete it: doctl compute droplet delete ${d.id} --force`);
+    try {
+      // The list can detect extra IDs, but cannot make or overturn an exact-ID absence decision.
+      const rows = (await collection.list()).filter((d) => !collection.confirmedAbsent.has(String(d.id)));
+      leftovers = leftoverDroplets(rows, plan, states);
+    } catch (e) { unlisted = 1; console.error(`the droplet list failed, so leftover droplets are unknown: ${e.message}`); }
+    for (const d of leftovers) {
+      if (states.some((s) => s?.id === String(d.id) && hasDeletionRecord(s))) {
+        console.error(`droplet ${d.id} is still listed despite a saved deletion record; reconcile read-only, do not repeat DELETE`);
+      } else console.error(`leftover droplet ${d.id} (${d.name}) belongs to no live part of ${options.round}; check exact identity and ownership before any action`);
+    }
     let code = splitExit(codes, leftovers.length + unlisted);
     const which = (...want) => plan.parts.filter((_, i) => want.includes(codes[i])).map(name).join(", ");
     // A part that never started, is partial or is missing means the round cannot merge, so the
@@ -342,7 +493,8 @@ export function splitController(options, deps = {}) {
       catch (e) { console.error(`partial: every droplet finished and was deleted, but they do not merge into one round: ${e.message}\n${options.round} cannot be merged: follow the exit 1 steps in bench/marketplace/nightly.md (State And Collection); the next round takes a new number, never relaunch ${options.round}.`); code = 1; }
     } else if (code === 3) {
       if (!doomed.length) console.log(`${options.round} is not finished: ${which(3)} still running. Finished droplets are collected and deleted; run ${collectCommand} again later.`);
-    } else if (code === 1) console.log(`${options.round} is partial: ${which(1, "missing")} did not finish its part. Every droplet's deletion is confirmed; there is no merged round.`);
+    } else if (code === 1) console.log(`${options.round} is partial: ${which(1, "missing")} did not finish its part.${collection.confirmedAbsent.size
+      ? ` Exact IDs confirmed absent: ${[...collection.confirmedAbsent].join(", ")}.` : ""} There is no merged round.`);
     else console.error(`collection error${which(2) ? ` on ${which(2)}` : ""}${leftovers.length ? `, ${leftovers.length} leftover droplet(s)` : ""}: droplets that still exist are preserved and still billed. Fix the error and run ${collectCommand} again; never relaunch ${options.round}.`);
     return code;
   }
@@ -363,7 +515,11 @@ export function splitController(options, deps = {}) {
         console.log(`${lockPath} is stale: pid ${lock.pid} is not running, so its launch was killed; removing the lock and collecting the stopped launch`);
         unlinkSync(lockPath);
       }
-      return collectUnlocked();
+      const collection = openCollection(options.context, { ...deps, repo, interrupted });
+      let failed = false;
+      try { return await collectUnlocked(collection); }
+      catch (error) { failed = true; throw error; }
+      finally { try { await collection.close(); } catch (error) { if (!failed) throw error; } }
     },
   };
 }
@@ -373,7 +529,8 @@ export function splitDryRun(options) {
   const base = { workload: "marketplace-v2", round: options.round, tag: `corten-marketplace-run-${"0".repeat(16)}`, commit: plan.commit, options: nightly };
   const states = plan.parts.map((p) => ({ ...base, name: p.name, unit: `${p.name}.service`, part: { index: p.index, of: plan.droplets }, group: plan.group, apps: p.apps }));
   return { options, measurements: nightly, plan,
-    commands: ["git rev-parse HEAD", "git status --porcelain", "doctl compute droplet list --output json", "doctl account get --output json",
+    commands: ["git rev-parse HEAD", "git status --porcelain", "preflight durable delete intent publisher on the state filesystem",
+      "doctl compute droplet list --output json", "doctl account get --output json",
       `write ${join(resolve(options.stateDir), "split.json")}`,
       ...states.map((s) => `doctl compute droplet create ${s.name} --size c-8 --region sfo2 --image ubuntu-24-04-x64 --ssh-keys ${options.sshKey} --tag-names corten-bench,corten-marketplace,<run tag> --wait --output json`),
       ...states.map((s) => `ssh root@<${s.name} ip>: upload job.sh, pack.sh and ${s.unit}; systemctl start ${s.unit}`)],
@@ -395,7 +552,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const task = splitController(options, { interrupted: launcherSignals() });
       if (options.collect) process.exitCode = await task.collect(); else await task.launch();
     } else {
-      const task = controller(options);
+      const task = controller(options, options.collect ? { interrupted: launcherSignals() } : {});
       if (options.collect) process.exitCode = await task.collect(); else await task.launch();
     }
   } catch (e) { console.error(e.stack); process.exitCode = 2; }

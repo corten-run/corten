@@ -148,7 +148,7 @@ pub fn After() -> impl Render {
                         <code>"corten-run"</code> " and its library " <code>"corten"</code> ", as the app's Cargo.toml says."
                     </p>
                     <p>
-                        "Corten is 0.2: usable and tested, and built for " <a href={links::chase_sets()}>"Chase Sets"</a>
+                        "Corten is 0.3: usable and tested, and built for " <a href={links::chase_sets()}>"Chase Sets"</a>
                         ". The " <a href={links::changelog()}>"changelog"</a>
                         " lists what each release changed."
                     </p>

@@ -10,7 +10,9 @@ import { check } from "k6";
 
 const BASE = __ENV.BASE;
 const MODE = __ENV.MODE || "closed";
-const PATH = (__ENV.TARGET || "page") === "json" ? "/api/items/item_" : "/items/item_";
+const TARGET = __ENV.TARGET ?? "page";
+if (TARGET !== "page" && TARGET !== "json") throw new Error(`unknown TARGET ${JSON.stringify(TARGET)}; expected page or json`);
+const PATH = TARGET === "json" ? "/api/items/item_" : "/items/item_";
 const scenarios = {
   closed: { executor: "constant-vus", vus: Number(__ENV.VUS || 64), duration: __ENV.DURATION || "60s" },
   open: { executor: "constant-arrival-rate", rate: Number(__ENV.RATE || 100), timeUnit: "1s", duration: __ENV.DURATION || "60s", preAllocatedVUs: 200, maxVUs: 1000 },

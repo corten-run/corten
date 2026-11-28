@@ -1,327 +1,95 @@
 # Native Hardening
 
-`run.mjs` is a local, opt-in driver for the registry's complete hardening group:
-Corten, ASP.NET Core, Spring Boot, Next.js Pages Router, Django, Express, Gin,
-Drogon and Topcoat. Both fixture/API sources, direct/deployed-edge deployments
-and every scenario stay in its ledger. No cloud controller,
-operational benchmark network, production deployment or automation is used.
+This group asks whether a deployment can serve an ordinary marketplace read before
+and after a request hits a boundary. It is not a throughput ranking. Corten, ASP.NET
+Core, Spring Boot, Next.js Pages Router, Django, Express, Gin, Drogon and Topcoat use
+their native matched production adapters. Each runs directly and behind the reviewed
+edge, with records read either from the fixture or over HTTP from a private upstream.
+Keep these four configurations separate: a response from a proxy does not establish
+how the application alone behaves.
+
+| Phase | What to read from the result |
+| --- | --- |
+| Request timeout | Does an ordinary read complete before the client deadline when the private dependency is delayed? Can the next ordinary read return the right record? A client deadline does not prove the server enforced a timeout. |
+| Request limit | How does the endpoint handle one complete request at the configured header boundary? Compare it with ordinary reads before and after. Acceptance is not an apparatus failure; rejection alone does not identify which process imposed a limit. |
+| Dependency recovery | How long after the upstream restores its normal delay do five consecutive correct reads return to baseline latency? Fixture reads must not use the upstream and cannot establish a recovery time. |
+
+The [native plan](plan.mjs) fixes the cases and budgets. The full matrix, including
+missing native features, unsuccessful responses and failed checks, stays in the
+evidence. Functional parity, the process inventory, terminal liveness and owned-resource
+cleanup have separate checks. A bad control or missing receipt cannot be reported as
+a framework failure. An unavailable measurement is not zero.
+
+If ordinary reads succeed but the deployment has no discoverable health endpoint,
+its terminal liveness check is unsupported. A discovered endpoint returning an
+error, a process observed to have stopped, or an incorrect follow-up read stays a
+failure; a missing endpoint does not erase it.
+If no candidate health path succeeds, a completed HTTP 5xx during discovery
+is reported with its path and status rather than as an absent feature. A
+confirmed failure before timing counts against the app, not as a timed result.
+
+Qualification applies only to the checked features. The runner does not test
+incomplete requests, connection caps, large bodies or server-enforced deadlines.
+A passed row is not evidence that those protections exist.
+Connection-flood resistance: not measured.
+
+Use the [grouped benchmark procedure](../workloads/CLOUD.md) for an official round.
+For a deployed-edge case, nginx accepts the public `localhost:8080` authority
+and forwards the original `Host` and `Origin`. The app receives the exact
+`MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080` configuration; native direct
+preflight still reaches the app at `http://127.0.0.1:8080`. The proxy strips
+client-supplied forwarding metadata about the public authority and scheme. It
+does not translate `Origin` or provide the application's CSRF protection. This deployment
+differs from r96, where nginx forwarded its internal upstream name as `Host`.
+The Corten marketplace adapter also requires the exact configured origin on
+alert writes to the public authority; its direct listener retains the native check.
+
+Before a full rerun after a deployment change, a dedicated test host can exercise
+one fixture case per app against the real TLS edge with the same qualification gates:
 
 ```sh
-node --test --test-concurrency=1 bench/hardening/*.test.mjs
-node bench/hardening/run.mjs w1 --review approved-profile-reference --build
-node bench/hardening/verify.mjs bench/hardening/results/w1
-node bench/hardening/adversarial.mjs bench/hardening/results/w1/<observed-cell-directory>
-node bench/hardening/verify-network.mjs
-node bench/hardening/verify-health.mjs
-node bench/hardening/verify-exit.mjs
+node bench/hardening/run.mjs w1 --build --out /tmp/hardening-edge-check --review edge-deployment-check --verify-case deployed-edge --verify-source fixture --verify-phase request-limit
 ```
 
-The dispatcher interface is `export async function run(args)`, where `args` is
-the CLI string array including the mandatory local development round `wN`.
-The returned and persisted summary schema is `native-hardening-run/v2`. The
-connection-pressure scenario from v1 is retired, not renamed. Its results
-cannot be used for the dependency recovery test.
+This filtered run is diagnostic, not an official group result.
 
-In the recovery scenario each deployment serves the same ordinary marketplace
-JSON read every 400 ms. After four seconds the private upstream adds 150 ms to
-record reads for eight seconds, then resumes normal service for the final eight
-seconds. Each response has a 600 ms deadline and must match the complete record.
-The API-source result reports how soon five consecutive good responses return
-to baseline latency. The fixture-source result is a control: it must not read
-the upstream and cannot demonstrate recovery from a dependency delay.
-`--out` optionally selects a fresh subdirectory under `bench/hardening/results`.
-`--node-modules` can name an existing dependency installation (the pinned
-Playwright version is checked). Stable regular installed files, including esbuild's
-postinstall hardlinks, are copied into a fresh private evidence tree and mounted
-read-only. The installed tree is not changed; copied files are independent and
-single-link. Saved evidence still rejects hardlinks.
+Before the first cell, the runner prepares its Node upstream, Playwright checker,
+nginx edge and OpenSSL certificate images. It reuses successful local lookups
+and otherwise makes one bounded pull of the same reference. The Playwright
+reference follows the pinned browser-driver version. That container supplies
+Chromium and its libraries; new dedicated Hardening cloud runs do not install
+a second Chromium on the host. The runner records and
+uses the inspected image IDs; failure here is an apparatus failure, not a
+framework result. This setup does not warm any measured endpoint or alter the
+request schedule.
 
-The copy preflights the existing depth, entry and byte bounds, checks descriptor
-identity before reading, and requires unchanged source identity, metadata and
-recursive membership bookends. Symlinks, special files and changing inputs fail
-closed. Linux traversal uses pinned directory descriptors and no-follow opens;
-Windows uses path bookends plus descriptor identity checks before content reads.
-Linux output storage is restricted to native ext-family, tmpfs and overlayfs
-filesystems, checked through the opened parent descriptor before any output
-creation and through active output descriptors before subsequent creates. Other
-types, including WSL DrvFS/9p, are refused as `unsupported-output-filesystem`.
-DrvFS descriptor child paths can follow a replaced directory name and create an
-empty file before identity checks reject it; no output tree is created there.
-Output creates are anchored to pinned directory descriptors on supported Linux
-filesystems. This is not a blanket Linux filesystem qualification. Windows
-temporarily pins the existing output parent while creating the root, then holds
-exclusive handles on active owned output directories to prevent rename/junction
-substitution before writes. Handles are bounded by traversal depth and released
-on success or failure. Output ancestor, directory and file identities are checked
-before writes and bookended around the read-only seal; byte-identical replacement
-trees are not accepted. Unrelated ancestor membership changes remain allowed.
-This is not an atomic filesystem snapshot: the installation must remain stable.
-Only the unused top-level `.bin` launchers are excluded. Rejections identify a
-bounded relative path (up to 64 characters), entry type, link count and reason,
-with fixed public I/O codes rather than absolute paths or file contents.
+Isolated grouped runs pin the service, upstream, optional proxy, apparatus and host
+command to separate CPU sets. Replay checks live Linux cgroups for the service
+containers and native probe at the two boundaries of the probe's work, including
+the effective sets of occupied child cgroups. Setup and terminal helpers are
+checked against their Docker launch receipts, not sampled as timed participants.
+This is boundary evidence, not continuous monitoring of every process.
+When replay compares inherited execution defaults, an omitted or null image
+`Config.Entrypoint` or `Config.Cmd` must match an explicit null in the container
+receipt. Explicit image values, including empty arrays, and commands supplied by
+the runner must match exactly.
 
-No options select a smaller benchmark group. `--verify-app`, `--verify-source`,
-`--verify-case` and `--verify-phase` select bounded apparatus verification only.
-Every other cell remains `not-run`, and verification mode cannot set `groupReady`.
+The Hardening binding includes every tracked input to each application's source
+digest, even files under an app's `results/` directory if they are in its build
+context. This does not change the archive recipe or which files it selects. The
+Corten root archive still binds the full measured checkout, including its harness.
+Other groups keep the ordinary source inventory. An all-group plan keeps a shared
+source digest and records the full Hardening closure on its own binding; a dedicated
+Hardening plan records it in both places. Existing reservations replay with their
+pinned measured checkout.
 
-## Native Qualification
+Offline replay checks the saved native evidence; it does not run a new measurement:
 
-A clean, committed checkout and immutable native source/image/config identities
-are mandatory. `--build` builds the existing native production Dockerfiles with
-the existing matched profile, records the source digest and provenance labels,
-and removes only its generated image tags afterwards. Without it, each
-`cb-marketplace-production-<app>` image must carry this exact commit, profile,
-clean-build and native-source digest. Old or dirty local images are not relabeled.
-Missing images/builds/native features remain explicit invalid/not-run cells.
+```sh
+node bench/hardening/verify.mjs bench/hardening/results/w1
+```
 
-The representative is the existing native matched production adapter, not a
-common implementation of a framework's behavior. The summary's `nativeGroup`
-keeps all nine representatives visible with `not-established`, `partial`,
-`gaps-observed` or `qualified` production qualification and exact missing features.
-Its alternatives list is empty until an actual native alternative has its own
-source/config/process-budget identity and passes the same complete gates. No
-alternative is presumed qualified and no default is weakened to fill that list.
-`nativeControlsVersion: 1` requires additional raw controls and replay validation.
-`semanticReceiptsVersion: 2` binds both native target closure and client release
-to the reviewed release deadline (within the existing `maxWindowDriftMs`), bounds
-establishment by the 2,000 ms connection timeout or release, whichever is earlier
-(within the existing `maxStartLagMs`), requires full-duration trickle counts and
-cadence, and rejects completed legitimate responses beyond the unchanged 600 ms
-deadline or their window.
-`lifecycleVersion: 4` requires terminal recovery of the application, edge proxy
-and API-source upstream, not only a successful earlier HTTP request. After the
-timed probe and its receiving controls finish, separate short-lived observers in
-each service's own network namespace request its native liveness path (the API
-upstream's `/health`). Paths are bound to direct/effective production qualification;
-there is no fallback endpoint. Complete, error-free HTTP 200 within 600 ms and
-the subsequent Docker running/health state must both support recovery. Docker
-`unhealthy`/`starting`, a terminal 503, timeout/reset or missing observation cannot
-establish recovery or numeric qualification. A missing native liveness path stays
-an explicit gap. No Docker healthcheck is installed or changed; absent checks are
-`not-configured`, not invented healthy results. Terminal target failures remain
-target-capacity outcomes; failure of the idle fixture upstream remains apparatus.
-Replay checks the actual response receipt's complete URL (including scheme and
-authority), `GET` method and HTTP Host, not only its wrapper path. Acquisition
-timestamps are recorded inside the HTTP observer. They must lie inside a separate
-Linux monotonic observation interval with the same kernel boot identity, after
-the probe's final receiving controls and before owned cleanup. Preflight page
-responses, stale endpoint receipts and missing timestamps cannot supply terminal
-health. The observer interval is retained in each native lifecycle artifact;
-`probe-complete` is the raw post-controls boundary. Missing clocks are unavailable,
-never zero-time observations.
-If observer creation/start fails, the collector re-inspects the target. An
-unchanged service-critical container that actually exited, with valid exit state
-and no daemon error, retains unavailable health plus the observer error and can
-produce a target-capacity outcome. Live targets, changed identities/restarts and
-fixture-upstream failures are not converted to target outcomes. Replay continues
-to reject external stop/kill/restart events; no exit is manufactured or restarted.
-Verification rejects older producer versions explicitly; historical evidence is
-never backfilled.
-`review-regressions.mjs CELL` independently replays retained API/edge slow-body
-bytes and mutates them in memory to exercise these gates. It does not upgrade
-the old capture or establish fresh native qualification.
-`verify-health.mjs` is a finite real-Docker control: a labeled local Node service
-stays running while its actual healthcheck turns unhealthy and its terminal HTTP
-probe returns 503. Each observation independently blocks recovery for the three
-critical roles. This is not native framework evidence. The control removes its
-container and volumes; it publishes no ports and changes no shared images.
-`verify-exit.mjs` checks the real Docker race: a local target exits naturally
-after the running check, and a labeled observer cannot join its network namespace.
-The shared collector must preserve the verified exit as a target-capacity failure,
-not apparatus-invalid. Both containers and their volumes are removed afterwards.
-
-Each phase starts fresh native application and upstream containers. Production
-qualification uses the unchanged `bench/marketplace/qualify.mjs` infrastructure.
-Missing defensive capabilities are disclosed but do not exclude a target.
-The complete existing marketplace browser/content gate is separate: 500 numeric
-JSON records and 264 page checks across every locale, JS mode and device. It
-must pass before attacks. Deployed-edge also reruns this gate through TLS nginx,
-with the existing pinned edge image and generated `nginxConf`, without substituting
-a common renderer or application transport. Node trusts only the generated CA;
-Chromium pins its generated public key. Native form action, encoding, CSRF fields
-and cookies are discovered and submitted successfully before body attacks.
-`deploymentQualificationVersion: 1` additionally runs the unchanged production
-`qualify()` predicate suite through real TLS clients at the edge, including the
-unfinished-header and 950/1,050 connection probes. It stores separate
-`edge-qualification.json` and `native-parity.json`; direct qualification is never
-substituted for effective edge qualification. The TLS adapter changes client
-transport only, not the proxy profile, target, budgets, thresholds or predicates.
-TLS handshakes must complete and validate the generated CA before requests or
-idle connections count. See [native app-owner requirements](NATIVE-GAPS.md) for
-the observed Express/Gin feature gaps and full-matrix acceptance command.
-
-`native-controls.json` separately records allowed/unknown Host responses, the
-actual liveness path found by production qualification, and a negative health
-path. No endpoint means `missing`; a catch-all 200 is `inconclusive`, not live.
-A failed, partial or timed-out negative health request is also inconclusive;
-only a completed negative 4xx distinguishes the endpoint from a catch-all.
-API-source controls retain nonce-mutated page/full JSON responses, exact one-read
-upstream counters, 503/302 refusal, independent liveness under upstream failure,
-and reset/readback receipts. Controls run in the direct and deployed-edge namespace
-as applicable. Wire differences are observations, not proof of native serialization;
-the existing native source and complete browser/content gates remain mandatory.
-The timed API run independently resets its owned upstream before the clock starts
-and retains the actual read/status totals afterwards. Those totals include attack
-reads, not an invented per-legitimate-request attribution. Unavailable observations
-remain unavailable and block numeric qualification; they are never zero reads.
-An unqualified representative is explicitly labeled a native defense-gap
-observation, never qualified performance. Missing defenses are target outcomes.
-
-## Apparatus
-
-The exact profiles live in `plan.mjs`, serialized into each cell's settings.
-`--profile bounded` is the default: 2.5 s baseline, 6 s attack, 5 s recovery,
-12 attack attempts in one second and legitimate new-connection reads every
-400 ms in every window. Reads rotate the three localized pages and complete
-numeric JSON. This is a safety/driver verification, not a timeout, saturation
-or throughput qualification. `--profile sustained` explicitly selects a 95 s
-attack and 1,200 attempts. Neither profile inherits legacy defense thresholds.
-`--review` identifies the caller's approved profile; a string alone does not
-constitute independent review or authorize shared-service attacks.
-
-Direct and edge both charge 1.5 CPU and 1.5 GiB total: upstream 0.5 CPU/512 MiB,
-direct app 1 CPU/1 GiB, or edge app 0.75 CPU/768 MiB plus proxy 0.25 CPU/256 MiB.
-The fixture case still inventories/charges its idle upstream. These are container
-quotas, not CPU pinning or physical memory reservations. Every container has
-512-task and 65,536-FD bounds and no swap allowance above its memory budget.
-The separate injector has 2 CPU/1 GiB; preflight/browser processes use 2 CPU/2 GiB
-and are removed before the attack. All native child processes and threads are
-charged by their container cgroups; `docker top` and actual `cgroup.procs` are
-retained, not normalized to one process. The isolated network inventory must
-match every declared native target container before injection.
-Replay checks actual Docker CPU/memory/swap/task/FD quotas against the serialized
-profile, rejects automatic recovery restarts and published ports, and rejects
-configuration updates or changed native limits during the attack. An exit during
-asynchronous collection is checked against the collection interval's end, not
-incorrectly attributed to a missing resource sample before the exit.
-The short-lived observer uses the host PID and cgroup namespaces, with read-only
-cgroup access and no Docker socket, so other containers' PIDs are visible rather
-than represented as namespace-hidden zeros. Asynchronous cgroup reads retain their
-actual monotonic collection intervals; reads cannot block the socket scheduler.
-
-The same socket injector runs independent receiving controls before/after each
-phase. Controls verify actual emitted/received bytes, trickle ticks, incomplete
-heads/bodies, paused-reader write backpressure and an independently checked JSON
-legitimate response. Attacks send unfinished trickled heads, native form bodies
-trickled after complete heads (4 KiB declared, below ordinary form-size caps),
-pipelined requests from readers that stop reading,
-idle sockets, fresh-connection GET floods, and all three oversized variants
-(200 headers, 128 KiB header, 4 MiB body). Oversize writes honor backpressure.
-Scheduled starts and actual monotonic starts are retained including refusals;
-local FD/memory/address exhaustion, missing work, excessive lag, stalled event
-loop, invalid controls, changed lifecycle or failed cleanup invalidate apparatus.
-
-Receiving controls release on actual payload receipt (including every byte of
-the 4 MiB body), two trickles, or demonstrated reader backpressure, under a separate
-finite 5 s deadline. They no longer presume delivery within 350 ms. Their exact
-byte checks remain intact. The recorder unit test explicitly triggers its deadline
-after the hung request arrives instead of requiring a good response within 150 ms.
-Serial local socket tests avoid aggregate test-runner contention; native 600 ms
-requests, 200 ms scheduler/host gates and all reviewed attack windows are unchanged.
-
-The bounded raw journal is buffered in injector memory (64 MiB maximum) and
-flushed after the timed windows, so host-mounted filesystem stalls cannot delay
-scheduled traffic. Adjacent windows share one observed boundary clock sample.
-The final cleanup observer samples the same Linux kernel monotonic clock and
-boot identity as the injector, including on Docker Desktop; the parent removes
-that observer before verifying zero remaining owned containers.
-
-Raw JSONL retains attempts, status prefixes, byte hashes/counts, paused-reader
-kernel receive queues, observation boundaries, cgroup CPU/memory/OOM/procs and
-controls. Lifecycle/config/image/source records, complete parity/qualification,
-logs and manifests accompany it. Replay rehashes artifacts, rechecks native
-parity/controls/counters, reconstructs the shared-oracle capture and compares it
-to the saved file. This is integrity validation, not signed remote attestation.
-Ephemeral form credentials and the TLS private key are removed after use.
-`semanticReceiptsVersion: 1` retains complete/partial legitimate response bytes,
-completion, status, error and timeout receipts; replay recomputes both hashes and
-semantic success. Exact native emission plans bind attack hashes/bytes, writes,
-body chunks and actual trickle timestamps. Target refusals before writes remain
-explicit refusals, not emitted work. Successful API reads impose a lower bound
-on actual upstream request and 200-answer totals; unrelated attack reads cannot
-be attributed to individual successes. Terminal Docker state is separate from
-the midpoint resource sample and can revoke recovery and numeric qualification.
-Historical byte-less captures are retained unchanged, but cannot satisfy these
-stronger semantic replay gates; no missing fields are backfilled or invented.
-
-Cleanup's 15 s timeout bounds each Docker cleanup operation, not total artifact
-collection wall time, which is retained separately. API-source upstream failure
-is a charged deployment outcome; unexpected failure of the unused fixture-source
-upstream invalidates its apparatus. Generic HTTP 400/403/5xx responses do not
-identify a defensive rejection; only phase-appropriate limit/timeout statuses do.
-
-The shared outcome validator is used only after real native observations and
-owned cleanup. A refusal, lost useful service, resource exhaustion, missing
-defense or failure to recover remains a target outcome. No target is restarted
-to manufacture recovery. A broken functional gate or apparatus gets no measured
-capture. All owned containers (including anonymous volumes), command clients,
-sockets, timers, network and generated image tags are reaped; results remain.
-Each invalid cell names its failed stage and distinguishes `parity-blocked` from
-`apparatus-invalid`, and controlled native API contract failures are explicitly
-`target-functional-failure` rather than broken apparatus. Build image ownership
-is persisted before the daemon can create its tag, including cancellation paths.
-Network names are likewise reserved and saved before creation. An in-flight
-network-create client is allowed to settle on interruption, within its 15 s
-operation deadline, before exact-name/ownership-label reconciliation removes the
-network by ID. Cleanup never removes differently named or owned resources and
-reports an attached or ownership-conflicting reserved network as a cleanup failure.
-An unacknowledged create failure/deadline also invalidates cleanup, even if reconciliation
-finds nothing yet; absence cannot certify that a delayed daemon operation finished.
-`verify-network.mjs` is a finite, opt-in real-daemon cancellation control using
-two empty, labeled private networks and an injected process SIGINT event before
-the owning callback receives acknowledgement; it starts no containers or benchmarks.
-Completed native baseline HTTP errors are `target-functional-failure`, including
-allowed-Host/liveness 503 responses. Incomplete/reset/timed-out baseline transport
-is apparatus-invalid; a negative-health transport failure is inconclusive, not live.
-Cleanup checks ownership and removes only generated tags that actually exist.
-Valid native captures separately classify `service-preserved`
-or `target-capacity-failure`. Loss of baseline service after successful preflight
-is retained as an unavailable numeric measurement, not mislabeled broken injection.
-`numericComparisonQualified` also requires observed production qualification;
-`groupReady` means complete native apparatus evidence, not universal protection.
-Its source and deployment-specific native receipts must exist, including separate
-edge controls. A production-checklist pass alone cannot set the group ledger's
-`productionQualification` to `qualified`: all selected native content/browser and
-apparatus cells must actually be observed, and direct and edge production controls
-must qualify. Failed browser gates, absent edge receipts and unknown checks remain
-partial, while explicit native feature gaps remain gaps.
-
-## Limits
-
-The driver measures HTTP/1.1, including through the TLS edge, not HTTP/2/3 attacks.
-Slow-reader queue samples establish unread data, not necessarily blocked native
-server writes; protection remains inconclusive without a rejection. A bounded
-paused reader may not deliver its peer's EOF to JavaScript until it reads again,
-so closure counters describe client-observed closure, not an exact server FIN time.
-A hold shorter than a native deadline cannot prove the defense absent outside that
-window. Statuses and closures never identify a proxy/server mechanism by inference.
-TCP receive-queue scans are shared for at most 50 ms and retain their sample age;
-they match both loopback endpoints and the destination port, not just a local
-port that an upstream socket could also use. An absent connection is unavailable
-evidence, never an invented zero-byte queue. Timed JSON reads validate the full
-record; timed page reads check completed HTTP bodies and page markers, not a full
-DOM/CSS comparison on every request. The full browser gate runs before injection.
-Memory/CPU are window samples, not continuous peaks or kernel socket-memory totals.
-CPU seconds are raw cumulative cgroup counters, including startup and preflight,
-not per-window CPU deltas or per-request costs.
-No ranking or throughput claim is supported by these safety runs, particularly
-on a concurrently loaded workstation. Full native qualification and group-wide
-execution are still required for any complete-group claim. This scoped runner
-does not repair missing native adapter features outside `bench/hardening`.
-
-Independent review and repository-wide checks remain the integrating parent's
-responsibility when this task explicitly disallows subagents and edits outside
-this directory. Run the focused checks above and report actual native verification
-and residual gaps, never a passing oracle fixture as a native result.
-
-## Repair Handoff
-
-The endpoint/time-binding and observer-exit repair follows `43780246ecdaaf73af0f8b38c2beaf6baa9d1031`.
-An integrating checkout that has not imported that commit needs it and the
-follow-up commit in order. Current focused tests pass 33/33; the combined
-hardening/workload/production-qualification/edge suite passes 287/287. Retained
-`w10` and `w11` each pass 42/42 in-memory regressions, without rewriting or
-numerically qualifying either capture. Both real-Docker controls pass and clean
-up their exact owned resources. A fresh lifecycle-v4 native capture, independent
-review and integrating repository-wide checks remain outstanding; no full matrix
-or framework changes are part of this repair.
+The current archive schema is `native-hardening-run/v3`. The
+[previous contract and qualification notes](https://github.com/corten-run/corten/blob/ab40c8b1d60ada54c33e959cae73f3ef8c1768f8/bench/hardening/README.md)
+describe different traffic and have no compatible baseline here. Replay earlier
+captures at their original measured commit; do not import individual cells into v3.

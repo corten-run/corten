@@ -1,0 +1,107 @@
+# Counts what a request costs for a pull request against its base, with bench/request-cost, and
+# holds the change to the way its description declares (CONTRIBUTING.md, Pull requests, item 2.1):
+# instructions and allocations a request and the memory an idle connection holds, for the probe
+# built at the merge base and at the head, on one runner in one job, because a count can differ
+# between CPU models. The table is the job's summary. bench/request-cost/README.md (The hosted
+# job) says what it runs, how its verdict is read, and what a green check is: counts of the pull
+# request's own tree by its own kit, for a reviewer to read.
+name: Request Cost
+
+# A pull request alone: the comparison is of a change with its base. The description is read from
+# the event as it was when the run started, so a line added to it later is read by the next run
+# a push or a reopening starts, not by a rerun of this one; an edit starts none, since it would
+# count the same commits again.
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# A pull request from a fork has a token that reads and no secrets: the job needs neither.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # One job, whose scope step decides whether the rest run: a job to scope and a job to count
+  # each waited for a runner, 2 to 15 minutes and then 5 to 17 in this job's first five runs.
+  request-cost:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      # STOP_AT is when the readings end: 24 minutes from the job's first step, so the checkout,
+      # the setup and the builds come out of the job's thirty as the readings do. The six left are
+      # for a run stopped at the end (10 seconds from its stop to its kill), the table and the
+      # steps after it.
+      - name: When the readings end
+        run: echo "STOP_AT=$(($(date +%s) + 1440))" >> "$GITHUB_ENV"
+      # The whole history: the merge base is found in it, and build.sh archives each commit from it.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - id: scope
+        run: node scripts/benchmark-scope.mjs request-cost
+      - name: Nothing to count
+        if: steps.scope.outputs.run == 'false'
+        run: echo "Not counted, this pull request changes nothing the probe is built from or counted with (bench/request-cost/README.md, The hosted job)." >> "$GITHUB_STEP_SUMMARY"
+      # A scope that said neither has not said there is nothing to count: the job fails.
+      - name: The scope said neither
+        if: steps.scope.outputs.run != 'true' && steps.scope.outputs.run != 'false'
+        run: |
+          echo "::error::the scope step did not say whether this pull request is counted"
+          exit 1
+      # No cargo cache: the two builds take under two minutes without one (the kit's page, The
+      # hosted job).
+      - name: Rust, valgrind, jemalloc and libzstd's headers
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update && sudo apt-get install -y valgrind libjemalloc2 pkg-config libzstd-dev
+      # The checkout is the pull request's merge with its base. The kit, and so the probe's source
+      # and job.sh, is the checkout's for both builds. The builds' directory is outside the
+      # checkout and any git repository, as build.sh requires, and one for both: where a crate is
+      # built is part of the binary. A build that fails, or does not end in seven minutes, leaves
+      # why for the table, which is written either way.
+      - name: Build the probe against the merge base, then against the head, in one directory
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        run: |
+          bash bench/request-cost/job.sh build "$RUNNER_TEMP/request-cost"
+          sha256sum "$RUNNER_TEMP/request-cost"/bin/* || true
+      # Each build's answers, then each run of the kit that compare.mjs names, on base and then on
+      # head, on one CPU, as job.sh says: a run is stopped at 120 seconds, none starts once STOP_AT
+      # has come, and one that gave no figure is taken again, once.
+      - name: Answers, counts, allocations and idle memory
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        run: |
+          cpu=$(($(nproc) - 1))
+          echo "$(nproc) CPUs, the probe on CPU $cpu; open files $(ulimit -Sn) of $(ulimit -Hn)"
+          lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core)' || true
+          valgrind --version; rustc --version; node --version
+          sysctl net.ipv4.tcp_tw_reuse net.ipv4.ip_local_port_range net.core.somaxconn || true
+          bash bench/request-cost/job.sh read "$RUNNER_TEMP/request-cost" "$cpu"
+          echo "sockets in TIME_WAIT: $(ss -Htan state time-wait | wc -l)"
+      # The description is the event's own copy, written to a file and read there: never text in
+      # a script. The comparison's exit status is the job's.
+      - name: The table and the verdict
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        run: |
+          builds=$RUNNER_TEMP/request-cost
+          jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/description.md"
+          status=0
+          node bench/request-cost/compare.mjs "$builds/base" "$builds/head" --description "$RUNNER_TEMP/description.md" --base "$(cat "$builds/base/commit")" --head "$(cat "$builds/head/commit")" > "$RUNNER_TEMP/table.md" || status=$?
+          {
+            cat "$RUNNER_TEMP/table.md"
+            echo
+            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$builds/seconds" | sed 's/,/, /g'). The head is counted against the commit where it left the base's branch, not as merged: what the base gained since is in neither build. The description was read as it stood when this run started: a line added to it since is read by the next run a push starts, not by a rerun of this one."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"

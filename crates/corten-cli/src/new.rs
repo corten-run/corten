@@ -41,8 +41,13 @@ fn write_app(args: &[String]) -> Result<(PathBuf, String), String> {
         return Err(format!("{} exists and is not empty", dir.display()));
     }
     for (path, text) in FILES {
-        let text =
-            text.replace("{{name}}", &name).replace("{{crate}}", &name.replace('-', "_")).replace("{{corten}}", &dependency);
+        // `{{version}}`: the release of `corten` the Dockerfile's profiled build installs, by this
+        // command's number, as `{{corten}}` names the library's.
+        let text = text
+            .replace("{{name}}", &name)
+            .replace("{{crate}}", &name.replace('-', "_"))
+            .replace("{{corten}}", &dependency)
+            .replace("{{version}}", env!("CARGO_PKG_VERSION"));
         write(&dir.join(path), &text)?;
     }
     Ok((dir, name))
@@ -207,6 +212,25 @@ mod tests {
         assert!(!dockerfile.contains("{{"), "a placeholder is left in the Dockerfile:\n{dockerfile}");
         assert!(dockerfile.contains("id=shop-front-target,target=/src/target"), "{dockerfile}");
         assert!(dockerfile.contains("cargo build --release --locked"), "{dockerfile}");
+    }
+
+    #[test]
+    fn a_new_apps_dockerfile_installs_the_command_of_this_number_for_a_profiled_build() {
+        // The image's profiled build installs the release with this command's number, as the
+        // app's manifest names the library's, and says so where it refuses one without the
+        // option. A command built between releases has an earlier release's number, so its
+        // Dockerfile installs that release; the refusal is for one without `--profile-from`
+        // (0.2.0, which a command built before 0.3.0 wrote).
+        let dir = std::env::temp_dir().join(format!("corten-new-profiled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_app(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();
+        let dockerfile = std::fs::read_to_string(dir.join("Dockerfile")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let install = format!("cargo install corten-cli --version {} --locked --root /usr/local", env!("CARGO_PKG_VERSION"));
+        assert!(dockerfile.contains(&install), "{dockerfile}");
+        let refused = format!("corten-cli {} has no --profile-from", env!("CARGO_PKG_VERSION"));
+        assert!(dockerfile.contains(&refused), "{dockerfile}");
+        assert!(dockerfile.contains("corten build --locked --profile-from sh -- \"$PROFILE_FROM\""), "{dockerfile}");
     }
 
     #[test]

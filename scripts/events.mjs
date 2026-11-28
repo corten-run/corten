@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import * as ts from "typescript7/unstable/ast";
+import * as ts from "typescript/unstable/ast";
 import { parse } from "./typescript.mjs";
 
 const read = (/** @type {string} */ path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -16,7 +16,7 @@ const dom = read("crates/corten-macros/src/dom.rs");
 const markers = read("crates/corten/src/script.rs");
 
 /** lib.dom's event maps, read with TypeScript's parser: event name to interface. */
-const compilerRequire = createRequire(createRequire(import.meta.url).resolve("typescript7/package.json"));
+const compilerRequire = createRequire(createRequire(import.meta.url).resolve("typescript/package.json"));
 const platformPackage = compilerRequire.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`);
 const libDom = join(dirname(platformPackage), "lib", "lib.dom.d.ts");
 const file = parse(libDom, readFileSync(libDom, "utf8"), (source) => source);

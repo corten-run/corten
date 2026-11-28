@@ -7,7 +7,7 @@ import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { digest } from "./cloud-local.mjs";
 import { bootstrapMarker } from "./cloud-remote.mjs";
-import { setupEvidence, terminalSetupScript } from "./cloud-retirement.mjs";
+import { setupEvidence, terminalSetupScript, watcherDeadlineFailure } from "./cloud-retirement.mjs";
 
 const noNative = { inspect: async () => { throw new Error("no native campaign began"); } };
 function failedSetup(t, flags = {}, entries = metadata()) {
@@ -54,12 +54,48 @@ test("observed common bootstrap with a lost monitor honors the close embargo and
   assert.equal(await h.task(noNative).collect(), 3);
   assert.equal(h.calls.length, calls); assert.ok(!existsSync(join(h.local, "results.tgz")));
   t.mock.timers.setTime(close.recoverAfterMs);
+  await assert.rejects(h.task(noNative).collect(), /original monitor owner is still live or uncertain/);
+  assert.equal(h.calls.length, calls);
+  // The test process stood in for the launcher. Model its exit without removing either lock.
+  const pid = 2147483647, operation = join(h.local, "operation.lock"), launch = join(h.base, ".groups-launch.lock");
+  const operationBytes = JSON.stringify({ ...JSON.parse(readFileSync(operation)), pid });
+  const launchBytes = JSON.stringify({ ...JSON.parse(readFileSync(launch)), pid });
+  writeFileSync(operation, operationBytes); writeFileSync(launch, launchBytes);
   await assert.rejects(h.task(noNative).collect(), /sealed\/native entry cannot use pre-entry retirement/);
   const s = h.saved();
   assert.deepEqual(s.bootstrapReady, bootstrapReady); assert.equal(s.validation, undefined);
   assert.ok(s.archiveSha256 && s.evidenceSha256); assert.equal(s.retirement, undefined); assert.equal(s.deletionIntentAt, undefined);
-  assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+  assert.equal(readFileSync(operation, "utf8"), operationBytes); assert.equal(readFileSync(launch, "utf8"), launchBytes);
   assert.equal(h.deletes, 0);
+});
+// The drain proof is only for a pre-registration bootstrap. After registration the unsealed
+// fallback still refuses an archived watcher failure, with a stage and before any setup query.
+test("after registration an archived watcher deadline failure refuses before any setup query", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true }), fleet = firstFleet();
+  const path = join(h.temp, "fleet.json"); writeFileSync(path, JSON.stringify(fleet));
+  const task = h.task({ run(...args) {
+    const result = h.run(...args);
+    if (args[5]?.request?.seal) h.flags.completeMonitor(false);
+    return result;
+  } }, { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group: fleet.jobs[0].group, fleet: path });
+  await assert.rejects(task.launch(), error => error.controlTreeUncertain === true);
+  const { control, preBootstrapTerminal } = h.saved();
+  assert.equal(preBootstrapTerminal, undefined); assert.equal(control.monitor.phase, "invalid");
+  const first = control.ledger[0].request.invocation.id;
+  h.flags.active = false;
+  h.setArchive(archive([...metadata(), { name: "campaign/" }, { name: "control/" }, { name: `control/watch-failure-${first}.json`, body: watcherDeadlineFailure }]));
+  const close = JSON.parse(readFileSync(join(h.local, "monitor-local-closed.json")));
+  t.mock.timers.enable({ apis: ["Date"], now: close.recoverAfterMs });
+  await assert.rejects(h.task(noNative).collect(), /original monitor owner is still live or uncertain/);
+  const pid = 2147483647, operation = join(h.local, "operation.lock"), launch = join(h.base, ".groups-launch.lock");
+  writeFileSync(operation, JSON.stringify({ ...JSON.parse(readFileSync(operation)), pid }));
+  writeFileSync(launch, JSON.stringify({ ...JSON.parse(readFileSync(launch)), pid }));
+  const queries = () => h.calls.filter(([bin, ...a]) => bin === "ssh" && String(a.at(-1)).includes("CORTEN_FAILED_SETUP_HOST")).length;
+  await assert.rejects(h.task(noNative).collect(), { controllerStage: "setup-watcher-proof-missing" });
+  const s = h.saved();
+  assert.equal(queries(), 0); assert.equal(h.deletes, 0); assert.ok(s.archiveSha256 && s.evidenceSha256);
+  assert.equal(s.retirement, undefined); assert.equal(s.deletionIntentAt, undefined);
+  assert.equal(readFileSync(join(h.local, s.evidence, "control", `watch-failure-${first}.json`), "utf8"), watcherDeadlineFailure);
 });
 test("ordinary collect preserves failed-setup archive and retires only after separate terminal no-entry proof", async (t) => {
   const h = failedSetup(t);

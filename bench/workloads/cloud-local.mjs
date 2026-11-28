@@ -1,8 +1,8 @@
 // Physical, bounded local evidence. No provider or campaign execution here.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { constants, closeSync, createReadStream, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, opendirSync,
-  readSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { constants, closeSync, createReadStream, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, opendirSync,
+  readSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -16,6 +16,13 @@ export const { compressed: archiveLimit, content: expandedLimit, tar: tarLimit, 
 const depthLimit = 64, pathLimit = 4096, smallLimit = 16 * 1024 ** 2;
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const same = (a, b) => ["dev", "ino", "size", "mtimeNs", "ctimeNs", "nlink"].every((key) => a[key] === b[key]);
+const identity = (stat) => [stat.dev, stat.ino, stat.size, stat.mode, stat.nlink, stat.birthtimeNs, stat.mtimeNs, stat.ctimeNs].join(":");
+export function evidenceFileIdentity(path) {
+  physical(dirname(path));
+  const stat = lstatSync(path, { bigint: true });
+  assert.ok(stat.isFile() && stat.nlink === 1n, "physical handoff custody file required");
+  return identity(stat);
+}
 const bounded = (value, max) => { assert.ok(Number.isSafeInteger(value) && value >= 0 && value <= max, "evidence bound"); return value; };
 function bounds(input = {}) {
   const max = { compressed: archiveLimit, content: expandedLimit, tar: tarLimit, ...archivePathLimits };
@@ -80,9 +87,20 @@ export function regular(path, limit = smallLimit) {
 }
 export function fileHash(path, limit = archiveLimit) {
   bounded(limit, archiveLimit);
-  const file = opened(path, limit), hash = createHash("sha256");
-  try { chunks(file, (bytes) => hash.update(bytes)); return hash.digest("hex"); }
+  const file = opened(path, limit);
+  try { return openedHash(file); }
   finally { closeSync(file.fd); }
+}
+function openedHash(file) {
+  const hash = createHash("sha256");
+  chunks(file, (bytes) => hash.update(bytes)); return hash.digest("hex");
+}
+export async function withVerifiedArchive(path, expected, action) {
+  const file = opened(path, archiveLimit);
+  try {
+    assert.equal(openedHash(file), expected, "archive changed; preserve host");
+    return await action(file.unchanged);
+  } finally { closeSync(file.fd); }
 }
 export function syncDirectory(path) {
   if (process.platform === "win32") return;
@@ -92,6 +110,62 @@ export function durable(path, bytes) {
   physical(dirname(path)); const fd = openSync(path, "wx", 0o600);
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
   syncDirectory(dirname(path));
+}
+// A file published whole or not at all: written and synced under its own stage name in
+// the same directory, then hard-linked to its final name, which fails rather than
+// replacing an existing file. A stage is never trusted; a stage left by an interrupted
+// write is this function's own name, so the next write removes it first. A caller's
+// `beforePublish` runs after the stage is written and synced, immediately before the link.
+// The stage name is only a name: what this call wrote is the file it created, held open
+// by its own descriptor from creation until the link or refusal, so its inode cannot be
+// freed and reused by a replacement. The link is made only while the stage still names
+// that file and the file still holds the bytes written, and the stage is removed only
+// while it still names that file; a replacement or rewrite there is refused and left as
+// found. If `beforePublish` throws, nothing is published and the stage is removed only if
+// it is still the one this call wrote; a replaced stage is kept and the error says so.
+export const publicationStage = (path) => `${path}.stage`;
+export function discardPublicationStage(path) {
+  const stage = publicationStage(path);
+  if (!lstatSync(stage, { throwIfNoEntry: false })) return;
+  unlinkSync(stage); syncDirectory(dirname(path));
+}
+export function durableNew(path, bytes, beforePublish = () => {}) {
+  assert.ok(Buffer.byteLength(bytes) <= smallLimit, "bounded publication required");
+  physical(dirname(path)); discardPublicationStage(path);
+  const stage = publicationStage(path), sha256 = digest(bytes);
+  const fd = openSync(stage, "wx", 0o600);
+  try {
+    writeFileSync(fd, bytes); fsyncSync(fd); syncDirectory(dirname(path));
+    const written = fstatSync(fd, { bigint: true });
+    // Whether `name` still names the held file, and, with `content`, whether that file
+    // still holds exactly the bytes written.
+    const authored = (name, content = false) => {
+      const now = lstatSync(name, { bigint: true, throwIfNoEntry: false });
+      if (!now?.isFile() || now.dev !== written.dev || now.ino !== written.ino) return false;
+      if (!content) return true;
+      // The held descriptor is write-only, so the bytes are read through a second one,
+      // admitted only if it opened the same held file.
+      const read = openSync(name, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      try {
+        const open = fstatSync(read, { bigint: true });
+        if (open.dev !== written.dev || open.ino !== written.ino || open.size > BigInt(smallLimit)) return false;
+        const held = Buffer.alloc(Number(open.size)); if (held.length) readAt(read, held, 0);
+        return digest(held) === sha256;
+      } finally { closeSync(read); }
+    };
+    try { beforePublish(); } catch (error) {
+      if (authored(stage)) discardPublicationStage(path);
+      else if (error && typeof error === "object") {
+        try { error.message = `${error.message}; the publication stage was replaced and is kept`; } catch {}
+      }
+      throw error;
+    }
+    assert.ok(authored(stage, true), "publication stage replaced before its link; nothing published, the replacement is kept");
+    linkSync(stage, path);
+    assert.ok(authored(path), "published file is not the stage this write made; preserve both");
+    assert.ok(authored(stage), "publication stage replaced after its link; the replacement is kept");
+    unlinkSync(stage); syncDirectory(dirname(path));
+  } finally { closeSync(fd); }
 }
 export function durableCopy(source, destination, expected) {
   const file = opened(source, archiveLimit), hash = createHash("sha256");
@@ -106,20 +180,30 @@ export function durableCopy(source, destination, expected) {
 
 // Compact sorted directory inventory: <=32 MiB name bytes + 4.2 MiB offsets.
 // opendir checks admission before retaining a name, unlike read-entire-directory.
-function walkTree(root, limits, selected, hashFiles) {
+function walkTree(root, limits, selected, hashFiles, trackIdentity = false, subtrees) {
   physical(root);
   const arena = Buffer.alloc(limits.nameBytes), offsets = new Uint32Array(limits.nodes), hash = createHash("sha256");
+  const metadata = trackIdentity ? createHash("sha256") : null;
   let used = 0, count = 1, size = 0, memberBytes = 0, tarBytes = 0;
   const nameAt = (i) => { const at = offsets[i]; return arena.subarray(at + 1, at + 1 + arena[at]); };
-  function visit(path, key, depth) {
+  function visit(path, key, depth, scopes) {
     assert.ok(depth <= depthLimit && key.length <= pathLimit && Buffer.byteLength(path) <= pathLimit, "evidence path limit");
     const member = key.replace(/^\//, "");
-    const stat = lstatSync(path);
+    const info = trackIdentity ? lstatSync(path, { bigint: true }) : null;
+    const stat = info ?? lstatSync(path), bytes = Number(stat.size);
+    const subtree = subtrees?.get(key);
+    if (subtree) {
+      assert.ok(stat.isDirectory(), "evidence subtree must be a directory");
+      subtree.seen = true;
+      scopes = [...(scopes ?? []), subtree];
+    }
     memberBytes += member.length + (key && stat.isDirectory() ? 1 : 0); assert.ok(memberBytes <= limits.memberBytes, "archive index member budget");
     assert.ok(!stat.isSymbolicLink(), "evidence link");
+    if (metadata) metadata.update(`${key}\0${identity(info)}\0`);
     if (key) tarBytes += 512 + (member.length + (stat.isDirectory() ? 1 : 0) > 100 ? 512 + Math.ceil((member.length + (stat.isDirectory() ? 1 : 0) + 1) / 512) * 512 : 0);
     if (stat.isDirectory()) {
       physical(path); hash.update(`d\0${key}\0`);
+      if (scopes) for (const scope of scopes) scope.hash.update(`d\0${key.slice(scope.key.length)}\0`);
       const start = count - 1; let end = start;
       const add = (name) => {
         assert.ok(portableEvidenceSegment(name) && name.length <= 255, "unsafe evidence component");
@@ -134,24 +218,54 @@ function walkTree(root, limits, selected, hashFiles) {
       }
       offsets.subarray(start, end).sort((a, b) => Buffer.compare(arena.subarray(a + 1, a + 1 + arena[a]), arena.subarray(b + 1, b + 1 + arena[b])));
       for (let i = start; i < end; i++) {
-        const name = nameAt(i).toString("ascii"); visit(join(path, name), `${key}/${name}`, depth + 1);
+        const name = nameAt(i).toString("ascii"); visit(join(path, name), `${key}/${name}`, depth + 1, scopes);
       }
     } else {
-      assert.ok(stat.isFile() && stat.nlink === 1, "evidence special file/hardlink");
-      size += stat.size; assert.ok(size <= limits.content, "evidence size limit");
-      tarBytes += Math.ceil(stat.size / 512) * 512;
-      hash.update(`f\0${key}\0${stat.size}\0`);
-      const file = opened(path, limits.content);
-      try {
-        assert.equal(file.size, stat.size, "evidence file changed");
-        if (hashFiles) chunks(file, (bytes) => hash.update(bytes)); else file.unchanged();
-      } finally { closeSync(file.fd); }
+      assert.ok(stat.isFile() && Number(stat.nlink) === 1, "evidence special file/hardlink");
+      size += bytes; assert.ok(size <= limits.content, "evidence size limit");
+      tarBytes += Math.ceil(bytes / 512) * 512;
+      if (!trackIdentity || hashFiles) {
+        hash.update(`f\0${key}\0${bytes}\0`);
+        if (scopes) for (const scope of scopes) scope.hash.update(`f\0${key.slice(scope.key.length)}\0${bytes}\0`);
+        const file = opened(path, limits.content);
+        try {
+          assert.equal(file.size, bytes, "evidence file changed");
+          if (info) assert.equal(identity(fstatSync(file.fd, { bigint: true })), identity(info), "evidence file changed");
+          if (hashFiles) chunks(file, (bytes) => {
+            hash.update(bytes);
+            if (scopes) for (const scope of scopes) scope.hash.update(bytes);
+          }); else file.unchanged();
+        } finally { closeSync(file.fd); }
+      }
     }
   }
   visit(root, "", 0);
-  return { sha256: hashFiles ? hash.digest("hex") : null, nodes: count, bytes: size, tarBytes: Math.ceil((tarBytes + 1024) / 10240) * 10240 };
+  return { sha256: hashFiles ? hash.digest("hex") : null, nodes: count, bytes: size,
+    tarBytes: Math.ceil((tarBytes + 1024) / 10240) * 10240, ...(metadata ? { metadataSha256: metadata.digest("hex") } : {}) };
 }
 export function treeHash(root, lowered = {}) { return walkTree(root, bounds(lowered), null, true).sha256; }
+// Verify the whole root while deriving the same framed hashes as separate
+// treeHash calls on these directories. Metadata rechecks do not read payloads.
+export function verifiedEvidenceTree(root, expected, message, paths = []) {
+  const subtrees = new Map(paths.map((path) => {
+    assert.ok(path.split("/").every(portableEvidenceSegment), "unsafe evidence subtree");
+    const key = "/" + path;
+    return [key, { key, hash: createHash("sha256"), seen: false }];
+  }));
+  assert.equal(subtrees.size, paths.length, "duplicate evidence subtree");
+  const limits = bounds(), verified = walkTree(root, limits, null, true, true, subtrees.size ? subtrees : undefined);
+  assert.equal(verified.sha256, expected, message);
+  const hashes = Object.fromEntries([...subtrees.values()].map(({ key, hash, seen }) => {
+    assert.ok(seen, "required evidence subtree missing");
+    return [key.slice(1), hash.digest("hex")];
+  }));
+  return { hashes, unchanged: () => assert.ok(walkTree(root, limits, null, false, true).metadataSha256 === verified.metadataSha256,
+    "local handoff custody changed: extraction") };
+}
+
+export function pinEvidenceTree(root, expected, message) {
+  return verifiedEvidenceTree(root, expected, message).unchanged;
+}
 export function checkPackage(root) {
   physical(root);
   const selected = ["run.log", "host.txt", "exit-code"];
@@ -180,9 +294,10 @@ const octal = (field) => {
 
 // Every byte, including body padding and both trailer blocks, contributes to the
 // spool receipt. File bodies are drained, not retained in the validated index.
-function scanTar(file, limits, destination, extract = false) {
+function scanTar(file, limits, destination, extract = false, compare = false) {
   const paths = extract ? null : archivePaths({ nodes: limits.nodes, nameBytes: limits.nameBytes, memberBytes: limits.memberBytes });
   const hash = createHash("sha256"), buffer = Buffer.alloc(ioBytes);
+  const savedBytes = compare ? Buffer.alloc(ioBytes) : null;
   let offset = 0, content = 0, longName = null, ended = false, headers = 0;
   const consume = (size, use = () => {}) => {
     assert.ok(offset + size <= file.size, "truncated tar body");
@@ -228,6 +343,21 @@ function scanTar(file, limits, destination, extract = false) {
         try { consume(size, (bytes) => writeAll(fd, bytes)); fsyncSync(fd); } finally { closeSync(fd); }
         syncDirectory(parent);
       }
+    } else if (compare) {
+      const target = join(destination, name.replace(/\/$/, ""));
+      assert.equal(realpathSync(target), target, "archive member path differs from saved extraction");
+      if (directory) physical(target);
+      else {
+        const saved = opened(target, size); let at = 0;
+        try {
+          assert.equal(saved.size, size, "archive member size differs from saved extraction");
+          consume(size, (part) => {
+            const expected = savedBytes.subarray(0, part.length); readAt(saved.fd, expected, at); at += part.length;
+            assert.ok(expected.equals(part), "archive member differs from saved extraction");
+          });
+          saved.unchanged();
+        } finally { closeSync(saved.fd); }
+      }
     } else consume(size);
     consume(padding, zero);
   }
@@ -235,13 +365,13 @@ function scanTar(file, limits, destination, extract = false) {
   file.unchanged(); return { ...paths?.finish(), bytes: content, sha256: hash.digest("hex") };
 }
 
-async function spooled(input, expected, lowered, destination, extract) {
+async function spooled(input, expected, lowered, destination, extract, compare = false) {
   const limits = bounds(lowered), source = typeof input === "string" ? opened(input, limits.compressed) : null;
   let scratch, scratchIdentity, spoolParent, fd;
   try {
     // Buffer input is retained only for small local fixtures. Production uses a physical file.
     if (!source) assert.ok(Buffer.isBuffer(input) && input.length <= Math.min(limits.compressed, smallLimit), "compressed archive size limit");
-    spoolParent = source ? dirname(input) : realpathSync(tmpdir()); physical(spoolParent);
+    spoolParent = source && !compare ? dirname(input) : realpathSync(tmpdir()); physical(spoolParent);
     scratch = mkdtempSync(join(spoolParent, ".cloud-spool-")); physical(scratch); scratchIdentity = lstatSync(scratch, { bigint: true });
     const path = join(scratch, "archive.tar"); fd = openSync(path, "wx+", 0o600);
     const compressedHash = createHash("sha256"), tarHash = createHash("sha256"); let compressed = 0, expanded = 0;
@@ -267,8 +397,9 @@ async function spooled(input, expected, lowered, destination, extract) {
     const file = { fd, size: expanded, unchanged() {
       physical(scratch); assert.ok(same(before, fstatSync(fd, { bigint: true })) && same(before, lstatSync(path, { bigint: true })), "spool changed while reading");
     } };
-    const receipt = tarHash.digest("hex"), preflight = scanTar(file, limits, destination);
+    const receipt = tarHash.digest("hex"), preflight = scanTar(file, limits, destination, false, compare);
     assert.equal(preflight.sha256, receipt, "spool differs from decoded archive");
+    if (compare) assert.equal(walkTree(destination, limits, null, false).nodes, preflight.nodes, "saved extraction contains extra archive members");
     if (extract) {
       physical(destination); assert.deepEqual(readdirSync(destination), [], "fresh extraction required"); file.unchanged();
       assert.equal(scanTar(file, limits, destination, true).sha256, receipt, "extracted spool differs");
@@ -288,6 +419,10 @@ async function spooled(input, expected, lowered, destination, extract) {
   }
 }
 export async function archiveMembers(input, expected, lowered = {}) { return spooled(input, expected, lowered); }
+export async function verifyArchiveTree(input, destination, expected) {
+  physical(destination);
+  await spooled(input, expected, {}, destination, false, true);
+}
 export async function extractArchive(input, destination, expected, lowered = {}) {
   physical(destination); assert.deepEqual(readdirSync(destination), [], "fresh extraction required");
   return spooled(input, expected, lowered, destination, true);

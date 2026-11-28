@@ -36,6 +36,11 @@ test("valid close failure and actual deadline failure retain null, not zero", ()
       Object.assign(p.lifecycle.close, { startedAt: 30001, endedAt: 30003 });
     } else p.lifecycle.close.observed = false;
     const r = replay(p); assert.equal(r.passed, false); assert.equal(r.timings, null);
+    assert.equal(r.closurePassed, timeout, "only an observed close proves physical closure");
+    if (timeout) {
+      p.lifecycle.close.observed = false;
+      assert.equal(replay(p).closurePassed, false, "a deadline cannot substitute for a close observation");
+    }
   }
 });
 test("configuration union includes overrides, flags and case variants without values", () => {

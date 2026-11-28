@@ -29,7 +29,7 @@ use std::{
     convert::Infallible,
     pin::{pin, Pin},
     sync::{
-        atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering},
         Arc,
     },
     task::{Context, Poll},
@@ -114,6 +114,13 @@ struct Inner {
     callers: AtomicU64,
     /// The app's error page is answering it.
     error_page: AtomicBool,
+    /// Something negotiated the request's locale from its `Accept-Language` (`req.t()`,
+    /// `req.lang()`), so the answer's `Vary` names the header (`crate::page::vary_on_language`).
+    asked_language: AtomicBool,
+    /// For a request that may change what its path shows, in an app that keeps pages: which of
+    /// the store's counts of writes is its path's, plus one, or [`WROTE_EARLY`] for one that
+    /// found no counts (`crate::kept`).
+    write: AtomicUsize,
     /// Its answer is `Public`, the same for everyone: written as for a visitor whose zone is not
     /// known, its live part's fragments too.
     #[cfg(feature = "zones")]
@@ -154,6 +161,10 @@ struct Inner {
     /// any more would make every request's signal a larger allocation.
     late: AtomicU8,
 }
+
+/// In [`Signal`]'s `write`: a write that began before the app counted writes by path. No path
+/// has this count, of which there are far fewer.
+const WROTE_EARLY: usize = usize::MAX;
 
 /// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
 /// middleware makes with `Req` carries the head it was made with.
@@ -415,6 +426,8 @@ impl Signal {
         let handler = std::sync::Arc::downgrade(&awaiting);
         let task = tokio::spawn(async move {
             let _counted = counted;
+            // However the work ends, what it wrote is written by then.
+            let _wrote = Wrote(request.clone());
             // Passes on the request's abort, or shutdown's, then waits for `run` to end.
             let forward = async {
                 let reason = match &shutdown {
@@ -576,6 +589,60 @@ impl Signal {
         self.0.error_page.load(Ordering::Relaxed)
     }
 
+    /// The request's locale was negotiated from its `Accept-Language`: the answer's `Vary` names
+    /// the header, however late it was read (`crate::page::vary_on_language`).
+    pub(crate) fn ask_language(&self) {
+        self.0.asked_language.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn asked_language(&self) -> bool {
+        self.0.asked_language.load(Ordering::Relaxed)
+    }
+
+    /// The request may change what its path shows: `count` is where the pages the app keeps
+    /// count its path's writes.
+    pub(crate) fn writes(&self, count: usize) {
+        self.0.write.store(count + 1, Ordering::Relaxed);
+    }
+
+    /// The request may change what its path shows, and the app had no counts by path when it
+    /// began: it is counted with the other writes like it ([`crate::kept`]).
+    pub(crate) fn writes_early(&self) {
+        self.0.write.store(WROTE_EARLY, Ordering::Relaxed);
+    }
+
+    /// Whether the request is counted as a write ([`Signal::writes`], [`Signal::writes_early`]).
+    #[cfg(test)]
+    pub(crate) fn counts_a_write(&self) -> bool {
+        self.0.write.load(Ordering::Relaxed) != 0
+    }
+
+    /// How the request is counted as a write: by its path, with the writes that found no
+    /// counts, or not at all.
+    #[cfg(test)]
+    pub(crate) fn counted_as(&self) -> &'static str {
+        match self.0.write.load(Ordering::Relaxed) {
+            0 => "none",
+            WROTE_EARLY => "early",
+            _ => "path",
+        }
+    }
+
+    /// Work that outlived the request's handler has ended ([`Signal::finish`]): what it wrote
+    /// after the request was answered or dropped counts as a write to the request's path too,
+    /// in the way the request itself was counted.
+    fn wrote(&self) {
+        let write = self.0.write.load(Ordering::Relaxed);
+        let Some(count) = write.checked_sub(1) else { return };
+        if let Some(kept) = self.shared().and_then(|shared| shared.kept.as_ref()) {
+            if write == WROTE_EARLY {
+                kept.early();
+            } else {
+                kept.count(count);
+            }
+        }
+    }
+
     /// True when something read who is asking.
     pub(crate) fn is_personal(&self) -> bool {
         self.0.personal.load(Ordering::Relaxed)
@@ -613,6 +680,15 @@ impl<S: Send + Sync> FromRequestParts<S> for Signal {
 /// Dropped before the body ended (the handler's future or the body was dropped: the client went
 /// away), it aborts with [`Abort::Disconnected`].
 pub(crate) struct Watch(pub(crate) Signal);
+
+/// Held by a request's [`Signal::finish`] work until it ends, however it ends.
+struct Wrote(Signal);
+
+impl Drop for Wrote {
+    fn drop(&mut self) {
+        self.0.wrote();
+    }
+}
 
 impl Drop for Watch {
     fn drop(&mut self) {

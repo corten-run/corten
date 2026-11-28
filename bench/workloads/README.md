@@ -8,16 +8,23 @@ or remove Corten's features to manufacture parity.
 <!-- groups:start -->
 | Group | Popular challengers | Performance-oriented challengers | Required work |
 |---|---|---|---|
-| Catalog page (`catalog-page`) | ASP.NET Core, Express, FastAPI | axum + Maud, Drogon, Gin + templ | typed-record, escaped-fields-and-links, get-filter, request-time-source, no-output-cache |
-| JSON API (`json-api`) | ASP.NET Core, FastAPI, Express, Spring Boot | axum + Maud, Drogon, Gin + templ, ASP.NET Core Native AOT (JSON only) | typed-complete-schema, numeric-json, tested-errors, fetch-parse-reserialize, no-output-cache |
-| Localized marketplace (`localized-marketplace`) | Next.js (Pages Router), ASP.NET Core, Django | Topcoat, Leptos, Gin + templ, Drogon | complete-marketplace, request-time-localization, filter-sort, valid-invalid-forms, js-and-no-js, production-http |
-| Mixed production traffic (`mixed-production`) | ASP.NET Core, Spring Boot, Django, Express, FastAPI | Topcoat, Gin + templ, Drogon | localized-reads, numeric-json, listings, accepted-rejected-writes, write-readback, slow-upstream, production-http |
+| Catalog page (`catalog-page`) | ASP.NET Core, Express, FastAPI | axum + Maud, Drogon, Gin + templ, Proa | typed-record, escaped-fields-and-links, get-filter, request-time-source, no-output-cache |
+| JSON API (`json-api`) | ASP.NET Core, FastAPI, Express, Spring Boot | axum + Maud, Drogon, Gin + templ, ASP.NET Core Native AOT (JSON only), ntex | typed-complete-schema, numeric-json, tested-errors, fetch-parse-reserialize, no-output-cache |
+| Localized marketplace (`localized-marketplace`) | Next.js (Pages Router), ASP.NET Core, Django | Topcoat, Leptos, Gin + templ, Drogon | complete-marketplace, request-time-localization, filter-sort, valid-invalid-forms, js-and-no-js, bounded-production-http/v2 |
+| Mixed production traffic (`mixed-production`) | ASP.NET Core, Spring Boot, Django, Express, FastAPI | Topcoat, Gin + templ, Drogon | localized-reads, numeric-json, listings, accepted-rejected-writes, write-readback, slow-upstream, bounded-production-http/v2 |
 | Full-stack browser experience (`fullstack-browser`) | Next.js (Pages Router), Nuxt, React Router, Rails + Hotwire, Laravel + Livewire | SvelteKit, Astro, TanStack Start, Leptos | ssr, native-navigation, filter-sort, valid-invalid-forms, js-and-no-js, desktop-mobile, readiness-actions-bytes |
 | Client-heavy screens (`client-heavy`) | React, Vue | Solid, Svelte, Remix | equal-loaded-keyed-rows, dashboard-mutations, sort-filter-selection, no-operation-http, subscription-cleanup, final-dom |
 | Live delivery (`live-delivery`) | ASP.NET Core, Express, Phoenix, Rails + Hotwire | Gin + templ, Drogon, Leptos | equal-initial-state, ordered-visible-events, native-transport, bounded-slow-client, browser-correctness, cleanup |
 | Recoverable live application (`recoverable-live`) | Phoenix, Rails + Hotwire, Laravel + Livewire, ASP.NET Core | Leptos, Topcoat | equal-initial-state, disconnect, gap-detection, replay-or-resnapshot, no-duplicate-effects, final-keyed-state, bounded-slow-client, cleanup |
-| Resilience and hardening (`hardening`) | ASP.NET Core, Spring Boot, Next.js (Pages Router), Django, Express | Gin + templ, Drogon, Topcoat | equal-legitimate-traffic, declared-deployment-budget, slow-headers-bodies-readers, dependency-recovery, oversized-requests, useful-service, recovery |
+| Resilience and hardening (`hardening`) | ASP.NET Core, Spring Boot, Next.js (Pages Router), Django, Express | Gin + templ, Drogon, Topcoat | equal-legitimate-traffic, declared-deployment-budget, bounded-client-deadline, bounded-request-limit, dependency-recovery, useful-service, recovery |
 <!-- groups:end -->
+
+Proa is selected only for its compiled catalog page, and ntex only for its native
+JSON API. Neither selection implies a measured advantage or admits a tuned deployment.
+Do not add a localized Proa or browser port on the strength of an HTTP throughput
+ranking. The [optional JSON comparison](../json-api/README.md#optional-transport-comparison)
+reuses the fixture-backed app to measure body compression and connection reuse. It
+is not a tenth group or a new phase multiplied across the official matrix.
 
 ## Implementation status
 
@@ -56,6 +63,10 @@ Removing or retargeting it refuses remaining admission, even via the physical pa
 invocation's requested spelling still requires its own exact approval; consumed intents are
 never rewritten to repair path identity.
 
+For a partial round, use [independent group continuation](CLOUD.md#independent-group-continuation)
+to reference already verified group results and run only missing groups. Each
+result keeps its measured revision and evidence; the index is not a new fleet.
+
 The [client-heavy runner](../client-heavy/README.md) builds all selected native
 applications, observes their actual DOM and resources, and gates a separate
 measured journey on correctness. Its defaults are bounded local verification,
@@ -70,7 +81,14 @@ captures and validate its complete evidence before publishing comparative number
 
 The localized marketplace group is wired to the existing marketplace runner as an explicit
 `--group localized-marketplace` selection. Its exact-image feature qualification and complete
-browser/content gates remain mandatory. Candidates missing production parity stay in the
+browser/content gates remain mandatory. Timing has four cases: one page rotating through
+`en-US`, `fr-FR` and `de-DE`, and one locale-neutral JSON case, for each of fixture and API.
+Page throughput is for the mix, not for each locale. Parity still checks each locale separately
+in both sources, on desktop and mobile, with JavaScript on and off. The new group contract
+requires v6 results; the preceding bounded v5 contract retains its eight per-locale/JSON cases.
+Both the localized and mixed groups check ordinary,
+sequential HTTP requests before timing. Connection-flood resistance: not measured.
+Historical qualification does not admit an app to a new run. Candidates missing production parity stay in the
 report with their missing features and are not timed. The existing scheduled `production`
 selection and historical reservations are unchanged while native parity work is completed.
 
@@ -199,13 +217,11 @@ acknowledgements and owned-resource observations must come from the implementati
 from the reference-state helper. Browser execution, continuous peak instrumentation and
 complete native process/store inventories remain runner responsibilities.
 
-`hardening.mjs` validates `hardening-capture/v1` against a reviewed attack and legitimate
-traffic plan. Functional parity is a prerequisite, while missing defenses, refused
-connections, zero useful service, exhaustion and failure to recover stay visible as target
-outcomes. Broken injection, invalid controls, corrupt evidence and failed cleanup invalidate
-the apparatus instead. Direct and deployed-edge cases remain separate. Native process
-topologies may differ, but all required processes must be inventoried and charged within
-equivalent total budgets. Unavailable counters stay unavailable, never numeric zero.
+The [native hardening runner](../hardening/README.md) uses ordinary bounded HTTP requests
+to observe client deadlines, request limits and recovery after a private dependency delay.
+It keeps direct and deployed-edge deployments separate. A target that cannot serve a
+request stays in the results; an invalid control or missing evidence is not a target
+failure. Earlier pressure-workload captures are historical and cannot fill these cells.
 
 Run all shared contract checks with `npm run check:workloads`. None of these offline checks
 establishes build-time, instruction-count, browser-interactivity or load-test results.
@@ -246,6 +262,19 @@ editor/test-build/disk/core scaling and supported hardware instruction counts. S
 is retained as explicitly not implemented: no save-to-browser-reload harness exists yet.
 Each needs a workload-specific port or an explicit historical/unsupported/not-run label;
 grouping never removes it or invents new measurements. No new cadence is defined here.
+
+A group's published result commits its report and provenance, and a summary only if it fits
+and is approved for disclosure. The collected archive and other raw output stay outside the
+tree. Provenance records the original's SHA-256 (`archiveSha256`) and where it can be fetched.
+For an original that must stay in controlled custody, the
+[grouped results publication exception](../../CONTRIBUTING.md#benchmark-results) instead
+requires independent replay of that original in place, a custody reference, and a separate
+downloadable export with its own digest. Do not record the export as the original or use it to
+qualify a group. `npm run check` fails on a file
+under `bench/` with an archive suffix or over 256 KiB, in any commit of the pull request, unless
+the base's `scripts/bench-size.allow` lists it at that path and blob, or it is a dependency lock
+file at a path `LOCKS` in `scripts/bench-size.mjs` lists, beside its manifest; the
+[contributor guide](../../CONTRIBUTING.md#benchmark-results) has the full rule.
 
 Corten-only rendering/allocation/default-cost and TCP diagnostics remain separate from
 competitive rankings. The distributed listings-feed run and failover test remain separate,

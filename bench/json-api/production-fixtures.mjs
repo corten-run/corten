@@ -51,8 +51,9 @@ export function phaseFixture(phase, responses = ["ok", "ok", "ok"], offset = 0, 
 
 // `fault` makes one phase's native command time out as process.mjs reports it, saved as
 // run.mjs saves it. `cells` limits timing to "app/key" cells so multi-pass controls stay small.
-export async function productionFixture(folder, { failure, fault, passes = 1, cells } = {}) {
-  const f = result(["--duration", "1", "--warmup", "1", "--rate", "3"], { artifacts: new ByteStore() }), s = f.summary;
+// `loadCpu(stage)` sets the sampled k6 CPU percent per phase; without it every sample is 10.
+export async function productionFixture(folder, { failure, fault, passes = 1, cells, commit, placement, loadCpu = () => 10 } = {}) {
+  const f = result(["--duration", "1", "--warmup", "1", "--rate", "3"], { artifacts: new ByteStore(), commit, ...(placement ? { placement } : {}) }), s = f.summary;
   s.schema = timedSchema; s.producer = producerProvenance(); s.options.passes = passes;
   s.finishedAt = "2026-11-18T00:00:00Z";
   const { timingPlan } = await import("./contract.mjs"); s.timingPlan = timingPlan(s.options);
@@ -122,7 +123,7 @@ export async function productionFixture(folder, { failure, fault, passes = 1, ce
             },
             async copy(source, target) { writeFileSync(target, JSON.stringify(source.includes("summary") ? synthetic.summary : synthetic.clock)); },
             async counters() { const value = counter + counted++ * 100000; return Object.fromEntries((profile.source === "api" ? ["app", "upstream"] : ["app"]).map((r) => [r, value])); },
-            sample() { return { async stop() { return Object.fromEntries(["app", "upstream", "load"].map((r) => [r, [100, 800].map((t) => ({ t: synthetic.command.clock.startedAt + t, cpu: 10, mem: 8 }))])); } }; },
+            sample() { return { async stop() { return Object.fromEntries(["app", "upstream", "load"].map((r) => [r, [100, 800].map((t) => ({ t: synthetic.command.clock.startedAt + t, cpu: r === "load" ? loadCpu(stage) : 10, mem: 8 }))])); } }; },
             async observe() {
               const before = observed++ === 0, at = before ? synthetic.command.clock.startedAt - 10 : synthetic.command.clock.finishedAt + 10;
               const liveness = Object.fromEntries(Object.entries(infos).map(([role, info]) => [role, {

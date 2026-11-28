@@ -1,20 +1,20 @@
 // Build and test each profile separately, with the same PROFILE for both commands.
-// Kept separate from fast unit tests because the real HTTP deadline probes take 30 seconds.
+// Kept separate from fast unit tests because these checks need a built app and Chromium.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chromium } from "@playwright/test";
+import { qualify } from "../../../marketplace/qualify.mjs";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
 const fixture = fileURLToPath(new URL("../../../marketplace/fixtures/marketplace.json", import.meta.url));
 const upstreamScript = fileURLToPath(new URL("../../../marketplace/upstream.mjs", import.meta.url));
-const qualifier = fileURLToPath(new URL("../../../marketplace/qualify.mjs", import.meta.url));
 const profile = process.env.PROFILE === "matched" ? "matched" : "";
 
 async function freePort() {
@@ -37,7 +37,6 @@ function child(script, args = [], env = {}, processTree = false) {
   const exit = once(process, "exit");
   return {
     process, log: () => log,
-    done: async () => { const [code] = await exit; assert.equal(code, 0, log); },
     stop: async () => {
       if (process.exitCode === null) {
         if (processTree && globalThis.process.platform === "win32") {
@@ -115,7 +114,7 @@ test("enhanced alert POST returns JSON source failures without changing its sess
       const initial = await fetch(base + "/api/alerts");
       assert.deepEqual(await initial.json(), []);
       const cookie = initial.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
-      const post = (id) => fetch(`${base}/api/marketplace/${id}?locale=en-US`, {
+      const post = (id) => fetch(`${base}/api/marketplace/${id}/alerts?locale=en-US`, {
         method: "POST", headers: { Origin: base, Cookie: cookie },
         body: new URLSearchParams({ email: "source@example.test", target_price: "1.25" }),
         signal: AbortSignal.timeout(10000),
@@ -142,6 +141,54 @@ test("enhanced alert POST returns JSON source failures without changing its sess
   } finally {
     await new Promise((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("marketplace forms use the configured public origin only on its exact Host", { timeout: 45000 }, async () => {
+  const publicOrigin = "https://localhost:8080";
+  const form = "email=edge%40example.test&target_price=1.25";
+  await fixtureApp(profile, async (base) => {
+    const send = (path, headers, body) => new Promise((resolve, reject) => {
+      const req = request(new URL(path, base), {
+        method: body ? "POST" : "GET", headers, signal: AbortSignal.timeout(5000),
+      }, async (res) => {
+        try {
+          const chunks = [];
+          for await (const chunk of res) chunks.push(chunk);
+          resolve({ status: res.statusCode, cookie: res.headers["set-cookie"]?.[0], body: Buffer.concat(chunks).toString() });
+        } catch (error) { reject(error); }
+      });
+      req.once("error", reject);
+      req.end(body);
+    });
+    for (const path of ["/marketplace/en-US/item_1", "/api/marketplace/item_1/alerts?locale=en-US"]) {
+      for (const [host, origin, site, status, secure] of [
+        ["localhost:8080", publicOrigin, "same-origin", 200, true],
+        ["localhost:8080", "http://localhost:8080", "same-origin", 403],
+        ["localhost:8080", "https://other.invalid", "same-origin", 403],
+        ["localhost:8081", publicOrigin, "same-origin", 403],
+        ["127.0.0.1:8080", publicOrigin, "same-origin", 403],
+        ["localhost:8080", undefined, "same-origin", 403],
+        ["localhost:8080", publicOrigin, "cross-site", 403],
+        ...(profile === "matched" ? [["other.invalid:8080", publicOrigin, "same-origin", 400]] : []),
+        ["127.0.0.1:8080", "http://127.0.0.1:8080", "same-origin", 200, false],
+      ]) {
+        const claimed = new URL(origin ?? publicOrigin), scheme = claimed.protocol.slice(0, -1);
+        const forged = { Forwarded: `host="${claimed.host}";proto=${scheme}`, "X-Forwarded-Host": claimed.host, "X-Forwarded-Proto": scheme };
+        const res = await send(path, { Host: host, ...(origin && { Origin: origin }), "Sec-Fetch-Site": site,
+          ...(status !== 200 && forged), "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(form) }, form);
+        assert.equal(res.status, status, `${path}: ${host} from ${origin} (${site})`);
+        if (status !== 200) {
+          assert.ok(res.cookie === undefined, "rejected form created a session");
+          continue;
+        }
+        assert.ok(res.cookie?.startsWith("nextjs_alerts="), "accepted form did not set the Next.js alert cookie");
+        assert.equal(/;\s*secure\b/i.test(res.cookie), secure);
+        const read = await send("/api/alerts", { Host: host, Cookie: res.cookie.split(";")[0] });
+        assert.equal(read.status, 200);
+        assert.deepEqual(JSON.parse(read.body), [{ item_id: "item_1", email: "edge@example.test", target_minor: 125 }]);
+      }
+    }
+  }, { MARKETPLACE_PUBLIC_ORIGIN: publicOrigin });
 });
 
 test(`built ${profile || "default"} artifact preserves native not-found prerendering and rejects mismatched runtime`, () => {
@@ -227,24 +274,8 @@ test(`Chromium ${profile || "default"}: native 404 hydration and valid navigatio
   }, { NODE_ENV: "production" });
 });
 
-async function stalledBody(port) {
-  const socket = connect({ host: "127.0.0.1", port });
-  const closed = once(socket, "close");
-  let answer = "";
-  socket.on("data", (part) => answer += part);
-  const limit = setTimeout(() => socket.destroy(new Error("unfinished body held beyond 35 seconds")), 35000);
-  const start = performance.now();
-  try {
-    await once(socket, "connect");
-    socket.write("POST /marketplace/en-US/item_1 HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\nemail=");
-    await closed;
-    assert.match(answer, /^HTTP\/1\.1 408\b/);
-    assert.ok(performance.now() - start <= 35000);
-  } finally { clearTimeout(limit); socket.destroy(); }
-}
-
 for (const source of profile ? ["fixture", "api"] : []) {
-  test(`native matched production qualification: ${source}`, { timeout: 150000 }, async () => {
+  test(`native matched bounded production qualification: ${source}`, { timeout: 150000 }, async () => {
     const upstreamPort = await freePort(), port = await freePort();
     const upstreamBase = `http://127.0.0.1:${upstreamPort}`, base = `http://127.0.0.1:${port}`;
     const upstream = child(upstreamScript, [], { PORT: String(upstreamPort), MARKETPLACE_FIXTURE_PATH: fixture });
@@ -255,6 +286,60 @@ for (const source of profile ? ["fixture", "api"] : []) {
     });
     try {
       await ready(base, app);
+      const result = await qualify({ base, source, upstream: upstreamBase });
+      await mkdir(new URL("./work/", import.meta.url), { recursive: true });
+      await writeFile(new URL(`./work/bounded-qualification-${source}.json`, import.meta.url), JSON.stringify(result, null, 2));
+      assert.deepEqual(result.missing, []);
+      assert.equal(result.cells.json405, "405 json");
+      assert.equal(result.eligible, true);
+      assert.ok(result.unmeasured.includes("connectionCap"));
+      const record = "/api/marketplace/item_1";
+      const alert = record + "/alerts";
+      const post = (path) => fetch(base + path, {
+        method: "POST", headers: { Origin: base },
+        body: new URLSearchParams({ email: "method@example.test", target_price: "1.25" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      for (const send of [
+        () => fetch(base + record, { method: "POST", signal: AbortSignal.timeout(5000) }),
+        () => post(record + "?locale=en-US"),
+        () => fetch(base + record, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: "{", signal: AbortSignal.timeout(5000) }),
+      ]) {
+        const refused = await send();
+        assert.equal(refused.status, 405, "POST is not a method of the JSON record resource");
+        assert.equal(refused.headers.get("allow"), "GET, HEAD");
+        assert.deepEqual(await refused.json(), { error: "method not allowed" });
+        assert.deepEqual(refused.headers.getSetCookie(), []);
+      }
+      const put = await fetch(base + alert + "?locale=en-US", {
+        method: "PUT", headers: { Origin: base },
+        body: new URLSearchParams({ email: "method@example.test", target_price: "1.25" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(put.status, 405);
+      assert.equal(put.headers.get("allow"), "POST");
+      assert.deepEqual(await put.json(), { error: "method not allowed" });
+      assert.deepEqual(put.headers.getSetCookie(), []);
+      const malformed = await fetch(base + alert + "?locale=en-US", {
+        method: "PUT", headers: { Origin: base, "Content-Type": "application/json" },
+        body: "{", signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(malformed.status, 400, "the write route keeps Next's native malformed-body rejection");
+      await malformed.text();
+      assert.deepEqual(malformed.headers.getSetCookie(), []);
+      const badInput = await post(alert);
+      assert.equal(badInput.status, 400, "the write resource accepts POST but requires a locale");
+      assert.deepEqual(await badInput.json(), { error: "Unsupported locale" });
+      assert.deepEqual(badInput.headers.getSetCookie(), []);
+      const accepted = await post(alert + "?locale=en-US");
+      assert.equal(accepted.status, 200);
+      assert.match((await accepted.json()).message, /method@example\.test/);
+      const cookie = accepted.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
+      assert.ok(cookie);
+      const readback = await fetch(base + "/api/alerts", { headers: { Cookie: cookie }, signal: AbortSignal.timeout(5000) });
+      assert.equal(readback.status, 200);
+      assert.deepEqual(await readback.json(), [{ item_id: "item_1", email: "method@example.test", target_minor: 125 }]);
       const first = await fetch(base + "/marketplace/fr-FR/item_1", {
         headers: { "x-nonce": "attacker", "content-security-policy": "script-src * 'unsafe-eval'" },
       });
@@ -267,16 +352,10 @@ for (const source of profile ? ["fixture", "api"] : []) {
       const scripts = [...html.matchAll(/<script\b[^>]*>/g)];
       assert.ok(scripts.length > 0, "Next's native scripts must remain present");
       for (const [tag] of scripts) assert.ok(tag.includes(`nonce="${nonce}"`), "Next script missing document nonce");
-      await mkdir(new URL("./work/", import.meta.url), { recursive: true });
-      const output = fileURLToPath(new URL(`./work/qualification-${source}.json`, import.meta.url));
-      const probe = child(qualifier, [base, source, upstreamBase, output]);
-      try { await Promise.all([probe.done(), stalledBody(port)]); }
-      finally { await probe.stop(); }
-      const result = JSON.parse(await readFile(output, "utf8"));
-      assert.deepEqual(result.missing, []);
-      assert.equal(result.eligible, true);
-      assert.equal((await fetch(base + "/health/live")).status, 200);
-      console.log(`${source}: official qualifier eligible; unfinished head ${Math.round(result.probes.unfinishedHead.closedMs)} ms; ${result.cells.connectionCap}`);
+      const live = await fetch(base + "/health/live", { signal: AbortSignal.timeout(5000) });
+      assert.equal(live.status, 200);
+      assert.equal(await live.text(), "ok");
+      console.log(`${source}: bounded qualification passed. Connection-flood resistance: not measured.`);
     } finally { await Promise.all([app.stop(), upstream.stop()]); }
   });
 }

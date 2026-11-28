@@ -27,6 +27,11 @@ qualify measured native costs. Fresh v3 recovery measurements are required. They
 remain partial rounds, never full-group readiness.
 `evidence/native-recovery-timing-limit/` preserves the earlier failed Corten
 round without rewriting its identity or relaxing the 10-second gates.
+These saved captures stay where they are, listed in `scripts/bench-size.allow`. A new round's
+captures go to `results/<round>/` here, whose gzip files Git ignores (its `coverage.json` and
+`plan.json` stay visible): commit its summary and provenance, recording where a maintainer
+published the captures, so they can be fetched, and their SHA-256
+([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
 
 Explicit `--measure` revalidates all six successful saved native recovery journeys before
 measuring that app's actual 1/2/4-browser fan-out, visible frame latency and kernel CPU/memory.
@@ -35,3 +40,17 @@ timed. Default selection/profile behavior is unchanged. Historical v1 captures k
 original inventory and are not retroactively upgraded when new ports are registered.
 Verification reads retained failure/incomplete artifacts even if the current native
 profile is unavailable; coverage flags cannot hide or skip their raw files.
+
+To check Laravel's 2- and 4-client cells without reserving an official host, use a disposable
+local Linux setup with Docker and the pinned Playwright Chromium. Use a fresh round name:
+
+```sh
+node bench/recoverable-live/run.mjs laravel-fanout-local --apps laravel --profile native-feed --measure --build
+node bench/live/verify.mjs bench/recoverable-live/results/laravel-fanout-local
+```
+
+This runs all six Laravel correctness journeys before the unchanged 1/2/4-client sweep.
+Require both `laravel-fanout-2.json.gz` and `laravel-fanout-4.json.gz` to be measured and
+verified, not failure artifacts. On a publisher-lag refusal, read the optional
+[`publisherLag` diagnostic](../live/README.md#bounded-fan-out) from that cell. A Laravel-only
+round is partial; neither a pass nor a failure establishes what limited r108.

@@ -13,7 +13,7 @@ export const failure = (error) => ({ name: error.name, diagnosticSha256: sha256(
 export const clock = () => performance.now();
 const inside = (base, path) => { const r = relative(base, path); return r === "" || (!isAbsolute(r) && r !== ".." && !r.startsWith(`..${sep}`)); };
 
-async function regularBytes(absolute, limit, expectedLinks = 1n) {
+async function regularBytes(absolute, limit, expectedLinks = 1n, processImage) {
   const before = await lstat(absolute, { bigint: true });
   assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === expectedLinks, "linked-or-nonregular-source");
   assert.ok(before.size <= BigInt(limit), "evidence-file-limit");
@@ -22,6 +22,11 @@ async function regularBytes(absolute, limit, expectedLinks = 1n) {
   try {
     const stat = await handle.stat({ bigint: true });
     assert.ok(stat.dev === before.dev && stat.ino === before.ino && stat.size === before.size, "source-changed-during-read");
+    if (processImage) {
+      // Compare the descriptor we read with the pinned /proc image, not its pathname.
+      const image = await processImage.stat({ bigint: true });
+      assert.ok(stat.dev === image.dev && stat.ino === image.ino, "process-image-differs");
+    }
     const bytes = Buffer.alloc(Number(before.size));
     let offset = 0;
     while (offset < bytes.length) {
@@ -72,9 +77,10 @@ export class Evidence {
     await writeFile(join(this.out, path), json(value));
   }
   async blob(bytes, fileBytes = this.limits.fileBytes) {
+    assert.ok(bytes.length <= fileBytes, "evidence-byte-limit");
     const sha = sha256(bytes);
     if (!this.blobs.has(sha)) {
-      assert.ok(bytes.length <= fileBytes && this.bytes + bytes.length <= this.limits.bytes, "evidence-byte-limit");
+      assert.ok(this.bytes + bytes.length <= this.limits.bytes, "evidence-byte-limit");
       const path = join(this.out, "evidence/blobs", sha);
       await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes, { flag: "wx" });
       this.blobs.add(sha); this.bytes += bytes.length;
@@ -82,7 +88,7 @@ export class Evidence {
     }
     return { bytes: bytes.length, sha256: sha, blob: `evidence/blobs/${sha}` };
   }
-  async file(base, path, fileBytes = this.limits.fileBytes) {
+  async file(base, path, fileBytes = this.limits.fileBytes, processImage) {
     const absolute = resolve(base, path);
     assert.ok(inside(base, absolute), "source-path-escape");
     // Check every ancestor, not just the leaf: package roots can be junctions.
@@ -92,7 +98,7 @@ export class Evidence {
       const stat = await lstat(ancestor);
       assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), "linked-source-ancestor");
     }
-    return this.blob(await regularBytes(absolute, fileBytes), fileBytes);
+    return this.blob(await regularBytes(absolute, fileBytes, 1n, processImage), fileBytes);
   }
   git(args) {
     return execFileSync("git", args, { cwd: this.root, maxBuffer: 64 * 1024 ** 2, windowsHide: true,

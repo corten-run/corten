@@ -10,7 +10,9 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:https";
 
-export const edgeImage = "nginx:1.29.8-alpine";
+// nginx 1.31.10 since 2026-11-26; rounds before it ran 1.31.9 (from 2026-11-20) or 1.29.8 (a round's load step records the
+// image in edge.json; its browser step does not, and runs this checkout's), so compare edge numbers across those changes as a changed input.
+export const edgeImage = "nginx:1.31.10-alpine@sha256:7fc0fb4af7bf006aeb31aea88069976060f8f0a0a86b667126742cc17f4e31ae";
 /** Makes the edge's key and certificate (P-256) into the edge's volume before it starts. */
 export const edgeCertImage = "alpine/openssl@sha256:6821afa2476e11be343f29275f2ca24291720ff0a7148bd131fd8e314ff26d9e";
 export const edgeContainer = "fsw-edge";
@@ -36,7 +38,8 @@ export const edgeBound = (edgeCpuUsedPct, cores) => (edgeCpuUsedPct == null ? nu
  * keeping up to 1,024 idle connections to it for less than Corten's header timeout (as
  * docs/guide/deploy.md#nginx does, with more connections, since k6 holds 256). No access log, no
  * compression of its own (the apps compress), no cache.
- * @param {[string, { port: number }][]} apps @param {number} [workers]
+ * A deployment with a public authority passes it through instead of using the internal name.
+ * @param {[string, { port: number, publicAuthority?: string }][]} apps @param {number} [workers]
  */
 export const nginxConf = (apps, workers = edgeCores()) => [
   `worker_processes ${workers};`,
@@ -57,11 +60,14 @@ export const nginxConf = (apps, workers = edgeCores()) => [
     "    http2 on;",
     "    ssl_certificate /cert/cert.pem;",
     "    ssl_certificate_key /cert/key.pem;",
+    ...(app.publicAuthority ? [`    if ($http_host != "${app.publicAuthority}") { return 421; }`] : []),
     "    location / {",
     `      proxy_pass http://${name};`,
     "      proxy_http_version 1.1;",
     '      proxy_set_header Connection "";',
-    `      proxy_set_header Host fsw-${name}:8080;`,
+    app.publicAuthority ? "      proxy_set_header Host $http_host;" : `      proxy_set_header Host fsw-${name}:8080;`,
+    ...(app.publicAuthority ? ["Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port"]
+      .map((header) => `      proxy_set_header ${header} "";`) : []),
     "    }",
     "  }",
   ]),

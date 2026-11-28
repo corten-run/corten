@@ -10,9 +10,71 @@ import { verifyResources, verifyResourceBounds, verifyResourceLifecycle } from "
 export const fanoutProfile = Object.freeze({ schema: "native-live-fanout-profile/v1", clients: [1, 2, 4],
   seed: 17, rowCount: 5, eventCount: 60, rate: 20, deadlineMs: 90000, maxScheduleLagMs: 500,
   limits: "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking" });
+export const fanoutTeardownRefusals = Object.freeze(["context-close", "fetch", "malformed", "unavailable", "timeout"]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Context close can finish before the native endpoint drops its readers.
+// A nonzero observation may settle; a failed or ambiguous observation cannot.
+export async function waitForFanoutDrain(base, maxCleanupMs, signal, deadline = performance.now() + maxCleanupMs) {
+  if (signal.aborted) return;
+  const remaining = Math.min(maxCleanupMs, Math.ceil(deadline - performance.now()));
+  if (remaining <= 0) return "timeout";
+  const timeout = AbortSignal.timeout(remaining);
+  const probe = AbortSignal.any([signal, timeout]);
+  const expired = () => timeout.aborted || performance.now() >= deadline;
+  const refuse = (reason) => signal.aborted ? undefined : expired() ? "timeout" : reason;
+  while (!signal.aborted) {
+    if (expired()) return "timeout";
+    try {
+      const response = await fetch(`${base}/parity/resources`, { signal: probe, redirect: "manual" });
+      if (expired() || response.status !== 200) {
+        void response.body?.cancel().catch(() => {});
+        return refuse("unavailable");
+      }
+      let counts;
+      try { counts = await response.json(); }
+      catch (error) {
+        return refuse(error instanceof SyntaxError ? "malformed" : "fetch");
+      }
+      if (signal.aborted) return;
+      if (expired()) return "timeout";
+      if (!counts || typeof counts !== "object" || Array.isArray(counts)
+        || ![counts.connections, counts.subscriptions].every((n) => Number.isSafeInteger(n) && n >= 0)) return "malformed";
+      if (counts.connections === 0 && counts.subscriptions === 0) return;
+    } catch {
+      return refuse("fetch");
+    }
+    await sleep(Math.max(0, Math.min(25, deadline - performance.now())));
+  }
+}
+
+async function confirmContextCloses(closes, deadline) {
+  let timer;
+  try {
+    const settled = await Promise.race([Promise.all(closes), new Promise((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, Math.ceil(deadline - performance.now())));
+    })]);
+    return settled?.every((ok) => ok) && performance.now() < deadline;
+  } finally { clearTimeout(timer); }
+}
+
 const sort = (rows) => [...rows].sort((a, b) => a.id.localeCompare(b.id));
 const pct = (values, p) => [...values].sort((a, b) => a - b)[Math.ceil(p * values.length) - 1];
+
+/** @typedef {{sequence: number, lagMs: number, previousSendMs: number | null}} PublisherLag */
+
+/** @returns {PublisherLag | undefined} */
+function publisherLagReceipt(sequence, scheduledAt, startedAt, previous) {
+  const lagMs = startedAt - scheduledAt;
+  if (!Number.isInteger(sequence) || sequence < 1 || sequence > fanoutProfile.eventCount
+      || !Number.isFinite(scheduledAt) || !Number.isFinite(startedAt)
+      || !(lagMs > fanoutProfile.maxScheduleLagMs && lagMs <= Number.MAX_SAFE_INTEGER)) return;
+  if (sequence === 1 && !previous) return { sequence, lagMs, previousSendMs: null };
+  if (previous?.seq !== sequence - 1 || !Number.isFinite(previous.startedAt)
+      || !Number.isFinite(previous.finishedAt) || previous.finishedAt > startedAt) return;
+  const previousSendMs = previous.finishedAt - previous.startedAt;
+  if (previousSendMs >= 0 && previousSendMs <= Number.MAX_SAFE_INTEGER) return { sequence, lagMs, previousSendMs };
+}
 
 export function kernelObservation(raw) {
   const [cpu, memory] = raw.split("MEMORY\n"), [current, peak] = (memory ?? "").trim().split(/\s+/).map(Number);
@@ -142,10 +204,21 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
   return summary;
 }
 
-export async function fanoutJourney(browser, base, settings, clients, port, kernelCounters) {
+export async function fanoutJourney(browser, base, settings, clients, { wire }, kernelCounters, recordRenderer, teardown = {}) {
   const workload = createLiveWorkload(fanoutProfile), contexts = [], readers = [];
   const host = { timeOrigin: performance.timeOrigin, base, requests: [] }, resourceObservations = {};
-  const deadline = setTimeout(() => { for (const c of contexts) c.close().catch(() => {}); }, fanoutProfile.deadlineMs);
+  /** @type {PublisherLag | undefined} */
+  let publisherLag;
+  let failed = false;
+  const closing = new Map();
+  const closeContexts = () => {
+    teardown.deadline ??= performance.now() + settings.maxCleanupMs;
+    return contexts.map((context) => {
+      if (!closing.has(context)) closing.set(context, Promise.resolve().then(() => context.close()).then(() => true, () => false));
+      return closing.get(context);
+    });
+  };
+  const deadline = setTimeout(closeContexts, fanoutProfile.deadlineMs);
   const api = async (name, data, phase = name) => {
     const startedAt = performance.now();
     const r = await fetch(`${base}/parity/${name}`, { ...(data === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }), signal: AbortSignal.timeout(10000) });
@@ -159,6 +232,7 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
     for (let i = 0; i < clients; i++) {
       const context = await browser.newContext(); contexts.push(context);
       const page = await context.newPage(); page.setDefaultTimeout(15000);
+      recordRenderer?.(true);
       const cdp = await context.newCDPSession(page); await cdp.send("Network.enable"); await cdp.send("Performance.enable");
       const identityReceipt = await cdp.send("Target.getTargetInfo");
       const identity = { receipt: identityReceipt, targetId: identityReceipt.targetInfo.targetId, contextId: identityReceipt.targetInfo.browserContextId };
@@ -201,7 +275,10 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
       const scheduledAt = start + (event.seq - 1) * 1000 / fanoutProfile.rate;
       while (performance.now() < scheduledAt) await sleep(Math.max(1, scheduledAt - performance.now()));
       const startedAt = performance.now();
-      assert.ok(startedAt - scheduledAt <= fanoutProfile.maxScheduleLagMs, "native publisher behind offered rate");
+      if (!(startedAt - scheduledAt <= fanoutProfile.maxScheduleLagMs)) {
+        publisherLag = publisherLagReceipt(event.seq, scheduledAt, startedAt, schedule.at(-1));
+        assert.fail("native publisher behind offered rate");
+      }
       await readers[0].page.evaluate((e) => window.liveApp.publish(e), event);
       schedule.push({ seq: event.seq, scheduledAt, startedAt, finishedAt: performance.now() });
     }
@@ -229,10 +306,18 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
     return { clients, configuration, workload, settings, resources: { attached, delivered, released }, resourceObservations,
       host, interval, kernel: { before, after }, browsers, schedule };
   } catch (error) {
-    error.evidence = { workload, settings, browsers: await Promise.all(readers.map(async (r) => ({
+    failed = true;
+    error.evidence = { workload, settings, ...(publisherLag ? { publisherLag } : {}), browsers: await Promise.all(readers.map(async (r) => ({
       network: r.network, failures: r.failures, records: await r.page.evaluate(() => window.liveApp?.records ?? []).catch(() => []),
       html: await captureHtml(r.page, wire).catch(() => ""),
     }))) };
     throw error;
-  } finally { clearTimeout(deadline); await Promise.all(contexts.map((c) => c.close())); }
+  } finally {
+    recordRenderer?.(false);
+    clearTimeout(deadline);
+    if (!await confirmContextCloses(closeContexts(), teardown.deadline)) {
+      teardown.failure = "context-close";
+      if (!failed) throw new Error("native fanout context closure unconfirmed");
+    }
+  }
 }

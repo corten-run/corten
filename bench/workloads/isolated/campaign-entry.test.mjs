@@ -23,10 +23,26 @@ test("fixed entry accepts one exact registry group, never app filters or overrid
   for (const tail of [["--group", "foreign"], ["--group", ""], ["--group"], ["--apps", "corten"],
     ["--group", "catalog-page", "--group", "json-api"], ["--group", "catalog-page", "--apps", "corten"],
     ["--group", "catalog-page", "--recipe", "native-defaults"], ["--load-layout", "c16-generator-v1"],
-    ["--group", "catalog-page", "--load-layout", "arbitrary"], ["--group", "json-api", "--load-layout", "c16-generator-v1"]])
+    ["--group", "catalog-page", "--load-layout", "arbitrary"], ["--group", "json-api", "--load-layout", "c16-generator-v1"],
+    ["--group", "json-api", "--placement", "nyc1"], ["--group", "json-api", "--placement", "dedicated-nyc1"],
+    ["--group", "json-api", "--placement", "dedicated-sfo3"], ["--group", "json-api", "--placement", "legacy"],
+    ["--group", "json-api", "--load-layout", "dedicated-lon1"], ["--load-layout", "json-c16-generator-v1"],
+    ...["catalog-page", "localized-marketplace", "mixed-production"].map((group) => ["--group", group, "--load-layout", "json-c16-generator-v1"]),
+    ["--group", "json-api", "--placement", "json-c16-generator-v1"], ["--group", "json-api", "--load-layout", ""]])
     assert.throws(() => parseCampaignArgs([...args, ...tail]));
+  for (const layout of ["json-c16-generator-v1", "json-c32-generator-v1"]) {
+    assert.deepEqual(parseCampaignArgs([...args, "--group", "json-api", "--load-layout", layout]),
+      { round: "r17", commit, stateRoot: "/bench/campaign", group: "json-api", loadLayout: layout });
+    assert.throws(() => parseCampaignArgs([...args, "--group", "catalog-page", "--load-layout", layout]), /unknown group placement/);
+    assert.throws(() => parseCampaignArgs([...args, "--group", "json-api", "--placement", layout]), /unknown group placement/);
+  }
   assert.deepEqual(parseCampaignArgs([...args, "--group", "catalog-page", "--load-layout", "c16-generator-v1"]),
     { round: "r17", commit, stateRoot: "/bench/campaign", group: "catalog-page", loadLayout: "c16-generator-v1" });
+  for (const placement of ["dedicated-sfo2", "dedicated-lon1", "dedicated-blr1"]) {
+    assert.deepEqual(parseCampaignArgs([...args, "--group", "json-api", "--placement", placement]),
+      { round: "r17", commit, stateRoot: "/bench/campaign", group: "json-api", placement });
+    assert.throws(() => parseCampaignArgs([...args, "--group", "catalog-page", "--placement", placement]), /unknown group placement/);
+  }
 });
 test("private inbox has bounded physical bytes, never follows producer hardlinks", () => {
   for (const group of ["json-api", "mixed-production"]) {
@@ -92,14 +108,18 @@ test("entry retains live handle through review wait and exits nonzero for partia
   assert.equal(process.listenerCount("SIGINT"), sigint); assert.equal(process.listenerCount("SIGTERM"), sigterm);
 });
 test("group entry chooses the group binder and retains the same audit and terminal exits", async (t) => {
-  let expectedGroup, state, checked, calls, delivered, savedStatus = "verified";
+  let expectedGroup, expectedMode, state, checked, calls, delivered, savedStatus = "verified";
   const handle = { id: "r17-0123456789abcdef", directory: null };
   t.mock.module("./control-admission.mjs", { namedExports: {
     bootstrapControl: () => ({ round: "r17", commit }), controlOperation: () => {}, waitControlAdmission: async (_binding, epoch) => ({ epoch }),
   } });
   t.mock.module("./campaign-contract.mjs", { exports: {
     bindCampaign() { assert.fail("group launch must not bind an all-group campaign"); },
-    bindGroupCampaign(input) { assert.deepEqual(input, { round: "r17", commit, group: expectedGroup }); return { ...input, order: [input.group] }; },
+    bindGroupCampaign(input, mode) {
+      assert.deepEqual(input, { round: "r17", commit, group: expectedGroup });
+      assert.equal(mode, expectedMode);
+      return { ...input, order: [input.group] };
+    },
   } });
   t.mock.module("./campaign-verify.mjs", { exports: { async validateCampaign(input) {
     assert.deepEqual(input, { folder: "/bench/campaign", round: "r17", commit }); checked = true;
@@ -135,16 +155,17 @@ test("group entry chooses the group binder and retains the same audit and termin
       stop() { assert.fail("completed entry does not stop or release the host"); },
     };
   } } });
-  for (const group of groupNames) {
-    expectedGroup = group; state = "active"; checked = false; calls = 0; delivered = false;
-    handle.directory = join(temporary, `entry-${group}`); mkdirSync(handle.directory);
+  for (const [group, placement] of [...groupNames.map((group) => [group]), ["json-api", "dedicated-lon1"], ["mixed-production", "dedicated-blr1"]]) {
+    expectedGroup = group; expectedMode = placement; state = "active"; checked = false; calls = 0; delivered = false;
+    handle.directory = join(temporary, `entry-${group}-${placement ?? "default"}`); mkdirSync(handle.directory);
     const sigint = process.listenerCount("SIGINT"), sigterm = process.listenerCount("SIGTERM");
-    assert.equal(await runCampaignEntry([...args, "--group", group]), 0); assert.equal(checked, true);
+    assert.equal(await runCampaignEntry([...args, "--group", group, ...(placement ? ["--placement", placement] : [])]), 0);
+    assert.equal(checked, true);
     assert.equal(calls, ["json-api", "mixed-production"].includes(group) ? 2 : 1);
     assert.equal(process.listenerCount("SIGINT"), sigint); assert.equal(process.listenerCount("SIGTERM"), sigterm);
   }
   for (const [status, code] of [["failed", 1], ["blocked", 1], ["invalid", 2]]) {
-    savedStatus = status; state = "active"; expectedGroup = "catalog-page";
+    savedStatus = status; state = "active"; expectedGroup = "catalog-page"; expectedMode = undefined;
     handle.directory = join(temporary, `entry-${status}`); mkdirSync(handle.directory);
     assert.equal(await runCampaignEntry([...args, "--group", expectedGroup]), code);
   }

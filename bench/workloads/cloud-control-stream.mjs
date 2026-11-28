@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, renameSync, writeSync } from "node:fs";
+import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
 import { durable, digest, fileHash, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { streamLimits, verifyApparatus } from "./isolated/control-stream.mjs";
@@ -70,6 +70,37 @@ function auditDirectory(path) {
   physical(path);
 }
 
+function* journalFrames(path, requireComplete = false, maxRowBytes = Infinity) {
+  const before = lstatSync(path); assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1);
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = fstatSync(fd); assert.ok(opened.ino === before.ino && opened.dev === before.dev);
+    const size = opened.size; assert.ok(size <= streamLimits.journalBytes);
+    const chunkBytes = 2 * streamLimits.frameBytes;
+    let complete = false, suffix = Buffer.alloc(0);
+    for (let end = size; end > 0;) {
+      const start = Math.max(0, end - chunkBytes), bytes = Buffer.alloc(end - start);
+      assert.equal(readSync(fd, bytes, 0, bytes.length, start), bytes.length);
+      if (requireComplete && end === size) assert.equal(bytes.at(-1), 10, "incomplete monitor journal");
+      const chunk = suffix.length ? Buffer.concat([bytes, suffix]) : bytes;
+      let right = chunk.length;
+      for (let left = chunk.lastIndexOf(10); left >= 0; left = left === 0 ? -1 : chunk.lastIndexOf(10, left - 1)) {
+        if (complete) {
+          assert.ok(right - left - 1 <= maxRowBytes, "oversized monitor journal record");
+          yield JSON.parse(chunk.toString("utf8", left + 1, right));
+        }
+        complete = true; right = left; // Ignore the possibly partial write at the snapshot's end.
+      }
+      if (start === 0 && complete) {
+        assert.ok(right <= maxRowBytes, "oversized monitor journal record");
+        yield JSON.parse(chunk.toString("utf8", 0, right));
+      }
+      assert.ok(right <= chunkBytes, "oversized monitor journal record");
+      suffix = chunk.subarray(0, right); end = start;
+    }
+  } finally { closeSync(fd); }
+}
+
 export function localStreamStatus(local) {
   physical(local);
   for (const kind of ["invalid", "terminal"]) {
@@ -78,16 +109,25 @@ export function localStreamStatus(local) {
   }
   const path = join(local, "monitor-journal.jsonl");
   if (!existsSync(path)) return { kind: "pending" };
-  const before = lstatSync(path); assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1);
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const opened = fstatSync(fd); assert.ok(opened.ino === before.ino && opened.dev === before.dev);
-    const size = opened.size; assert.ok(size <= streamLimits.journalBytes);
-    const length = Math.min(size, 131072), bytes = Buffer.alloc(length);
-    assert.equal(readSync(fd, bytes, 0, length, size - length), length);
-    const lines = bytes.toString("utf8").split("\n"); lines.pop(); if (size > length) lines.shift();
-    return { kind: "progress", frame: lines.length ? JSON.parse(lines.at(-1)) : null };
-  } finally { closeSync(fd); }
+  for (const frame of journalFrames(path)) return { kind: "progress", frame };
+  return { kind: "progress", frame: null };
+}
+
+export function livePeerLease(local, state) {
+  physical(local);
+  const ended = () => ["invalid", "terminal", "local-closed"].some((kind) =>
+    lstatSync(join(local, `monitor-${kind}.json`), { throwIfNoEntry: false }) !== undefined);
+  const path = join(local, "monitor-journal.jsonl"), { id } = state.control.monitor;
+  if (ended() || !existsSync(path)) return false;
+  for (const frame of journalFrames(path)) {
+    if (frame?.id !== id) return false;
+    // A complete terminal frame is decisive even before the close sidecar.
+    if (["progress", "audit-begin", "audit-end", "delivery-sealed"].includes(frame.kind)) continue;
+    if (frame.kind !== "peer-lease" || !Number.isSafeInteger(frame.atMs)) return false;
+    const age = Date.now() - frame.atMs;
+    return age >= 0 && age < streamLimits.leaseMs && monitorRegistration(local, state).host.hostname === state.name && !ended();
+  }
+  return false;
 }
 
 export function streamRecoveryReady(local, monitor) {
@@ -104,13 +144,88 @@ export function streamRecoveryReady(local, monitor) {
   return Date.now() >= closed.recoverAfterMs;
 }
 
-export function queueStreamAudit(local, state, options, approvedDeliverySha256) {
-  assert.ok(state.control.monitor.phase === "live" && existsSync(join(local, "operation.lock")), "foreground monitor required");
-  assert.ok(existsSync(join(local, "audit-delivery.lock")), "exclusive audit publisher required");
-  monitorRegistration(local, state);
-  assert.equal(localStreamStatus(local).kind, "progress");
-  const bytes = regular(resolve(options.deliverAudit), streamLimits.deliveryBytes);
-  assert.equal(digest(bytes), approvedDeliverySha256, "locked audit delivery changed");
+function requireAcknowledgedStart(state) {
+  assert.ok(state.control.sealed.includes("bootstrap") && state.control.ledger.every(r => r.localTerminal));
+  const start = digest(`set -euo pipefail\nsystemctl start ${state.unit}\n`);
+  assert.ok(state.control.ledger.some(r => r.request.epoch === "bootstrap" && r.code === 0
+    && r.request.invocation.channel === "ssh" && r.request.invocation.requestSha256 === start), "acknowledged unit start required");
+}
+
+export function settledMonitor(local, state) {
+  const m = state.control.monitor, terminal = localStreamStatus(local);
+  assert.ok(m.phase === "closed" && terminal.kind === "terminal" || m.phase === "invalid" && terminal.kind === "invalid",
+    "saved monitor is not settled");
+  requireAcknowledgedStart(state);
+  assert.ok(streamRecoveryReady(local, m), "closed monitor lease required");
+  return { registration: monitorRegistration(local, state), terminal };
+}
+
+// The workstation stopped before writing a close marker, after an audit delivery.
+// This is local custody only. It does not say what happened on the guest.
+export function requireOrphanedAuditMonitor(local, state) {
+  requireAcknowledgedStart(state);
+  const { id, host } = monitorRegistration(local, state), { group, round } = state;
+  assert.ok(host.hostname === state.name, "monitor hostname differs");
+  const requireJournal = (value) => assert.ok(value, "monitor journal requires reconciliation");
+  const now = Date.now(), audit = [];
+  let registered = false, leaseNeedsEarlierActive = false, sequence = Infinity, leaseAt = now, lastLease;
+  // Journal records are read newest first. Raw audit parts are not journaled.
+  for (const frame of journalFrames(join(local, "monitor-journal.jsonl"), true, streamLimits.frameBytes)) {
+    requireJournal(!registered && frame?.id === id);
+    if (frame.kind === "peer-lease") {
+      requireJournal(Number.isSafeInteger(frame.atMs) && frame.atMs > 0 && frame.atMs <= now && frame.atMs <= leaseAt);
+      lastLease ??= frame.atMs; leaseAt = frame.atMs; leaseNeedsEarlierActive = true;
+      continue;
+    }
+    const { kind, payload } = frame;
+    requireJournal(frame.schema === "benchmark-control-frame/v1" && Number.isSafeInteger(frame.sequence)
+      && frame.sequence > 0 && frame.sequence < sequence && payload && typeof payload === "object" && !Array.isArray(payload));
+    sequence = frame.sequence;
+    if (kind === "registered") {
+      requireJournal(sequence === 1 && digest(JSON.stringify(payload)) === state.control.monitor.registrationSha256);
+      registered = true;
+    } else if (kind === "progress") {
+      requireJournal(payload.round === round);
+      if (payload.state === "active") leaseNeedsEarlierActive = false;
+    } else {
+      requireJournal(audit.length < 3 && kind === ["delivery-sealed", "audit-end", "audit-begin"][audit.length]
+        && payload.group === group && typeof payload.subjectSha256 === "string" && /^[a-f0-9]{64}$/.test(payload.subjectSha256));
+      audit.push(payload);
+    }
+  }
+  requireJournal(registered && !leaseNeedsEarlierActive && audit.length === 3);
+  assert.ok(lastLease && now - lastLease >= 2 * streamLimits.leaseMs, "expired peer lease required");
+  const [delivery, end, begin] = audit, { campaign, subjectSha256 } = begin;
+  requireJournal(typeof campaign === "string" && campaign.startsWith(round + "-") && /^[a-f0-9]{16}$/.test(campaign.slice(round.length + 1))
+    && delivery.campaign === campaign && [end, delivery].every((p) => p.subjectSha256 === subjectSha256));
+  const queued = regular(join(local, `monitor-delivery-${group}.json`), streamLimits.deliveryBytes);
+  assert.ok(delivery.bytes === queued.length && delivery.sha256 === digest(queued), "saved audit delivery differs");
+  try { checkedAuditDelivery(local, state, queued, { campaign, auditGroup: group, approveSubject: subjectSha256 }); }
+  catch { throw new Error("saved audit delivery differs"); }
+}
+
+// A stream can journal a terminal frame before SSH fails and revokes publication.
+export function requireUnfinishedJournal(path, monitorId) {
+  let registered = false;
+  for (const frame of journalFrames(path, true)) {
+    assert.ok(frame?.kind === "local-closed" || frame?.id === monitorId
+      && ["registered", "progress", "peer-lease"].includes(frame.kind), "monitor journal requires reconciliation");
+    if (frame.kind === "registered") registered = true;
+  }
+  assert.ok(registered, "monitor journal requires reconciliation");
+}
+
+export function sealedMonitor(local, state) {
+  assert.equal(state.control.monitor.phase, "closed");
+  const { registration, terminal } = settledMonitor(local, state);
+  const closed = JSON.parse(regular(join(local, "monitor-local-closed.json")));
+  assert.ok(closed.code === 0 && closed.signal === null);
+  assert.ok(terminal.kind === "terminal" && terminal.nativeTerminal === true && terminal.localClosed === true && terminal.remoteDrained === false);
+  assert.match(terminal.sealSha256, /^[a-f0-9]{64}$/);
+  return { registration, terminal };
+}
+
+function checkedAuditDelivery(local, state, bytes, options) {
   const intent = auditDelivery(bytes, options);
   if (state.group !== undefined) assert.equal(state.group, intent.group);
   const ready = JSON.parse(regular(join(local, "monitor-audit-" + intent.group + "-ready.json")));
@@ -123,18 +238,31 @@ export function queueStreamAudit(local, state, options, approvedDeliverySha256) 
     const wanted = expected.find((value) => value.app === receipt.identity.app && value.key === receipt.identity.key);
     assert.ok(wanted); assert.equal(deploymentSha256(receipt.identity), deploymentSha256(wanted));
   }
+  return intent;
+}
+
+export function queueStreamAudit(local, state, options, approvedDeliverySha256) {
+  assert.ok(state.control.monitor.phase === "live" && existsSync(join(local, "operation.lock")), "foreground monitor required");
+  assert.ok(existsSync(join(local, "audit-delivery.lock")), "exclusive audit publisher required");
+  monitorRegistration(local, state);
+  assert.equal(localStreamStatus(local).kind, "progress");
+  const bytes = regular(resolve(options.deliverAudit), streamLimits.deliveryBytes);
+  assert.equal(digest(bytes), approvedDeliverySha256, "locked audit delivery changed");
+  const intent = checkedAuditDelivery(local, state, bytes, options);
   assert.ok(!existsSync(join(local, "monitor-invalid.json")) && !existsSync(join(local, "monitor-terminal.json")));
   const target = join(local, "monitor-delivery-" + intent.group + ".json"), pending = target + ".pending";
   assert.equal(lstatSync(target, { throwIfNoEntry: false }), undefined, "audit delivery already queued; never repeat");
   durable(pending, bytes);
+  durable(target + ".approved-sha256", approvedDeliverySha256 + "\n");
   assert.ok(!existsSync(join(local, "monitor-invalid.json")) && !existsSync(join(local, "monitor-terminal.json")));
   renameSync(pending, target); syncDirectory(local);
 }
 
-export function openControlStream({ repo, argv, env, expected, local, launch = spawn, interrupted = () => false }) {
+export function openControlStream({ repo, argv, env, expected, local, launch = spawn, interrupted = () => false, peerLease = false }) {
   physical(local); assert.ok(!existsSync(join(local, "monitor-journal.jsonl")), "monitor cannot restart/adopt a stream");
   const fd = openSync(join(local, "monitor-journal.jsonl"), "wx", 0o600);
   let bytes = 0, sequence = 0, buffer = Buffer.alloc(0), registration, terminal, child, timer, file, audit, auditBytes = 0;
+  let nativeEntered = false, lastPeerLease = 0;
   let readyResolve, readyReject, doneResolve, doneReject, settled = false, closing = false, last = Date.now(), deadline = last + streamLimits.maximumMs;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   const done = new Promise((resolve, reject) => { doneResolve = resolve; doneReject = reject; });
@@ -186,7 +314,16 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
       if (kind === "challenge") {
         assert.match(payload.nonce, /^[a-f0-9]{32}$/); assert.ok(Number.isSafeInteger(payload.sequence) && payload.sequence > 0);
         send("renew", payload); last = Date.now();
-      } else if (kind === "progress") replaceProgress(frame);
+        // A fresh challenge from the existing stream, after native entry.
+        // This is local custody evidence, not a new remote probe or timing.
+        if (peerLease && nativeEntered && last - lastPeerLease >= streamLimits.challengeMs) {
+          append({ kind: "peer-lease", id: expected.id, atMs: last });
+          lastPeerLease = last;
+        }
+      } else if (kind === "progress") {
+        if (payload.state === "active") nativeEntered = true;
+        replaceProgress(frame);
+      }
       else if (kind === "audit-begin") {
         assert.equal(audit, undefined); assert.ok(["json-api", "mixed-production"].includes(payload.group));
         assert.match(payload.campaign, /^r[1-9]\d*-[a-f0-9]{16}$/); assert.match(payload.subjectSha256, /^[a-f0-9]{64}$/);
@@ -270,15 +407,23 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
         let at; while ((at = buffer.indexOf(10)) >= 0) { assert.ok(at <= streamLimits.frameBytes); accept(JSON.parse(buffer.subarray(0, at))); buffer = buffer.subarray(at + 1); }
       } catch { fail(); }
     });
-    let stderr = 0; child.stderr.on("data", (data) => { stderr += data.length; if (stderr > 8192) fail(); });
+    let stderr = Buffer.alloc(0), excess = false;
+    child.stderr.on("data", (data) => {
+      if (excess) return;
+      if (stderr.length + data.length > 8192) { excess = true; stderr = Buffer.alloc(0); fail(); }
+      else stderr = Buffer.concat([stderr, data]);
+    });
     child.once("close", (code, signal) => {
       const late = settled;
       clearInterval(timer); clearTimeout(timer); settled = true;
       try {
         if (file) { closeSync(file.fd); file = undefined; }
         const closedAtMs = Date.now();
+        const reported = Array.from(stderr.toString("latin1").matchAll(/^CORTEN_MONITOR_FAULT ([0-9a-f]{32}) ([1-9][0-9]{0,4})\n/gm));
+        const helperLine = code !== 0 && registration && reported.length === 1 && reported[0][1] === expected.id ? Number(reported[0][2]) : null;
         durable(join(local, "monitor-local-closed.json"), JSON.stringify({ id: expected.id, binding: expected.binding,
-          code, signal, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs }));
+          code, signal, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs,
+          ...(helperLine !== null ? { helperLine } : {}) }));
         if (late) return; // Uncertain result and closed journal stand; only add the actual local observation.
         if (!terminal || closing || code !== 0 || signal !== null || buffer.length) {
           revoke(); append({ kind: "local-closed", code, signal, remoteTerminal: false });
@@ -297,10 +442,14 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
         if (!delivery) for (const group of ["json-api", "mixed-production"]) {
           const path = join(local, `monitor-delivery-${group}.json`);
           if (!delivered.has(group) && existsSync(path)) {
-            const bytes = regular(path, streamLimits.deliveryBytes), value = JSON.parse(bytes), ready = JSON.parse(regular(join(local, `monitor-audit-${group}-ready.json`)));
+            const approval = path + ".approved-sha256", bytes = regular(path, streamLimits.deliveryBytes), sha256 = digest(bytes);
+            assert.ok(regular(approval, 65).toString("utf8") === sha256 + "\n", "queued audit differs from approval");
+            const value = JSON.parse(bytes), ready = JSON.parse(regular(join(local, `monitor-audit-${group}-ready.json`)));
             assert.equal(value.subjectSha256, ready.subjectSha256);
+            // Consume the one-shot marker before sending; sealed orphan recovery keeps the original file set.
+            unlinkSync(approval); syncDirectory(local);
             delivery = { group, bytes, offset: 0 }; delivered.add(group);
-            send("delivery-begin", { ...ready, sha256: digest(bytes), bytes: bytes.length }); break;
+            send("delivery-begin", { ...ready, sha256, bytes: bytes.length }); break;
           }
         }
         if (delivery) {

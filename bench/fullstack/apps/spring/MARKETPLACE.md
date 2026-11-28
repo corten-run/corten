@@ -60,6 +60,13 @@ signed 64-bit minor units are rejected. Missing/invalid inputs and missing recor
 do not append. Marketplace POST rejects cross-site Fetch Metadata or a different
 Origin using the servlet request's scheme and Host. This app has no Spring Security
 dependency; none is added or disabled. POST responses and readbacks are no-store.
+For the Hardening TLS edge only, `MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080`
+requires that exact Origin on marketplace form POSTs to the configured authority,
+including its port, even over plain HTTP upstream. It does not use forwarding
+headers. Other authorities keep the original check, including the direct
+`http://127.0.0.1:8080` preflight; the edge's Host check and the form's
+cross-site Fetch Metadata refusal are separate.
+
 The existing read-only pages, record JSON, full-page marketplace forms and legacy
 htmx enhancement remain unchanged.
 
@@ -199,3 +206,23 @@ are focused functional checks, not performance or whole-workload qualification.
 Caller abort while synchronous MVC is blocked still has no pre-response disconnect
 notification: the upstream may remain pending until the independent ten-second
 deadline. The required 500 ms caller-cancellation observation still fails.
+
+## Mixed-only WebFlux deployment
+
+`Dockerfile.mixed` builds a separate WebFlux/Netty application for the localized
+marketplace routes, record JSON and alert forms/readback. The upstream exchange and
+body read belong to the request subscription. The dedicated Mixed recipe selects it
+with `--build --profile matched --spring-deployment spring-webflux` and keeps
+Django on ASGI. The build, source audit and saved execution distinguish this
+image from MVC/Tomcat. Other recipes still use `Dockerfile` and MVC/Tomcat.
+The Mixed image has its own `HOSTS` allowlist, strict response headers,
+private dynamic responses, native gzip compression, and `/health/live`.
+
+From this directory, build the candidate with `docker build -f Dockerfile.mixed .`.
+Run `node --test mixed-http.test.mjs` with `SPRING_MIXED_IMAGE` set to its full
+`sha256:` image ID. The HTTP tests cover all three locales, with an upstream
+holding either headers or the rest of a partially sent body. A connected client
+must stay pending until release; disconnect must close the one unfinished
+upstream response within the Mixed cleanup window. The same test file runs the
+campaign's bounded production precheck on both sources. These are functional
+checks, not timing or whole-group evidence.

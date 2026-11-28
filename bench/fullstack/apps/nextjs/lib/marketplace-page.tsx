@@ -65,7 +65,7 @@ export function Marketplace({ record, locale, query, message = "" }: Marketplace
         setPending(true);
         const form = new FormData(event.currentTarget);
         try {
-          const response = await fetch("/api/marketplace/" + encodeURIComponent(record.id) + "?locale=" + locale, {
+          const response = await fetch("/api/marketplace/" + encodeURIComponent(record.id) + "/alerts?locale=" + locale, {
             method: "POST", body: new URLSearchParams({
               email: String(form.get("email") ?? ""), target_price: String(form.get("target_price") ?? ""),
             }),

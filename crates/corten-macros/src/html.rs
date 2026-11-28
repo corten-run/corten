@@ -93,6 +93,10 @@ const KEYWORDS: &[&str] = &[
 ];
 
 pub fn expand(input: TokenStream) -> TokenStream {
+    expand_with_loss(input, |_| {})
+}
+
+fn expand_with_loss(input: TokenStream, record_loss: impl FnOnce(&str)) -> TokenStream {
     let (inside, input) = inside_marker(input);
     // A view written as another view's prop renders inside it, so it borrows what it uses (see
     // `borrowing`); any other owns it, since it may be returned.
@@ -175,7 +179,22 @@ pub fn expand(input: TokenStream) -> TokenStream {
             // `corten::view::Patch`). A view with a part that cannot be one is written as before.
             let body = if could_patch(&nodes) {
                 let mut slots = Slots::default();
-                let shape = gen.top_nodes(&nodes, &mut slots);
+                let mut shape = gen.top_nodes(&nodes, &mut slots);
+                if let Some(why) = lost_if_whole(&nodes) {
+                    record_loss(&why);
+                    shape = q(
+                        "{
+                            struct __CortenLostIfWhole<S>(S);
+                            impl<S: ::corten::view::__private::PatchShape> ::corten::view::__private::PatchShape
+                                for __CortenLostIfWhole<S>
+                            {
+                                const CHECK_WHOLE: () = ::core::panic!(__A1);
+                            }
+                            __CortenLostIfWhole(__A0)
+                        }",
+                        &[shape, literal(&why)],
+                    );
+                }
                 let mut body = slots.lets;
                 body.extend(gen.finish());
                 body.extend(shape);
@@ -200,6 +219,32 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
         Err((span, message)) => compile_error(span, &message),
     }
+}
+
+/// Project the test fixture into Rust. The browser-vector test also renders the exact expansion
+/// that supplied the verdict to find its recorded parse.
+pub(super) fn whole_patch_cases(render: bool) -> TokenStream {
+    use crate::json::Value;
+    let Value::Array(cases) = crate::json::parse(include_str!("whole-patch-cases.json")).unwrap() else { unreachable!() };
+    let option = |text: Option<&str>| match text {
+        Some(text) => q("Some(__A0)", &[literal(text)]),
+        None => q("None", &[]),
+    };
+    let mut rows = TokenStream::new();
+    for case in cases {
+        let Value::Array(fields) = case else { unreachable!() };
+        let [Value::String(markup), expected] = fields.as_slice() else { unreachable!() };
+        let expected = match expected {
+            Value::String(text) => Some(text.as_str()),
+            Value::Null => None,
+            _ => unreachable!(),
+        };
+        let mut actual = None;
+        let view = expand_with_loss(markup.parse().expect("literal patch markup"), |why| actual = Some(why.to_owned()));
+        let rendered = if render { q("render_patch(__A0)", &[view]) } else { q("()", &[]) };
+        rows.extend(q("(__A0, __A1, __A2, __A3),", &[literal(markup), option(expected), option(actual.as_deref()), rendered]));
+    }
+    q("[__A0]", &[rows])
 }
 
 /// One or more `let`s and then one component, nothing else.
@@ -2148,14 +2193,16 @@ fn could_patch(nodes: &[Node]) -> bool {
 const TEMPLATE_HEAD: &[&str] =
     &["base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title"];
 
+/// The leading head tags that decide in Chromium and WebKit only (`DECIDING_HEAD` in the debug check).
+const DECIDING_HEAD: &[&str] = &["base", "basefont", "bgsound", "noframes", "title"];
+
 /// The start tags the "in template" insertion mode reads as a table's. The same list as
 /// `TABLE_PARTS` in `crates/corten/src/html.rs`, which a test there holds it to.
 const TABLE_PARTS: &[&str] = &["caption", "col", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"];
 
-/// What the first element at a view's top level (after `TEMPLATE_HEAD`'s) makes of the elements
-/// after it, for the shapes `check_patch_top` refuses.
+/// How the first deciding element at a view's top level makes the elements after it read.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum TopRead {
+enum TopRead<'a> {
     /// No element yet but head tags.
     Open,
     /// The first is a `<table>`: a table part after it is lost.
@@ -2166,9 +2213,17 @@ enum TopRead {
     /// the top level or in a later element, is lost, and so is a `<form>` there that holds an
     /// element, where an element HTML's wherever it lands is in or around it (`lost_after_part`).
     Part(usize),
-    /// The first is another element, or is not known (an expression, a component or a block may
-    /// write it): nothing after it is refused.
+    /// The whole patch begins with an element that selects body rules: later table parts are dropped.
+    Body(&'a str),
+    /// The first is unknown, or some markup since it may change how the rest is read.
     Unknown,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TopPlace {
+    Anywhere,
+    Whole,
+    WholeWithDecidingHead,
 }
 
 /// Where a refusal of `check_patch_top` sends the reader for why each shape is lost, and where.
@@ -2192,8 +2247,8 @@ const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/doc
 /// to the browsers' parses in `patch-parsing.json`. Every other shape the parse loses depends on
 /// what the patch began with or where the view is written, which a component's markup does not show
 /// (after a first `<tr>`, a `<p>` and a `<tr>` after it are both kept, and an `<svg>` keeps a
-/// `<form>` of fields after a `<tr>`), so it is left to the debug check in `Action::patch` and
-/// `corten::live`, which finds it when it is sent. Like every refusal of `html!`, each rests only
+/// `<form>` of fields after a `<tr>`). `lost_if_whole` can decide more when this view starts the
+/// patch; the debug check reads what is sent. Like every refusal of `html!`, each rests only
 /// on the markup between the two elements: an expression, a component, or a `<script>` or
 /// `<style>` whose text may change the parsing context (`writes_tags`) before the lost element's start tag (in the
 /// first element, between the two, or in a later element that holds the lost one, before it) may
@@ -2201,15 +2256,25 @@ const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/doc
 /// is refused and the debug check is left to find it. What a lost top-level element holds does
 /// not save it: the parse has lost it at its start tag.
 fn check_patch_top(nodes: &[Node]) -> Result<(), Error> {
-    match patch_top(nodes, TopRead::Open) {
+    match patch_top(nodes, TopRead::Open, TopPlace::Anywhere) {
         Ok(_) => Ok(()),
         Err((attrs, message)) => err(id_span(attrs), message),
     }
 }
 
+/// What a browser loses when this literal top level starts the patch. A view can still be drawn
+/// after other markup, so only a send boundary consumes this verdict.
+fn lost_if_whole(nodes: &[Node]) -> Option<String> {
+    patch_top(nodes, TopRead::Open, TopPlace::Whole)
+        .and_then(|_| patch_top(nodes, TopRead::Open, TopPlace::WholeWithDecidingHead))
+        .err()
+        .map(|(_, why)| why)
+}
+
 /// Reads `nodes` from `read`, returning what follows them reads as, or the attributes of the
 /// top-level element whose markup is lost (for its `id`'s span) and why.
-fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], String)> {
+fn patch_top<'a>(nodes: &'a [Node], mut read: TopRead<'a>, place: TopPlace) -> Result<TopRead<'a>, (&'a [Attr], String)> {
+    let whole = place != TopPlace::Anywhere;
     for node in nodes {
         match node {
             Node::Text(_) | Node::Markup(_) | Node::Let(_) => {}
@@ -2219,8 +2284,12 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
             // follows to an element the markup cannot name, and one with an expression or a
             // component in it to markup it does not show.
             Node::Block { bodies, .. } => {
+                // Only unconditional top-level elements provide the whole-patch proof.
+                if whole {
+                    return Ok(TopRead::Unknown);
+                }
                 for body in bodies {
-                    patch_top(body, read)?;
+                    patch_top(body, read, place)?;
                 }
                 if read == TopRead::Open || bodies.iter().any(|body| nesting::holds_unseen(body)) {
                     read = TopRead::Unknown;
@@ -2231,11 +2300,15 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                 // A `<script>` or `<style>` whose text may write tags is as unseen as what it holds.
                 let unseen = nesting::holds_unseen(std::slice::from_ref(node));
                 match read {
+                    TopRead::Open if place == TopPlace::WholeWithDecidingHead && is(DECIDING_HEAD) => {
+                        read = TopRead::Body(name);
+                    }
                     TopRead::Open if is(TEMPLATE_HEAD) => {}
                     TopRead::Open if is(&["table"]) => read = TopRead::Table,
                     TopRead::Open if is(&["col"]) => read = TopRead::Col,
                     TopRead::Open => match TABLE_PARTS.iter().position(|part| name.eq_ignore_ascii_case(part)) {
                         Some(part) => read = TopRead::Part(part),
+                        None if whole => read = TopRead::Body(name),
                         None => return Ok(TopRead::Unknown),
                     },
                     TopRead::Unknown => return Ok(TopRead::Unknown),
@@ -2246,6 +2319,17 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                                 "send the <{name}> inside the <table>, or in a patch of its own: a patch that begins with a <table> loses a <{name}> after it wherever it is written ({PARSE_REFUSALS})"
                             ),
                         ));
+                    }
+                    TopRead::Body(first) if is(TABLE_PARTS) => {
+                        let browsers = if DECIDING_HEAD.iter().any(|head| first.eq_ignore_ascii_case(head)) {
+                            " in Chromium and WebKit"
+                        } else {
+                            ""
+                        };
+                        return Err((attrs, whole_loss(name, first, &format!("is dropped{browsers}"))));
+                    }
+                    TopRead::Col if !is(&["col", "template"]) && whole => {
+                        return Err((attrs, whole_loss(name, "col", "is dropped")));
                     }
                     TopRead::Col if !is(&["col", "template"]) && breaks_out(name, attrs) => {
                         return Err((
@@ -2264,6 +2348,12 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                             ),
                         ));
                     }
+                    TopRead::Part(part) if whole && is(TABLE_PARTS) => {
+                        let first = TABLE_PARTS[part];
+                        if let Some(change) = table_part_change(first, name) {
+                            return Err((attrs, whole_loss(name, first, change)));
+                        }
+                    }
                     TopRead::Part(part) if !is(TABLE_PARTS) && !is(TEMPLATE_HEAD) => {
                         // The lost element is in this one, so what this one holds is between them.
                         if !unseen {
@@ -2273,7 +2363,7 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                             }
                         }
                     }
-                    TopRead::Table | TopRead::Col | TopRead::Part(_) => {}
+                    TopRead::Table | TopRead::Col | TopRead::Part(_) | TopRead::Body(_) => {}
                 }
                 // What an expression or a component in it writes may leave an element open.
                 if unseen {
@@ -2283,6 +2373,25 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
         }
     }
     Ok(read)
+}
+
+/// Changes to a later top-level table part in the table, table body or row insertion mode.
+fn table_part_change(first: &str, next: &str) -> Option<&'static str> {
+    let one_of = |names: &[&str]| names.iter().any(|name| next.eq_ignore_ascii_case(name));
+    let cell = one_of(&["td", "th"]);
+    match first {
+        "td" | "th" => (!cell).then_some("is dropped"),
+        "tr" if cell => Some("is put in a <tr> the browser adds"),
+        "tr" => (!one_of(&["tr"])).then_some("is dropped"),
+        _ if cell => Some("is put in a <tbody> and a <tr> the browser adds"),
+        _ if one_of(&["tr"]) => Some("is put in a <tbody> the browser adds"),
+        _ if one_of(&["col"]) => Some("is put in a <colgroup> the browser adds"),
+        _ => None,
+    }
+}
+
+fn whole_loss(name: &str, first: &str, change: &str) -> String {
+    format!("the <{name}> {change} when this whole patch begins with <{first}>; send the <{name}> in a patch of its own ({PARSE_REFUSALS})")
 }
 
 /// What a later top-level element loses after a first table part (`lost_after_part`).
@@ -3259,9 +3368,9 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 #[cfg(test)]
 mod tests {
     use super::{
-        breaks_out, foreign_breakout, local_path, parsing_within, patch_top, raw_text_boundary, reads_as_text, refused_path,
-        text_only_element, Attr, Node, Parsing, RawTextBoundary, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS,
-        TABLE_PARTS, TEMPLATE_HEAD, TEXT_ONLY,
+        breaks_out, foreign_breakout, local_path, lost_if_whole, parsing_within, patch_top, raw_text_boundary, reads_as_text,
+        refused_path, text_only_element, Attr, Node, Parsing, RawTextBoundary, TopPlace, TopRead, BREAKOUT, DECIDING_HEAD,
+        MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS, TABLE_PARTS, TEMPLATE_HEAD, TEXT_ONLY,
     };
     use proc_macro::TokenStream;
 
@@ -3486,7 +3595,44 @@ mod tests {
 
     /// Why `patch_top` refuses `nodes`, or `None`.
     fn lost(nodes: &[Node]) -> Option<String> {
-        patch_top(nodes, TopRead::Open).err().map(|(_, why)| why)
+        patch_top(nodes, TopRead::Open, TopPlace::Anywhere).err().map(|(_, why)| why)
+    }
+
+    #[test]
+    fn a_whole_patch_knows_which_literal_element_decides() {
+        let leaf = |name| el(name, vec![]);
+        for part in TABLE_PARTS {
+            let nodes = [leaf("p"), leaf(part)];
+            assert_eq!(lost(&nodes), None);
+            let why = lost_if_whole(&nodes).expect("lost in a whole patch");
+            assert!(why.contains(&format!("the <{part}> is dropped when this whole patch begins with <p>")), "{why}");
+        }
+        for head in TEMPLATE_HEAD {
+            let why = lost_if_whole(&[leaf(head), leaf("tr")]);
+            if DECIDING_HEAD.contains(head) {
+                let why = why.expect("lost in Chromium and WebKit");
+                assert!(
+                    why.contains(&format!(
+                        "the <tr> is dropped in Chromium and WebKit when this whole patch begins with <{head}>"
+                    )),
+                    "{why}"
+                );
+            } else {
+                assert_eq!(why, None, "{head}");
+            }
+        }
+        let unknown = || Node::Expr(TokenStream::new());
+        for nodes in [
+            vec![leaf("p"), leaf("table"), leaf("form")],
+            vec![unknown(), leaf("p"), leaf("tr")],
+            vec![leaf("p"), unknown(), leaf("tr")],
+            vec![el("p", vec![unknown()]), leaf("tr")],
+            vec![Node::Block { head: Vec::new(), bodies: vec![vec![leaf("tr")]], arms: false }, leaf("p"), leaf("tr")],
+        ] {
+            assert_eq!(lost_if_whole(&nodes), None);
+        }
+        // The last element has already been lost before any of its children are read.
+        assert!(lost_if_whole(&[leaf("p"), el("tr", vec![unknown()])]).is_some());
     }
 
     #[test]

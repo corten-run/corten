@@ -17,16 +17,21 @@ const CHANGED = "net::ERR_NETWORK_CHANGED";
 /** What Chromium logs for a resource aborted by `ERR_NETWORK_CHANGED`. */
 const ABORTED = `Failed to load resource: ${CHANGED}`;
 
+const WEBKIT_ROUTE_TIMEOUT = 5000;
+
 /**
  * Returns `browser`, every page it opens from now on (`newPage`, or `newContext` then
  * `newPage`) retrying `goto` and `reload` once on `ERR_NETWORK_CHANGED`, and the console
  * listeners of every page in its contexts (a popup too) not told of a resource that error aborted
- * (`quiet`).
+ * (`quiet`). The affected suites can also gate each new page's first Linux WebKit navigation
+ * (`gateInitialLoad`).
  * @template {import("@playwright/test").Browser} B
  * @param {B} browser
+ * @param {{ gateInitialWebKitLoad?: boolean }} [options]
  * @returns {B}
  */
-export function steady(browser) {
+export function steady(browser, { gateInitialWebKitLoad = false } = {}) {
+  const gate = gateInitialWebKitLoad && process.platform === "linux" && browser.browserType().name() === "webkit";
   const newContext = browser.newContext.bind(browser);
   // `browser.newPage` makes its context through `browser.newContext`, so this covers it too.
   browser.newContext = async (...args) => {
@@ -34,10 +39,72 @@ export function steady(browser) {
     context.on("page", quiet);
     const newPage = context.newPage.bind(context);
     // Playwright emits "page" before `newPage` returns; `quiet` here is in case it does not.
-    context.newPage = async () => quiet(retrying(await newPage()));
+    context.newPage = async () => {
+      const page = quiet(retrying(await newPage()));
+      return gate ? gateInitialLoad(page) : page;
+    };
     return context;
   };
   return browser;
+}
+
+/**
+ * In Linux WebKit a fast COOP response can start a process swap before the UI process handles the
+ * old WebProcess's provisional-start message; that late start cancels its own swap (#1712,
+ * WebKit bug 325840). Intercept the initial document request in the old process. Playwright only
+ * releases it after the UI process forwards the interception, behind the start on the same IPC
+ * connection. No response is replaced and no navigation retried. Restrict interception (which
+ * disables HTTP caching while installed) to the first load from each new page's about:blank.
+ * @param {import("@playwright/test").Page} page
+ */
+export function gateInitialLoad(page) {
+  const goto = page.goto.bind(page);
+  let first = true;
+  page.goto = async (url, options) => {
+    if (!first || page.url() !== "about:blank") return goto(url, options);
+    const target = URL.parse(url);
+    if (!target || !["http:", "https:"].includes(target.protocol)) return goto(url, options);
+    first = false;
+    target.hash = "";
+    const match = (/** @type {URL} */ request) => request.href === target.href;
+    // Let an existing page or context route handle this request as before, or let the browser
+    // send it if there is none.
+    const release = (/** @type {import("@playwright/test").Route} */ route) => route.fallback();
+    let navigated = false;
+    try {
+      await webKitRouteCommand("setup", page.route(match, release, { times: 1 }));
+      const response = await goto(url, options);
+      navigated = true;
+      return response;
+    } finally {
+      // Playwright can register the handler locally before setup is acknowledged. Try to remove
+      // it even after setup fails, but keep the setup or navigation error if cleanup fails too.
+      try {
+        if (!page.isClosed()) await webKitRouteCommand("cleanup", page.unroute(match, release));
+      } catch (error) {
+        if (navigated) throw error;
+      }
+    }
+  };
+  return page;
+}
+
+/**
+ * Playwright does not time out interception updates. Bound the wait without changing goto's
+ * timeout; this does not cancel the underlying command.
+ * @param {"setup" | "cleanup"} step
+ * @param {Promise<void>} command
+ */
+async function webKitRouteCommand(step, command) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  try {
+    await Promise.race([command, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`WebKit gate route ${step} timed out after ${WEBKIT_ROUTE_TIMEOUT} ms`)), WEBKIT_ROUTE_TIMEOUT);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

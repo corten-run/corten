@@ -34,6 +34,9 @@ metadata also lists 4.0.0-rc-7; it is not a stable release and is not selected.
 | `maven:3.10-eclipse-temurin-27` | `sha256:3175c44b207d6698aecb9bbb5bf285b5b4efcf7f567d6f65d88cd218276a6ab2` |
 | `eclipse-temurin:27-jre` | `sha256:05a57c9f4d6d8bf8d8c2213049ea816609672ffcc14463a9c83433a610703e10` |
 
+The Ruby and both Temurin digests above were replaced on 2026-11-23 by security releases of the
+same lines; see the [security re-pin](server-refresh.md#security-re-pin-2026-11-23).
+
 ## Scope and verification
 
 Only these six app subtrees and this note change. Native transports, form/security

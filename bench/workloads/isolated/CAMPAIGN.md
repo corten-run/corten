@@ -31,14 +31,28 @@ node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
 # The reviewed fleet reservation passes its named layout to the same entry:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page --load-layout c16-generator-v1
+# An independent json-api fleet passes its saved c-16 or c-32 layout the same way:
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --load-layout json-c16-generator-v1
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --load-layout json-c32-generator-v1
+# For a non-catalog group only at the placement authorized by the fleet:
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --placement dedicated-sfo2
 ```
+
+In new rounds the fleet can also pass `--placement dedicated-lon1` or
+`--placement dedicated-blr1`. The sfo3 command still has no placement flag.
+The catalog job keeps its separate `c16-generator-v1` layout.
 
 The argument order and root are fixed. No selection, recipe, command, validator, image,
 environment, output-path, retry or resume argument is accepted. The parent provisions a
 private, same-UID `/bench/campaign` outside a clean checkout, a Linux host with Node 24+,
-at least eight available CPUs (16 for the named catalog layout), Docker and the
-actual native build/browser dependencies. Only the catalog group accepts the named
-layout. Without it the existing CPU binding is unchanged. The parent separately
+at least eight available CPUs (16 for a c-16 layout, 32 for c-32), Docker and the
+actual native build/browser dependencies. Only the catalog group accepts
+`c16-generator-v1`. Only json-api accepts
+[`json-c16-generator-v1`](../CLOUD.md#json-api-c-16-placement-opt-in) and
+[`json-c32-generator-v1`](../CLOUD.md#json-api-c-32-placement-opt-in). Their
+bindings set `JSON_API_LOAD_LAYOUT` to the named value and pin the app to 1,
+the upstream to 2-3, and k6 to 4-15 or 4-23 respectively. Without a layout
+the existing CPU binding is unchanged. The parent separately
 establishes the reserved host identity, authorized operator launch, unit/cgroup
 ownership and exclusive fresh-host use. This code does not authenticate a cloud size or
 prove host exclusivity from a receipt. The trusted parent launching this fixed CLI is the
@@ -105,14 +119,27 @@ Campaign rN maps to catalog cN, JSON prepare j(2N), JSON timing j(2N+1), marketp
 mixed/browser/client/hardening wN and live/recoverable rN. N is 17..1000000000. Existing
 native output for any reserved round prevents launch; there is no semantic retry.
 
+Both live runners write to their fixed native result roots. Once the command's terminal
+lifetime is proved, the campaign transfers only that round's result tree into the external
+phase archive and seals its manifest before rechecking the complete source checkout. The
+same intake retains failed-app output. Other tracked or untracked changes still block
+finalization. Historical result paths, standalone commands and the archive layout are unchanged.
+
 `campaign-contract.mjs` retains the complete registry and hashes the actual nine source
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
-groups and new mixed-production-measure. Mixed adds --measure --profile matched as the
-native README specifies. The older mixed-measure remains the default-profile recipe,
-unchanged. Numeric defaults come from native parsers, not new CLI constants. Browser,
-client and hardening retain their declared native bounded production procedures; this is
-not a claim that their measurements or proof are available. All need merged-source review.
+groups and mixed-production-measure in the legacy full campaign. Dedicated Mixed
+campaigns use `mixed-production-asgi-webflux`: the same `--measure --profile matched`,
+plus `--django-deployment django-granian-asgi --spring-deployment spring-webflux`.
+The build and audit bind both deployments for both sources, without changing the
+measured workload or its gates. The earlier Django-only recipe remains
+`mixed-production-django-asgi`; replay uses the measured commit.
+The older mixed-measure remains the default-profile recipe,
+unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
+client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
+legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
+and hardening keep their bounded production procedures. No recipe name establishes
+measurement or host proof. All need merged-source review.
 
 ## Durable evidence
 
@@ -169,17 +196,45 @@ For example, native client v2 intentionally exits 2 after a positive diagnostic 
 that exact source-defined exit is distinguished from cancellation, a fixture error or an
 unknown nonzero exit. No validator injection or selected-app filtering is permitted.
 
-Status includes uncollectedNativeRoots. A terminal command's entire native tree is copied
-even when subsequent host cleanup/source observations fail. If terminal ownership or safe
-copy cannot be established, the original root remains explicitly uncollected: the parent
-must retain the host for inspection/terminal-safe collection, not delete it merely because
-the campaign logs or partial archive were saved.
+Status includes uncollectedNativeRoots. A terminal command's entire native tree is collected
+even when subsequent host cleanup/source observations fail. The live reservation records both
+the checkout-relative original and the campaign-relative transferDestination before any move.
+Both remain pending until the durable phase seal; an interrupted transfer may have bytes at
+either path but cannot qualify. A staged seal left by a write failure is not a journal event.
+If terminal ownership or safe collection cannot be established,
+the parent must retain the host for inspection/terminal-safe collection, not delete it merely
+because the campaign logs or partial archive were saved.
 
 Host observations retain boot/host, CPU/memory/pressure/cgroup information, PID start
 identities and Docker container/network boundaries before/after each group. A new persistent
 process/container/network or changed host halts sequencing. These conservative observations
 are not a resource peak measurement, an independent quiet-host audit, or proof of isolation.
 Actual native CPU quotas/cpusets must still pass the fixed native saved-evidence gate.
+
+The full-stack browser's timed roles are the application (CPU 1), upstream (CPUs 2-3)
+and Chromium with its Node driver (CPUs 4-7); none uses the SSH apparatus's CPU 0.
+The campaign pins the existing delegated command scope before starting the browser runner.
+The runner checks effective CPU placement before timing. Replay requires the sampled
+driver/Chromium cgroup, role-specific Docker limits, and corresponding running container
+cgroups in the timing windows. This proves separation for those roles, not reserved physical
+cores, host service placement, or qualification of the native browser matrix.
+
+Detach preview and its locked recheck generate the official plan from committed
+source. They use the same CPU-partition projection as stream open and replay.
+Client-heavy keeps its Node driver, Chromium, Rust compiler and loopback server in
+the delegated CPU 4-7 scope. Live delivery and recoverable live keep the existing
+host browser/driver (including publisher) on CPUs 4-7 and each sequential app
+container on CPU 1 at the existing one-CPU/1-GiB budget. Replay matches running app
+and browser identities within the retained work windows and checks observed
+processes' own effective sets, including child cgroups. It does not claim a trace
+of every short-lived process. Mixed production shares the throughput roles for its
+measured stage only; its separate functional capture has no pinning proof.
+
+The fixed hardening adapter replays the bounded native service and dependency-recovery
+results. The isolated recipe requires the bound CPU gate and its declared budgets and
+CPU sets. A complete result still requires the native matrix, exact build archives,
+effective CPU and process receipts, and clean terminal boundaries. Passing replay does
+not authorize launch or establish a throughput ranking. Connection-flood resistance: not measured.
 
 ## Kernel lifetime observations
 
@@ -189,10 +244,11 @@ and enabled on the empty service root. A compatible systemd layout uses
 `Delegate=cpu cpuset memory pids` and `DelegateSubgroup=supervisor`; the parent must verify
 that layout on its actual systemd/kernel. Core does not change parent controllers, quotas,
 cpusets or memory budgets and never moves the wrapper or an unrelated process. It fails
-closed when delegation/accounting is absent. This is not an approved new finite client
-budget or mandatory isolated CPU partition.
+closed when delegation/accounting is absent. Full-stack browser, client-heavy and
+both live commands require their bound child cpuset, without setting a new finite
+host-process CPU quota or memory budget.
 
-The fixed cloud bootstrap prepares Node 26, both root and bench/browser npm lockfile
+The fixed cloud bootstrap prepares Node 26, the root, bench and bench/browser npm lockfile
 installations, Playwright Chromium, the native runner's digest-pinned Node tool image,
 and the ordinary Rust generator toolchain. Native commands keep a sanitized fixed PATH
 including /root/.cargo/bin; inherited PATH, NODE_OPTIONS and credentials are not forwarded.
@@ -213,7 +269,9 @@ child: fixed native replay must independently prove their IDs, roles, limits and
 An unobserved escape or resource/identity gap cannot be cleared by a manifest or requested
 budget. Parent live source/unit/host ownership remains the trust boundary of these records.
 
-Core samples recursive cgroup files and live PID/start/executable identities at 100 ms.
+Core targets a 100 ms interval for recursive cgroup and live PID/start/executable
+reads. Fullstack Browser leaves at least 50 ms between the end of each periodic
+Docker census and the start of the next; a gap over one second still fails.
 It retains raw initial process observations content-addressed under processes/, references
 the independently re-read identities in each sample, and records raw CPU accounting,
 memory current/peak/events and effective controls. No environment or arbitrary command-line
@@ -224,6 +282,10 @@ setup deadline remains active until both the bootstrap and observer are ready. R
 initial/final populated=0 and empty recursive membership must agree with terminal flags.
 Observations add driver work; they are not a claim of zero observer overhead or a benchmark
 timing result. Source-bound observation code is part of the campaign's evidence conditions.
+The [storage FIFO](host-lifetime.md#ordered-asynchronous-storage) can write already queued
+sample-only frames together (up to 16 frames and 256 KiB), without waiting to fill a batch.
+Record frames stay separate. Each frame still counts toward the queue bounds until its
+append finishes, and the append uses the existing storage deadline.
 
 The fresh IPC-gated bootstrap's real executable is hashed before the initial empty-scope
 sample. For commands using deferred hashing, attachment independently pins the live
@@ -305,14 +367,26 @@ descriptors. Before/after descriptor identity must equal the original sampled id
 The helper must exit successfully within the existing 30-second bootstrap bound before
 finish returns or another command starts. Descriptor closure is unconditional. Unresolved,
 changed or unsealed hashes cannot qualify; `executables.json` binds the resolved digest
-to its sampled reference. Sample timestamps and the one-second gap gate are not rewritten
+to its sampled reference. When sealing fails, `terminal.json` distinguishes starting or
+running the helper, reading an inherited descriptor, rechecking its identity, and publishing
+the proof. An identity failure can name its sampled reference, not the executable path or
+arbitrary helper output. A ctime-only mismatch is still a failure, not proof of unlink.
+Sample timestamps and the one-second gap gate are not rewritten
 or relaxed. This post-sampling work is not benchmark timing and is not an OS authority
 claim by the saved JSON. The existing pre-gated bootstrap executable check is unchanged.
+
+For client-heavy, the campaign exclusively creates the native output's `.compiler` sibling
+and holds its directory descriptor. The gated builder checks that exact empty directory
+before using it as Cargo's fresh target. The campaign removes only its own target after
+descriptor sealing and terminal-empty cgroup cleanup, including a drained command whose
+native result or executable proof failed. An uncertain stop preserves the target. This
+scratch is outside the native and phase evidence trees. Standalone builds still exclusively
+create and remove their own target.
 
 `host-participant-linux.test.mjs` is a separate actual-kernel fixture, not a portable test
 or native-browser qualification. Its caller owns a fresh long-lived Node Docker container
 with one CPU and 1 GiB memory, using the native pinned image
-`node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
+`node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067`.
 The test only reads the original full ID; it does not create, stop or remove containers.
 It requires root-readable `/proc` and cgroup v2 in the Docker daemon's actual host PID
 and cgroup namespaces, plus the local Docker CLI/socket and Linux Node. Socket access
@@ -338,6 +412,77 @@ CI must exclude this file explicitly and mandatory Linux CI must select it expli
 These controls do not establish the full browser matrix, source authority, host exclusivity
 or campaign readiness. The v2 native adapter/producer integration remains a separate gate.
 
+## Post-command udev settle
+
+An authenticated monitored or offline-handoff campaign can take one additional host
+observation after official timing or untimed JSON preparation if the first-after
+inventory contains only new sleeping children of the same baseline `systemd-udevd`.
+Capture and replay use the same eligibility check: only the exact bound native
+invocation for the campaign's registered group, round and phase can carry a sealed
+clock. Fixture generators and helpers cannot carry one. The clock is optional;
+without it only the ordinary first-after boundary can prove cleanup.
+Live Delivery and Recoverable Live replay both censuses when a settled census
+is present. Both must match the committed phase seal and the verified lifetime;
+a supplied but invalid settlement cannot fall back to the first census.
+The last native command must have a verified sealed terminal lifetime, including
+proof that its accounting scope is empty, before the five-second wait begins. For
+official timing, each worker's Linux start ticks must place its birth strictly after
+the sealed terminal cutoff unless the following Live Delivery proof applies. For
+untimed JSON preparation, the same strict comparison uses the pre-phase census
+cutoff instead.
+
+Isolated measured Live Delivery can also settle a cohort born after measured
+work but before command exit. The successful native command records one workload
+end after every measured actor window and before the last browser and owned
+application are torn down. The phase seal binds that record to the command PID,
+round and commit. Each measured end also records both clocks on that boot. Replay
+orders the measurements, workload end and sealed terminal in each clock separately.
+Linux uptime and worker start ticks share the boot-time clock, including suspend;
+the monotonic clock excludes suspend and is never converted into boot-time ticks.
+A worker in the same 10 ms bucket as the workload end is ambiguous and is refused.
+Missing boot-time readings do not establish this proof. No baseline udev worker or
+child of that daemon may be present, and every worker in the first-after cohort must
+have been born strictly after the workload end tick. This does not establish the
+absence of transient workers outside that cohort. The ordinary post-terminal route does not require
+this evidence; historical rounds cannot use wall times to reconstruct it.
+
+Both uptime and the monotonic apparatus samples must support the wait. Cancellation
+keeps the first-after inventory and skips the second census. Exact cgroup, parent
+PID/start identity and matching executable path, device and inode are required, not
+just the worker name. On hosts where
+[systemd-udevd links to udevadm](https://github.com/systemd/systemd-stable/blob/v255.4/src/udev/meson.build),
+procfs may report `/usr/bin/udevadm` for the daemon and its workers. That path
+alone establishes neither role nor cleanup. Saved replay uses the measured checkout and requires cleanup
+proof before accepting JSON audit readiness. A surviving or replacement worker,
+uncertain timing or ownership, a new login or benchmark process, or a changed Docker
+baseline still stops sequencing. This does not alter a measured window, prove the
+host was quiet, or qualify historical evidence that lacks the proof.
+
+An [offline single-group handoff](../CLOUD.md#offline-handoff) writes execution
+version 6. It uses the registered bootstrap and audit epochs without a stream.
+Each phase seal includes the guest SSH fence readbacks before and after work;
+replay requires the exact policy with zero excess/non-SYN hits, monotonic counts
+for rate-bounded pre-login SYNs, and the ordinary lifetimes, workload evidence and
+audit gates. Replay reports the packet and byte deltas by sealed phase in
+`offlineIngress`. Untimed preparation permits bounded denied SYNs; official timing
+requires zero throughout the fenced phase. The fence closes after any post-terminal
+udev settle wait and second census, so a SYN denied after native command exit can
+still disqualify the phase. Keep probes stopped throughout the fenced phase. The
+measured workload window is unchanged. A valid archive with denied SYNs in the
+timing phase stays replayable but cannot supply a comparison. The udev settle
+checks use monotonic bookends taken on that boot, not workstation timestamps.
+For a finished archive the replay result can bind the boot, hostname, ownership
+token and exact bootstrap seal ledger to the collector's reservation. That
+binding is not a whole-host terminal observation or permission to destroy the host.
+
+An offline JSON or mixed audit wait with no delivery or audit admission can
+seal a terminal failure after 24 hours. Replay matches the expired subject
+and bootstrap seal, requires JSON's sealed preparation or mixed's absent
+native phase, and reports `offlineAuditExpired` without timing results. The
+separate collector can use this archived failure only alongside fresh whole-host
+terminal and quiescence checks. Other unsealed or uncertain failures do not
+qualify for this path.
+
 ## Awaitable intrinsic API
 
 `await validateCampaign({folder,round,commit})` from campaign-verify.mjs accepts the extracted
@@ -352,6 +497,12 @@ selection shape, ordered groups, collectionIntegrity manifest-verified, commandL
 observed-terminal, empty uncollectedNativeRoots and blockers, archiveTreeSha256 and
 reservationSha256. Each group has group/outcome native-validated/bindingSha256/
 nativeManifestSha256 plus ordered appOutcomes entries {app,outcome,comparisonEligible}.
+For a verified dedicated client-heavy comparison only, eligible rows also
+carry a `comparison` with sample count, actual attempted order for each block,
+and per-action median/min/max milliseconds. Skips can leave order effects; the
+range is not a winner claim. Native replay ties all three measured blocks to
+the fixed recipe and host process windows. An unverified campaign exposes only
+dispositions, even if a group's comparison was sealed before the halt.
 Failed/unsupported apps remain comparison-ineligible. It has no qualified/controllerReady/
 deletion approval claim. The live controller separately establishes operator authorization,
 approved merged source, provider/unit ownership and exact unchanged archive-tree binding.
@@ -360,26 +511,28 @@ Native dispatcher imports are fixed: catalog verify.mjs validateSaved, JSON stri
 inspectJson/inspectEvidence, marketplace validate.mjs validateSaved (returns the replayed
 summary, not a status envelope), and the six fixed isolated adapters' inspectSaved. No
 caller supplies a verifier. Native assertions/diagnostics are reduced to fixed public codes.
-The current imported browser/client and live/recovery adapters still report genuine producer
-gaps. Mixed/hardening adapters and reviewed native proofs must be routed by their owners;
-their absence is not silently replaced by a summary-only pass. Full actual all-nine
-execution, renewed source/build audits and dependency proofs have not been performed by
-this checkpoint. The local delegated-Linux fixture exercises actual collector lifetimes,
-not a complete campaign or provider ownership.
+Missing or incomplete producer proof remains blocked; a summary alone is not a substitute
+for native replay. Full actual all-nine execution, renewed source/build audits and
+dependency proofs have not been performed by this checkpoint. The local delegated-Linux
+fixture exercises actual collector lifetimes, not a complete campaign or provider ownership.
 
 ## JSON build, audit wait, then timing
 
 JSON first runs the actual full native --build --check-only round. Exit 1 is accepted for
-staging only if all 36 raw functional cells replay, image/CPU/source/commit configuration
+staging only if every selected app's four raw functional cells replay, image/CPU/source/commit configuration
 matches, cleanup is clean, no timing occurred and exactly the missing independent audits
 explain the failures. Anything else is a retained failed preparation, not an invented audit.
-Actual Docker image inspect records for all 18 built IDs and canonical bound source bytes
+Actual Docker image inspect records for every app/payload build and canonical bound source bytes
 are retained. Source names (including native `[id]` and `+page` route names) are mapped
 to regular content-addressed `audit-sources/blobs/<sha256>` files by the source manifest;
 they are not unsafe archive path names. Environment values are not forwarded from Docker image configuration.
-`json-audit-subject.json` binds those images, 36 identities, source/commit and both native
+`json-audit-subject.json` binds those images, every app/case identity, source/commit and both native
 and source manifests. It explicitly has qualified:false and a review-needed blocker.
-The retained image list includes the 18 app images and both actual Node/k6 tool images.
+The retained image list includes both payload images for each app and both actual Node/k6 tool images.
+If Docker omits `Config.WorkingDir`, the image evidence omits `config.workingDir` in both
+the live audit subject and saved JSON. If Docker reports it, the subject binds the exact
+value, including an empty string. Omission alone does not block review or authorize timing.
+
 The fixed k6 image/version is prepared before functional checks, even in check-only mode;
 this runs no load. Staging independently inspects both tool image execution configurations.
 App and tool image-default entrypoint/command observations are compared with actual Docker
@@ -452,7 +605,9 @@ it does not accept either ordinal interchangeably. The plan and reservation must
 unchanged across replay, as must the phase's evidence tree.
 It checks the exact binding/invocation, campaign/phase/command, boot and time window, native
 manifest, positive terminal empty scope, observed browser renderer, inherited controls and
-empty Docker container boundaries. Core's phase/journal seals bind these retained bytes;
+empty Docker container boundaries. Before using either one or two censuses, the adapter
+replays the ordered campaign journal through the phase seal and checks that seal against
+the whole phase. The recorded command start and exit bind the lifetime it reads;
 the live controller separately establishes their execution origin and exclusive ownership.
 This composes actual host cleanup instead of requiring the native app to assert it again.
 An error-only failure with no retained target HTTP/control observation is incomplete, even

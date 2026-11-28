@@ -5,9 +5,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, isAbsolute } from "node:path";
-import { createExecutionEvidence, replayExecution } from "./execution-evidence.mjs";
+import { bindExecutionParticipant, createAttachedParticipant, createExecutionEvidence, participantSetupCause, replayExecution } from "./execution-evidence.mjs";
 import { immutableGit } from "./immutable-git.mjs";
 import { mountSourceHash } from "./execution-inputs.mjs";
+import { djangoAsgi, springWebflux } from "./source-audit.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const image = `sha256:${"a".repeat(64)}`, id = "b".repeat(64), netId = "c".repeat(64);
@@ -39,10 +41,31 @@ function replay(folder, s) {
   } });
 }
 async function vector(folder, change = () => {}, options = {}) {
-  const s = summary(), p = participant(s); change(p); let present = false, network = true;
+  const s = summary(), p = participant(s);
+  let inspectedImage = imageInfo;
+  if (options.djangoSource) {
+    const source = options.djangoSource;
+    s.options = { ...s.options, profile: "matched", build: true, djangoDeployment: djangoAsgi.deployment };
+    s.inventory = ["django"]; s.apps = { django: { image: { id: image } } };
+    p.Name = `/${s.runId}-django-${source}`;
+    p.Config.Cmd = [...djangoAsgi.command];
+    p.Config.Entrypoint = null;
+    p.Config.Env = ["PROFILE=matched", `MARKETPLACE_SOURCE=${source}`, `DJANGO_SETTINGS_MODULE=${djangoAsgi.settings}`];
+    inspectedImage = { ...imageInfo, Config: { Cmd: [...djangoAsgi.command], Entrypoint: null } };
+  }
+  if (options.springSource) {
+    const source = options.springSource;
+    s.options = { ...s.options, profile: "matched", build: true, springDeployment: springWebflux.deployment };
+    s.inventory = ["spring"]; s.apps = { spring: { image: { id: image } } };
+    p.Name = `/${s.runId}-spring-${source}`;
+    p.Config.Cmd = null; p.Config.Entrypoint = [...springWebflux.entrypoint];
+    p.Config.Env = ["PROFILE=matched", `MARKETPLACE_SOURCE=${source}`];
+    inspectedImage = { ...imageInfo, Config: { Cmd: null, Entrypoint: [...springWebflux.entrypoint] } };
+  }
+  change(p, inspectedImage); let present = false, network = true;
   const docker = async (args) => {
     if (args[0] === "inspect") return JSON.stringify([p]);
-    if (args[0] === "image" && args[1] === "inspect") return JSON.stringify([imageInfo]);
+    if (args[0] === "image" && args[1] === "inspect") return JSON.stringify([inspectedImage]);
     if (args[0] === "ps") {
       if (options.queryFailure) throw new Error("secret-canary");
       return args.some((arg) => arg.startsWith("label=")) ? "" : present ? id : "";
@@ -117,6 +140,106 @@ test("terminal lifecycle cannot be repeated or reordered to erase an OOM failure
   }
 });
 
+test("matched functional source and target bind create IDs before start, preserving setup flags", async (t) => {
+  for (const mode of ["ready", "start-failed", "malformed-id"]) await t.test(mode, () => temporary(async (folder) => {
+    const s = summary(), net = `${s.runId}-net`, app = participant(s), upstreamId = "e".repeat(64);
+    s.options.profile = "matched"; app.Config.Env = ["PROFILE=matched", "MARKETPLACE_SOURCE=fixture"];
+    const name = app.Name.slice(1), up = `${name}-upstream`;
+    const source = { ...structuredClone(app), Id: upstreamId, Name: "/" + up,
+      Config: { ...app.Config, Cmd: ["node", "bench/mixed-production/upstream.mjs"], Env: ["MIXED_CONTROL_TOKEN=private-canary"] },
+      HostConfig: { ...app.HostConfig, NanoCpus: 2e9, Memory: 512 * 2 ** 20 },
+      Mounts: [["/source", "/src", false], ["/dependencies", "/src/node_modules", false], ["/output", "/out", true]]
+        .map(([Source, Destination, RW]) => ({ Type: "bind", Source, Destination, RW })) };
+    const model = new Map([[up, source], [name, app]]), present = new Map(), started = [];
+    const config = ["--network", net, "-p", "127.0.0.1::8080"];
+    const runtime = new Map([
+      [up, [...config, "--cpus", "2", "--memory", "512m", "-v", "/source:/src:ro", "-v", "/dependencies:/src/node_modules:ro",
+        "-v", "/output:/out", "-w", "/src", "-e", "MIXED_CONTROL_TOKEN=private-canary", image, ...source.Config.Cmd]],
+      [name, [...config, "--cpus", "1", "--memory", "1g", "-v", "/output:/fixtures:ro", "-e", "PROFILE=matched", image]],
+    ]);
+    const createLabels = ["--label", `run.corten.mixed-production=${s.runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${s.runId}`];
+    const docker = async ([command, ...args]) => {
+      if (command === "create") {
+        const n = args[1], info = model.get(n);
+        assert.deepEqual(args, ["--name", n, ...createLabels, ...runtime.get(n)]);
+        present.set(info.Id, { ...info, State: { ...info.State, Status: "created", Running: false, Pid: 0, StartedAt: info.State.FinishedAt } });
+        return mode === "malformed-id" ? info.Id + "\nprivate-canary" : info.Id;
+      }
+      if (command === "start") {
+        const [id] = args, info = present.get(id); assert.equal(info?.State.Status, "created");
+        assert.deepEqual(read(folder, "execution/manifest.json").events.slice(-3)
+          .map((ref) => read(folder, ref.path).kind), ["container-create", "container-name", "participant-created"]);
+        started.push(id);
+        if (mode === "start-failed") throw Error("private-canary");
+        info.State = [...model.values()].find((p) => p.Id === id).State;
+        return id;
+      }
+      if (command === "inspect") return JSON.stringify([present.get(args.at(-1))]);
+      if (command === "image" && args[0] === "inspect") return JSON.stringify([imageInfo]);
+      if (command === "ps") {
+        const filter = args[args.indexOf("--filter") + 1];
+        return [...present.values()].filter((p) => [`name=^${p.Name}$`, `id=${p.Id}`, `label=run.corten.mixed-production=${s.runId}`].includes(filter))
+          .map((p) => p.Id).join("\n");
+      }
+      if (command === "rm") { assert.ok(present.delete(args.at(-1))); return args.at(-1); }
+      if (command === "network" && args[0] === "inspect") return JSON.stringify([{ Id: netId, Name: net, Labels: app.Config.Labels }]);
+      if (command === "network" && args[0] === "rm") return netId;
+      if (args[0] === "ls") return "";
+      assert.fail("unexpected setup command");
+    };
+    const collector = createExecutionEvidence({ folder, summary: s, docker });
+    await collector.networkCreated(net, netId);
+    const own = (n) => collector.own(n, ["run", "-d", ...runtime.get(n)]);
+    if (mode === "ready") {
+      await own(up); await own(name);
+      assert.deepEqual(collector.pendingNames(), [name, up]);
+      assert.deepEqual(started, [upstreamId, id]); await collector.remove(name); await collector.remove(up);
+    } else {
+      const cause = mode === "start-failed" ? "docker-start-command-failed" : "docker-create-id-unavailable";
+      await assert.rejects(own(up), (error) => participantSetupCause(error) === cause);
+      assert.deepEqual(started, mode === "start-failed" ? [upstreamId] : []);
+      if (mode === "start-failed") { await collector.remove(up); assert.equal(present.size, 0); }
+      else { await assert.rejects(collector.remove(up), /without original create ID/); assert.equal(present.size, 1); }
+    }
+    await collector.removeNetwork(net); await collector.seal();
+    const replayed = replay(folder, s);
+    assert.equal(replayed.cleanupComplete, mode !== "malformed-id");
+    if (mode !== "malformed-id") assert.equal(bindExecutionParticipant(replayed.participants, { role: "upstream", source: "fixture" },
+      { id: upstreamId, imageId: image, startedAt: mode === "ready" ? source.State.StartedAt : source.State.FinishedAt }), mode === "ready");
+    for (const ref of read(folder, "execution/manifest.json").events)
+      assert.ok(!readFileSync(join(folder, ref.path), "utf8").includes("private-canary"));
+  }));
+});
+
+test("attached capture and qualification cannot start a same-name replacement", async (t) => {
+  const s = summary(), base = `${s.runId}-corten-fixture`;
+  for (const [name, script] of [[base + "-capture", "worker"], [`${s.runId}-q-corten-fixture-worker`, "qualify-worker"]]) await t.test(script, async () => {
+    const replacement = "e".repeat(64), existing = new Set([id, replacement]), names = new Map([[name, id]]), calls = [];
+    const args = ["--network", `container:${base}`, image, "node", `bench/mixed-production/${script}.mjs`];
+    const start = await createAttachedParticipant({
+      async own(create, subject) {
+        assert.deepEqual(create, ["create", ...args]); assert.equal(subject, name); return id;
+      },
+      async docker(argv, options) {
+        calls.push([argv, options]);
+        const target = names.get(argv[2]) ?? argv[2];
+        assert.notEqual(target, replacement);
+        if (!existing.has(target)) throw Error("original absent");
+        return target;
+      },
+    }, name, args);
+    names.set(name, replacement);
+    const options = { timeout: 1000 };
+    assert.equal(await start(options), id, "bind the original even after the name moves");
+    existing.delete(id);
+    await assert.rejects(start(options), /original absent/);
+    assert.deepEqual(calls, [[["start", "-a", id], options], [["start", "-a", id], options]]);
+    await assert.rejects(createAttachedParticipant({
+      own: async () => name, docker: () => assert.fail("a name is not a create ID"),
+    }, name, args), /full create ID/);
+  });
+});
+
 test("cleanup retains original create acknowledgement ID across same-name replacement", () => temporary(async (folder) => {
   const s = summary(), original = participant(s), name = original.Name.slice(1), replacement = "e".repeat(64), removed = [];
   let replaced = false;
@@ -149,12 +272,73 @@ test("cleanup never substitutes a same-name ID for a missing create acknowledgem
     calls.push(args); if (args[0] === "ps") return id;
     assert.fail("no name-based inspection or removal without original acknowledgement");
   } });
-  await assert.rejects(collector.create(name, async () => { throw Error("synthetic-private-canary"); }));
+  await assert.rejects(collector.create(name, async () => { throw Error("synthetic-private-canary"); }),
+    (error) => participantSetupCause(error) === "docker-create-command-failed");
   await assert.rejects(collector.remove(name), /without original create ID/);
   assert.ok(calls.every((args) => args[0] === "ps"));
   for (const ref of read(folder, "execution/manifest.json").events)
     assert.equal(readFileSync(join(folder, ref.path), "utf8").includes("synthetic-private-canary"), false);
 }));
+
+test("partial cleanup skips unattempted roles, binds ownership and proves absence without touching peers", async (t) => {
+  for (const mode of ["clean", "foreign-owner", "unconfirmed-name", "still-present", "volume-present", "absence-query-fails"]) await t.test(mode,
+    () => temporary(async (folder) => {
+      const s = summary(), p = participant(s), name = p.Name.slice(1), worker = name + "-capture";
+      const peer = "e".repeat(64), before = [peer], current = new Set(before), calls = [];
+      let terminal = false;
+      if (mode === "volume-present") p.Mounts.push({ Type: "volume", Name: "owned-volume", Destination: "/tmp", Source: "/local/owned-volume", RW: true });
+      const docker = async (args) => {
+        calls.push(args);
+        if (args[0] === "ps") {
+          const filter = args[args.indexOf("--filter") + 1];
+          if (filter === `name=^/${name}$`) return mode === "unconfirmed-name" ? peer : id;
+          if (filter === `id=${id}`) {
+            if (mode === "absence-query-fails") throw Error("private-canary");
+            return current.has(id) ? id : "";
+          }
+          assert.fail("no unbound inventory query");
+        }
+        if (args[0] === "inspect") {
+          assert.deepEqual(args, ["inspect", "--type", "container", id]);
+          const info = structuredClone(p);
+          if (terminal && mode === "foreign-owner") info.Config.Labels["agent.owner"] = "peer";
+          if (mode === "unconfirmed-name") info.Name = "/" + name + "-different";
+          return JSON.stringify([info]);
+        }
+        if (args[0] === "image") return JSON.stringify([imageInfo]);
+        if (args[0] === "rm") {
+          assert.deepEqual(args, ["rm", "-f", "-v", id]);
+          if (mode !== "still-present") current.delete(id);
+          return id;
+        }
+        if (args[0] === "volume") { assert.ok(args.includes("name=^owned-volume$")); return "owned-volume"; }
+        assert.fail("unexpected cleanup command");
+      };
+      const collector = createExecutionEvidence({ folder, summary: s, docker });
+      assert.equal(await collector.remove(worker), null);
+      assert.deepEqual(calls, []);
+      const creation = collector.create(name, async () => { current.add(id); return id; });
+      if (mode === "unconfirmed-name") await assert.rejects(creation, /docker-create-name-unconfirmed/); else await creation;
+      terminal = true;
+      assert.deepEqual(collector.pendingNames(), [name]);
+      const remove = () => collector.remove(name);
+      if (mode === "clean") assert.equal((await remove()).id, id);
+      else {
+        const cause = ["foreign-owner", "unconfirmed-name"].includes(mode) ? /ownership or terminal inspection unavailable/ : /absence unconfirmed/;
+        await assert.rejects(remove(), cause);
+        const count = calls.length;
+        await assert.rejects(remove(), cause);
+        assert.equal(calls.length, count, "do not retry a settled failed terminal attempt");
+      }
+      assert.deepEqual(collector.pendingNames(), []);
+      assert.equal(await collector.remove(worker), null);
+      const refused = ["foreign-owner", "unconfirmed-name"].includes(mode);
+      assert.deepEqual(calls.filter(([cmd]) => cmd === "rm"), refused ? [] : [["rm", "-f", "-v", id]]);
+      assert.deepEqual([...current], refused || mode === "still-present" ? [...before, id] : before);
+      for (const ref of read(folder, "execution/manifest.json").events)
+        assert.ok(!readFileSync(join(folder, ref.path), "utf8").includes("private-canary"));
+    }));
+});
 
 test("network cleanup never re-resolves a reused name or substitutes another ID", () => temporary(async (folder) => {
   const s = summary(), name = `${s.runId}-net`, replacement = "e".repeat(64), removed = [];
@@ -205,6 +389,54 @@ test("execution saved replay derives actual limits and terminal absence without 
   assert.deepEqual(paths.map((path) => hash(readFileSync(join(folder, path)))), before);
   for (const path of paths) assert.doesNotMatch(readFileSync(join(folder, path), "utf8"), /secret-canary|DATABASE_URL|MIXED_CONTROL_TOKEN/);
 }));
+
+test("Django ASGI replay checks the shipped command and settings in both sources", async (t) => {
+  for (const source of ["fixture", "api"]) await t.test(source, () => temporary(async (folder) => {
+    const s = await vector(folder, () => {}, { djangoSource: source });
+    assert.equal(replay(folder, s).resources, "verified");
+    mutate(folder, "participant-created", (event) => {
+      event.data.env.find(([key]) => key === "DJANGO_SETTINGS_MODULE")[1] = "itempage.settings";
+    });
+    assert.throws(() => replay(folder, s), /execution evidence differs/);
+  }));
+  await t.test("same-image WSGI command", () => temporary(async (folder) => {
+    const s = await vector(folder, (p, image) => {
+      p.Config.Cmd = image.Config.Cmd = ["sh", "-c", "python -m django migrate --noinput && exec python start_matched.py"];
+    }, { djangoSource: "api" });
+    assert.throws(() => replay(folder, s), /execution evidence differs/);
+  }));
+  for (const source of ["fixture", "api"]) {
+    await t.test(`${source}: ASGI Cmd hidden behind a WSGI entrypoint`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Entrypoint = image.Config.Entrypoint = ["python", "start_matched.py"];
+      }, { djangoSource: source });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+    await t.test(`${source}: ASGI Cmd digest with WSGI combined digest`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Cmd = image.Config.Cmd = ["sh", "-c", "python -m django migrate --noinput && exec python start_matched.py"];
+      }, { djangoSource: source });
+      for (const kind of ["participant-created", "participant-terminal"])
+        mutate(folder, kind, (e) => { e.data.cmdSha256 = hash(JSON.stringify(djangoAsgi.command)); });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+  }
+});
+
+test("Spring WebFlux replay rejects MVC even when container and image command agree", async (t) => {
+  for (const source of ["fixture", "api"]) {
+    await t.test(`${source} native launch`, () => temporary(async (folder) => {
+      const s = await vector(folder, () => {}, { springSource: source });
+      assert.equal(replay(folder, s).resources, "verified");
+    }));
+    await t.test(`${source} wrong jar`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Entrypoint = image.Config.Entrypoint = ["java", "-jar", "app.jar"];
+      }, { springSource: source });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+  }
+});
 
 test("execution contradictions reject recomputed receipt hashes", async (t) => {
   for (const [name, change] of Object.entries({ quota: (p) => p.limits.NanoCpus = 0, memory: (p) => p.limits.Memory = 0,
@@ -307,7 +539,7 @@ test("execution unknown failed variants, duplicate references and mutated files 
 
 test("producer immutable Git ignores blob replacements in a local isolated repository", () => temporary(async (folder) => {
   const git = (args, input) => {
-    const answer = spawnSync("git", args, { cwd: folder, input, windowsHide: true, encoding: "utf8" }); assert.equal(answer.status, 0, answer.stderr); return answer.stdout.trim();
+    const answer = spawnSync("git", args, { cwd: folder, input, windowsHide: true, encoding: "utf8", env: fixtureGitEnv() }); assert.equal(answer.status, 0, answer.stderr); return answer.stdout.trim();
   };
   git(["init", "--quiet"]); const original = git(["hash-object", "-w", "--stdin"], "original-source\n"), replacement = git(["hash-object", "-w", "--stdin"], "hostile-source\n");
   git(["replace", original, replacement]); assert.equal(git(["cat-file", "blob", original]), "hostile-source");
@@ -329,7 +561,7 @@ test("execution actual Docker limits and cleanup receipts", { skip: process.env.
   const s = summary(); s.runId = `mixed-w999-${randomBytes(4).toString("hex")}`;
   s.executionMounts.output = mountSourceHash(folder);
   s.provenance.nativeSource.commit = immutableGit(process.cwd(), ["rev-parse", "HEAD"]).toString().trim();
-  const actualImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"]))[0].Id;
+  const actualImage = JSON.parse(await docker(["image", "inspect", "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067"]))[0].Id;
   s.tools.nodeImage = actualImage; s.tools.browserImage = actualImage; s.apps.corten.image.id = actualImage;
   const collector = createExecutionEvidence({ folder, summary: s, docker }), name = `${s.runId}-corten-fixture`, network = `${s.runId}-net`;
   const labels = ["--label", "agent.owner=codex", "--label", `agent.task=${s.runId}`, "--label", `run.corten.mixed-production=${s.runId}`];

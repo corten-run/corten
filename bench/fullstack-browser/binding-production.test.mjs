@@ -12,7 +12,7 @@ import { BindingLinkObserver } from "./binding-links.mjs";
 import { discoverReactEndpoint } from "./bindings.mjs";
 import { checkBindingEffects } from "./binding-effects.mjs";
 import { records } from "../marketplace/fixtures.mjs";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { createBindingArtifact, indexBindingArtifact, bindingHash } from "./binding-artifact.mjs";
 import { replayBindingProof } from "./bindings.mjs";
 import { emittedModules } from "./binding-modules.mjs";
@@ -148,14 +148,14 @@ test("production Next: immutable native page links and independently POSTs reque
       await form.locator('button[type="submit"]').click(); assert.equal((await response).status(), 200);
       row.resourcesAtDOM = await resources.checkpoint();
       const positive = ["ordinary", "renamed safe helper"].includes(mode);
-      assert.deepEqual(posts.map(({ method, path, query }) => ({ method, path, query })), [{ method: "POST", path: `/api/marketplace/${positive ? "item_2" : "item_1"}`, query: "?locale=fr-FR" }]);
+      assert.deepEqual(posts.map(({ method, path, query }) => ({ method, path, query })), [{ method: "POST", path: `/api/marketplace/${positive ? "item_2" : "item_1"}/alerts`, query: "?locale=fr-FR" }]);
       assert.deepEqual(errors, []);
       assert.equal(observed.outcome, "observed", observed.reason);
       const discovered = discoverReactEndpoint([observed.candidate], observed.linked);
       if (!positive) { assert.equal(effects.outcome, "unknown"); assert.equal(discovered, null); }
       else {
         assert.equal(effects.outcome, "proved", effects.reason);
-        assert.equal(discovered?.path, "/api/marketplace/item_2");
+        assert.equal(discovered?.path, "/api/marketplace/item_2/alerts");
         assert.equal(replayBindingProof(discovered, activeArtifact), true);
         if (mode === "ordinary") {
           await lifecycle.finishObservation({ observationMs: 0 }); evidence.platformLifecycle = lifecycle.snapshot();
@@ -192,7 +192,7 @@ test("production Next: immutable native page links and independently POSTs reque
           assert.equal(settled.outcome, "observed", settled.reason);
           assert.equal(settled.receipt.hooks[0].value.type, "string", "Actual post-response state must remain linked, not assumed initial null");
           const next = discoverReactEndpoint([settled.candidate], settled.linked);
-          assert.equal(next?.path, "/api/marketplace/item_2"); assert.equal(replayBindingProof(next, activeArtifact), true);
+          assert.equal(next?.path, "/api/marketplace/item_2/alerts"); assert.equal(replayBindingProof(next, activeArtifact), true);
           await page.evaluate(() => {
             const form = document.querySelector('.marketplace__alert form');
             let fiber = form[Object.keys(form).find((key) => key.startsWith('__reactFiber$'))];

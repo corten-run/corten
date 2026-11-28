@@ -5,6 +5,18 @@ database session. `GET /api/alerts` uses `JsonResponse` to return only the curre
 session's rows as `[{item_id,email,target_minor}]`, ordered by insertion ID.
 CSRF middleware, templates, forms and scripts remain native. Rejected validation,
 missing records, missing CSRF tokens and cross-site requests do not write alerts.
+
+For the Hardening TLS edge only, set `MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080`.
+Django would otherwise compare Origin with the plain HTTP upstream scheme. The
+opt-in CSRF middleware subclass changes only the Origin decision for a marketplace
+form POST whose Django-validated Host matches that authority, port included: it
+requires the exact configured Origin, even if the request has no Origin header.
+It does not set global `CSRF_TRUSTED_ORIGINS`, read forwarding headers, or change the
+request scheme or Origin. Django still checks the CSRF cookie and token;
+`ALLOWED_HOSTS` and the view's cross-site Fetch Metadata check still apply.
+All other requests, including the direct `http://127.0.0.1:8080` form preflight,
+continue through Django's ordinary CSRF checks.
+
 Validation returns the localized message and half-up rounded minor units from one
 parse; amounts beyond signed 64-bit minor units are rejected safely.
 Before a POST renders or persists, its complete source record is checked for required
@@ -86,7 +98,7 @@ hashes still require an independent native source audit, not a self-issued recei
 
 ## Page Request Lifetime Limit
 
-Both production representatives remain WSGI: default Gunicorn sync workers and
+The existing representatives remain WSGI: default Gunicorn sync workers and
 matched Granian's WSGI interface. Their synchronous marketplace view uses Requests.
 There is no ASGI `http.disconnect` event in this view, and moving the blocking read
 to a thread does not make that upstream I/O cancellable when the client leaves.
@@ -100,11 +112,9 @@ operation deadline: a continuously trickling response can exceed it. Record-JSON
 error handling remains unchanged. See [Requests' timeout semantics](https://requests.readthedocs.io/en/latest/user/quickstart/#timeouts).
 
 [Django's native async support](https://docs.djangoproject.com/en/6.1/topics/async/)
-provides disconnect cancellation for async views under ASGI. Taking that route
-would require an ASGI deployment, an async view and cancellable async outbound I/O,
-not merely wrapping Requests with `sync_to_async`. It would be an explicitly
-different configuration, not a demonstrated fix to these WSGI representatives.
-No such alternate contender or new HTTP dependency is introduced here.
+provides disconnect cancellation for async views under ASGI. The separate
+[Mixed ASGI candidate](production.md#mixed-asgi-candidate) uses that path and
+awaits async HTTP I/O directly. It does not change the WSGI limitation.
 
 The real-socket probe in `../fastapi/page-lifetime.test.mjs` exercises all three
 locales in both production profiles and reports the remaining abort failures as

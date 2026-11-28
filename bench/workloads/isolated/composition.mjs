@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { latestStableSchema, candidateLatestStableSchema, unsupportedSolidReason } from "../latest-stable.mjs";
 import { selectedApps } from "../registry.mjs";
+import { comparisonProfile } from "../../client-heavy/contract.mjs";
 
 export const commandResult = (record) => Object.fromEntries(["terminal", "code", "signal", "cancelled", "forced", "error", "success"].map((key) => [key, record[key]]));
 
 /** Apparatus completion is independent of which framework passed its functional gates. */
-export function composePhase(binding, native, host, commands, timingAudit = true) {
+export function composePhase(binding, native, host, commands, timingAudit = true, deniedPreLoginProbes = 0) {
   const expected = binding.preparation.fixtures.length + 1, last = commands.at(-1);
   const browser = binding.request.group === "fullstack-browser";
   const hardening = binding.request.group === "hardening";
@@ -50,15 +51,23 @@ export function composePhase(binding, native, host, commands, timingAudit = true
   const policyAllowsComparison = (app) => client ? candidatePolicy
     && policy.candidates.some((row) => row.app === app && row.status === "satisfied" && row.latestStableEligible === true && row.blockers?.length === 0)
     : legacyPolicyAllowsComparison;
-  // These native runners gate timing for the whole group after a parity failure.
   const nativeAllowsComparison = (app) => hardening ? false
-    : client ? native.rankingEligible === true && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app)
+    : client ? binding.request.recipe === comparisonProfile && host.resources === "verified"
+      && native.rankingEligible === true && Array.isArray(native.comparisonEligibleApps)
+      && native.comparisonEligibleApps.includes(app) && Object.hasOwn(native.comparisons ?? {}, app)
     : !["mixed-production", "catalog-page", "json-api"].includes(binding.request.group)
     || (Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app));
   const browserAllowsComparison = (app) => !browser || native.qualificationPassed === true && native.expectedExitCode === 0
     && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app);
-  return { outcome: complete ? "native-validated" : native.status === "failed" || commands.some((r) => !r.success) ? "failed" : "blocked",
+  const timingBlockedByPreLoginProbes = complete && deniedPreLoginProbes > 0;
+  return { outcome: timingBlockedByPreLoginProbes ? "blocked"
+    : complete ? "native-validated" : native.status === "failed" || commands.some((r) => !r.success) ? "failed" : "blocked",
     nativeStatus: native.status,
-    appOutcomes: native.outcomes.map((r) => ({ ...r, comparisonEligible: complete && policyAllowsComparison(r.app) && r.outcome === "passed" && nativeAllowsComparison(r.app) && browserAllowsComparison(r.app) })),
-    report: { qualification: complete ? "native-replay-passed" : "blocked", latestStable: policy ?? null } };
+    appOutcomes: native.outcomes.map((r) => {
+      const comparisonEligible = complete && !timingBlockedByPreLoginProbes && policyAllowsComparison(r.app) && r.outcome === "passed"
+        && nativeAllowsComparison(r.app) && browserAllowsComparison(r.app);
+      return { ...r, comparisonEligible, ...(client && comparisonEligible ? { comparison: native.comparisons[r.app] } : {}) };
+    }),
+    report: { qualification: complete && !timingBlockedByPreLoginProbes ? "native-replay-passed" : "blocked", latestStable: policy ?? null,
+      ...(timingBlockedByPreLoginProbes ? { timingBlockedByPreLoginProbes: true } : {}) } };
 }

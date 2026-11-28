@@ -4,9 +4,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fleetPlan, remoteFiles, reservation } from "./cloud-contract.mjs";
-import { guardianSha256 } from "./cloud-control-runtime.mjs";
+import { bootstrapWorkspaceScript, fleetPlan, installBenchmarkUnit, preloginUserData, remoteFiles, reservation } from "./cloud-contract.mjs";
+import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { digest } from "./cloud-local.mjs";
 import { remoteFiles as productionFiles } from "./cloud-remote.mjs";
+import { settledBootstrap } from "./cloud-retirement.mjs";
 import { groupNames } from "./registry.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
@@ -131,7 +133,120 @@ const dropin = "/run/systemd/system/user@0.service.d/90-corten-benchmark.conf";
 const policy = "[Unit]\nConditionPathExists=!" + binding + "\n";
 const optOut = "unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE\n";
 
-function rootManagerStages(script) {
+function ingressState() {
+  const saved = structuredClone(supervised);
+  const workspace = bootstrapWorkspaceScript(saved, { launch: true });
+  for (const [script, timeout] of [["true", 30000], [workspace, 60000]]) {
+    const request = controlRequest(saved, "ssh", [script], timeout, "bootstrap");
+    saved.control.ledger.push({ request, localTerminal: true, code: 0 });
+  }
+  return saved;
+}
+
+test("SSH ingress job replay requires the new, acknowledged dedicated workspace command", () => {
+  const saved = ingressState();
+  const script = productionFiles(saved)["job.sh"];
+  const stages = ["package-services", "package-prerequisites", "ssh-ingress-install", "ssh-ingress-verification",
+    "campaign-directory", "bootstrap-marker", "native-entry"].map((name) => script.lastIndexOf("bootstrap_stage=" + name + "\n"));
+  assert.ok(stages.every((position, i) => position > (stages[i - 1] ?? 0)), String(stages));
+  const historical = structuredClone(saved);
+  historical.control.ledger.pop();
+  historical.control.ledger.push({ request: controlRequest(historical, "ssh", [bootstrapWorkspaceScript(historical)], 60000, "bootstrap"),
+    localTerminal: true, code: 0 });
+  assert.equal(productionFiles(historical)["job.sh"], productionFiles(supervised)["job.sh"]);
+  assert.doesNotMatch(productionFiles(historical)["job.sh"], /ssh-ingress/);
+  for (const initial of [historical, saved]) {
+    const partial = { ...initial, id: "123", ip: "192.0.2.10", status: "preparing", createIntentAt: "2026-11-18T00:00:00.000Z" };
+    const jobHash = digest(productionFiles(partial)["job.sh"]);
+    const paths = [join(tmpdir(), "job.sh"), "root@192.0.2.10:/bench/job.sh"];
+    for (const [binary, args, deadline] of [
+      ["scp", paths, 15 * 60000],
+      ["ssh", [`printf '%s  %s\\n' '${jobHash}' '/bench/job.sh' | sha256sum --check --status`], 60000],
+    ]) partial.control.ledger.push({ request: controlRequest(partial, binary, args, deadline, "bootstrap"), code: 0, localTerminal: true });
+    assert.equal(settledBootstrap(partial, tmpdir()), true);
+    partial.control.ledger[1].request.invocation.requestSha256 = "f".repeat(64);
+    assert.equal(settledBootstrap(partial, tmpdir()), false);
+  }
+});
+
+test("SSH ingress missing-nft bootstrap waits for the APT list lock and refuses a failed gate", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const script = productionFiles(ingressState())["job.sh"];
+  const start = script.indexOf("bootstrap_stage=package-services\n");
+  const end = script.indexOf("bootstrap_stage=git-install\n", start);
+  assert.ok(start >= 0 && end > start);
+  // Run the generated stages, not the machine's package manager. Stub the
+  // owner reader (tested separately with real SSH) and boot-local paths.
+  const stages = script.slice(start, end)
+    .replaceAll("/usr/sbin/nft", "mock_nft")
+    .replace("/usr/bin/python3 -I -c", "mock_owner")
+    .replaceAll("/run/corten-bench-ssh-ingress.nft", "./snapshot");
+  const shims = String.raw`
+set -euo pipefail
+locked=1
+nft_available=0
+systemctl() {
+  [[ "$*" == 'disable --now apt-daily.timer apt-daily-upgrade.timer' ]]
+  printf '%s\n' timers-disabled
+}
+timeout() {
+  case "$*" in
+    '900 systemd-run '*|'900 apt-get '*) shift ;;
+    '-k 5 90 apt-get '*|'-k 5 30 systemctl '*|'-k 5 15 mock_nft '*) shift 3 ;;
+    *) exit 91 ;;
+  esac
+  "$@"
+}
+systemd-run() {
+  [[ "$*" == '--quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true' ]]
+  [[ $locked == 1 ]]
+  printf '%s\n' apt-gate
+  if [[ $MODE == busy ]]; then return 124; fi
+  locked=0
+}
+apt-get() {
+  if [[ $locked == 1 ]]; then printf '%s\n' list-lock-contention >&2; return 100; fi
+  case "$*" in
+    'update -qq') printf '%s\n' update ;;
+    'install -y -qq gnupg curl ca-certificates build-essential') printf '%s\n' prerequisites ;;
+    *'install -y -qq --no-install-recommends --no-upgrade --no-remove nftables')
+      printf '%s\n' nft-package; nft_available=1 ;;
+    *) exit 92 ;;
+  esac
+}
+test() {
+  if [[ "$*" == '-x mock_nft' ]]; then [[ $nft_available == 1 ]]; else builtin test "$@"; fi
+}
+mock_owner() { printf '%s\n' 192.0.2.20; }
+mock_nft() {
+  [[ $nft_available == 1 ]]
+  case "$*" in
+    '-f -')
+      while IFS= read -r line; do printf '%s\n' "$line"; done > transaction
+      printf '%s\n' ingress-installed ;;
+    '--numeric --stateless --handle list table inet corten_bench_ssh') printf '%s\n' snapshot ;;
+    *) exit 93 ;;
+  esac
+}
+`;
+  for (const [mode, expected, calls] of [
+    ["drain", 0, ["timers-disabled", "apt-gate", "update", "prerequisites", "nft-package", "ingress-installed"]],
+    ["busy", 124, ["timers-disabled", "apt-gate"]],
+  ]) {
+    const root = mkdtempSync(join(tmpdir(), "corten-ingress-apt-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const result = spawnSync("/bin/bash", ["-c", shims + stages], {
+      cwd: root, env: { PATH: "", MODE: mode }, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, expected, result.stderr);
+    assert.deepEqual(result.stdout.trimEnd().split("\n"), calls);
+    assert.equal(existsSync(join(root, "snapshot")), mode === "drain");
+  }
+});
+
+function rootManagerStages(script, quiet = false) {
   const stages = [...script.matchAll(/^bootstrap_stage=([a-z-]+)$/gm)];
   function section(name, next) {
     const index = stages.findIndex((stage) => stage[1] === name);
@@ -140,10 +255,22 @@ function rootManagerStages(script) {
     assert.equal(stages[index + 1][1], next);
     return { offset: stages[index].index, shell: script.slice(stages[index].index, stages[index + 1].index) };
   }
-  return [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
+  return quiet
+    ? [section("root-manager-idle", "cloud-init"), section("root-manager-verification", "ssh-ingress-verification")]
+    : [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
 }
 
-function executeRootManager(t, script, { mode = "drain", marker = true, prior } = {}) {
+// The native Linux evidence job loads this file before installing any packages.
+// Accept only our single literal block, not general cloud-config or YAML.
+function preloginBootCommand(data) {
+  const lines = data.split("\n");
+  assert.deepEqual(lines.splice(0, 3), ["#cloud-config", "bootcmd:", "  - |"]);
+  assert.equal(lines.pop(), "");
+  assert.ok(lines.length && lines.every(line => /^    \S[^\r]*$/.test(line)));
+  return lines.map(line => line.slice(4)).join("\n") + "\n";
+}
+
+function executeRootManager(t, script, { mode = "drain", marker = true, prior, quiet } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-root-manager-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, "bin"), path = join(root, dropin.slice(1));
@@ -159,14 +286,51 @@ function executeRootManager(t, script, { mode = "drain", marker = true, prior } 
   }
   symlinkSync("/bin/bash", join(bin, "bash"));
   symlinkSync("/usr/bin/mkdir", join(bin, "mkdir"));
+  symlinkSync("/usr/bin/cmp", join(bin, "cmp"));
+  const prelogin = quiet?.quietBootstrap === "prelogin", afterStart = prelogin || quiet?.quietBootstrap === "after-start";
+  for (const binary of ["mv", "stat"]) symlinkSync("/usr/bin/" + binary, join(bin, binary));
+  if (afterStart) writeFileSync(join(bin, "python3"), `#!/usr/bin/python3 -I
+import os, sys, time
+assert sys.argv[1:3] == ["-I", "-c"]
+source = sys.argv[3]
+sys.argv = ["-c", *sys.argv[4:]]
+def sleep(seconds):
+    assert seconds == 119
+    open("elapsed", "x").close()
+    if os.environ["MODE"] not in ("busy", "reactivated"): open("drained", "x").close()
+time.sleep = sleep
+time.monotonic_ns = lambda: (201 if not os.path.exists("elapsed") else 335 if os.environ["MODE"] == "late-window" else 320) * 10**9
+exec(source)
+`, { mode: 0o700 });
+  else symlinkSync("/usr/bin/python3", join(bin, "python3"));
+  writeFileSync(join(bin, "busctl"), `#!/bin/sh
+set -eu
+if test "$*" = "--json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListSessions"; then
+  echo ListSessions >> trace
+  if test "$MODE" = unknown-sessions; then exit 1; fi
+  if test "$MODE" = held-session; then echo '{"type":"a(susso)","data":[[["7",0,"root","","/session/7"]]]}'
+  else echo '{"type":"a(susso)","data":[[]]}'; fi
+  exit
+fi
+test "$*" = "--json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/user_400_2eservice org.freedesktop.systemd1.Unit Conditions"
+echo Conditions >> trace
+if test "$MODE" = shadowed; then trigger=true; else trigger=false; fi
+printf '{"type":"a(sbbsi)","data":[["ConditionPathExists",%s,true,"%s",0]]}\\n' "$trigger" "$BINDING"
+`, { mode: 0o700 });
   writeFileSync(join(bin, "systemctl"), `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> trace
 case "$*" in
   daemon-reload) test -f "$DROPIN"; if test "$MODE" = reload-failed; then exit 37; fi ;;
+  "show ${quiet?.unit} --property=ExecMainStartTimestampMonotonic --value")
+    if test "$MODE" = missing-start; then echo 0; else echo 200000000; fi ;;
+  "show user@0.service --all --property=ActiveState,MainPID,ActiveEnterTimestampMonotonic")
+    if test -f drained; then printf 'ActiveState=inactive\nMainPID=0\nActiveEnterTimestampMonotonic=0\n'
+    elif test "$MODE" = reactivated && test -f elapsed; then printf 'ActiveState=active\nMainPID=77\nActiveEnterTimestampMonotonic=310000000\n'
+    else printf 'ActiveState=active\nMainPID=42\nActiveEnterTimestampMonotonic=1000000\n'; fi ;;
   "show user@0.service --property=ActiveState --value")
     case "$MODE" in
-      drain|busy) if test -f drained; then echo inactive; else echo active; fi ;;
+      drain|busy|reactivated) if test -f drained; then echo inactive; else echo active; fi ;;
       active-query-failed) echo inactive; exit 38 ;;
       active-query-timeout) exit 124 ;;
       invalid-state) echo secret-fixture ;;
@@ -176,6 +340,7 @@ case "$*" in
   "show user@0.service --property=MainPID --value")
     case "$MODE" in
       nonzero-pid|busy) echo 42 ;;
+      reactivated) echo 77 ;;
       invalid-pid) echo secret-fixture ;;
       *) echo 0 ;;
     esac
@@ -186,7 +351,8 @@ esac
   // The first poll interval ends either in natural drain or the simulated deadline.
   writeFileSync(join(bin, "timeout"), `#!/bin/bash
 set -eu
-test "$1" = 120 && test "$2" = bash || exit 92
+if test "$1" = 5 && test "$2" = systemctl; then shift; exec "$@"; fi
+{ test "$1" = 120 || test "$1" = 15; } && test "$2" = bash || exit 92
 printf 'timeout %s\\n' "$1" >> trace
 shift
 sleep() {
@@ -197,20 +363,33 @@ sleep() {
 export -f sleep
 exec "$@"
 `, { mode: 0o700 });
-  const shell = rootManagerStages(script).map((stage) => stage.shell).join("");
-  // Only the two extracted stages run. Redirect their paths into the fixture,
-  // except the literal condition written into the drop-in.
+  const stages = rootManagerStages(script, !!quiet).map((stage) => stage.shell);
+  const install = quiet ? installBenchmarkUnit(quiet).split("\n").slice(1).join("\n") + "\n" : "";
+  const late = { "late-busy": "export MODE=busy\n", "late-tampered": "echo replaced > \"$DROPIN\"\n",
+    "late-shadowed": "export MODE=shadowed\n" };
+  const drain = afterStart ? script.slice(script.indexOf("bootstrap_stage=root-manager-drain\n"), script.indexOf("bootstrap_stage=root-manager-idle\n"))
+    : mode === "drain" ? ": > drained\n" : "";
+  const boot = prelogin && mode !== "missing-boot" ? preloginBootCommand(preloginUserData) +
+    (mode === "wrong-boot" ? 'echo foreign > "$DROPIN"\n' : "") : "";
+  const shell = quiet ? boot + install + drain + stages[0] + (late[mode] ?? "") + stages[1]
+    : stages.join("");
+  // Run only the extracted root-manager stages and policy installation.
+  // Redirect their paths into the fixture except the literal condition.
   assert.doesNotMatch(shell, /\/(?:usr\/)?(?:s?bin|etc)\//);
   const result = spawnSync("/bin/bash", ["-c", "set -Eeuo pipefail\n" +
-    shell.replace(/(?<!!)\/run\//g, "./run/") + "printf 'NATIVE_ENTRY_REACHED\\n'\n"], {
-    cwd: root, env: { PATH: bin, LANG: "C", MODE: mode, DROPIN: "." + dropin },
+    shell.replace(/(?<!!)\/run\//g, "./run/").replaceAll("/var/lib/systemd/linger/root", "./linger-root")
+      .replace("= 0:0:600:1", `= ${process.getuid()}:${process.getgid()}:600:1`) + "printf 'NATIVE_ENTRY_REACHED\\n'\n"], {
+    cwd: root, env: { PATH: bin, LANG: "C", MODE: mode, DROPIN: "." + dropin, BINDING: binding },
     encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
   });
   assert.equal(result.error, undefined);
   assert.equal(result.signal, null);
   const trace = join(root, "trace");
   const calls = existsSync(trace) ? readFileSync(trace, "utf8").trimEnd().split("\n") : [];
-  assert.ok(calls.every((call) => /^(daemon-reload|timeout 120|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
+  const handoffQueries = afterStart ? [`show ${quiet.unit} --property=ExecMainStartTimestampMonotonic --value`,
+    "show user@0.service --all --property=ActiveState,MainPID,ActiveEnterTimestampMonotonic"] : [];
+  assert.ok(calls.every((call) => handoffQueries.includes(call)
+    || /^(daemon-reload|timeout (120|15)|Conditions|ListSessions|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
   return { ...result, calls, contents: existsSync(path) ? readFileSync(path, "utf8") : null };
 }
 
@@ -243,6 +422,129 @@ for (const [name, generate] of [["contract", remoteFiles], ["production", produc
       "show user@0.service --property=MainPID --value"]);
   });
 }
+
+test("new dedicated reservations check the manager before cloud-init and native entry", () => {
+  const saved = ingressState();
+  const original = productionFiles(saved)["job.sh"];
+  // This unmarked, ingress-bound fixture's job as generated by the pre-fix controller.
+  assert.equal(digest(original), "1c1ea65ff651f99a2742309c295e5f52b486d769a176af3f553b74aa3ef88290");
+  const quiet = productionFiles({ ...saved, quietBootstrap: true })["job.sh"];
+  assert.equal(digest(quiet), "c01fba52f787cf40f0772edae5b290baa7a28e9cd10ac1524e581aa99491ec4c"); // bd6b7741, pre-start drain.
+  const after = productionFiles({ ...saved, quietBootstrap: "after-start" })["job.sh"];
+  const final = "bootstrap_stage=root-manager-verification\n";
+  assert.equal(after.slice(after.indexOf(final)), quiet.slice(quiet.indexOf(final)));
+  rootManagerStages(quiet, true);
+  assert.doesNotMatch(quiet, /^bootstrap_stage=root-manager-policy$/m);
+  assert.equal(quiet.slice(quiet.indexOf("bootstrap_stage=ssh-ingress-verification")),
+    original.slice(original.indexOf("bootstrap_stage=ssh-ingress-verification")));
+  for (const plain of [state, { ...state, control }, dedicated, { ...dedicated, control: ledger }])
+    assert.throws(() => productionFiles({ ...plain, quietBootstrap: true }), /quiet bootstrap requires a registered group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a registered group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: "other" }), /quiet bootstrap requires a registered group/);
+});
+
+test("post-start idle evidence distinguishes natural drain, persistent manager and a late proof", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = { ...ingressState(), quietBootstrap: "after-start" }, script = productionFiles(quiet)["job.sh"];
+  for (const mode of ["drain", "busy", "reactivated", "late-window", "late-busy", "late-shadowed"]) {
+    const result = executeRootManager(t, script, { quiet, mode });
+    assert.equal(result.status, mode === "drain" ? 0 : 1, mode + ": " + result.stderr);
+    assert.equal(result.stdout.includes("NATIVE_ENTRY_REACHED"), mode === "drain");
+    assert.equal(result.calls.filter(s => s.includes("ActiveEnterTimestampMonotonic")).length, 2);
+    assert.equal(result.stdout.split("ActiveEnterTimestampMonotonic=1000000").length - 1, mode === "busy" ? 2 : 1);
+    if (mode === "busy") assert.match(result.stderr, /ActiveState=active MainPID=42/);
+    if (mode === "reactivated") {
+      assert.match(result.stdout, /MainPID=77\nActiveEnterTimestampMonotonic=310000000/);
+      assert.match(result.stderr, /ActiveState=active MainPID=77/);
+    }
+    if (mode === "late-window") assert.match(result.stderr, /outside post-start quiet window/);
+  }
+  const missing = executeRootManager(t, script, { quiet, mode: "missing-start" });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /missing unit start time/);
+  assert.equal(missing.stdout, "");
+});
+
+test("prelogin condition precedes guardian custody; both idle gates survive the atomic switch", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = { ...ingressState(), quietBootstrap: "prelogin" }, job = productionFiles(quiet)["job.sh"];
+  const boot = preloginBootCommand(preloginUserData);
+  assert.throws(() => preloginBootCommand(preloginUserData + "  - second-command\n"));
+  assert.throws(() => preloginBootCommand(preloginUserData + "runcmd: []\n"));
+  assert.match(boot, /ConditionPathExists=!\/run\/systemd\/system\/user@0\.service\.d\/90-corten-benchmark\.conf/);
+  assert.doesNotMatch(boot, /binding\.json|systemctl (?:stop|mask|restart)/);
+  for (const mode of ["drain", "missing-boot", "wrong-boot", "busy", "held-session", "unknown-sessions", "late-busy", "late-shadowed"]) {
+    const result = executeRootManager(t, job, { mode, quiet });
+    assert.equal(result.status === 0, mode === "drain", mode + ": " + result.stderr);
+    assert.equal(result.stdout.includes("NATIVE_ENTRY_REACHED"), mode === "drain");
+    if (mode === "drain") {
+      assert.equal(result.contents, policy);
+      assert.equal(result.calls.filter(s => s === "ListSessions").length, 2);
+    }
+    if (mode === "busy" || mode === "held-session") {
+      assert.match(result.stderr, /monotonic-us=\d+ root-sessions=[01] linger-file=0/);
+      assert.equal(result.calls.filter(s => s === "ListSessions").length, 1, "refuse before provisioning");
+    }
+    if (mode === "held-session") assert.match(result.stderr, /MainPID=0[\s\S]*root-sessions=1[\s\S]*root-manager: root session before provisioning/);
+  }
+  const unbound = executeRootManager(t, job, { quiet, marker: false });
+  assert.notEqual(unbound.status, 0);
+  assert.equal(unbound.contents, "[Unit]\nConditionPathExists=!" + dropin + "\n");
+});
+
+function offlineInstallState() {
+  const plan = fleetPlan({ round: state.round, commit: state.commit, token: "f".repeat(16),
+    tokens: { [group]: dedicated.token }, provider: fleet.provider, sshKey: fleet.sshKey }, fleet.createdAt, fleet.host.region,
+  { stagedPlacement: true, single: { group, indexSha256: "a".repeat(64), checkout: "/synthetic-measured", offlineHandoff: true } });
+  const saved = { ...reservation({ round: state.round, commit: state.commit, token: dedicated.token, group, fleet: plan }),
+    quietBootstrap: "prelogin", control: structuredClone(ledger) };
+  for (const [script, ms] of [["true", 30000], [bootstrapWorkspaceScript(saved, { launch: true }), 60000]])
+    saved.control.ledger.push({ request: controlRequest(saved, "ssh", [script], ms, "bootstrap"), localTerminal: true, code: 0 });
+  return saved;
+}
+
+test("generated offline installer requires the exact guardian binding, not a monitor", () => {
+  const install = installBenchmarkUnit(offlineInstallState());
+  assert.match(install, new RegExp("test -f '" + binding.replaceAll(".", "\\.") + "'"));
+  assert.doesNotMatch(install, /'null'/);
+});
+
+test("generated offline prelogin switch and job gates execute with only offline guardian custody", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = offlineInstallState(), script = productionFiles(quiet)["job.sh"];
+  const installed = executeRootManager(t, script, { quiet });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(installed.contents, policy);
+  assert.match(installed.stdout, /NATIVE_ENTRY_REACHED/);
+  const unbound = executeRootManager(t, script, { quiet, marker: false });
+  assert.notEqual(unbound.status, 0);
+  assert.doesNotMatch(unbound.stdout, /NATIVE_ENTRY_REACHED/);
+});
+
+test("new dedicated setup requires an intact handoff and idle manager at both gates", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = { ...ingressState(), quietBootstrap: true }, script = productionFiles(quiet)["job.sh"];
+  const drained = executeRootManager(t, script, { quiet });
+  assert.equal(drained.status, 0, drained.stderr);
+  assert.equal(drained.stdout, "NATIVE_ENTRY_REACHED\n");
+  assert.equal(drained.contents, policy);
+  const probes = ["Conditions", "show user@0.service --property=ActiveState --value", "show user@0.service --property=MainPID --value"];
+  assert.deepEqual(drained.calls, ["daemon-reload", "timeout 15", ...probes, "timeout 15", ...probes]);
+  for (const mode of ["busy", "late-busy", "late-tampered", "late-shadowed"]) {
+    const failed = executeRootManager(t, script, { quiet, mode });
+    assert.equal(failed.status, 1, failed.stderr);
+    assert.equal(failed.stdout, "");
+    if (mode.endsWith("busy")) assert.match(failed.stderr, /ActiveState=active MainPID=42/);
+    if (mode === "late-shadowed") assert.match(failed.stderr, /effective binding condition missing/);
+    const afterEarlyGate = { busy: [], "late-busy": ["timeout 15", ...probes],
+      "late-tampered": ["timeout 15"], "late-shadowed": ["timeout 15", "Conditions"] };
+    assert.deepEqual(failed.calls, ["daemon-reload", "timeout 15", ...probes, ...afterEarlyGate[mode]]);
+  }
+});
 
 test("root-manager preparation fails closed without overwriting policy or stopping busy services", {
   skip: process.platform !== "linux",

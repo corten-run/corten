@@ -5,6 +5,9 @@ import { readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { processStat } from "./host-observation.mjs";
 import { socketProof } from "../cloud-control-session.mjs";
+import { verifyNativePartition } from "./native-roles.mjs";
+
+export { nativeControlPartition } from "./native-roles.mjs";
 
 export const streamLimits = Object.freeze({ leaseMs: 15000, challengeMs: 1000, maximumMs: 48 * 60 * 60 * 1000,
   frameBytes: 65536, journalBytes: 64 * 1024 * 1024, auditBytes: 256 * 1024 * 1024, auditFileBytes: 128 * 1024 * 1024,
@@ -48,16 +51,9 @@ export function verifyApparatus(binding, registration, sample) {
   return { cpu: 0, registrationSha256: streamHash(registration), qualification: "pending-first-host-native-proof" };
 }
 
-export function apparatusProof(binding, registration, sample, cpus) {
+export function apparatusProof(binding, registration, sample, cpus, roles = ["app", "api", "load"]) {
   const proof = verifyApparatus(binding, registration, sample);
-  assert.ok(cpus && ["app", "api", "load"].every((role) => typeof cpus[role] === "string"), "native CPU partition absent");
-  for (const role of ["app", "api", "load"]) {
-    assert.match(cpus[role], /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/);
-    for (const part of cpus[role].split(",")) {
-      const [first, last = first] = part.split("-").map(Number);
-      assert.ok(first > 0 && last >= first, "control CPU0 overlaps native CPUs");
-    }
-  }
+  verifyNativePartition(cpus, roles);
   return proof;
 }
 

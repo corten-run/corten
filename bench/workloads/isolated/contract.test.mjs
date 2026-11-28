@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { bindExecution, captureSources, recipes, reviewSubject, validateArtifactPaths, validateBinding } from "./contract.mjs";
+import { bindExecution, captureSources, nativeExecution, recipes, reviewSubject, validateArtifactPaths, validateBinding } from "./contract.mjs";
 import { contractSha256, definition, groupNames, selectedApps } from "../registry.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { invocation } from "../run.mjs";
@@ -14,7 +14,8 @@ import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 import { parseOptions as browserOptions } from "../../fullstack-browser/contract.mjs";
-import { parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { appSourceRows, budgets as hardeningBudgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { committedInputs as hardeningInputs } from "../../hardening/evidence.mjs";
 import { sourceRoots as clientSourceRoots } from "../../client-heavy/contract.mjs";
 import { committed as nativeClientSources } from "../../client-heavy/verify.mjs";
 
@@ -60,6 +61,39 @@ test("client source binding includes the actual complete native committed invent
       assert.equal(error.actual, false); assert.equal(error.expected, true);
       return true;
     });
+  }
+});
+
+test("Hardening binds the native app source closure without widening other groups", () => {
+  const request = requestFor("hardening");
+  const binding = bindExecution({ ...request, review: null }, "dedicated");
+  const common = captureSources(commit);
+  const files = hardeningInputs(root, commit);
+  const isAppFile = (app, { path }) => app === "corten"
+    ? /^(crates\/|bench\/marketplace\/corten\/)|^Cargo\.(toml|lock)$/.test(path)
+    : path.startsWith(`bench/fullstack/apps/${app}/`);
+  const apps = selectedApps("hardening");
+  for (const app of apps) {
+    const expected = files.filter((f) => isAppFile(app, f)).map(({ path, sha256 }) => [path, sha256]);
+    assert.deepEqual(appSourceRows(app, files), expected);
+    assert.deepEqual(appSourceRows(app, binding.sources.files), expected);
+  }
+  const sharedPaths = new Set(common.files.map((f) => f.path));
+  const extra = binding.sources.files.filter((f) => !sharedPaths.has(f.path));
+  assert.ok(extra.every((f) => apps.some((app) => isAppFile(app, f))));
+  assert.deepEqual(bind("catalog-page").sources, common);
+  assert.equal(binding.subjectSha256, reviewSubject(request, "dedicated"));
+  assert.equal(validateBinding(binding).binding, "verified-offline");
+  const target = (extra[0] ?? binding.sources.files[0]).path;
+  for (const remove of [true, false]) {
+    const bad = structuredClone(binding), index = bad.sources.files.findIndex((f) => f.path === target);
+    if (remove) bad.sources.files.splice(index, 1);
+    else bad.sources.files[index].sha256 = "0".repeat(64);
+    bad.sources.sha256 = bad.sourceSha256 = deploymentSha256(bad.sources.files);
+    const { schema, selection, sourceSha256, latestStable, campaignMode, host } = bad;
+    bad.subjectSha256 = deploymentSha256({ schema, request, selection, sourceSha256, latestStable, campaignMode, host });
+    bad.execution = nativeExecution(request.group, request.round, request.recipe, bad.subjectSha256);
+    assert.throws(() => validateBinding(reseal(bad)), /binding differs/);
   }
 });
 
@@ -124,9 +158,10 @@ test("mixed keeps native functional defaults separate from explicit measurement"
   assert.equal(measured.resources.measurement.loadSharedMemoryBytes, 512 * 2 ** 20);
 });
 
-test("browser recipe supplies only required build/output options, not subset or target manifests", () => {
+test("browser recipe supplies build, output, and isolation, not subset or target manifests", () => {
   const b = bind("fullstack-browser"), e = b.execution;
   assert.deepEqual(e.effectiveOptions, browserOptions(e.invocation.argv.slice(1)));
+  assert.equal(e.effectiveOptions.isolated, true);
   assert.equal(e.effectiveOptions.apps.length, 10); assert.equal(e.effectiveOptions.cases, null);
   assert.equal(e.effectiveOptions.targets, null); assert.equal(b.coverage.cells.length, 240);
   assert.equal(e.settings.profiles.mobile.cpu, 4); assert.equal(e.settings.actionTimeoutMs, 15000);
@@ -142,7 +177,8 @@ test("client-heavy keeps bounded sizes, fresh native generation and no --build/c
   const b = bind("client-heavy"), e = b.execution;
   assert.deepEqual(e.nativeDefaults, { rows: 14, large: 110, append: 7, cards: 24, seed: 7, cleanupMs: 2000, observationMs: 100, timeoutMs: 30000, cargo: "cargo" });
   assert.deepEqual(e.invocation.argv, ["bench/client-heavy/run.mjs", "w1", "--out", "bench/client-heavy/work/w1"]);
-  assert.equal(b.resources.app, null); assert.equal(b.resources.state, "blocked");
+  assert.equal(b.resources.app, null); assert.equal(b.resources.state, "unknown");
+  assert.deepEqual(b.resources.actorCpus, { client: "4-7" });
   assert.deepEqual(b.validation.required, ["result.json", "native/build.json"]);
 });
 
@@ -154,9 +190,9 @@ test("live preserves historical-mode guard, unchanged defaults, registered ports
     assert.ok(ordinary.status.blockers.includes("native port incompatible with selected profile: corten"));
     assert.equal(measured.execution.nativeDefaults.profile, "bounded");
     assert.deepEqual(measured.execution.nativeDefaults, { apps: selectedApps(group), build: false, profile: "bounded", measure: false });
-    assert.deepEqual(measured.execution.effectiveOptions, { apps: selectedApps(group), build: true, profile: "native-feed", measure: true });
+    assert.deepEqual(measured.execution.effectiveOptions, { apps: selectedApps(group), build: true, profile: "native-feed", measure: true, isolated: true });
     assert.deepEqual(measured.execution.invocation.argv, [group === "live-delivery" ? "bench/live/run.mjs" : "bench/recoverable-live/run.mjs", "w1",
-      ...(group === "live-delivery" ? ["--group", group] : []), "--build", "--profile", "native-feed", "--measure"]);
+      ...(group === "live-delivery" ? ["--group", group] : []), "--build", "--isolated", "--profile", "native-feed", "--measure"]);
     assert.equal(measured.execution.settings.workload.seed, 17);
     assert.equal(measured.execution.settings.workload.initial.length, 5);
     assert.equal(measured.execution.settings.workload.eventCount, 1044);
@@ -173,15 +209,16 @@ test("live preserves historical-mode guard, unchanged defaults, registered ports
   }
 });
 
-test("reviewed live CLI parser bytes and explicit rejection semantics remain unchanged", async () => {
+test("reviewed live CLI parser adds only the isolated mode and retains explicit rejections", async () => {
   const source = readFileSync(join(root, "bench/live/parity.mjs"), "utf8").replaceAll("\r\n", "\n");
   const parser = source.slice(source.indexOf("export async function main("));
-  assert.equal(createHash("sha256").update(parser).digest("hex"), "634281d26c75390cade87f7046ee04db5999b1b360bfeeaca8c36f9424ee02de");
-  assert.ok(source.includes('export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false })'));
+  assert.equal(createHash("sha256").update(parser).digest("hex"), "e861be48ad779e70cb399475a286e76e69d36a4d5926a5f030aef51290c9f303");
+  assert.ok(source.includes('export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false, isolated = false })'));
   const { runRound } = await import("../../live/parity.mjs");
   for (const group of ["live-delivery", "recoverable-live"]) {
     await assert.rejects(runRound(group, ["w1", "--duration", "1"]), /unknown argument/);
     await assert.rejects(runRound(group, ["w1", "--profile"]), /needs a value/);
+    await assert.rejects(runRound(group, ["w1", "--isolated", "--isolated"]), /duplicate isolation flag/);
     await assert.rejects(runRound(group, ["../escape"]), /safe round/);
   }
 });
@@ -204,7 +241,12 @@ test("hardening binds native reviewed-profile reference without treating the str
   assert.deepEqual(e.effectiveOptions, hardeningOptions(e.invocation.argv.slice(1)));
   assert.equal(e.nativeDefaults.review, null); assert.equal(e.effectiveOptions.review, b.subjectSha256);
   assert.deepEqual(e.effectiveOptions.verify, {}); assert.equal(e.effectiveOptions.profile, "bounded");
-  assert.equal(e.settings.attack.maxConnections, 12); assert.equal(e.settings.resources.cpuCoresTotal, 1.5);
+  assert.equal(e.effectiveOptions.isolated, true); assert.ok(e.invocation.argv.includes("--isolated"));
+  assert.equal(Object.hasOwn(e.settings, "attack"), false);
+  const expected = hardeningBudgets("bounded");
+  assert.deepEqual(e.settings.boundedRequests, expected.boundedRequests);
+  assert.deepEqual(e.settings.dependencyRecovery, expected.dependencyRecovery);
+  assert.equal(e.settings.resources.cpuCoresTotal, expected.resources.cpuCoresTotal);
   assert.equal(b.review.state, "unknown"); assert.equal(b.status.executionAuthorized, false);
 });
 

@@ -4,15 +4,15 @@ import { constants, closeSync, fstatSync, statfsSync, openSync, readSync, writeS
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative, isAbsolute, posix, win32 } from "node:path";
-import { hardeningCaptureSchema, hardeningContract, validateHardeningOutcome } from "../workloads/hardening.mjs";
-import { validateBudget } from "./plan.mjs";
-import { validateControl } from "./probe.mjs";
-import { assessTimedSource } from "./native.mjs";
-import { records } from "../marketplace/fixtures.mjs";
-import { validateLegitimate, validateAttack } from "./receipts.mjs";
-import { terminalRecovery, verifyContainerCommands, requireCommandAcknowledgement } from "./lifecycle.mjs";
+import { appSourcePath, appSourceRows, validateBudget, phases } from "./plan.mjs";
+import { verifyContainerCommands, requireCommandAcknowledgement } from "./lifecycle.mjs";
 import { qualificationSettings, featureProfile } from "../marketplace/feature-contract.mjs";
+import { edgeOffset, nginxConf } from "../fullstack/edge.mjs";
+import { nativeBuildArchiveArgs } from "../mixed-production/build-context.mjs";
+import { cpuSetWithin, hardeningCpuGate, hardeningGateMs, hardeningRoleCpu } from "../workloads/isolated/native-roles.mjs";
 
+export const edgePublicOrigin = "https://localhost:8080";
+export const proxyConfig = () => nginxConf([["target", { port: 8080 - edgeOffset, publicAuthority: new URL(edgePublicOrigin).host }]], 1);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const savedProofVersion = 2;
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -302,42 +302,54 @@ export const nativeHostConfig = (value) => ({ ...value, OomKillDisable: value.Oo
 export const readyScript = 'const end=Date.now()+45000; while(true){try{const r=await fetch("http://127.0.0.1:8080/marketplace/en-US/item_1",{signal:AbortSignal.timeout(1000)});await r.arrayBuffer();if(r.status===200)break;}catch{}if(Date.now()>end)throw Error("native startup timeout");await new Promise(r=>setTimeout(r,100));}';
 
 const recoveryPhase = "dependency-recovery";
-export const upstreamSourcePath = (phase) => phase === recoveryPhase ? "bench/hardening/dependency-recovery-upstream.mjs" : "bench/marketplace/upstream.mjs";
-const probeSourcePath = (phase) => phase === recoveryPhase ? "bench/hardening/dependency-recovery-probe.mjs" : "bench/hardening/probe.mjs";
+export const usesDelayUpstream = (phase) => phase === recoveryPhase || phase === "request-timeout";
+export const upstreamSourcePath = (phase) => usesDelayUpstream(phase) ? "bench/hardening/dependency-recovery-upstream.mjs" : "bench/marketplace/upstream.mjs";
+export const probeSourcePath = (phase) => phase === recoveryPhase ? "bench/hardening/dependency-recovery-probe.mjs" : "bench/hardening/bounded-requests-probe.mjs";
+export const phaseInputs = (phase) => [...new Set([upstreamSourcePath(phase), probeSourcePath(phase),
+  ...(usesDelayUpstream(phase) ? ["bench/hardening/dependency-recovery-contract.mjs"] : []),
+  ...(phase === recoveryPhase ? [] : ["bench/hardening/bounded-requests.mjs", "bench/hardening/request-capture.mjs"]),
+  "bench/hardening/qualification.mjs", "bench/hardening/plan.mjs"])];
 
-function verifyWorker(r, cell, summary, receipts, folder) {
+// parseArgs always writes options, but adds isolated only for --isolated.
+// Missing options are not valid standalone evidence.
+export function savedIsolation(options) {
+  assert.ok(options && Object.getPrototypeOf(options) === Object.prototype, "native hardening options required");
+  assert.equal(options.profile, "bounded", "bounded profile required in native hardening options");
+  if (!Object.hasOwn(options, "isolated")) return false;
+  assert.equal(options.isolated, true, "invalid native hardening isolation option");
+  return true;
+}
+
+function verifyWorker(r, cell, summary, receipts, isolatedRun) {
   const step = r.intent.step, base = step.startsWith("edge-") ? "https://localhost:8080" : "http://127.0.0.1:8080";
   const upstream = `http://${summary.runId}-cell-upstream:8080`, edge = step.startsWith("edge-");
   const qualification = `/results/${edge ? "edge-" : ""}qualification.json`, node = "/repo/bench/hardening/";
   const recovery = cell.phase === recoveryPhase;
-  if (recovery || cell.key.endsWith("/" + recoveryPhase))
-    assert.equal(cell.key, [cell.app, cell.source, cell.mode, cell.phase].join("/"), "recovery phase differs from the cell identity");
-  const usesTrigger = recovery && ["upstream", "probe"].includes(step);
-  assert.ok(!(recovery && step === "form"), "dependency recovery has no native form worker");
+  assert.ok(phases.includes(cell.phase), "unsupported native phase");
+  assert.equal(cell.key, [cell.app, cell.source, cell.mode, cell.phase].join("/"), "phase differs from the cell identity");
+  const usesTrigger = usesDelayUpstream(cell.phase) && ["upstream", "probe"].includes(step);
+  const sampleResources = recovery && step === "probe";
   const commands = {
     upstream: ["node", "/repo/" + upstreamSourcePath(cell.phase)], ready: ["node", "--input-type=module", "-e", readyScript],
-    qualification: ["node", "/repo/bench/marketplace/qualify.mjs", base, cell.source, upstream, qualification],
-    "edge-qualification": ["node", node + "tls-qualification.mjs", base, cell.source, upstream, qualification],
+    qualification: ["node", node + "qualification.mjs", cell.source, "direct", upstream, qualification],
+    "edge-qualification": ["node", node + "qualification.mjs", cell.source, "deployed-edge", upstream, qualification],
     "native-controls": ["node", node + "native.mjs", base, cell.source, upstream, qualification, "/results/native-controls.json"],
     "edge-controls": ["node", node + "native.mjs", base, cell.source, upstream, qualification, "/results/edge-native-controls.json", "deployed-edge"],
     parity: ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
     "edge-parity": ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
-    probe: ["node", "/repo/" + probeSourcePath(cell.phase), "/results/probe.json", "/results/raw.jsonl"],
+    probe: ["node", ...(isolatedRun ? ["--import", "/repo/" + hardeningCpuGate] : []),
+      "/repo/" + probeSourcePath(cell.phase), "/results/probe.json", "/results/raw.jsonl"],
     "terminal-clock": ["node", node + "clock.mjs"], "cleanup-clock": ["node", node + "clock.mjs"],
     certificate: ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "/cert/key.pem", "-out", "/cert/cert.pem", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
   };
   const info = r.created;
+  // Image inspect may omit an unset Cmd or Entrypoint; container inspect records null.
+  // Keep the container receipt and any explicit image value exact.
   if (commands[step]) assert.deepEqual(info.Config.Cmd, commands[step], "launched native worker command differs");
   else if (step === "application" || step === "proxy") {
     const image = step === "application" ? summary.builds[cell.app].image : summary.tools.edge;
-    assert.deepEqual(info.Config.Cmd, image.Config.Cmd); assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint);
-  } else if (step === "form") {
-    assert.equal(info.Config.Cmd.length, 4); assert.deepEqual(info.Config.Cmd.slice(0, 2), ["node", node + "form.mjs"]);
-    assert.equal(info.Config.Cmd[3], "/results/form.json");
-    const target = JSON.parse(info.Config.Cmd[2]);
-    assert.deepEqual(target, { host: "127.0.0.1", port: 8080, authority: "localhost:8080",
-      origin: `${cell.mode === "direct" ? "http" : "https"}://localhost:8080`, tls: cell.mode !== "direct",
-      ...(cell.mode === "deployed-edge" ? { caPem: readFileSync(join(folder, cell.key, "cert/cert.pem"), "utf8") } : {}) });
+    assert.deepEqual(info.Config.Cmd, image.Config.Cmd ?? null);
+    assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint ?? null);
   } else if (/^(application|upstream|proxy)-health$/.test(step)) {
     const role = step.split("-")[0], path = r.intent.healthPath;
     assert.ok(path === null || typeof path === "string" && path.startsWith("/"));
@@ -347,19 +359,23 @@ function verifyWorker(r, cell, summary, receipts, folder) {
     : step === "proxy" || step === "upstream" ? step : ["ready", "probe", "certificate", "terminal-clock", "cleanup-clock"].includes(step) ? "apparatus" : "qualification";
   assert.equal(r.intent.role, role);
   assert.equal(info.HostConfig.ShmSize, role === "qualification" ? 1024 ** 3 : 64 * 1024 ** 2, "native shared-memory allocation differs");
-  if (step === "probe") {
+  if (sampleResources) {
     assert.equal(info.HostConfig.PidMode, "host", "native process observer must see runner-host PIDs");
     assert.equal(info.HostConfig.CgroupnsMode, "host", "native resource observer must see runner-host cgroups");
+  } else if (step === "probe") {
+    assert.ok(["", "private"].includes(info.HostConfig.PidMode), "bounded probe may not share the host PID namespace");
+    assert.ok(["", "private"].includes(info.HostConfig.CgroupnsMode), "bounded probe may not share the host cgroup namespace");
   }
   const tool = role === "qualification" ? "checker" : step === "certificate" ? "cert" : step === "proxy" ? "edge" : "node";
   if (step !== "application") assert.equal(info.Image, summary.tools[tool].Id);
   else assert.equal(info.Image, summary.builds[cell.app].imageId);
   const image = step === "application" ? summary.builds[cell.app].image : summary.tools[tool];
-  if (!["application", "proxy"].includes(step)) assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint);
+  if (!["application", "proxy"].includes(step)) assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint ?? null);
   for (const key of ["User", "WorkingDir"]) assert.equal(info.Config[key] ?? "", image.Config[key] ?? "");
   const environment = new Map((image.Config.Env ?? []).map((s) => [s.slice(0, s.indexOf("=")), s.slice(s.indexOf("=") + 1)]));
   const overrides = step === "application" ? { MARKETPLACE_SOURCE: cell.source, MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json",
-    API_BASE: upstream, PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }
+    API_BASE: upstream, PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections),
+    ...(cell.mode === "deployed-edge" ? { MARKETPLACE_PUBLIC_ORIGIN: edgePublicOrigin } : {}) }
     : role === "qualification" ? { PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
       ...(cell.mode === "deployed-edge" && !["qualification", "native-controls", "parity"].includes(step)
         ? { NODE_EXTRA_CA_CERTS: "/results/cert/cert.pem", BENCH_EDGE_CERT: "/results/cert/cert.pem" } : {}) } : {};
@@ -382,7 +398,7 @@ function verifyWorker(r, cell, summary, receipts, folder) {
   if (step === "probe") required("/results", out, false);
   if (step === "certificate" || step === "proxy") required("/cert", paths.join(out, "cert"), step === "proxy");
   if (step === "proxy") required("/etc/nginx/nginx.conf", paths.join(out, "nginx.conf"));
-  if (step === "probe") required("/sys/fs/cgroup", "/sys/fs/cgroup");
+  if (sampleResources) required("/sys/fs/cgroup", "/sys/fs/cgroup");
   let triggerSource;
   if (usesTrigger) {
     const trigger = info.Mounts.find((m) => m.Destination === "/recovery");
@@ -400,7 +416,7 @@ function verifyWorker(r, cell, summary, receipts, folder) {
   // Inspect metadata cannot vouch for a different acknowledged command. Parse
   // the fixed native CLI vocabulary and compare it to the procedure, not intent.
   const args = r.creation.args.slice(9), options = new Map(), volumes = [], env = [];
-  const scalar = new Set(["--network", "--network-alias", "--cpus", "--memory", "--memory-swap", "--pids-limit", "--ulimit", "--shm-size"]);
+  const scalar = new Set(["--network", "--network-alias", "--cpus", "--memory", "--memory-swap", "--pids-limit", "--ulimit", "--shm-size", "--cpuset-cpus"]);
   let index = 0;
   while (typeof args[index] === "string" && args[index].startsWith("-")) {
     const flag = args[index++];
@@ -422,14 +438,19 @@ function verifyWorker(r, cell, summary, receipts, folder) {
     ["--pids-limit", "512"], ["--ulimit", "nofile=65536:65536"],
   ]);
   if (role === "qualification") expectedOptions.set("--shm-size", "1g");
-  if (step === "probe") { expectedOptions.set("--cgroupns=host", true); expectedOptions.set("--pid=host", true); }
+  if (isolatedRun) {
+    const cpus = hardeningRoleCpu(role);
+    assert.equal(info.HostConfig.CpusetCpus, cpus, "native hardening Docker cpuset differs");
+    expectedOptions.set("--cpuset-cpus", cpus);
+  }
+  if (sampleResources) { expectedOptions.set("--cgroupns=host", true); expectedOptions.set("--pid=host", true); }
   if (["application", "upstream", "proxy"].includes(step)) expectedOptions.set("-d", true);
   if (step === "application") expectedOptions.set("--network-alias", "fsw-target");
   const isolated = ["certificate", "terminal-clock", "cleanup-clock"].includes(step), service = ["application", "upstream", "proxy"].includes(step);
   let network = isolated ? "none" : service ? `${summary.runId}-net` : null;
   if (network === null) {
     const targetRole = step.endsWith("-health") ? step.split("-")[0]
-      : edge || ["form", "probe"].includes(step) && cell.mode === "deployed-edge" ? "proxy" : "application";
+      : edge || step === "probe" && cell.mode === "deployed-edge" ? "proxy" : "application";
     const owner = receipts.find((other) => other.intent.cell === cell.key && other.intent.step === targetRole)?.created
       ?? (cell.status !== "observed" ? r.namespace : null);
     if (!owner) missingProof("native namespace owner missing");
@@ -446,17 +467,83 @@ function verifyWorker(r, cell, summary, receipts, folder) {
 }
 
 const missingProof = (message) => { throw Object.assign(new Error(message), { code: "ENOENT" }); };
-export function verifyOwnedReceipts(receipts, summary, folder) {
+
+export function verifyHardeningCpuScope(sample, cpus) {
+  const { id, pid, startTicks, path, groups } = sample;
+  assert.match(id, /^[a-f0-9]{64}$/);
+  assert.ok(Number.isSafeInteger(pid) && pid > 0); assert.match(startTicks, /^[1-9]\d*$/);
+  assert.ok(posix.isAbsolute(path) && posix.normalize(path) === path && [id, `docker-${id}.scope`].includes(posix.basename(path)));
+  assert.ok(Array.isArray(groups) && groups.length > 0);
+  const paths = new Set(groups.map((g) => g.path)), pids = new Set();
+  assert.equal(paths.size, groups.length); assert.ok(paths.has(path));
+  for (const { path: child, files } of groups) {
+    assert.ok(child === path || child.startsWith(path + "/") && posix.normalize(child) === child && paths.has(posix.dirname(child)));
+    const members = files["cgroup.procs"].trim().split("\n").filter(Boolean);
+    for (const member of members) {
+      assert.match(member, /^[1-9]\d*$/); assert.ok(!pids.has(member)); pids.add(member);
+      if (member === String(pid)) assert.equal(child, path, "container init must belong to its Docker cgroup");
+    }
+    const effective = files["cpuset.cpus.effective"];
+    if (child === path) assert.equal(effective.trim(), cpus, "hardening actor effective cpuset differs");
+    else if (members.length) assert.ok(cpuSetWithin(effective, cpus), "hardening process effective cpuset escapes its role");
+  }
+  assert.ok(pids.has(String(pid)), "container init missing from Linux CPU scope");
+}
+
+export function verifyHardeningCpuRoles(evidence, cell, launches, raw) {
+  assert.equal(evidence.schema, "native-hardening-cpu-roles/v1");
+  const roles = ["application", "upstream", ...(cell.mode === "deployed-edge" ? ["proxy"] : []), "probe"];
+  const wall = Date.parse(raw.find((r) => r.type === "clock")?.wallAtStart);
+  const endMs = cell.phase === recoveryPhase
+    ? raw.find((r) => r.type === recoveryPhase)?.upstream.after.observedAtMs
+    : raw.find((r) => r.type === "bounded-requests")?.completeAtMs;
+  assert.ok(Number.isFinite(wall) && Number.isFinite(endMs) && endMs >= 0);
+  const end = wall + endMs;
+  assert.deepEqual(Object.keys(evidence.before).sort(), [...roles].sort());
+  assert.deepEqual(Object.keys(evidence.after).sort(), [...roles].sort());
+  for (const role of roles) {
+    const { created, terminal, intent } = launches.find((r) => r.intent.step === role);
+    const before = evidence.before[role], after = evidence.after[role];
+    const start = Date.parse(terminal.State.StartedAt);
+    assert.ok(before.atMs >= Math.max(start, wall - hardeningGateMs) && before.atMs <= wall
+      && after.atMs >= Math.floor(end) - 1 && after.atMs <= end + hardeningGateMs, "hardening CPU samples do not bracket the probe");
+    assert.ok(Number.isSafeInteger(before.atMs) && Number.isSafeInteger(after.atMs));
+    for (const row of [before, after]) {
+      assert.deepEqual([row.id, row.imageId, row.startedAt], [created.Id, created.Image, terminal.State.StartedAt]);
+    }
+    const cpus = hardeningRoleCpu(intent.role);
+    verifyHardeningCpuScope(before, cpus);
+    if (role === "probe") assert.ok(after.atMs <= Date.parse(terminal.State.FinishedAt), "CPU sample from after probe exit");
+    else assert.equal(before.pid, created.State.Pid, "wrong service init PID");
+    if (role !== "probe" && Object.hasOwn(after, "finishedAt")) {
+      assert.equal(terminal.State.Status, "exited");
+      assert.equal(after.finishedAt, terminal.State.FinishedAt);
+      assert.ok(Date.parse(after.finishedAt) >= before.atMs && Date.parse(after.finishedAt) <= after.atMs);
+    } else {
+      assert.deepEqual([after.pid, after.startTicks, after.path], [before.pid, before.startTicks, before.path]);
+      verifyHardeningCpuScope(after, cpus);
+    }
+  }
+}
+
+export function verifyOwnedReceipts(receipts, summary, folder, preflight) {
+  const isolatedRun = savedIsolation(summary.options);
   assert.ok(Array.isArray(receipts)); if (!receipts.length) missingProof("missing owned container receipts");
   const ids = new Set(), launches = new Map(), resources = summary.budget.resources;
   const triggerByCell = new Map(), cellByTrigger = new Map();
+  const required = preflight && ["upstream", "application", ...(preflight.failedStage === "edge-native-controls"
+    ? ["proxy", "edge-qualification", "edge-controls"] : ["qualification", "native-controls"])];
   for (let i = 0; i < receipts.length; i++) {
-    const r = receipts[i]; assert.equal(r.index, i); assert.equal(r.schema, "native-hardening-container/v2");
+    const r = receipts[i];
+    if (preflight && (r.intent.cell !== preflight.key || !required.includes(r.intent.step))) continue;
+    assert.equal(r.index, i); assert.equal(r.schema, "native-hardening-container/v2");
     assert.ok(r.intent && ["create", "run"].includes(r.intent.operation));
     const before = r.created, end = r.terminal; if (!before || !end) missingProof("missing owned container lifetime");
     const cell = summary.cells.find((c) => c.key === r.intent.cell); assert.ok(cell);
     verifyContainerCommands(r, summary.runId);
-    const trigger = verifyWorker(r, cell, summary, receipts, folder);
+    const trigger = verifyWorker(r, cell, summary, receipts, isolatedRun);
+    if (folder && r.intent.step === "proxy")
+      assert.ok(readFileSync(join(folder, cell.key, "nginx.conf")).equals(Buffer.from(proxyConfig())), "saved edge configuration differs");
     if (trigger !== undefined) {
       const key = win32.isAbsolute(trigger) && !posix.isAbsolute(trigger) ? trigger.toLowerCase() : trigger;
       assert.equal(triggerByCell.get(cell.key) ?? trigger, trigger, "recovery workers do not share the same trigger directory");
@@ -519,10 +606,10 @@ export function verifyOwnedReceipts(receipts, summary, folder) {
       const list = launches.get(r.intent.cell) ?? []; list.push(r); launches.set(r.intent.cell, list);
     }
   }
-  for (const c of summary.cells.filter((c) => c.status === "observed")) {
+  for (const c of preflight ? [preflight] : summary.cells.filter((c) => c.status === "observed")) {
     const list = launches.get(c.key) ?? [];
-    for (const name of ["upstream", "application", "ready", "qualification", "native-controls", "parity",
-      ...(c.phase === recoveryPhase ? [] : ["form"]), "probe", "terminal-clock", "cleanup-clock",
+    for (const name of required ?? ["upstream", "application", "ready", "qualification", "native-controls", "parity",
+      "probe", "terminal-clock", "cleanup-clock",
       ...(c.mode === "deployed-edge" ? ["certificate", "proxy", "edge-qualification", "edge-parity", "edge-controls"] : [])])
       if (!list.some((r) => r.intent.step === name)) missingProof("missing charged native apparatus step");
     for (const step of new Set(list.map((r) => r.intent.step))) assert.equal(list.filter((r) => r.intent.step === step).length, step === "terminal-clock" ? 2 : 1);
@@ -531,7 +618,7 @@ export function verifyOwnedReceipts(receipts, summary, folder) {
       const step = r.intent.step;
       const network = ["certificate", "terminal-clock", "cleanup-clock"].includes(step) ? "none"
         : ["upstream", "application", "proxy"].includes(step) ? `${summary.runId}-net`
-          : `container:${target(step.endsWith("-health") ? step.split("-")[0] : step.startsWith("edge-") || ["form", "probe"].includes(step) && c.mode === "deployed-edge" ? "proxy" : "application")}`;
+          : `container:${target(step.endsWith("-health") ? step.split("-")[0] : step.startsWith("edge-") || step === "probe" && c.mode === "deployed-edge" ? "proxy" : "application")}`;
       assert.equal(r.created.HostConfig.NetworkMode, network, "native worker namespace differs");
     }
   }
@@ -542,13 +629,14 @@ export function verifyRunInputs(folder, summary) {
   const input = JSON.parse(readFileSync(join(folder, "inputs.json"), "utf8"));
   assert.equal(input.schema, "native-hardening-inputs/v1"); assert.equal(input.commit, summary.commit);
   const files = committedInputs(repository, summary.commit); assert.deepEqual(input.files, files);
-  const contextFiles = (app) => files.filter((f) => app === "corten" || f.path.startsWith(`bench/fullstack/apps/${app}/`));
+  const contextFiles = (app) => files.filter((f) => app === "corten" || appSourcePath(app, f.path));
   const body = (file) => readFileSync(join(folder, file));
   for (const [app, build] of Object.entries(summary.builds ?? {})) {
     assert.match(app, /^[a-z][a-z0-9-]*$/); assert.ok(summary.cells.some((c) => c.app === app));
     const prefix = app === "corten" ? "" : `bench/fullstack/apps/${app}/`, expected = contextFiles(app);
-    const archive = sourceGit(repository, ["archive", "--format=tar", `${summary.commit}${prefix ? `:${prefix.slice(0, -1)}` : ""}`]);
-    assert.equal(build.contextSha256, digest(archive)); assert.equal(digest(body(`${app}-build-context.tar`)), build.contextSha256);
+    const archive = sourceGit(repository, nativeBuildArchiveArgs(summary.commit, app));
+    assert.equal(build.contextSha256, digest(archive), "native build-context archive differs from committed inputs");
+    assert.equal(digest(body(`${app}-build-context.tar`)), build.contextSha256);
     const actual = savedFiles(join(folder, `${app}-build-context`)).map(({ path, sha256 }) => ({ path: prefix + path, sha256 }));
     assert.deepEqual(actual, expected.map(({ path, sha256 }) => ({ path, sha256 })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     assert.deepEqual(build.files, expected);
@@ -560,9 +648,7 @@ export function verifyRunInputs(folder, summary) {
     assert.equal(receipt.inputSha256, build.contextSha256); assert.equal(receipt.inputBytes, archive.length);
     assert.ok(Date.parse(receipt.finishedAt) >= Date.parse(receipt.startedAt));
     const dockerfile = app === "corten" ? "bench/marketplace/corten/Dockerfile" : "Dockerfile";
-    const labels = build.image.Config.Labels, expectedSource = digest(JSON.stringify(files.filter((f) => app === "corten"
-      ? ["Cargo.toml", "Cargo.lock"].includes(f.path) || f.path.startsWith("crates/") || f.path.startsWith("bench/marketplace/corten/")
-      : f.path.startsWith(prefix)).map((f) => [f.path, f.sha256])));
+    const labels = build.image.Config.Labels, expectedSource = digest(JSON.stringify(appSourceRows(app, files)));
     assert.equal(labels["run.corten.hardening.source"], expectedSource);
     assert.deepEqual(receipt.args, ["build", "--label", `run.corten.hardening=${summary.runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${summary.runId}`,
       "--label", `run.corten.marketplace.commit=${summary.commit}`, "--label", "run.corten.marketplace.dirty=false", "--label", `run.corten.marketplace.profile=${featureProfile}`,
@@ -571,10 +657,9 @@ export function verifyRunInputs(folder, summary) {
   }
   // The root context is also the immutable mounted harness/input snapshot.
   if (!summary.builds?.corten) missingProof("full source/harness build closure missing");
-  if (summary.cells.some((cell) => cell.status === "observed" && cell.phase === recoveryPhase)) {
-    for (const path of [upstreamSourcePath(recoveryPhase), probeSourcePath(recoveryPhase)])
-      assert.ok(files.some((file) => file.path === path), "dependency recovery entry point is not in the committed source");
-  }
+  for (const phase of new Set(summary.cells.filter((cell) => cell.status === "observed").map((cell) => cell.phase)))
+    for (const path of phaseInputs(phase))
+      assert.ok(files.some((file) => file.path === path), `native hardening input is not in the committed source: ${path}`);
   assert.deepEqual(savedFiles(join(folder, "dependencies")), input.dependencies);
   const lock = JSON.parse(body("corten-build-context/package-lock.json"));
   for (const name of ["@playwright/test", "playwright", "playwright-core"]) {
@@ -606,9 +691,6 @@ export function verifyArtifacts(folder, manifest) {
   }
   assert.deepEqual(artifacts(folder), manifest, "raw artifact missing, added or modified");
 }
-const unavailable = (reason) => ({ status: "unavailable", reason });
-const percentile = (values, share) => values[Math.min(values.length - 1, Math.ceil(values.length * share) - 1)];
-
 export function verifyParity(parity, source) {
   assert.equal(parity.workload, "marketplace-v2"); assert.equal(parity.source, source);
   assert.equal(parity.jsonRecords, 500); assert.equal(parity.pages, 264); assert.equal(parity.profiles.length, 12);
@@ -616,13 +698,6 @@ export function verifyParity(parity, source) {
   assert.equal(new Set(keys).size, 12);
   for (const locale of ["en-US", "fr-FR", "de-DE"]) for (const js of [true, false]) for (const mobile of [true, false]) assert.ok(keys.includes(`${locale}/${js}/${mobile}`));
   if (source === "api") assert.deepEqual(parity.upstream, { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true });
-}
-
-export function defensiveRejection(phase, row) {
-  const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(row.responsePrefix)?.[1]);
-  if (phase === "oversized-requests") return row.variant === "body-size" ? status === 413 : [414, 431].includes(status);
-  if (["slow-headers", "slow-bodies", "idle-connections"].includes(phase)) return status === 408 || phase === "slow-bodies" && status === 413;
-  return phase === "connection-pressure" && status === 429;
 }
 
 export function verifyNativeLimits(settings, lifecycle) {
@@ -639,124 +714,7 @@ export function verifyNativeLimits(settings, lifecycle) {
     assert.deepEqual(actual.Ulimits, [{ Name: "nofile", Hard: 65536, Soft: 65536 }], `${p.id}: actual FD limit differs`);
     assert.equal(actual.RestartPolicy.Name, "no", "automatic restart cannot manufacture recovery");
     assert.equal(actual.Privileged, false); assert.deepEqual(actual.PortBindings, {}, "native verification must not publish ports");
-    assert.deepEqual(nativeHostConfig(state.after.HostConfig), nativeHostConfig(actual), "native deployment configuration changed during injection");
+    assert.deepEqual(nativeHostConfig(state.after.HostConfig), nativeHostConfig(actual), "native deployment configuration changed during observation");
     assert.ok(!state.events.some((event) => event.Action === "update"), "external configuration intervention invalidates apparatus");
   }
-}
-
-export function assemble({ settings, raw, parity, source, cleanup, provenance, lifecycle }) {
-  const b = validateBudget(JSON.parse(settings.effectiveBudgets)); verifyParity(parity, source);
-  verifyNativeLimits(settings, lifecycle);
-  const expected = records().item_1;
-  for (const row of raw.filter((r) => r.type === "legitimate")) validateLegitimate(row, expected, b.recovery.requestTimeoutMs);
-  if (settings.nativeSource === "api") { assert.equal(source, "api"); assessTimedSource(raw); }
-  const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); return rows[0]; };
-  for (const type of ["control-before", "control-after"]) {
-    const control = one(type); validateControl(control); assert.equal(control.phase, settings.phase);
-  }
-  const reaped = one("probe-cleanup");
-  assert.equal(reaped.connections, 0); assert.equal(reaped.tasks, 0); assert.deepEqual(reaped.errors, []); assert.deepEqual(reaped.failures, []);
-  assert.ok(reaped.eventLoopMaxMs <= b.timing.maxStartLagMs, "injector event loop stalled");
-  assert.equal(cleanup.complete, true); assert.equal(cleanup.containers.length, 0); assert.equal(cleanup.volumes.length, 0);
-  assert.equal(cleanup.commandClients, 0);
-  const clock = one("clock");
-  assert.equal(cleanup.nativeClock?.bootId, clock.bootId, "cleanup and injector clocks are not from the same kernel boot");
-  assert.match(clock.monotonicNs, /^\d+$/); assert.match(cleanup.nativeClock.monotonicNs, /^\d+$/);
-  const cleanupAtMs = Number(BigInt(cleanup.nativeClock.monotonicNs) - BigInt(clock.monotonicNs)) / 1e6;
-  assert.ok(cleanupAtMs >= reaped.atMs, "cleanup clock preceded injector cleanup");
-  if (Object.values(lifecycle).some((p) => p.observation)) {
-    const complete = one("probe-complete");
-    assert.ok(Number.isFinite(complete.atMs) && complete.atMs >= Math.max(reaped.atMs, b.legitimate.after.endMs));
-    assert.ok(raw.indexOf(complete) > raw.indexOf(one("control-after")), "terminal boundary preceded final receiving controls");
-    const minimum = BigInt(clock.monotonicNs) + BigInt(Math.ceil(complete.atMs * 1e6));
-    for (const p of Object.values(lifecycle)) {
-      const window = p.observation; assert.ok(window, "missing terminal observation interval");
-      for (const bound of [window.start, window.end]) {
-        assert.equal(bound.bootId, clock.bootId, "terminal observation and injector clocks differ");
-        assert.match(bound.monotonicNs, /^\d+$/);
-      }
-      assert.ok(BigInt(window.start.monotonicNs) >= minimum && BigInt(window.end.monotonicNs) >= BigInt(window.start.monotonicNs)
-        && BigInt(window.end.monotonicNs) <= BigInt(cleanup.nativeClock.monotonicNs), "terminal observation interval escaped post-probe/pre-cleanup bounds");
-    }
-  }
-  const attack = raw.filter((r) => r.type === "attack").sort((a, c) => a.index - c.index);
-  assert.deepEqual(attack.map((r) => r.index), b.attack.scheduledAtMs.map((_, i) => i), "attack attempt indices incomplete");
-  assert.ok(Array.isArray(settings.emissionPlan) && settings.emissionPlan.length === attack.length, "missing exact native emission plan; historical evidence cannot establish current semantic qualification");
-  for (const row of attack) validateAttack(row, settings.emissionPlan[row.index], b);
-  assert.ok(attack.every((r) => r.phase === settings.phase && r.endedAtMs >= r.startedAtMs));
-  assert.ok(attack.reduce((n, r) => n + r.bytesQueued, 0) <= b.attack.maxWireBytes, "injector wire budget exceeded");
-  if (settings.phase === "oversized-requests") for (const variant of ["header-count", "header-size", "body-size"]) assert.ok(attack.some((r) => r.variant === variant));
-  const legitimate = {}, resources = {};
-  for (const [window, w] of Object.entries(b.legitimate)) {
-    const boundary = (name) => { const rows = raw.filter((r) => r.type === "window" && r.window === window && r.boundary === name); assert.equal(rows.length, 1); return rows[0].atMs; };
-    const startMs = boundary("startMs"), endMs = boundary("endMs");
-    const rows = raw.filter((r) => r.type === "legitimate" && r.window === window).sort((a, c) => a.index - c.index);
-    assert.deepEqual(rows.map((r) => r.index), w.scheduledAtMs.map((_, i) => i), "legitimate attempt indices incomplete");
-    const paths = ["/marketplace/en-US/item_1", "/marketplace/fr-FR/item_1", "/marketplace/de-DE/item_1", "/api/marketplace/item_1"];
-    for (const row of rows) {
-      assert.equal(row.path, paths[row.index % paths.length], "scheduled native request path was substituted");
-      if (row.bodyComplete) assert.ok(row.endedAtMs <= endMs, "completed response escaped its observation window");
-    }
-    const times = rows.filter((r) => r.ok).map((r) => r.latencyMs).sort((a, c) => a - c);
-    legitimate[window] = { startMs, endMs, counts: { sent: rows.length, ok: times.length, errors: rows.length - times.length },
-      startedAtMs: rows.map((r) => r.startedAtMs), latency: times.length ? { p50Ms: percentile(times, 0.5), p99Ms: percentile(times, 0.99), maxMs: times.at(-1) } : unavailable("no successful legitimate requests"), evidence: `raw.jsonl#legitimate/${window}` };
-    const samples = raw.filter((r) => r.type === "resources" && r.window === window); assert.equal(samples.length, 1);
-    const sample = samples[0];
-    if (sample.collectedAtMs !== undefined) assert.ok(sample.atMs >= startMs && sample.collectedAtMs >= sample.atMs && sample.collectedAtMs <= endMs, "resource collection escaped observation window");
-    assert.deepEqual(Object.keys(sample.samples).sort(), settings.deployment.processes.map((p) => p.id).sort());
-    resources[window] = settings.deployment.processes.map((p) => {
-      const s = sample.samples[p.id], state = lifecycle[p.id]; assert.ok(state, "missing lifecycle evidence");
-      const sampleWall = Date.parse(clock.wallAtStart) + (sample.collectedAtMs ?? sample.atMs);
-      assert.equal(state.before.State.Running, true); assert.equal(state.after.Id, state.before.Id); assert.equal(state.after.State.StartedAt, state.before.State.StartedAt, "target restarted");
-      assert.ok(!state.after.State.Error, "Docker lifecycle failure");
-      assert.ok(!state.events.some((e) => ["kill", "stop", "start", "restart", "pause", "unpause", "destroy"].includes(e.Action)), "external lifecycle intervention invalidates apparatus");
-      if (s.unavailable) assert.ok(state.after.State.Running === false && Date.parse(state.after.State.FinishedAt) <= sampleWall, "unexplained missing resource evidence");
-      const running = s.unavailable ? false : s.running;
-      if (!s.unavailable) {
-        if (s.startedNs !== undefined) {
-          const began = Number(BigInt(s.startedNs) - BigInt(clock.monotonicNs)) / 1e6, ended = Number(BigInt(s.endedNs) - BigInt(clock.monotonicNs)) / 1e6;
-          assert.ok(began >= sample.atMs && ended >= began && ended <= sample.collectedAtMs, "resource counter timestamp differs from collection interval");
-          assert.ok(s.procs.every((pid) => /^[1-9]\d*$/.test(pid)), "native PID inventory hidden by observer namespace");
-        }
-        assert.equal(s.cpuSeconds, Number(/^usage_usec (\d+)$/m.exec(s.cpu)?.[1]) / 1e6, "CPU differs from raw cgroup counter");
-        assert.equal(s.memoryBytes, Number(s.memory), "memory differs from raw cgroup counter");
-        assert.equal(s.running, s.procs.length > 0, "running differs from process inventory");
-        assert.equal(s.oomKilled, Number(/^oom_kill (\d+)$/m.exec(s.events)?.[1]) > 0, "OOM differs from raw cgroup events");
-      }
-      const oomKilled = !running && (s.unavailable ? state.after.State.OOMKilled : s.oomKilled);
-      return { id: p.id, count: p.count, observedProcessCount: s.procs?.length ?? unavailable("container exited before sample"), atMs: s.unavailable ? sample.collectedAtMs ?? sample.atMs : sample.atMs, running, oomKilled,
-        cpuSeconds: s.cpuSeconds ?? unavailable(s.unavailable), memoryBytes: s.memoryBytes ?? unavailable(s.unavailable), evidence: `raw.jsonl#resources/${window}/${p.id}` };
-    });
-  }
-  const established = attack.filter((r) => r.established), closed = established.filter((r) => r.targetClosedAtMs !== null);
-  const after = raw.filter((r) => r.type === "legitimate" && r.window === "after");
-  const recoveryStart = Math.max(b.legitimate.during.endMs, legitimate.during.endMs), recovered = after.filter((r) => r.ok && r.startedAtMs >= recoveryStart).sort((a, c) => a.endedAtMs - c.endedAtMs)[0];
-  const terminal = terminalRecovery(recovered, settings.deployment.processes, resources.after, lifecycle, source, settings.terminalHealthPaths);
-  const rejected = established.filter((r) => defensiveRejection(settings.phase, r));
-  const missing = ["slow-headers", "slow-bodies", "idle-connections"].includes(settings.phase) && established.length > 0 && closed.length === 0;
-  // Closing a slow reader is not proof it reached write backpressure. No generic cap/timeout attribution.
-  const protection = rejected.length ? "observed" : missing ? "missing" : "inconclusive";
-  const capture = { schema: hardeningCaptureSchema, contract: hardeningContract, case: settings.case, phase: settings.phase,
-    deployment: settings.deployment, effectiveBudgets: settings.effectiveBudgets, provenance,
-    parity: { status: "passed", contract: "marketplace-v2/native-browser-and-content", evidence: "parity.json" },
-    apparatus: { injector: { healthy: true, scheduled: b.attack.scheduledAtMs.length, attempted: attack.length, errors: 0, dropped: 0, evidence: "raw.jsonl#attack" },
-      host: { healthy: true, evidence: "raw.jsonl#probe-cleanup" }, controls: { attackValid: true, legitimateValid: true, evidence: "raw.jsonl#control-before,control-after" },
-      artifacts: { complete: true, evidence: "manifest.json" }, cleanup: { complete: true, atMs: cleanupAtMs,
-        connections: 0, processes: 0, tasks: 0, evidence: "cleanup.json" } },
-    attack: { attempted: attack.length, established: established.length, failed: attack.length - established.length, closed: closed.length, held: established.length - closed.length,
-      startedAtMs: attack.map((r) => r.startedAtMs), evidence: "raw.jsonl#attack" }, legitimate, resources,
-    recovery: { attempted: true, startMs: recoveryStart, endMs: terminal.disposition === "recovered" ? recovered.endedAtMs : legitimate.after.endMs,
-      ...terminal, evidence: "raw.jsonl#legitimate/after and service-critical native lifecycle after snapshots" },
-    defense: { protection, reason: rejected.length ? "native HTTP rejection observed; see exact statuses and incomplete sends" : missing ? "connections retained to the declared release; no closure protection observed within this profile" : "bounded observations do not identify a protection mechanism",
-      attribution: [{ layer: "unknown", mechanism: "raw closure/rejection/unread-queue evidence only; no inferred server/proxy mechanism", evidence: "raw.jsonl#attack" }] } };
-  return validateHardeningOutcome(capture, settings);
-}
-
-export function targetOutcome(capture, assessment, sourceObservation) {
-  const service = Object.fromEntries(Object.entries(capture.legitimate).map(([key, value]) => [key, value.counts]));
-  return { classification: Object.values(service).some((counts) => counts.errors > 0) || capture.recovery.disposition !== "recovered"
-    ? "target-capacity-failure" : "service-preserved", service, recovery: capture.recovery.disposition,
-    measurement: capture.measurement, numericComparisonQualified: capture.measurement === "complete" && capture.recovery.disposition === "recovered"
-      && Object.values(service).every((counts) => counts.errors === 0) && assessment?.productionQualified === true
-      && (!sourceObservation || sourceObservation.state === "observed") };
 }

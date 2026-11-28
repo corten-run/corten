@@ -13,7 +13,7 @@ not set? This measures it through nginx, the way an app with live streams is dep
    own), each carrying when it was made after the first. Three copies run, each in its own
    container: `NODELAY` unset (Corten's own listeners, `corten::serve`), `on` and `off` (the
    same listeners wrapped in a `Listener` of the app's own that sets `TCP_NODELAY` as told).
-2. nginx 1.29 ([nginx.conf](nginx.conf): the deploy guide's `upstream` with `keepalive`, one
+2. nginx 1.31.10, pinned by digest (1.29.8 for the results below; each run records `nginx -v`) ([nginx.conf](nginx.conf): the deploy guide's `upstream` with `keepalive`, one
    worker, so streams to an app reuse one connection to it) runs in a fourth container, and
    [client.mjs](client.mjs) (Node 24) in a fifth, all on one Docker network: every hop is a TCP
    connection between two network namespaces, not loopback.

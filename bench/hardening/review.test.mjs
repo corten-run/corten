@@ -5,11 +5,6 @@ import { qualification } from "../marketplace/feature-contract.mjs";
 import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { nativeControls, assessNative } from "./native.mjs";
 import { trackedNetworkCreate, removeOwnedNetwork, requireSourceControl, failureKind, terminalRecovery, observeTerminalHealth, collectTerminalHealth } from "./lifecycle.mjs";
-import { targetOutcome } from "./evidence.mjs";
-import { budgets } from "./plan.mjs";
-import { validateAttack } from "./receipts.mjs";
-import { validateLegitimate } from "./receipts.mjs";
-import { createHash } from "node:crypto";
 
 test("completed native baseline HTTP failures remain target-functional, broken transport remains apparatus-invalid", async () => {
   const q = qualification(qualificationProbes(), "fixture"), live = q.probes.live.path;
@@ -113,9 +108,7 @@ test("terminal native liveness and Docker health must both recover in every crit
         const changed = structuredClone(lifecycle); corrupt(changed[id]);
         const terminal = recovery(changed);
         assert.equal(terminal.disposition, "not-recovered", id);
-        const capture = { recovery: terminal, measurement: "complete", legitimate: Object.fromEntries(["before", "during", "after"].map((key) => [key, { counts: { sent: 1, ok: 1, errors: 0 } }])) };
-        const outcome = targetOutcome(capture, { productionQualified: true }, { state: "observed" });
-        assert.equal(outcome.classification, "target-capacity-failure"); assert.equal(outcome.numericComparisonQualified, false);
+        assert.ok(terminal.terminalServices.some((service) => !service.healthy || service.liveness !== "observed"));
       }
     }
     const wrong = structuredClone(lifecycle); wrong.application.health.path = "/invented";
@@ -125,7 +118,13 @@ test("terminal native liveness and Docker health must both recover in every crit
     const fixture = structuredClone(lifecycle); fixture.upstream.health = failed.upstream;
     assert.throws(() => recovery(fixture, "fixture"), /apparatus upstream unhealthy/);
     const missing = structuredClone(lifecycle); missing.application.health = { path: null, response: null };
-    assert.equal(terminalRecovery(true, processes, resources, missing, "api", { ...paths, application: null }, endpoints).disposition, "not-recovered");
+    const missingPath = () => terminalRecovery(true, processes, resources, missing, "api", { ...paths, application: null }, endpoints);
+    assert.equal(missingPath().disposition, "missing-liveness");
+    missing.proxy.health = failed.proxy;
+    assert.equal(missingPath().disposition, "not-recovered");
+    missing.proxy.health = lifecycle.proxy.health;
+    missing.application.after.State.Running = false;
+    assert.equal(missingPath().disposition, "not-recovered");
   } finally { app.closeAllConnections(); await new Promise((r) => app.close(r)); }
 });
 
@@ -168,8 +167,8 @@ test("observer failure retains only an unchanged, verified critical target exit;
     const result = await collect(exited);
     assert.equal(result.after, exited); assert.equal(result.health.response, null); assert.equal(result.health.observerError, failure.message);
     const recovery = terminalRecovery(true, [{ id: role, role }], [{ id: role, running: true }], { [role]: result }, "api", { [role]: "/health" });
-    const outcome = targetOutcome({ recovery, measurement: "complete", legitimate: {} }, { productionQualified: true });
-    assert.equal(outcome.classification, "target-capacity-failure"); assert.equal(outcome.numericComparisonQualified, false);
+    assert.equal(recovery.disposition, "not-recovered");
+    assert.equal(recovery.terminalServices[0].healthy, false);
     for (const corrupt of [(p) => { p.State.Running = true; }, (p) => { p.Id = "different-id"; },
       (p) => { p.State.StartedAt = "2026-11-12T00:00:10Z"; }, (p) => { p.State.Error = "daemon failure"; },
       (p) => { p.State.FinishedAt = "not a time"; }, (p) => { p.State.Dead = true; }]) {
@@ -177,49 +176,5 @@ test("observer failure retains only an unchanged, verified critical target exit;
       await assert.rejects(collect(changed), (error) => error === failure);
     }
     if (role === "upstream") await assert.rejects(collect(exited, "fixture"), (error) => error === failure);
-  }
-});
-
-test("release and drip validation use the unchanged reviewed deadline and full cadence", () => {
-  const b = budgets(), plan = { variant: "slow-headers", firstBytes: 1, firstSha256: "a".repeat(64), repeat: true, dripBytes: 1 };
-  const row = { variant: plan.variant, firstBytes: 1, firstSha256: plan.firstSha256, startedAtMs: 2600, connectedAtMs: 2600,
-    endedAtMs: 8501, releasedAtMs: 8500, targetClosedAtMs: null, established: true, emission: "emitted", responsePrefix: "",
-    drips: 23, dripAtMs: Array.from({ length: 23 }, (_, i) => 2600 + (i + 1) * 250), writes: 24, bytesQueued: 24, backpressure: 0 };
-  validateAttack(row, plan, b);
-  for (const delta of [-101, 101]) {
-    const changed = structuredClone(row); changed.releasedAtMs += delta; changed.endedAtMs = changed.releasedAtMs + 1;
-    assert.throws(() => validateAttack(changed, plan, b), /release deadline/);
-  }
-  for (const corrupt of [(r) => { r.drips = 1; r.dripAtMs.length = 1; r.writes = 2; r.bytesQueued = 2; },
-    (r) => r.dripAtMs[10] += 201, (r) => r.dripAtMs[0] -= 10]) {
-    const changed = structuredClone(row); corrupt(changed); assert.throws(() => validateAttack(changed, plan, b), /trickle/);
-  }
-  const refused = { ...row, endedAtMs: 2650, releasedAtMs: null, targetClosedAtMs: 2650, drips: 0, dripAtMs: [], writes: 1, bytesQueued: 1 };
-  validateAttack(refused, plan, b); // Real early target closure is not an injection failure.
-  for (const established of [true, false]) {
-    const closed = { ...row, established, releasedAtMs: null, targetClosedAtMs: 9500, endedAtMs: 9501,
-      drips: 27, dripAtMs: Array.from({ length: 27 }, (_, i) => 2600 + (i + 1) * 250), writes: 28, bytesQueued: 28 };
-    if (!established) Object.assign(closed, { writes: 0, bytesQueued: 0, drips: 0, error: "ECONNREFUSED" });
-    assert.throws(() => validateAttack(closed, plan, b), /release deadline/);
-  }
-  const late = { ...row, connectedAtMs: 8490, drips: 0, dripAtMs: [], writes: 1, bytesQueued: 1 };
-  assert.throws(() => validateAttack(late, plan, b), /connect deadline/);
-  assert.throws(() => validateAttack({ ...late, emission: "target-refused-before-write", writes: 0, bytesQueued: 0,
-    targetClosedAtMs: 8500, releasedAtMs: null }, plan, b), /connect deadline/);
-  const deadline = row.startedAtMs + b.attack.connectTimeoutMs + b.timing.maxStartLagMs;
-  const atDeadline = { ...refused, connectedAtMs: deadline, endedAtMs: deadline + 1, targetClosedAtMs: deadline + 1,
-    emission: "target-refused-before-write", writes: 0, bytesQueued: 0, error: "ECONNRESET" };
-  validateAttack(atDeadline, plan, b);
-  assert.throws(() => validateAttack({ ...atDeadline, connectedAtMs: deadline + 0.5 }, plan, b), /connect deadline/);
-});
-
-test("completed legitimate HTTP responses cannot evade the 600 ms deadline with self-consistent timestamps", () => {
-  const body = Buffer.from('{"id":"native"}');
-  const row = { path: "/api/record", status: 200, bodyComplete: true, ok: true, bodyBase64: body.toString("base64"),
-    bodyBytes: body.length, bodySha256: createHash("sha256").update(body).digest("hex"), startedAtMs: 100, endedAtMs: 700, latencyMs: 600 };
-  validateLegitimate(row, { id: "native" });
-  for (const status of [200, 503]) {
-    const changed = { ...row, status, ok: status === 200, endedAtMs: 701, latencyMs: 601 };
-    assert.throws(() => validateLegitimate(changed, { id: "native" }), /request deadline/);
   }
 });

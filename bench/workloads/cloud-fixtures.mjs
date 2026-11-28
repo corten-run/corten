@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { controller } from "./droplet.mjs";
-import { reservation, selection, tags } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, reservation, selection, tags } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 import { descriptor } from "../json-api/contract.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
@@ -14,6 +14,28 @@ import { registration as streamRegistration } from "./test-fixtures/control-stre
 
 export const commit = "a".repeat(40), campaign = "r21-0123456789abcdef", subject = "d".repeat(64);
 export const userId = "synthetic-user-0001", accountId = `user:${userId}`, context = "synthetic-cloud-control";
+export function syntheticPlacement(c8Regions = ["sfo2", "sfo3"]) {
+  return { sizes: [{ slug: "c-8", available: true, regions: [...c8Regions] },
+    { slug: "c-16", available: true, regions: ["sfo2"] }],
+  regions: ["sfo2", "sfo3", "lon1", "blr1"].map((slug) => ({ slug, available: true,
+    sizes: [...(c8Regions.includes(slug) ? ["c-8"] : []), ...(slug === "sfo2" ? ["c-16"] : [])] })) };
+}
+export function syntheticCatalogProvider(catalog = syntheticPlacement(), calls = []) {
+  return ({ createMode }) => {
+    assert.equal(createMode, undefined, "fleet catalog cannot create");
+    return Object.assign(async (args) => {
+      calls.push(args);
+      assert.deepEqual(args.slice(-2), ["--context", context]);
+      const command = args.slice(0, -2);
+      if (command[0] === "account") {
+        assert.deepEqual(command, ["account", "get", "--output", "json"]);
+        return { status: 0, stdout: JSON.stringify({ uuid: userId }) };
+      }
+      assert.deepEqual(command, fleetCatalogCommand);
+      return { status: 0, stdout: JSON.stringify(typeof catalog === "function" ? catalog() : catalog) };
+    }, { close: async () => {} });
+  };
+}
 export function syntheticDelivery(group = "json-api", subjectSha256 = subject) {
   const mixed = group === "mixed-production", prefix = mixed ? "mixed" : "json";
   const identities = mixed ? selectedApps(group).map((app) => ({ app, key: "mixed-native-source", payload: "marketplace-v2" }))
@@ -48,10 +70,13 @@ export const metadata = () => [{ name: "run.log", body: "synthetic fake-only evi
 export function harness(t, flags = {}) {
   const temp = mkdtempSync(join(tmpdir(), "groups-cloud-test-"));
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
-  const repo = join(temp, "repo"), base = join(temp, "control"), local = join(base, "groups-r21"), statePath = join(local, "state.json");
-  mkdirSync(repo); mkdirSync(base);
+  const repo = join(temp, "repo"), slot = join(temp, flags.fleetSlot ?? "control");
+  const base = flags.stateRoot ?? (flags.fleetGroup === undefined ? slot : join(slot, flags.fleetGroup));
+  const round = flags.round ?? "r21", local = join(base, `groups-${round}`), statePath = join(local, "state.json");
+  mkdirSync(repo);
+  if (!flags.stateRoot) mkdirSync(slot);
   const hostId = flags.hostId ?? "123";
-  let s = { ...reservation({ round: "r21", commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
+  let s = { ...reservation({ round, commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
   const d = () => ({ id: Number(hostId), name: s.name, tags: [...tags, s.tag], size_slug: s.host.size, region: { slug: s.host.region },
     networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
@@ -76,6 +101,10 @@ export function harness(t, flags = {}) {
       if (args[0] === "auth" && args[1] === "token") return good("SYNTHETIC_ONLY_CREDENTIAL_A\n");
       if (args[0] === "account") return good(JSON.stringify({ uuid: flags.accountId ?? userId,
         ...(flags.teamId === undefined ? {} : { team: { uuid: flags.teamId } }), droplet_limit: flags.noCapacity ? 0 : 20 }));
+      if (args[1] === "placement") {
+        assert.deepEqual(args.slice(0, -2), fleetCatalogCommand);
+        return good(JSON.stringify(flags.placement ?? syntheticPlacement()));
+      }
       if (args[2] === "list") { if (flags.listError) throw new Error("fake list failure"); return good(JSON.stringify(droplets)); }
       if (args[2] === "get") {
         if (flags.listError) throw new Error("fake host read failure");
@@ -94,25 +123,28 @@ export function harness(t, flags = {}) {
         assert.ok(saved.deletionIntentAt && (saved.retirement?.kind === "unused" ? saved.retirement.evidenceSha256
           : saved.archiveSha256 && saved.evidenceSha256)); assert.equal(saved.fullGroupQualified, false);
         if (flags.deleteError) throw new Error("fake deletion error");
-        if (!flags.deleteUnconfirmed) droplets = [];
+        if (!flags.deleteUnconfirmed) droplets = droplets.filter((d) => String(d.id) !== hostId);
         if (flags.deleteLost) throw new Error("fake deletion acknowledgement lost"); return flags.deleteRejected ? { ...good(), status: 1 } : good();
       }
     }
     if (binary === "ssh") {
       if (registration?.stream) {
-        const apparatus = { ...structuredClone(streamRegistration), binding: registration.expected.binding, id: registration.expected.id };
+        const apparatus = { ...structuredClone(streamRegistration), binding: registration.expected.binding, id: registration.expected.id,
+          host: { ...streamRegistration.host, hostname: JSON.parse(readFileSync(statePath)).name } };
         writeFileSync(join(local, "monitor-registration.json"), JSON.stringify(apparatus));
         writeFileSync(join(local, "monitor-journal.jsonl"), JSON.stringify({ kind: "progress", id: apparatus.id, payload: { state: "active" } }) + "\n");
         const done = new Promise((resolve) => {
           flags.completeMonitor = (terminal = true) => {
+            const closedAtMs = Date.now(), recoverAfterMs = closedAtMs + 30000;
             if (terminal) supervisedTerminal = { registrationSha256: digest(JSON.stringify(apparatus)), sealSha256: digest("synthetic native seal") };
-            const value = { id: apparatus.id, binding: apparatus.binding, nativeTerminal: terminal, localClosed: true, remoteDrained: false,
-              ...(terminal ? { campaign, sealSha256: supervisedTerminal.sealSha256 } : { publicationRevoked: true }) };
+            const identity = { id: apparatus.id, binding: apparatus.binding };
+            const value = terminal
+              ? { ...identity, nativeTerminal: true, localClosed: true, remoteDrained: false, campaign, sealSha256: supervisedTerminal.sealSha256 }
+              : { ...identity, at: new Date(closedAtMs).toISOString(), recoverAfterMs, publicationRevoked: true, remoteTerminal: false };
             writeFileSync(join(local, "monitor-" + (terminal ? "terminal" : "invalid") + ".json"), JSON.stringify(value));
-            const closedAtMs = Date.now();
-            writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ id: apparatus.id, binding: apparatus.binding,
-              code: terminal ? 0 : 255, signal: null, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 30000 }));
-            resolve({ ...value, terminal });
+            writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ ...identity,
+              code: terminal ? 0 : 255, signal: null, remoteDrained: false, closedAtMs, recoverAfterMs }));
+            resolve({ ...value, terminal, remoteDrained: false });
           };
           if (!flags.monitorHold) flags.completeMonitor();
         });
@@ -136,12 +168,24 @@ export function harness(t, flags = {}) {
           setupFailed: true, exitCode: 1, observedAtMs: Date.now() };
         return good(JSON.stringify(Object.hasOwn(flags, "setupProof") ? flags.setupProof : proof));
       }
-      if (script === "true") return flags.noSsh ? { ...good(), status: 255 } : good();
-      if (script.startsWith("systemctl show")) {
-        units++; if (flags.unitError) throw new Error("fake unit failure");
-        return good(`Id=${flags.wrongUnit ? "foreign.service" : s.unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${s.unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC\n`);
+      if (script === "true") {
+        if (flags.noSsh) return { ...good(), status: 255 };
+        const known = join(local, "known_hosts");
+        if (args.includes("StrictHostKeyChecking=accept-new") && args.includes("GlobalKnownHostsFile=none") && !existsSync(known))
+          writeFileSync(known, "synthetic launch SSH host key\n", { flag: "wx" });
+        return good();
       }
-      if (script === "sha256sum /bench/results.tgz") return good(`${flags.wrongHash ? "f".repeat(64) : digest(bytes)}  /bench/results.tgz\n`);
+      if (script.includes("CORTEN_IDLE") && flags.busyHost) return { ...good(), status: 1 };
+      if (script.startsWith("systemctl show") || script.includes("CORTEN_IDLE") && script.includes("\nsystemctl show")) {
+        units++; if (flags.unitError) throw new Error("fake unit failure");
+        const started = flags.expired ? "ExecMainCode=0\nExecMainStartTimestamp=" : "ExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC";
+        const extra = script.includes("--property=ControlPID") ? `Job=${flags.job ?? ""}\nControlPID=${flags.controlPid ?? 0}\nSubState=dead\n` : "";
+        const { unit } = JSON.parse(readFileSync(statePath));
+        return good(`Id=${flags.wrongUnit ? "foreign.service" : unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\n${started}\n${extra}`);
+      }
+      if (script.includes("CORTEN_IDLE") && script.includes("sha256sum <&3"))
+        return good(`${flags.wrongHash ? "f".repeat(64) : digest(bytes)}  /bench/results.tgz\n${digest("archive stat")}  -\n`);
+      if (script.endsWith("sha256sum /bench/results.tgz")) return good(`${flags.wrongHash ? "f".repeat(64) : digest(bytes)}  /bench/results.tgz\n`);
       if (script.startsWith("systemctl start") && flags.startLost) throw new Error("fake start acknowledgement lost");
       if (script.startsWith("node -e")) { if (flags.auditCollision) throw new Error("fake inbox collision"); return good(`${subject}\n`); }
       if (script.includes("pack.sh") && flags.packError) throw new Error("fake pack failure");
@@ -163,8 +207,8 @@ export function harness(t, flags = {}) {
     change(fn) { const value = this.saved(); fn(value); writeFileSync(statePath, JSON.stringify(value)); },
     host: d, hosts(value) { droplets = value ?? [d()]; }, setArchive(value) { bytes = value; },
     task(deps = {}, options = {}) {
-      return controller({ round: "r21", stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
-        inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round: "r21", commit }); return report(); }, ...deps });
+      return controller({ round, stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
+        inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round, commit }); return report(); }, ...deps });
     },
     pinnedUnused(deps = {}) {
       const key = join(temp, "synthetic-verified-host-key"), bytes = "synthetic operator-verified host key\n";
@@ -184,7 +228,12 @@ export function syntheticProviderRequest(h, run = h.run) {
     assert.ok(credential === "SYNTHETIC_ONLY_CREDENTIAL_A");
     let args;
     if (path === "/v2/account") args = ["account", "get", "--output", "json"];
-    else if (method === "GET" && path.startsWith("/v2/droplets?")) args = ["compute", "droplet", "list", "--output", "json"];
+    else if (method === "GET" && /^\/v2\/(sizes|regions)\?page=1&per_page=200$/.test(path)) {
+      const kind = path.split(/[/?]/)[2];
+      const result = await run("doctl", [...fleetCatalogCommand, "--context", context], timeout);
+      const rows = JSON.parse(result.stdout)[kind];
+      return { status: 200, value: { [kind]: rows, meta: { total: rows.length } } };
+    } else if (method === "GET" && path.startsWith("/v2/droplets?")) args = ["compute", "droplet", "list", "--output", "json"];
     else if (method === "GET" && /^\/v2\/droplets\/[1-9]\d*$/.test(path)) args = ["compute", "droplet", "get", path.split("/").at(-1), "--output", "json"];
     else if (method === "POST" && path === "/v2/droplets") args = ["compute", "droplet", "create", body.name, "--size", body.size, "--region", body.region,
       "--image", body.image, "--ssh-keys", String(body.ssh_keys[0]), "--tag-names", body.tags.join(","), "--wait", "--output", "json"];

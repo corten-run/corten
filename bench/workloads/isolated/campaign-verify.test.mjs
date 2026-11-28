@@ -11,6 +11,12 @@ import * as audit from "./test-fixtures/campaign-audit.mjs";
 import { catalogResult } from "./test-fixtures/catalog.mjs";
 import { cpuSettings, parseArgs as catalogOptions } from "../../catalog/contract.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
+import * as lifetime from "./host-lifetime.mjs";
+import * as nativeReplay from "./native-replay.mjs";
+import { verifyHostBoundary } from "./host-observation.mjs";
+import { composePhase } from "./composition.mjs";
+import { comparisonProfile } from "../../client-heavy/contract.mjs";
+import { readLatestStable } from "../../client-heavy/build.mjs";
 
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-replay-"));
 const round = "r77", commit = "a".repeat(40), id = `${round}-0123456789abcdef`, sentinel = "SYNTHETIC_PRIVATE_SENTINEL";
@@ -46,6 +52,14 @@ mock.module("./json-staging.mjs", { namedExports: { ...audit,
   if (nativeMode === "parse") throw new SyntaxError(`invalid JSON ${sentinel}`);
   return { report: { baseline: false, warnings: [sentinel] } };
 } } });
+let clientNative;
+const clientObservation = { status: "verified", cleanupComplete: true, manifestSha256: "b".repeat(64), context: { bootId: "synthetic-boot" } };
+const clientHostProof = { resources: "verified", cleanupComplete: true, blockers: [] };
+mock.module("./native-replay.mjs", { namedExports: { ...nativeReplay, inspectNative: (...args) => clientNative ?? nativeReplay.inspectNative(...args) } });
+mock.module("./host-lifetime.mjs", { namedExports: { ...lifetime,
+  inspectLifetime: (...args) => clientNative ? clientObservation : lifetime.inspectLifetime(...args),
+  composeHostProof: (...args) => clientNative ? clientHostProof : lifetime.composeHostProof(...args),
+} });
 const { validateCampaign } = await import("./campaign-verify.mjs");
 
 function journal() {
@@ -151,9 +165,9 @@ function mutateEvent(request, kind, update) {
 }
 test("saved group scope comes only from the rebound plan; foreign, missing, edited or downgraded groups are invalid", async () => {
   const legacy = await validateCampaign(archive()); assert.equal(legacy.schema, "benchmark-isolated-campaign-inspection/v1");
-  function stoppedGroup(group, changePlan = () => {}, changeStatus = () => {}) {
+  function stoppedGroup(group, changePlan = () => {}, changeStatus = () => {}, campaignMode = "dedicated") {
     expectedPlan = { ...plan, schema: contracts.groupCampaignSchema, order: [group], bindings: plan.bindings.filter((b) => b.request.group === group)
-      .map((b) => ({ ...b, selection: { apps: selectedApps(group), contractSha256: "synthetic-contract" } })) };
+      .map((b) => ({ ...b, campaignMode, selection: { apps: selectedApps(group), contractSha256: "synthetic-contract" } })) };
     const folder = join(temporary, String(serial++)), directory = join(folder, id); mkdirSync(directory, { recursive: true });
     const save = (path, value) => writeFileSync(join(folder, path), JSON.stringify(value));
     const status = { schema: "benchmark-isolated-campaign-status/v1", campaign: id, round, campaignSha256: plan.campaignSha256,
@@ -179,6 +193,15 @@ test("saved group scope comes only from the rebound plan; foreign, missing, edit
       assert.deepEqual(result.selection.groups.map((r) => r.group), [group]); assert.deepEqual(result.groups, []);
       assert.equal(result.qualified, false); assert.equal(result.deletionAuthorized, false);
       assert.deepEqual(evidence.tree(request.folder), before);
+    }
+    for (const placement of ["dedicated-sfo2", "dedicated-lon1", "dedicated-blr1"]) {
+      const request = stoppedGroup("json-api", undefined, undefined, placement), before = evidence.tree(request.folder);
+      const result = await validateCampaign(request);
+      assert.equal(result.status, "blocked");
+      assert.equal(result.placement, placement);
+      assert.deepEqual(evidence.tree(request.folder), before);
+      const edited = stoppedGroup("json-api", (p) => { p.bindings[0].campaignMode = "dedicated-nyc1"; }, undefined, placement);
+      assert.equal((await validateCampaign(edited)).status, "invalid");
     }
     for (const change of [
       (p) => { p.schema = "benchmark-isolated-campaign/v1"; },
@@ -333,6 +356,61 @@ test("an interrupted open command is preserved only as incomplete partial lifecy
   } });
   const result = (await validateCampaign(request)); assert.equal(result.status, "blocked", JSON.stringify(result));
   assert.equal(result.collectionIntegrity, "unsealed-partial"); assert.equal(result.qualified, false); assert.equal(result.deletionAuthorized, false);
+});
+test("halt after group-finished keeps the comparison in custody but not in the public report", async () => {
+  const group = "client-heavy", apps = selectedApps(group);
+  const binding = { ...plan.bindings.find((b) => b.request.group === group), request: { group, recipe: comparisonProfile },
+    selection: { apps, contractSha256: "synthetic-contract" }, preparation: { fixtures: [] }, latestStable: readLatestStable() };
+  const clientPlan = { ...plan, schema: contracts.groupCampaignSchema, order: [group], bindings: [binding] };
+  const folder = join(temporary, String(serial++)), directory = join(folder, id), phase = "00-client-heavy-timing";
+  const nativeFolder = join(directory, phase, "native");
+  mkdirSync(nativeFolder, { recursive: true });
+  const save = (path, value) => writeFileSync(join(directory, path), JSON.stringify(value));
+  const snapshot = { hostname: "unit", bootId: clientObservation.context.bootId, processes: [], containers: [] };
+  save(`${phase}/host-before.json`, snapshot); save(`${phase}/host-after.json`, snapshot);
+  save(`${phase}/command-0.log`, "synthetic");
+  save(`${phase}/native/raw.json`, "preserved raw bytes");
+  const manifest = evidence.tree(nativeFolder);
+  save(`${phase}/native-manifest.json`, manifest);
+  const phaseManifestSha256 = evidence.phaseSnapshot(join(directory, phase)).sha256;
+  save("plan.json", clientPlan);
+  writeFileSync(join(folder, ".host-attempt.json"), JSON.stringify({ schema: "benchmark-isolated-campaign-reservation/v1",
+    id, commit, campaignSha256: clientPlan.campaignSha256 }));
+  const comparison = { samples: 3, actions: [{ operation: "unit", kind: "unit", minMs: 1, medianMs: 2, maxMs: 3 }] };
+  clientNative = { status: "failed", attemptComplete: true, cleanupComplete: true, resources: "blocked",
+    rankingEligible: true, comparisonEligibleApps: ["react"], comparisons: { react: comparison },
+    outcomes: apps.map((app) => ({ app, outcome: app === "solid" ? "unsupported" : "passed" })) };
+  expectedPlan = clientPlan;
+  try {
+    const exit = { terminal: true, code: 1, signal: null, success: false, cancelled: false, forced: false, error: null };
+    const outcome = { group, ...composePhase(binding, clientNative, clientHostProof, [exit]),
+      host: clientHostProof, cleanup: verifyHostBoundary(snapshot, snapshot), nativeManifestSha256: manifest.sha256 };
+    assert.deepEqual(outcome.appOutcomes.find((r) => r.app === "react").comparison, comparison);
+    const request = { folder, round, commit }, artifactRoot = binding.validation.artifactRoot;
+    for (const finished of [false, true]) {
+      const status = { schema: "benchmark-isolated-campaign-status/v1", campaign: id, round, campaignSha256: clientPlan.campaignSha256,
+        executionVersion: 3, state: finished ? "finished" : "preserved-uncertain", controllerReady: false, isolation: "unverified",
+        outcomes: [outcome], uncollectedNativeRoots: [] };
+      const rows = [{ kind: "authorized" }, { kind: "started" }, { kind: "native-output-reserved", group, phase: "timing", artifactRoot },
+        { kind: "command-intent", group, invocation: binding.execution.invocation }, { kind: "command-started", pid: 100 },
+        { kind: "command-exited", ...exit, hostManifestSha256: clientObservation.manifestSha256 },
+        { kind: "phase-sealed", group, phase: "timing", artifactRoot, nativeManifestSha256: manifest.sha256, phaseManifestSha256 },
+        { kind: "group-finished", ...outcome }, { kind: finished ? "finished" : "halted" }];
+      for (const [sequence, row] of rows.entries()) save(`${String(sequence).padStart(5, "0")}-${row.kind}.json`, { ...row,
+        schema: "benchmark-isolated-campaign-event/v1", sequence, campaign: id, round, campaignSha256: clientPlan.campaignSha256, status });
+      save("campaign-result.json", { status, deletionAuthorized: false, wholeHostTerminal: "parent-must-observe" });
+      if (finished) {
+        rmSync(join(directory, "00008-halted.json"));
+        save("collection-manifest.json", { status, manifest: evidence.tree(directory) });
+      }
+      const before = evidence.tree(folder), result = await validateCampaign(request);
+      assert.equal(result.status, finished ? "verified" : "failed", JSON.stringify(result));
+      const row = result.groups[0].appOutcomes.find((r) => r.app === "react");
+      assert.equal(row.comparisonEligible, finished);
+      assert.deepEqual(row.comparison, finished ? comparison : undefined);
+      assert.deepEqual(evidence.tree(folder), before);
+    }
+  } finally { clientNative = undefined; expectedPlan = plan; }
 });
 test("outer assertion and JSON parse diagnostics never echo archive data", async () => {
   for (const malformed of [false, true]) {

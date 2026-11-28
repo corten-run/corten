@@ -1,22 +1,73 @@
-// Read-only: never starts a server, Docker, or an external process.
+// Read-only: strict reporting also checks the requested local Git object.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cpuSettings, descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { descriptor, identity, k6Image, nodeImage, payloads, phases, runtimeContext, scheduledProducerMarker, scheduledProducerSchema, schema, sha256, timingPlan, verifyImage, verifyImageExecution, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { reader } from "./artifacts.mjs";
 import { functionalVerifier, verifyFunctionalFailure, verifyFunctionalLiveness, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { timedSummarySchema, timedCaseProjection } from "./timed-outcomes.mjs";
-import { verifyProducer } from "./production.mjs";
+import { legacyProducerSchema, producerSourceNames, verifyProducer } from "./production.mjs";
 import { replayTimedRun } from "./evidence.mjs";
+import { describePlacement, recordedPlacement } from "./placement.mjs";
+
+function gitAtMeasuredCheckout(repo, args, options) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
+  return spawnSync("git", ["--no-replace-objects", "-C", repo, ...args], {
+    env: { ...env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" }, windowsHide: true, timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"], ...options,
+  });
+}
+function requireMeasuredCommit(commit) {
+  assert.ok(typeof commit === "string" && /^[a-f0-9]{40}$/.test(commit), "full measured commit required for strict reporting");
+}
+export function producerPolicyAtCommit(commit, repo = process.cwd()) {
+  requireMeasuredCommit(commit);
+  const result = gitAtMeasuredCheckout(repo, ["ls-tree", "--full-tree", "-z", `${commit}^{commit}`, "--", scheduledProducerMarker],
+    { encoding: "utf8", maxBuffer: 16 * 1024 });
+  assert.ok(result.status === 0 && !result.error, "cannot read strict JSON producer policy at measured commit");
+  if (!result.stdout) return legacyProducerSchema;
+  assert.ok(/^100(?:644|755) blob [a-f0-9]{40}\t/.test(result.stdout) && result.stdout.split("\t")[1] === scheduledProducerMarker + "\0",
+    "invalid committed JSON load sampler marker");
+  return scheduledProducerSchema;
+}
+
+export function verifyProducerAtCommit(producer, commit, repo = process.cwd()) {
+  requireMeasuredCommit(commit);
+  for (const name of producerSourceNames(producer?.schema)) {
+    const result = gitAtMeasuredCheckout(repo, ["cat-file", "blob", `${commit}^{commit}:bench/json-api/${name}`], { maxBuffer: 1024 ** 2 });
+    assert.ok(result.status === 0 && !result.error, `cannot read measured JSON producer file: ${name}`);
+    assert.ok(producer.sources?.[name] === sha256(result.stdout), `JSON producer differs from measured commit: ${name}`);
+  }
+}
 
 export function inspectJson(summary, { load, commit } = {}) {
+  if (commit !== undefined) assert.equal(summary.group?.contractSha256, descriptor().contractSha256,
+    "strict comparison requires this checkout's roster; use the measured checkout to qualify a historical group");
+  return inspectReport(summary, { load, commit, verifySource: commit === undefined ? undefined : () => {
+    const required = producerPolicyAtCommit(commit);
+    const timed = summary.schema === timedSummarySchema;
+    if (required === scheduledProducerSchema || timed)
+      assert.ok(timed && summary.producer?.schema === required, "JSON producer differs from the measured commit policy");
+    if (timed) verifyProducerAtCommit(summary.producer, commit);
+  } });
+}
+
+// Isolated callers supply their trusted source-binding gate instead of probing local Git.
+export function inspectBoundJson(summary, { load, commit, verifyBoundProducer }) {
+  requireMeasuredCommit(commit);
+  verifyBoundProducer(summary);
+  return inspectReport(summary, { load, commit });
+}
+
+function inspectReport(summary, { load, commit, verifySource }) {
   const timed = summary.schema === timedSummarySchema;
   assert.ok(summary.schema === schema || timed, "not a json-api result schema");
-  assert.deepEqual(summary.group, descriptor(), "JSON group contract/selection differs");
+  assert.deepEqual(summary.group, descriptor(summary.group?.contractSha256), "JSON group contract/selection differs");
   assert.deepEqual(summary.options?.apps, summary.group.apps, "exact JSON registry selection required");
   assert.equal(summary.options.group, "json-api");
   assert.match(summary.round ?? "", /^j[1-9]\d*$/); assert.equal(summary.options.round, summary.round);
@@ -40,25 +91,33 @@ export function inspectJson(summary, { load, commit } = {}) {
     assert.ok(Number.isFinite(Date.parse(summary.startedAt)) && Number.isFinite(Date.parse(summary.finishedAt))
       && Date.parse(summary.finishedAt) >= Date.parse(summary.startedAt), "missing/invalid terminal clock");
   });
+  if (verifySource) check("producer provenance", verifySource);
   check("configuration", () => {
     if (timed) verifyProducer(summary.producer);
-    assert.deepEqual(summary.timingPlan, timingPlan(summary.options), "missing/wrong effective timing plan");
+    assert.deepEqual(summary.timingPlan, timingPlan(summary.options, summary.group.contractSha256), "missing/wrong effective timing plan");
     for (const [key, max] of [["duration", 300], ["warmup", 120], ["rate", 10000], ["startupTimeout", 300]]) {
       assert.ok(Number.isSafeInteger(summary.options[key]) && summary.options[key] >= 1 && summary.options[key] <= max, `invalid ${key}`);
     }
-    const cpus = summary.measurement?.cpus;
-    const expected = cpuSettings(Object.fromEntries(["app", "load", "api"].map((role) => [`JSON_API_${role.toUpperCase()}_CPUS`, cpus?.[role]?.cpuset])));
-    assert.deepEqual(cpus, expected, "missing/wrong CPU quotas or placement");
-    assert.deepEqual(summary.measurement, { cpus: expected, encoding: "identity", fixedRate: summary.options.rate,
+    // An unmarked summary is the default placement exactly as before; only an explicit
+    // A named layout with its own recorded cold probe and sampler CPUs admits a wider generator.
+    let placed;
+    try { placed = recordedPlacement(summary.measurement); }
+    catch { assert.fail("missing/wrong CPU quotas or placement"); }
+    const { cpus: expected, generatorPlacement } = placed;
+    assert.deepEqual(summary.measurement, { cpus: expected,
+      ...(generatorPlacement === undefined ? {} : { loadLayout: placed.placement, generatorPlacement }), encoding: "identity", fixedRate: summary.options.rate,
       appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, loadMemoryBytes: 2 ** 31,
       nativeProfile: "framework-default", phases: ["warmup", ...phases] }, "measurement settings differ");
     assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
     for (const tool of ["node", "k6"]) {
       assert.match(summary.tools?.[tool]?.imageId ?? "", /^sha256:[0-9a-f]{64}$/, `missing ${tool} immutable tool image`);
-      assert.equal(summary.tools[tool].image, tool === "node" ? nodeImage : k6Image, "wrong tool image reference");
+      // Image pins are this checkout's, so saved evidence replays from a checkout of its measured commit.
+      const pin = tool === "node" ? nodeImage : k6Image;
+      const measured = typeof summary.commit === "string" && /^[a-f0-9]{40}$/.test(summary.commit) ? `the measured commit ${summary.commit}` : "its measured commit";
+      assert.ok(summary.tools[tool].image === pin, `wrong ${tool} image reference: not this checkout's pin ${pin}; report from a checkout of ${measured}`);
       verifyImageExecution(summary.toolExecutions?.[tool]);
     }
-    verifyK6Provenance(summary.tools.k6);
+    verifyK6Provenance(summary.tools.k6, { verb: "report", commit: summary.commit });
   });
   const fixtures = {}, functionalVerifiers = {};
   check("fixture set", () => assert.deepEqual(Object.keys(summary.fixtures ?? {}).sort(), Object.keys(payloads).sort()));
@@ -72,7 +131,7 @@ export function inspectJson(summary, { load, commit } = {}) {
     const entry = summary.apps?.[app], rows = apps[app] = {};
     check(`${app} images`, () => {
       assert.deepEqual(Object.keys(entry?.images ?? {}).sort(), Object.keys(payloads).sort(), "missing/extra native image payload");
-      for (const payload of Object.keys(payloads)) verifyImage(entry.images[payload], summary.commit, app, payload);
+      for (const payload of Object.keys(payloads)) verifyImage(entry.images[payload], summary.commit, app, payload, summary.group.contractSha256);
     });
     for (const section of ["checks", "runs", "aggregates", ...(timed ? ["projections"] : [])]) check(`${app} ${section} matrix`, () => {
       assert.deepEqual(Object.keys(entry?.[section] ?? {}).sort(), cases.map((c) => c.key).sort(), "missing/extra payload/source/target evidence");
@@ -170,7 +229,7 @@ export function inspectJson(summary, { load, commit } = {}) {
   const negative = Object.values(apps).some((rows) => Object.values(rows).some((r) => r.functionalComplete && !r.functional));
   if (timed && !gated && !preparation) check("executed matrix continuity", () => {
     const seen = new Set(), tails = {}, upstreamLives = {}; let previousEnd = Date.parse(summary.startedAt);
-    for (const item of timingPlan(summary.options)) {
+    for (const item of timingPlan(summary.options, summary.group.contractSha256)) {
       const window = execution.get(`${item.app}/${item.profile.key}/${item.pass}`), payload = item.profile.payload;
       assert.ok(window && window.startedAt >= previousEnd && window.finishedAt >= window.startedAt, "missing/overlapping/reordered native timing cell");
       assert.ok(!seen.has(window.appId), "native app reused across timing passes/cases"); seen.add(window.appId);
@@ -253,6 +312,13 @@ export function renderJson(report) {
   for (const role of ["app", "load", "api"]) {
     const budget = config.measurement?.cpus?.[role]; lines.push(`| ${role} | ${budget?.quota ?? "missing"} | ${budget?.cpuset === null ? "unpinned" : budget?.cpuset ?? "missing"} |`);
   }
+  // Fixed text from this checkout's layout, never the saved values; the configuration check validates those.
+  if (config.measurement?.loadLayout !== undefined) {
+    const layout = config.measurement.loadLayout, setting = describePlacement(layout);
+    lines.push("", setting
+      ? `Load layout ${layout}: the untimed cold probe ran on CPUs ${setting.coldProbe.cpuset} at quota ${setting.coldProbe.quota}; load resource samples are bounded against k6's quota ${setting.loadSampler.quota} on CPUs ${setting.loadSampler.cpuset}. This is apparatus placement for a ${setting.logicalCpus}-CPU host, not a measured speedup.`
+      : "Load layout: unknown (see the configuration check).");
+  }
   lines.push("", "## Limits", "", "CPU is whole-container cgroup usage. The upstream is a single Node process and can limit throughput independently. Cold time is Docker container-start to first complete 200, not process exec. No build, browser, instruction-count or deployment parity claim is made.");
   for (const warning of report.warnings) lines.push(`- ${warning.replace(/[\r\n]+/g, " ")}`);
   return `${lines.join("\n")}\n`;
@@ -266,7 +332,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else if (args[i] === "--commit" && commit === undefined && /^[0-9a-f]{40}$/.test(args[i + 1] ?? "")) commit = args[++i];
       else throw new Error(`unknown/duplicate report argument ${args[i]}`);
     }
-    const report = inspectJson(JSON.parse(readFileSync(file, "utf8")), { load: reader(dirname(file)), commit });
-    console.log(renderJson(report)); if (strict && !report.baseline) process.exitCode = 1;
+    const summary = JSON.parse(readFileSync(file, "utf8"));
+    const load = reader(dirname(file));
+    const measured = commit ?? summary.commit;
+    if (strict) requireMeasuredCommit(measured);
+    const report = strict ? inspectJson(summary, { load, commit: measured }) : inspectReport(summary, { load, commit });
+    console.log(renderJson(report));
+    if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

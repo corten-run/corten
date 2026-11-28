@@ -125,9 +125,69 @@ export function verifyControlRegistration(expected, registration) {
   return registration;
 }
 
+const settledEvents = (events) => events === null || typeof events === "string" && scopeEvents(events, 0);
+// The guardian writes records with Python's ensure_ascii JSON. Match those bytes exactly.
+const asciiDigest = (value) => createHash("sha256").update(JSON.stringify(value)
+  .replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`) + "\n").digest("hex");
+const drainedRecords = ["request", "start", "launcher", "registration", "result", "watch-failure"];
+const drainProofKeys = ["schema", "binding", "requests", "receipts", "watchers", "drained", "registration", "start", "launcher", "watcher",
+  "query", "timeout", "executables", "observation", "entries", "custody", "dockerSockets"];
+// docker-install leaves dockerd and containerd running before any later bootstrap poll, so
+// they would predate the fence; the proof cannot see work a daemon holds for a session.
+const dockerRuntime = "Docker or containerd present";
+const dockerSockets = { "/run/docker.sock": false, "/run/containerd/containerd.sock": false };
+const dockerCommand = (comm) => comm === "dockerd" || comm === "containerd" || comm.startsWith("containerd-");
+// A failed watcher has no receipt. Its replacement is a later positive observation:
+// the exact recorded result, an inactive watcher unit and no observed process of the
+// session. It is a process observation only (see CLOUD.md for what it cannot see).
+function verifyDrainedSession(invocation, failure, entry, host, listener, map, now) {
+  exact(entry, ["id", "failureSha256", "result", "start", "launcher", "registration", "watcher", "cgroupEvents", "scope"]);
+  same([entry.id, entry.failureSha256], [failure.id, failure.failureSha256], "drained watcher differs");
+  assert.equal(entry.id, invocation.id);
+  exact(entry.result, ["transport", "code", "releasedMonoNs", "completedMonoNs"]);
+  assert.equal(entry.result.transport, "exited", "uncertain transport cannot be drained");
+  assert.equal(entry.result.code, failure.code, "drained result differs from the ledger");
+  const unit = `corten-bench-control-${invocation.token}-${invocation.id}.service`;
+  same(entry.launcher, { unit, code: 0 }, "drained launcher differs");
+  exact(entry.start, ["guardian", "child", "unit", "connection", "deadlineMonoNs"]);
+  assert.equal(entry.start.unit, unit);
+  const registration = verifyControlRegistration(invocation, entry.registration), { chain, scope } = registration.session;
+  same(registration.host, host, "drained session boot differs");
+  // The live query's listener is exempt from the start-time check, so it must be the one that
+  // served this failed session (same PID and start time), which therefore predates it.
+  assert.equal(key(registration.listener), key(listener), "listener differs from a failed session");
+  assert.equal(entry.start.child, chain.at(-1).pid); assert.equal(entry.start.guardian, chain.at(-2).pid);
+  assert.equal(entry.start.connection, registration.socket.connection);
+  const deadline = decimal(entry.start.deadlineMonoNs), released = decimal(entry.result.releasedMonoNs), completed = decimal(entry.result.completedMonoNs);
+  assert.ok(released >= deadline - BigInt(invocation.deadlineMs) * 1000000n && completed >= released && completed <= deadline
+    && now >= deadline, "drained session outside its original window");
+  same(Object.keys(entry.watcher).sort(), ["ActiveState", "ControlPID", "Id", "Job", "LoadState", "MainPID"], "drained watcher properties differ");
+  const w = entry.watcher;
+  assert.ok(w.Id === unit && (w.LoadState === "loaded" && w.ActiveState === "failed" || w.LoadState === "not-found" && w.ActiveState === "inactive")
+    && w.MainPID === "0" && w.ControlPID === "0" && w.Job === "", "failed watcher still active or queued");
+  assert.ok(settledEvents(entry.cgroupEvents), "failed watcher cgroup populated");
+  exact(entry.scope, ["path", "exists", "events", "members"]);
+  assert.ok(entry.scope.path === scope && isDeepStrictEqual(entry.scope.members, [])
+    && (entry.scope.exists === true ? entry.scope.events !== null && settledEvents(entry.scope.events) : entry.scope.exists === false && entry.scope.events === null),
+  "drained session scope populated");
+  // The query's own later inventory must still show nothing of that session.
+  for (const p of map.values()) assert.ok(!inScope(p, scope), "drained session scope member remains");
+  const keys = new Set(chain.map(key)), pids = new Set(chain.map((p) => p.pid));
+  for (const p of map.values()) assert.ok(!keys.has(key(p)) && !pids.has(p.parentPid), "drained session process or descendant remains");
+  assert.ok(!present(map, registration.observer), "failed watcher process remains");
+}
+
 export function verifyControlSetupQuery(expected, proof) {
   assert.ok(Number.isSafeInteger(expected.sequence) && expected.sequence > 0 && expected.sequence < 4096);
-  assert.equal(proof.schema, "benchmark-control-setup-query/v1");
+  const drain = Object.hasOwn(expected, "watcherFailures"), failures = drain ? expected.watcherFailures : [];
+  assert.ok(!drain || Array.isArray(failures) && failures.length > 0 && failures.length < expected.sequence + 1, "drain expectation required");
+  assert.equal(proof.schema, drain ? "benchmark-control-setup-query/v2" : "benchmark-control-setup-query/v1");
+  const failed = new Map(failures.map((failure, index) => [failure.id, index]));
+  assert.equal(failed.size, failures.length, "duplicate drain expectation");
+  if (drain) {
+    exact(proof, drainProofKeys);
+    assert.ok(Array.isArray(proof.drained) && proof.drained.length === failures.length, "drained watcher proof required");
+  }
   same(proof.binding, expected.binding, "setup control source/owner differs");
   assert.equal(proof.requests.length, expected.sequence + 1);
   same(proof.requests.slice(0, -1), expected.requests, "setup control sequence differs");
@@ -142,10 +202,13 @@ export function verifyControlSetupQuery(expected, proof) {
     assert.ok(["bootstrap", "collection"].includes(row.epoch)); assert.equal(row.seal, undefined);
     assert.equal(row.helperSha256, expected.binding.helperSha256);
     for (const field of ["round", "commit", "token"]) assert.equal(row.invocation[field], expected.binding[field]);
-    if (i < expected.sequence) {
+    if (i < expected.sequence && failed.has(row.invocation.id)) {
+      assert.ok(row.epoch === "bootstrap" && proof.receipts[i] === null && proof.watchers[i] === null, "failed watcher cannot carry a receipt");
+    } else if (i < expected.sequence) {
       verifyControlSession(row.invocation, proof.receipts[i]); same(proof.receipts[i].host, proof.registration.host, "setup receipt boot differs");
     }
   }
+  assert.ok([...failed.keys()].every((id) => proof.requests.slice(0, -1).some((row) => row.invocation.id === id)), "drain expectation outside the ledger");
   const registration = verifyControlRegistration(invocation, proof.registration), host = registration.host;
   const { chain, scope } = registration.session, unit = `corten-bench-control-${invocation.token}-${invocation.id}.service`;
   assert.equal(proof.start.unit, unit); assert.equal(proof.start.child, chain.at(-1).pid);
@@ -158,6 +221,13 @@ export function verifyControlSetupQuery(expected, proof) {
   const map = inventory(proof.observation, host), now = decimal(proof.observation.monoNs), deadline = decimal(proof.start.deadlineMonoNs);
   assert.ok(now >= decimal(registration.first.monoNs) && now < deadline && decimal(registration.first.monoNs) >= deadline - BigInt(invocation.deadlineMs) * 1000000n
     && now >= deadline - BigInt(invocation.deadlineMs) * 1000000n, "query observation outside original deadline");
+  // Requests are in sequence order, and so are the expected failures and drained entries.
+  let drainedIndex = 0;
+  for (const row of proof.requests.slice(0, -1)) if (failed.has(row.invocation.id)) {
+    const index = failed.get(row.invocation.id);
+    assert.equal(index, drainedIndex++, "drained watchers out of ledger order");
+    verifyDrainedSession(row.invocation, failures[index], proof.drained[index], host, registration.listener, map, now);
+  }
   const command = (args) => createHash("sha256").update(args.join("\0") + "\0").digest("hex");
   const query = proof.query, timeout = proof.timeout;
   for (const p of [query, timeout, observer]) {
@@ -184,9 +254,22 @@ export function verifyControlSetupQuery(expected, proof) {
     assert.ok(!p.cgroup.startsWith("0::/system.slice/corten-bench"), "unknown owned-unit participant");
     assert.ok(p.cgroup !== registration.listener.cgroup && !p.cgroup.startsWith(registration.listener.cgroup.trimEnd() + "/"), "unknown listener participant");
   }
+  if (drain) {
+    // A failed session's process can leave its scope and its parent (systemd-run --scope,
+    // then reparenting to PID 1). Outside the live query's own set, only processes that
+    // started before the earliest failed session's first process, or kernel threads, remain.
+    const fence = proof.drained.flatMap((entry) => entry.registration.session.chain).map((p) => BigInt(p.startTicks)).reduce((a, b) => (b < a ? b : a));
+    for (const p of map.values()) if (!allowed.has(p.pid)) {
+      const kernel = processStat(p.stat).kernelThread && p.parentPid === 2 && p.cgroup === "0::/\n";
+      assert.ok(kernel || BigInt(p.startTicks) < fence, "process started during or after a failed session");
+    }
+    same(proof.dockerSockets, dockerSockets, dockerRuntime);
+    for (const p of map.values()) assert.ok(!dockerCommand(processStat(p.stat).comm), dockerRuntime);
+  }
   assert.ok(Array.isArray(proof.entries) && proof.entries.length <= 32768 && Array.isArray(proof.custody));
   const names = new Set(["helper.py", "binding.json", "mutex"]), entries = new Map();
-  for (const [i, row] of proof.requests.entries()) for (const name of ["request", "start", "launcher", "registration", ...(i < expected.sequence ? ["result", "receipt"] : [])])
+  for (const [i, row] of proof.requests.entries()) for (const name of ["request", "start", "launcher", "registration",
+    ...(i < expected.sequence ? ["result", failed.has(row.invocation.id) ? "watch-failure" : "receipt"] : [])])
     names.add(`${name}-${row.invocation.id}.json`);
   let total = 0;
   for (const entry of proof.entries) {
@@ -199,9 +282,17 @@ export function verifyControlSetupQuery(expected, proof) {
   const rawDigest = (value) => createHash("sha256").update(JSON.stringify(value) + "\n").digest("hex");
   assert.equal(entries.get("binding.json").sha256, rawDigest(expected.binding));
   for (const row of proof.requests) assert.equal(entries.get(`request-${row.invocation.id}.json`).sha256, rawDigest(row));
+  for (const [index, failure] of failures.entries()) {
+    const entry = proof.drained[index], id = failure.id;
+    assert.equal(entries.get(`watch-failure-${id}.json`).sha256, failure.failureSha256, "watcher failure differs from the archive");
+    for (const name of ["result", "start", "launcher"]) assert.equal(entries.get(`${name}-${id}.json`).sha256, rawDigest(entry[name]), "drained control record differs");
+    assert.equal(entries.get(`registration-${id}.json`).sha256, asciiDigest(entry.registration), "drained registration differs");
+  }
   const copied = new Set();
   for (const entry of proof.custody) { same(entry, entries.get(entry.name), "control custody differs"); assert.ok(!copied.has(entry.name)); copied.add(entry.name); }
   assert.ok(copied.has("helper.py") && copied.has("binding.json"));
+  // Every record of a failed row is copied, so retirement compares each with the archive.
+  assert.ok(failures.every((failure) => drainedRecords.every((name) => copied.has(`${name}-${failure.id}.json`))), "failed watcher record missing from custody");
   return { allowedPids: [...allowed], host, sequence: expected.sequence, remoteDrained: false };
 }
 const identityFields = (p) => Object.fromEntries(["pid", "startTicks", "cgroup", "executable", "commandSha256"].map((field) => [field, p[field]]));

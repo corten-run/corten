@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 import { validateSaved } from "../../../client-heavy/verify.mjs";
-import { sourceRoots } from "../../../client-heavy/contract.mjs";
+import { comparisonProfile, sourceRoots } from "../../../client-heavy/contract.mjs";
 import { evaluateLatestStable, latestStableSources, candidateLatestStableSchema } from "../../latest-stable.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -34,7 +34,7 @@ export async function inspectSaved(binding, folder) {
     assert.equal(group, "client-heavy");
     const native = await validateSaved({ folder, round, commit });
     assert.ok(object(native));
-    if (!["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3"].includes(native.schema)) {
+    if (!["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3", "client-heavy-saved-verification/v4"].includes(native.schema)) {
       // v1 is diagnostic only; it has no source-bound plan, raw clocks or terminal proof.
       assert.equal(native.schema, "client-heavy-saved-verification/v1");
       assert.equal(native.group, group); assert.equal(native.round, round); assert.equal(native.commit, commit);
@@ -57,9 +57,10 @@ export async function inspectSaved(binding, folder) {
       return result;
     }
     const output = read("result.json"), plan = read("plan.json"), effective = binding.execution.effectiveOptions;
-    assert.equal(output.schema, native.schema === "client-heavy-saved-verification/v3" ? "client-heavy-native/v3" : "client-heavy-native/v2");
-    if (output.schema === "client-heavy-native/v3") {
-      // This bounded one-measurement recipe still has no ranking admission.
+    assert.equal(output.schema, native.schema.replace("saved-verification", "native"));
+    const comparison = binding.request.recipe === comparisonProfile;
+    assert.equal(output.schema === "client-heavy-native/v4", comparison);
+    if (output.schema !== "client-heavy-native/v2") {
       result.rankingEligible = false;
       result.comparisonEligibleApps = [];
       assert.deepEqual(output.latestStable, native.latestStable);
@@ -77,7 +78,12 @@ export async function inspectSaved(binding, folder) {
       rows: effective.rows, large: effective.large, append: effective.append, cards: effective.cards, seed: effective.seed,
       "cleanup-ms": effective.cleanupMs, "observation-ms": effective.observationMs, "timeout-ms": effective.timeoutMs,
       cargo: effective.cargo, out: paths.resolve(plan.root, effective.out),
+      ...(comparison ? { profile: comparisonProfile } : {}),
     });
+    if (comparison) {
+      assert.equal(effective.profile, comparisonProfile);
+      assert.deepEqual(plan.measurementOrder, effective.measurementOrder);
+    }
     assert.deepEqual(native.invocation, plan.invocation);
     for (const value of [output, plan, native]) {
       assert.deepEqual(value === plan ? value.workload : value.effectiveWorkload, binding.execution.settings);
@@ -93,16 +99,22 @@ export async function inspectSaved(binding, folder) {
       assert.ok(["passed", "failed", "unsupported", "not-run"].includes(raw.outcome));
       assert.equal(replayed.outcome, raw.outcome);
       assert.equal(replayed.build?.outcome, output.builds[row.app].outcome);
-      for (const phase of ["qualification", "measurement"]) {
-        assert.equal(raw[phase] === null, replayed[phase] === null);
-        if (raw[phase] !== null) {
-          assert.ok(object(replayed[phase]) && typeof replayed[phase].closurePassed === "boolean");
-          if (raw[phase].lifecycle.contextCreatedAt !== null && !replayed[phase].closurePassed) contextsClosed = false;
+      const measures = comparison ? raw.measurements : [raw.measurement];
+      const replays = comparison ? replayed.measurements : [replayed.measurement];
+      assert.equal(measures.length, replays.length);
+      const captures = [raw.qualification, ...measures], passes = [replayed.qualification, ...replays];
+      for (const [i, pass] of captures.entries()) {
+        assert.equal(pass === null, passes[i] === null);
+        if (pass !== null) {
+          assert.ok(object(passes[i]) && typeof passes[i].closurePassed === "boolean");
+          if (pass.lifecycle.contextCreatedAt !== null && !passes[i].closurePassed) contextsClosed = false;
         }
       }
       if (raw.outcome === "passed") {
         assert.equal(replayed.replayPassed, true);
-        assert.equal(replayed.qualification?.passed, true); assert.equal(replayed.measurement?.passed, true);
+        assert.equal(replayed.qualification?.passed, true);
+        assert.equal(replays.length, comparison ? plan.measurementOrder.length : 1);
+        assert.ok(replays.every((pass) => pass?.passed === true));
         assert.equal(replayed.build.outcome, "built");
       }
       row.outcome = raw.outcome;
@@ -140,7 +152,7 @@ export async function inspectSaved(binding, folder) {
         if (!seen.has(file.path)) { sourceComplete = false; block("source-byte-closure-incomplete"); }
       }
     }
-    if (output.schema === "client-heavy-native/v3") {
+    if (output.schema !== "client-heavy-native/v2") {
       if ([...policyPaths].some((path) => !capturedPolicyBytes.has(path))) {
         sourceComplete = false; block("candidate-policy-source-closure-missing");
       } else {
@@ -167,6 +179,12 @@ export async function inspectSaved(binding, folder) {
     if (native.blockers.length) block("native-proof-incomplete");
     if (!result.cleanupComplete) block("native-cleanup-incomplete");
     if (result.attemptComplete) result.status = native.intrinsic.passed ? "verified" : "failed";
+    if (comparison && result.attemptComplete && result.cleanupComplete) {
+      result.comparisons = Object.fromEntries(apps.filter((app) => native.cells[app].comparison)
+        .map((app) => [app, native.cells[app].comparison]));
+      result.comparisonEligibleApps = Object.keys(result.comparisons);
+      result.rankingEligible = result.comparisonEligibleApps.length > 0;
+    }
     block("actual-os-resource-inventory-missing");
     return result;
   } catch (error) {

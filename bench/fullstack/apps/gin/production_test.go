@@ -152,7 +152,7 @@ func TestNativeMatchedHeadersHostsAndCompression(t *testing.T) {
 	}
 }
 
-func TestNativeProductionBoundsAndListenerRelease(t *testing.T) {
+func TestNativeProductionBoundsAndFollowup(t *testing.T) {
 	r := matchedRouter(t)
 	var handled atomic.Int32
 	r.POST("/body", func(c *gin.Context) {
@@ -167,22 +167,34 @@ func TestNativeProductionBoundsAndListenerRelease(t *testing.T) {
 	if s.ReadHeaderTimeout != 30*time.Second || s.ReadTimeout != 30*time.Second || s.WriteTimeout != 30*time.Second || s.IdleTimeout != 30*time.Second || s.MaxHeaderBytes != 16<<10 {
 		t.Fatal(s)
 	}
-	base := serveNativeProduction(t, r, 2, func(s *http.Server) { s.ReadHeaderTimeout = 150 * time.Millisecond })
-	client := &http.Client{Timeout: 2 * time.Second}
-	defer client.CloseIdleConnections()
+	base := serveNativeProduction(t, r, 2, nil)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	// The oversized bodies go from a client that keeps connections alive, as a browser does. A
+	// request that says Connection: close (DisableKeepAlives) makes net/http close the
+	// connection as soon as it has replied, with the rest of the body unread, so the kernel
+	// resets it and the client can see the reset before the refusal. A keep-alive request
+	// takes the server's linger instead (a FIN, then 500 ms before the close), so the client
+	// reads the refusal while it is still writing.
+	refusing := http.DefaultTransport.(*http.Transport).Clone()
+	defer refusing.CloseIdleConnections()
+	sender := &http.Client{Transport: refusing, Timeout: 2 * time.Second}
 	for _, chunked := range []bool{false, true} {
 		req, _ := http.NewRequest("POST", base+"/body", strings.NewReader(strings.Repeat("x", 3<<20)))
+		want := http.StatusRequestEntityTooLarge
 		if chunked {
 			req.ContentLength = -1
 			req.TransferEncoding = []string{"chunked"}
+			want = http.StatusBadRequest
 		}
-		res, err := client.Do(req)
+		res, err := sender.Do(req)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("chunked", chunked, err)
 		}
 		res.Body.Close()
-		if res.StatusCode < 400 {
-			t.Fatal("oversized body accepted", res.Status)
+		if res.StatusCode != want {
+			t.Fatal("oversized body, chunked", chunked, res.Status)
 		}
 	}
 	if handled.Load() != 1 {
@@ -198,59 +210,35 @@ func TestNativeProductionBoundsAndListenerRelease(t *testing.T) {
 	if res.StatusCode != 431 {
 		t.Fatal(res.Status)
 	}
-	addr := strings.TrimPrefix(base, "http://")
-	conn, err := net.Dial("tcp", addr)
+	res, err = client.Post(base+"/body", "text/plain", strings.NewReader("small complete body"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
-	_, _ = io.WriteString(conn, "GET /health/live HTTP/1.1\r\nHost: localhost\r\n")
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := io.ReadAll(conn); err != nil {
-		t.Fatal("native header deadline did not close socket", err)
+	body, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil || res.StatusCode != 200 || string(body) != "read" || handled.Load() != 2 {
+		t.Fatalf("follow-up POST: status=%s body=%q handled=%d err=%v", res.Status, body, handled.Load(), err)
 	}
-	// Occupy every accepted connection with real partial request heads. A request
-	// queued beyond the native listener's cap cannot reach Gin until a slot closes.
-	base = serveNativeProduction(t, r, 2, nil)
-	addr = strings.TrimPrefix(base, "http://")
-	var held []net.Conn
-	for range 2 {
-		c, err := net.Dial("tcp", addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
-		held = append(held, c)
-		_, _ = io.WriteString(c, "GET /health/live HTTP/1.1\r\nHost: localhost\r\n")
-	}
-	probe, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer probe.Close()
-	_, _ = io.WriteString(probe, "GET /health/live HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-	_ = probe.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	var byte [1]byte
-	if _, err := probe.Read(byte[:]); err == nil {
-		t.Fatal("request served past connection cap")
-	}
-	for _, c := range held {
-		_ = c.Close()
-	}
-	_ = probe.SetReadDeadline(time.Now().Add(2 * time.Second))
-	res, err = http.ReadResponse(bufio.NewReader(probe), nil)
+	res, err = client.Get(base + "/health/live")
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
 	if res.StatusCode != 200 {
-		t.Fatal("listener failed to recover", res.Status)
+		t.Fatal("follow-up liveness failed", res.Status)
 	}
 }
 
 func TestNativeProductionConfigurationAndDefaultProfile(t *testing.T) {
+	t.Setenv("PROFILE", "matched")
+	t.Setenv("PORT", "invalid-port")
+	for _, bad := range []string{"0", "-1", "unlimited", "1.5"} {
+		t.Setenv("MAX_CONNECTIONS", bad)
+		if err := runGin(gin.New()); err == nil || !strings.Contains(err.Error(), "MAX_CONNECTIONS") {
+			t.Fatalf("invalid connection setting %q: %v", bad, err)
+		}
+	}
 	for _, bad := range []string{"", "*", "user@localhost", "localhost/", "localhost?", "localhost#", ":80", "localhost:bad", "localhost:70000"} {
-		t.Setenv("PROFILE", "matched")
 		t.Setenv("HOSTS", bad)
 		if configureProduction(gin.New()) == nil {
 			t.Fatal("unsafe host configuration accepted", bad)

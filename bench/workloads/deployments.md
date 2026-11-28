@@ -4,9 +4,10 @@
 runner, benchmark result, certification authority or replacement registry. It maps every
 approved app in all nine feature-parity groups to one named intended representative deployment,
 including explicit pending native-port entries rather than substitute applications.
-It retains the original cases, popular/performance-oriented contenders and auxiliary families.
-The legacy registry identity, hashes, `selectedApps`, scheduled selection and saved rounds do
-not change. There is no claim that the remaining parity work or all nine runners are complete.
+It takes its cases and contenders from the group contract and retains the auxiliary families.
+Rotating marketplace page timing has a new group hash; it does not reinterpret saved
+per-locale runs or change any other group's hash, roster or scheduled selection.
+There is no claim that the remaining parity work or all nine runners are complete.
 
 Two objectives share the **same feature-parity group and raw evidence**, with two labeled
 views rather than duplicate runs: marketing compares Corten with popular choices in their
@@ -185,8 +186,11 @@ Every supplied receipt is read and checked; known failures/unsupported states su
 later receipts. Every app and unselected candidate remains visible in the inventory.
 
 Complete implementation, parity and performance receipts each reference nonempty raw
-`artifacts`. Parity and performance must repeat the exact entire `cases` array. Performance
-has distinct repeated `runs`; every repeat contains every case in registry order with a raw
+`artifacts`. Performance must repeat the exact entire `cases` array. Parity must repeat
+`parityCases` where specified, otherwise `cases`. For localized marketplace this means
+six per-locale pages and two neutral JSON cases for native parity, but two rotating pages
+and two neutral JSON cases for timing. The rotating page is not a fourth browser locale.
+Performance has distinct repeated `runs`; every repeat contains every timed case in registry order with a raw
 `artifact` and measured `metrics` (`cpuUsec`, `memoryBytes`, `startupMs`, `p95Ms`). Units and
 aggregation must be validated against the native data, not supplied summaries. The independent
 review has a different author from implementation/parity/performance, `scope:"entire-group"`
@@ -206,8 +210,10 @@ audit. This module adds no new trusted native validator and ships no actual pass
 
 For JSON, use the existing `inspectJson` in `bench/json-api/report.mjs` with the contained
 artifact reader and expected full commit, and inspect its whole-matrix rows/warnings, native
-source/runtime/image provenance and derived measurements. Check-only results are not timed
-baselines. The native source audit remains an unsigned operator trust boundary. A future
+source/runtime/image provenance and derived measurements. Run from a repository with that
+commit locally available: inspection checks its producer policy and source blobs.
+Check-only results are not timed baselines. The native source audit remains an unsigned
+operator trust boundary. A future
 deployment adapter must bind those native results to this descriptor, not just copy saved
 `complete` flags. Other groups need their own native validators; none are auto-certified here.
 

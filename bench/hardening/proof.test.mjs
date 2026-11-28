@@ -5,12 +5,18 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, linkSync }
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { budgets } from "./plan.mjs";
+import { budgets, parseArgs } from "./plan.mjs";
+import { nginxConf, edgeOffset } from "../fullstack/edge.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
-import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits } from "./evidence.mjs";
+import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits, phaseInputs, proxyConfig } from "./evidence.mjs";
 import { ownedCleanupObservation, verifyOwnedCleanup, ownedContainerRecorder } from "./lifecycle.mjs";
-import { verifySavedProof } from "./verify.mjs";
+import { verifyFailedControl, verifySavedProof } from "./verify.mjs";
+import { assessNative } from "./native.mjs";
+import { livePaths } from "../fullstack/conformance.mjs";
+import { boundedQualification } from "./qualification.mjs";
+import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
+import { hardeningCpuGate, hardeningRoleCpu } from "../workloads/isolated/native-roles.mjs";
 
 // Docker-shaped replay vectors test the apparatus, not a native benchmark run.
 const root = mkdtempSync(join(tmpdir(), "hardening-proof-"));
@@ -18,29 +24,47 @@ after(() => rmSync(root, { recursive: true, force: true }));
 const stamp = "2026-11-13T12:00:00Z", runId = "hardening-test", budget = budgets();
 const id = (n) => n.toString(16).padStart(64, "0");
 const image = (n) => ({ Id: `sha256:${id(n)}`, Config: { Cmd: ["/server"], Entrypoint: null, Env: [], User: "", WorkingDir: "" } });
+
+test("the Hardening edge preserves the approved public Host without changing the default edge", () => {
+  assert.match(proxyConfig(), /if \(\$http_host != "localhost:8080"\) \{ return 421; \}/);
+  assert.match(proxyConfig(), /proxy_set_header Host \$http_host;/);
+  for (const name of ["Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port"])
+    assert.ok(proxyConfig().includes(`proxy_set_header ${name} "";`));
+  assert.doesNotMatch(proxyConfig(), /proxy_set_header Origin/);
+  const defaultConfig = nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
+  assert.doesNotMatch(defaultConfig, /\$http_host|Forwarded/);
+  assert.match(defaultConfig, /proxy_set_header Host fsw-target:8080;/);
+});
+
 const acknowledgeCreation = (r) => {
   r.creation.args = [r.intent.operation, "--name", r.intent.name,
     "--label", `run.corten.hardening=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...r.intent.args.slice(1)];
 };
 
-function fixture() {
-  const cell = { key: "corten/fixture/direct/slow-headers", app: "corten", source: "fixture", mode: "direct", status: "observed" };
-  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder: root, budget, cleanupFailures: [], cells: [cell],
+function fixture(mode = "direct", isolated = false) {
+  const cell = { key: `corten/fixture/${mode}/request-limit`, app: "corten", source: "fixture", phase: "request-limit", mode, status: "observed" };
+  const options = parseArgs(["w1", "--review", "proof-fixture", ...(isolated ? ["--isolated"] : [])]);
+  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder: root, options, budget, cleanupFailures: [], cells: [cell],
     tools: { node: image(1), checker: image(2), cert: image(3), edge: image(4) }, builds: { corten: { imageId: image(5).Id, image: image(5) } } };
   const node = "/repo/bench/hardening/", upstream = `http://${runId}-cell-upstream:8080`, base = "http://127.0.0.1:8080";
   const commands = [
     ["upstream", ["node", "/repo/bench/marketplace/upstream.mjs"], "upstream"],
-    ["application", ["/server"], "applicationDirect"], ["ready", ["node", "--input-type=module", "-e", readyScript], "apparatus"],
-    ["qualification", ["node", "/repo/bench/marketplace/qualify.mjs", base, "fixture", upstream, "/results/qualification.json"], "qualification"],
+    ["application", ["/server"], mode === "direct" ? "applicationDirect" : "applicationEdge"], ["ready", ["node", "--input-type=module", "-e", readyScript], "apparatus"],
+    ["qualification", ["node", node + "qualification.mjs", "fixture", "direct", upstream, "/results/qualification.json"], "qualification"],
     ["native-controls", ["node", node + "native.mjs", base, "fixture", upstream, "/results/qualification.json", "/results/native-controls.json"], "qualification"],
     ["parity", ["node", node + "parity.mjs", base, "fixture", upstream, "/results/parity.json"], "qualification"],
-    ["form", ["node", node + "form.mjs", JSON.stringify({ host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "http://localhost:8080", tls: false }), "/results/form.json"], "qualification"],
-    ["probe", ["node", node + "probe.mjs", "/results/probe.json", "/results/raw.jsonl"], "apparatus"],
+    ["probe", ["node", ...(isolated ? ["--import", "/repo/" + hardeningCpuGate] : []),
+      node + "bounded-requests-probe.mjs", "/results/probe.json", "/results/raw.jsonl"], "apparatus"],
     ...["terminal-clock", "terminal-clock", "cleanup-clock"].map((step) => [step, ["node", node + "clock.mjs"], "apparatus"]),
+    ...(mode === "direct" ? [] : [
+      ["proxy", ["/server"], "proxy"],
+      ["edge-qualification", ["node", node + "qualification.mjs", "fixture", mode, upstream, "/results/edge-qualification.json"], "qualification"],
+      ["edge-controls", ["node", node + "native.mjs", "https://localhost:8080", "fixture", upstream, "/results/edge-qualification.json", "/results/edge-native-controls.json", mode], "qualification"],
+    ]),
   ];
   const receipts = commands.map(([step, Cmd, role], index) => {
-    const tool = role === "qualification" ? "checker" : "node", limit = budget.resources[role];
-    const suffix = step === "application" ? "app" : step, name = step === "ready" ? `${runId}-ready` : `${runId}-cell-${suffix}`;
+    const tool = role === "qualification" ? "checker" : step === "proxy" ? "edge" : "node", limit = budget.resources[role];
+    const suffix = step === "application" ? "app" : step === "proxy" ? "edge" : step, name = step === "ready" ? `${runId}-ready` : `${runId}-cell-${suffix}`;
     const mounts = [], mount = (Destination, Source, RW = false) => mounts.push({ Destination, Source, RW });
     if (["upstream", "probe", "terminal-clock", "cleanup-clock"].includes(step)) mount("/repo", join(root, "corten-build-context"));
     if (role === "qualification") {
@@ -48,26 +72,33 @@ function fixture() {
       mount("/repo/node_modules", join(root, "dependencies")); mount("/results", join(root, cell.key), true);
     }
     if (["application", "upstream"].includes(step) || role === "qualification") mount("/fixtures", join(root, "fixtures"));
-    if (step === "probe") { mount("/results", join(root, cell.key), true); mount("/sys/fs/cgroup", "/sys/fs/cgroup"); }
+    if (step === "probe") mount("/results", join(root, cell.key), true);
+    if (step === "proxy") {
+      mount("/etc/nginx/nginx.conf", join(root, cell.key, "nginx.conf")); mount("/cert", join(root, cell.key, "cert"));
+    }
     const Env = step === "application" ? Object.entries({ MARKETPLACE_SOURCE: "fixture", MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json", API_BASE: upstream,
-      PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }).map(([k, v]) => `${k}=${v}`)
-      : role === "qualification" ? ["PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"] : [];
+      PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections),
+      ...(mode === "deployed-edge" ? { MARKETPLACE_PUBLIC_ORIGIN: "https://localhost:8080" } : {}) }).map(([k, v]) => `${k}=${v}`)
+      : role === "qualification" ? ["PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
+        ...(step.startsWith("edge-") ? ["NODE_EXTRA_CA_CERTS=/results/cert/cert.pem", "BENCH_EDGE_CERT=/results/cert/cert.pem"] : [])] : [];
     const created = { Id: id(index + 20), Name: "/" + name, Image: step === "application" ? summary.builds.corten.imageId : summary.tools[tool].Id,
       RestartCount: 0, Config: { Cmd, Entrypoint: null, Env, User: "", WorkingDir: "", Labels: { "run.corten.hardening": runId, "agent.owner": "codex", "agent.task": runId } }, Mounts: mounts,
       HostConfig: { NanoCpus: limit.cpu * 1e9, Memory: limit.memory, MemorySwap: limit.memory, PidsLimit: 512, Ulimits: [{ Name: "nofile", Hard: 65536, Soft: 65536 }],
+        ...(isolated ? { CpusetCpus: hardeningRoleCpu(role) } : {}),
         ShmSize: role === "qualification" ? 1024 ** 3 : 64 * 1024 ** 2,
-        RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {}, NetworkMode: ["upstream", "application"].includes(step) ? runId + "-net"
-          : ["terminal-clock", "cleanup-clock"].includes(step) ? "none" : `container:${id(21)}`,
-        PidMode: step === "probe" ? "host" : "", CgroupnsMode: step === "probe" ? "host" : "private" },
+        RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {}, NetworkMode: ["upstream", "application", "proxy"].includes(step) ? runId + "-net"
+          : ["terminal-clock", "cleanup-clock"].includes(step) ? "none" : `container:${id(20 + commands.findIndex(([s]) => s === (step.startsWith("edge-") ? "proxy" : "application")))}`,
+        PidMode: "", CgroupnsMode: "private" },
       State: { Running: false, ExitCode: 0, OOMKilled: false, Error: "", Dead: false, Restarting: false, StartedAt: stamp, FinishedAt: stamp } };
     const command = (args, stdout) => ({ args, stdout, exitCode: 0, timedOut: false, interrupted: false, startedAt: stamp, finishedAt: stamp });
-    const operation = ["upstream", "application"].includes(step) ? "run" : "create";
+    const operation = ["upstream", "application", "proxy"].includes(step) ? "run" : "create";
     const args = [operation, ...(operation === "run" ? ["-d"] : []), "--network", created.HostConfig.NetworkMode,
       ...(step === "application" ? ["--network-alias", "fsw-target"] : []),
       "--cpus", String(limit.cpu), "--memory", String(limit.memory), "--memory-swap", String(limit.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536",
-      ...(role === "qualification" ? ["--shm-size", "1g"] : []), ...(step === "probe" ? ["--cgroupns=host", "--pid=host"] : []),
+      ...(isolated ? ["--cpuset-cpus", hardeningRoleCpu(role)] : []),
+      ...(role === "qualification" ? ["--shm-size", "1g"] : []),
       ...mounts.flatMap((m) => ["-v", `${m.Source}:${m.Destination}${m.RW ? "" : ":ro"}`]), ...Env.flatMap((e) => ["-e", e]), created.Image,
-      ...(step === "application" ? [] : Cmd)];
+      ...(operation === "run" && step !== "upstream" ? [] : Cmd)];
     const r = { schema: "native-hardening-container/v2", index, intent: { cell: cell.key, name, step, role, tool, operation, args },
       created, terminal: structuredClone(created), removed: true, removedAt: stamp,
       creation: command(["create"], created.Id), removal: command(["rm", "-f", "-v", created.Id], created.Id),
@@ -78,10 +109,99 @@ function fixture() {
 }
 
 test("complete actual-configuration vectors replay every charged native step", () => {
-  const { summary, receipts } = fixture(); assert.equal(verifyOwnedReceipts(receipts, summary).get(summary.cells[0].key).length, 11);
+  const { summary, receipts } = fixture(); assert.equal(verifyOwnedReceipts(receipts, summary).get(summary.cells[0].key).length, 10);
   // A target exit remains compatible with complete apparatus receipts.
   receipts[1].terminal.State.ExitCode = 137; receipts[1].terminal.State.OOMKilled = true;
   assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary));
+});
+
+test("replay binds the exact public origin to the edge app, never to the direct app", () => {
+  for (const mode of ["deployed-edge", "direct"]) {
+    const { summary, receipts } = fixture(mode), app = receipts.find((r) => r.intent.step === "application");
+    const preflight = { ...summary.cells[0], failedStage: mode === "deployed-edge" ? "edge-native-controls" : "native-controls" };
+    assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary, undefined, preflight));
+    const unexpected = "MARKETPLACE_PUBLIC_ORIGIN=https://other.invalid:8080";
+    const i = app.created.Config.Env.findIndex((s) => s.startsWith("MARKETPLACE_PUBLIC_ORIGIN="));
+    if (i < 0) app.created.Config.Env.push(unexpected);
+    else app.created.Config.Env[i] = unexpected;
+    assert.throws(() => verifyOwnedReceipts(receipts, summary, undefined, preflight), /unbound native worker environment/);
+  }
+});
+
+test("owned receipts require declared options and enforce isolated launch CPU proof", () => {
+  const { summary, receipts } = fixture("direct", true);
+  assert.equal(verifyOwnedReceipts(receipts, summary).get(summary.cells[0].key).length, 10);
+  assert.throws(() => verifyOwnedReceipts(receipts, { ...summary, options: undefined }), /native hardening options required/);
+  assert.throws(() => verifyOwnedReceipts(fixture().receipts, { ...summary, options: {} }), /bounded profile required/);
+  assert.throws(() => verifyOwnedReceipts(receipts, { ...summary, options: { ...summary.options, isolated: false } }),
+    /invalid native hardening isolation option/);
+  assert.throws(() => verifyOwnedReceipts(fixture().receipts, summary), /Docker cpuset differs/);
+  const probe = receipts.find((r) => r.intent.step === "probe");
+  probe.created.Config.Cmd.splice(1, 2); probe.terminal.Config.Cmd.splice(1, 2);
+  probe.intent.args.splice(probe.intent.args.indexOf("--import"), 2); acknowledgeCreation(probe);
+  assert.throws(() => verifyOwnedReceipts(receipts, summary), /launched native worker command differs/);
+});
+
+for (const mode of ["direct", "deployed-edge"]) for (const discovery of [false, true])
+test(`ordinary ${mode} preflight failure (${discovery ? "discovery" : "allowed host"}) requires the matching owned launch`, () => {
+  const { receipts, summary } = fixture(mode), cell = summary.cells[0], edge = mode === "deployed-edge";
+  const probes = qualificationProbes(), keys = ["page", "json", "pageBr", "jsonBr", "jsonGzip", "ownPost", "crossSite",
+    "page404", "json404", "json405", "head", "badHost", "live", "liveness"];
+  const base = edge ? "https://localhost:8080" : "http://127.0.0.1:8080", prefix = edge ? "edge-" : "";
+  const p = Object.fromEntries(keys.map(k => [k, probes[k]]));
+  delete p.live;
+  p.liveness = livePaths.map((path, i) => ({ ...probes.live, path, status: discovery && i === 0 ? 503 : 404, url: base + path, method: "GET", host: new URL(base).host }));
+  const q = boundedQualification(p, cell.source);
+  const dir = join(root, "preflight"), out = join(dir, cell.key); mkdirSync(out, { recursive: true });
+  const qualification = join(out, prefix + "qualification.json"), capture = join(out, prefix + "native-controls.json");
+  writeFileSync(qualification, JSON.stringify(q));
+  // Run the actual control CLI (including stdout and its separate raw output);
+  // only the fixture read and HTTP transport are replaced.
+  const preload = `import fs from "node:fs"; import http from "node:http"; import https from "node:https";
+    import { EventEmitter } from "node:events"; import { syncBuiltinESMExports } from "node:module";
+    const read = fs.readFileSync; fs.readFileSync = (p, ...args) => p === "/fixtures/marketplace.json" ? '{"item_1":{}}' : read(p, ...args);
+    http.request = https.request = (url, options, receive) => {
+      const req = new EventEmitter();
+      req.end = () => { const res = Object.assign(new EventEmitter(), { headers: {}, statusCode: options.headers.host === "unrecognized.invalid" ? 403
+        : ${!discovery} && url.pathname === "/marketplace/en-US/item_1" ? 503 : 200 });
+        receive(res); res.emit("end"); req.emit("close"); }; return req;
+    }; syncBuiltinESMExports();`;
+  const stdout = execFileSync(process.execPath, ["--import", "data:text/javascript;base64," + Buffer.from(preload).toString("base64"),
+    fileURLToPath(new URL("native.mjs", import.meta.url)), base, cell.source, `http://${runId}-cell-upstream:8080`, qualification, capture, mode],
+    { cwd: out, encoding: "utf8" }).trim();
+  const raw = JSON.parse(readFileSync(capture)), assessment = assessNative(raw, q, mode);
+  assert.deepEqual(assessment.targetFunctionalFailures, [discovery ? { control: "liveness-discovery", path: livePaths[0], status: 503 }
+    : { control: "allowed-host", status: 503 }]);
+  Object.assign(cell, { status: "invalid", failedStage: prefix + "native-controls", failureKind: "target-functional-failure",
+    [edge ? "edgeAssessment" : "nativeAssessment"]: assessment });
+  writeFileSync(join(out, "failure.json"), JSON.stringify({ stage: cell.failedStage, kind: cell.failureKind }));
+  const config = join(out, "nginx.conf"), expectedConfig = proxyConfig();
+  if (edge) writeFileSync(config, expectedConfig);
+  const paths = new Set(savedFiles(dir).map(f => f.path)), launches = edge ? receipts : receipts.slice(0, 5), control = launches.at(-1);
+  control.start.stdout = stdout;
+  const replay = (list) => verifyFailedControl(dir, cell, paths, summary, list);
+  assert.equal(replay(launches), true);
+  if (edge) {
+    rmSync(config); assert.equal(replay(launches), false);
+    writeFileSync(config, "# different deployment"); assert.throws(() => replay(launches), /edge configuration/);
+    writeFileSync(config, expectedConfig);
+  }
+  assert.equal(replay([]), false);
+  assert.equal(replay(launches.slice(0, -1)), false);
+  delete raw.host.allowed.host; writeFileSync(capture, JSON.stringify(raw));
+  assert.equal(replay(launches), false);
+  raw.host.allowed.host = new URL(base).host; writeFileSync(capture, JSON.stringify(raw));
+  const row = p.liveness[0], url = row.url;
+  delete row.url; writeFileSync(qualification, JSON.stringify(boundedQualification(p, cell.source)));
+  assert.equal(replay(launches), false);
+  row.url = (edge ? "http://127.0.0.1:8080" : "https://localhost:8080") + row.path;
+  writeFileSync(qualification, JSON.stringify(boundedQualification(p, cell.source)));
+  assert.throws(() => replay(launches), /request url differs/);
+  row.url = url; writeFileSync(qualification, JSON.stringify(q));
+  control.start.stdout = "{}"; assert.throws(() => replay(launches), /owned control output/);
+  control.start.stdout = JSON.stringify(assessment);
+  control.created.HostConfig.NetworkMode = control.terminal.HostConfig.NetworkMode = "container:" + launches[0].created.Id;
+  assert.throws(() => replay(launches), /namespace differs/);
 });
 
 for (const [name, mutate] of [
@@ -112,6 +232,37 @@ test("Docker's empty default user/workdir match omitted image fields, not differ
   assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary));
   receipts[2].created.Config.User = "unexpected"; assert.throws(() => verifyOwnedReceipts(receipts, summary));
 });
+
+for (const [step, key] of [["application", "Entrypoint"], ["application", "Cmd"], ["proxy", "Entrypoint"], ["proxy", "Cmd"], ["ready", "Entrypoint"]])
+test(`Docker's omitted image ${key} replays as null for ${step}, not a different value`, () => {
+  const { summary, receipts } = fixture(step === "proxy" ? "deployed-edge" : "direct");
+  const { created, terminal } = receipts.find((r) => r.intent.step === step);
+  const config = step === "application" ? summary.builds.corten.image.Config
+    : summary.tools[step === "proxy" ? "edge" : "node"].Config;
+  const preflight = step === "proxy" ? { ...summary.cells[0], failedStage: "edge-native-controls" } : undefined;
+  const replay = () => verifyOwnedReceipts(receipts, summary, undefined, preflight);
+  const setActual = (value) => { created.Config[key] = terminal.Config[key] = value; };
+  const omitActual = () => { delete created.Config[key]; delete terminal.Config[key]; };
+  const refuse = () => assert.throws(replay, { code: "ERR_ASSERTION", operator: "deepStrictEqual" });
+  const command = ["/server", "--serve"];
+  if (key === "Cmd") created.Config.Entrypoint = terminal.Config.Entrypoint = config.Entrypoint = ["/server"];
+
+  config[key] = null; setActual(null);
+  assert.doesNotThrow(replay);
+  delete config[key];
+  assert.doesNotThrow(replay);
+  for (const value of [[], command]) { setActual(value); refuse(); }
+  omitActual(); refuse();
+  config[key] = []; setActual(null); refuse();
+
+  config[key] = command;
+  for (const r of receipts) if (r.created.Image === created.Image)
+    r.created.Config[key] = r.terminal.Config[key] = [...command];
+  assert.doesNotThrow(replay);
+  for (const value of [null, ["/server", "--other"]]) { setActual(value); refuse(); }
+  omitActual(); refuse();
+});
+
 test("deployment replay accepts Docker's enabled OOM default transition, not changed limits", () => {
   const { summary, receipts } = fixture();
   const processes = [{ id: "application", role: "application" }, { id: "upstream", role: "upstream" }];
@@ -250,8 +401,9 @@ test("dependency snapshot preserves actual bytes, excludes unused bin launchers 
 test("Git archive build and harness inputs replay committed bytes read-only, including root context files", async (t) => {
   const repository = fileURLToPath(new URL("../../", import.meta.url)), dir = join(root, "source"); mkdirSync(dir);
   const commit = sourceGit(repository, ["rev-parse", "HEAD"]).toString().trim(), files = committedInputs(repository, commit);
-  const context = await nativeBuildContext({ command: async (binary, args) => execFileSync(binary, args, { cwd: repository, windowsHide: true,
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] }) }, dir, commit, "corten", files.map(({ path, sha256 }) => ({ path, sha256 })));
+  const io = { command: async (binary, args) => execFileSync(binary, args, { cwd: repository, windowsHide: true,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] }) };
+  const context = await nativeBuildContext(io, dir, commit, "corten", files.map(({ path, sha256 }) => ({ path, sha256 })));
   const lock = JSON.parse(readFileSync(join(dir, "corten-build-context/package-lock.json")));
   for (const name of ["@playwright/test", "playwright", "playwright-core"]) {
     const path = join(dir, "dependencies", name, "package.json"); mkdirSync(dirname(path), { recursive: true });
@@ -262,8 +414,37 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
   const source = digest(JSON.stringify(files.filter((f) => ["Cargo.toml", "Cargo.lock"].includes(f.path) || f.path.startsWith("crates/") || f.path.startsWith("bench/marketplace/corten/")).map((f) => [f.path, f.sha256])));
   const buildImage = image(1); buildImage.Config.Labels = { "run.corten.hardening.context": context.sha256, "run.corten.marketplace.commit": commit, "run.corten.hardening.source": source };
   const build = await buildNativeImage(async (args) => args[0] === "build" ? "" : JSON.stringify([buildImage]), { context, runId, commit, source, tag: `${runId}-corten`, files });
-  const summary = { commit, runId, cells: [{ app: "corten", status: "observed" }], builds: { corten: build } };
+  const summary = { commit, runId, cells: [{ app: "corten", phase: "request-limit", status: "observed" }], builds: { corten: build } };
+  if (phaseInputs("request-limit").some((path) => !files.some((file) => file.path === path))) {
+    assert.throws(() => verifyRunInputs(dir, summary), /native hardening input is not in the committed source/);
+    return t.skip("the current Git commit predates the v3 sources; positive replay requires a committed v3 checkout");
+  }
   const before = savedFiles(dir); assert.deepEqual(verifyRunInputs(dir, summary), input); assert.deepEqual(savedFiles(dir), before);
+  await t.test("non-Corten Git context replays only the producer's exact archive bytes", async () => {
+    const app = "aspnet", prefix = `bench/fullstack/apps/${app}`;
+    const appFiles = files.filter((f) => f.path.startsWith(prefix + "/"));
+    const appContext = await nativeBuildContext(io, dir, commit, app, appFiles.map(({ path, sha256 }) => ({ path, sha256 })));
+    const appSource = digest(JSON.stringify(appFiles.map((f) => [f.path, f.sha256])));
+    const receipt = (context) => {
+      const appImage = image(2);
+      appImage.Config.Labels = { "run.corten.hardening.context": context.sha256, "run.corten.marketplace.commit": commit,
+        "run.corten.hardening.source": appSource };
+      return buildNativeImage(async (args) => args[0] === "build" ? "" : JSON.stringify([appImage]),
+        { context, runId, commit, source: appSource, tag: `${runId}-${app}`, files: appFiles });
+    };
+    const attempt = { ...summary, cells: [...summary.cells, { app, phase: "dependency-recovery", status: "observed" }],
+      builds: { ...summary.builds, [app]: await receipt(appContext) } };
+    assert.deepEqual(verifyRunInputs(dir, attempt), input);
+    const archive = join(dir, `${app}-build-context.tar`);
+    try {
+      // Same committed files, but a different tar timestamp and matching saved receipt.
+      const input = sourceGit(repository, ["archive", "--format=tar", "--mtime=2001-01-01T00:00:00Z", `${commit}:${prefix}`]);
+      const sha256 = digest(input); assert.notEqual(sha256, appContext.sha256);
+      writeFileSync(archive, input);
+      attempt.builds[app] = await receipt({ ...appContext, input, sha256 });
+      assert.throws(() => verifyRunInputs(dir, attempt), /native build-context archive differs from committed inputs/);
+    } finally { rmSync(archive); rmSync(join(dir, `${app}-build-context`), { recursive: true }); }
+  });
   assert.ok(files.some((f) => f.path === ".dockerignore"));
   const full = fixture(); Object.assign(full.summary, { commit, savedProofVersion, startedAt: "2000-01-01T00:00:00Z", finishedAt: "2100-01-01T00:00:00Z", builds: summary.builds });
   // Use the same retained application image identity as the actual-config vector.
@@ -300,6 +481,7 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
   writeFileSync(join(dir, "run-manifest.json"), JSON.stringify(savedFiles(dir)));
   const sealed = savedFiles(dir), proof = verifySavedProof(dir, full.summary);
   assert.equal(proof.sources, "verified"); assert.equal(proof.resources, "verified"); assert.equal(proof.cleanupComplete, true); assert.deepEqual(proof.blockers, []);
+  assert.equal(proof.cpuRoles, undefined, "standalone receipts do not prove CPU isolation");
   assert.deepEqual(savedFiles(dir), sealed);
   const reseal = () => writeFileSync(join(dir, "run-manifest.json"), JSON.stringify(savedFiles(dir).filter((f) => f.path !== "run-manifest.json")));
   for (const kind of ["image", "network"]) await t.test(`sealed proof blocks a known-used ${kind} disappearing before owned removal`, () => {
@@ -313,13 +495,13 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
   for (const [label, mutate] of [
     ["unrelated creation command", (r) => r.creation.args = ["not-a-docker-create-command"]],
     ["coherently substituted creation intent and acknowledgement", (r) => { r.intent.args = ["create", "alpine", "true"]; acknowledgeCreation(r); }],
-    ["private observer PID namespace", (r) => {
-      r.created.HostConfig.PidMode = ""; r.terminal.HostConfig.PidMode = "";
-      r.intent.args = r.intent.args.map((a) => a === "--pid=host" ? "--pid=private" : a); acknowledgeCreation(r);
+    ["bounded probe gaining host PID access", (r) => {
+      r.created.HostConfig.PidMode = "host"; r.terminal.HostConfig.PidMode = "host";
+      r.intent.args.splice(1, 0, "--pid=host"); acknowledgeCreation(r);
     }],
-    ["private observer cgroup namespace", (r) => {
-      r.created.HostConfig.CgroupnsMode = "private"; r.terminal.HostConfig.CgroupnsMode = "private";
-      r.intent.args = r.intent.args.map((a) => a === "--cgroupns=host" ? "--cgroupns=private" : a); acknowledgeCreation(r);
+    ["bounded probe gaining host cgroup access", (r) => {
+      r.created.HostConfig.CgroupnsMode = "host"; r.terminal.HostConfig.CgroupnsMode = "host";
+      r.intent.args.splice(1, 0, "--cgroupns=host"); acknowledgeCreation(r);
     }],
   ]) await t.test(`sealed proof rejects ${label}`, () => {
     const r = structuredClone(full.receipts.find((r) => r.intent.step === "probe")), path = join(dir, "owned-containers", ownedFiles[r.index]);
@@ -340,8 +522,9 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
     const result = verifySavedProof(dir, partial);
     assert.equal(result.sources, "blocked"); assert.equal(result.resources, "blocked"); assert.equal(result.cleanupComplete, true);
   });
+  const probe = full.receipts.find((r) => r.intent.step === "probe");
   for (const [label, relative, mutate] of [
-    ["probe start exitCode", `owned-containers/${ownedFiles[7]}`, (value) => delete value.start.exitCode],
+    ["probe start exitCode", `owned-containers/${ownedFiles[probe.index]}`, (value) => delete value.start.exitCode],
     ["build timedOut", "@summary", (value) => delete value.builds.corten.command.timedOut],
     ["image removal exitCode", "resource-cleanup.json", (value) => delete value[1].commands[2].exitCode],
   ]) await t.test(`sealed proof blocks missing ${label} but rejects explicit failure`, () => {
@@ -363,7 +546,7 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
     }
   });
   // This is proof-layer replay only; verify(folder) still requires the complete
-  // canonical 216-cell ledger and independent semantic/parity replay first.
+  // canonical 108-cell ledger and independent bounded request/parity replay first.
   writeFileSync(join(dir, "corten-build-context/.dockerignore"), "changed"); assert.throws(() => verifyRunInputs(dir, summary));
   assert.throws(() => verifySavedProof(dir, full.summary), /run-wide saved byte closure differs/);
 });

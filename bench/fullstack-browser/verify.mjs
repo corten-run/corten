@@ -9,10 +9,10 @@ import { isDeepStrictEqual } from "node:util";
 import { alertsFromReadback, candidates, nativeFailures, parseOptions, retainedFamilies, schema, settings, sha256, validateTargets } from "./contract.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
 import { recordSchema, cellReader, cellRecordName } from "./cell-records.mjs";
-import { reconcileRequests } from "./ledger.mjs";
+import { reconcileNativeNetwork, reconcileRequests } from "./ledger.mjs";
+import { cleanupObserved, replayDocumentNavigation, replayJSReplacement } from "./document-navigation.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
-import { classifyNoJSRequests, validatePlatformRetirement, nativeNetworkRequests } from "./lifecycle.mjs";
-import { nativeOriginId } from "./cancellations.mjs";
+import { classifyNoJSRequests, replacedRealm, validatePlatformRetirement } from "./lifecycle.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 import { comparePage } from "../marketplace/check.mjs";
@@ -129,8 +129,7 @@ function resource(v) {
 }
 function retired(before, after) {
   if (!before?.scope || before.scope === after.scope) return null;
-  if (before.realm !== after.realm) return { scope: before.scope, owned: null, basis: "Native document realm replaced", probeAvailable: false,
-    reason: "A destroyed realm cannot supply a fresh retired-DOM observation; no zero counts or successful event probe are invented" };
+  if (before.realm !== after.realm) return replacedRealm(before, after);
   const found = after.scopes.find((s) => s.scope === before.scope);
   return { scope: before.scope, owned: found?.owned ?? null, connected: found?.connected ?? null, basis: "Document-start native primitive ledger", probeAvailable: Boolean(found) };
 }
@@ -323,17 +322,18 @@ function receiptChronology(e, windows, block, caseKey) {
   const c = e.nativeCleanup;
   let cleanupEnd = windows.at(-1)?.end ?? baseline ?? origin;
   if (c) {
-    const points = [c.before?.at, c.navigation?.at, c.after?.at, c.detachedAt, c.released?.at, c.probe?.at, c.probe?.afterAt];
+    const points = [c.before?.at, c.navigation?.at, c.after?.at, c.landingSettledAt, c.detachedAt, c.released?.at, c.probe?.at, c.probe?.afterAt];
     points.forEach((v) => time(v, "cleanup", false)); sequence([cleanupEnd, ...points], "Journey/cleanup");
     if (!c.before) block("Cleanup start receipt unavailable");
     if (c.probe) interval(c.probe, "retired DOM probe", "at", "afterAt");
     if (c.platformProbe) {
       const [start, end] = interval(c.platformProbe, "cleanup platform probe", "receivedAt");
-      order(c.after?.at, start, "Cleanup/platform probe"); points.push(end);
+      order(c.landingSettledAt ?? c.after?.at, start, "Cleanup/platform probe"); points.push(end);
     }
     cleanupEnd = Math.max(cleanupEnd, ...points.filter((v) => !missing(v)));
   }
   const j = e.platformLifecycle, b = j?.boundaries ?? {};
+  if (c?.terminalResources) order(b.endedAt, time(c.terminalResources.at, "terminal landing resource"), "Terminal lifecycle/landing resource");
   if (j) {
     for (const key of ["startedAt", "applicationStartedAt", "terminalStartedAt", "endedAt"]) time(b[key], "lifecycle boundary");
     sequence([b.startedAt, baseline, b.applicationStartedAt, windows[0]?.start], "Pre-baseline/application lifecycle");
@@ -534,11 +534,25 @@ function replayCell(cell, profile, app, summary, records, block, endpoints, nati
   }
   if (e.functionalChecksPassed) need(allFunctional && !native.length && !semanticFailures.length, "Functional summary contradicts raw native observations");
   const c = e.nativeCleanup;
+  const navigation = e.documentNavigationProof === undefined ? null : replayDocumentNavigation(e, profile, settings);
+  if (navigation) {
+    same(e.documentNavigationProof, navigation, "Stored document navigation proof differs from native receipts");
+    if (navigation.outcome !== "proved") block(`Native document navigation unproved: ${navigation.reason}`);
+  }
+  const jsNavigation = e.jsDocumentNavigationProof === undefined ? null : replayJSReplacement(e, profile, settings);
+  if (jsNavigation) {
+    same(e.jsDocumentNavigationProof, jsNavigation, "Stored JS document replacement proof differs from native receipts");
+    if (jsNavigation.outcome !== "proved") block(`Native JS document replacement unproved: ${jsNavigation.reason}`);
+  }
+  if (profile.js && cell.outcome === "captured" && e.steps.some((row) => row.retired?.owned === null))
+    need(jsNavigation?.outcome === "proved", "Captured JS replacement lacks native proof");
+  const replaced = navigation?.outcome === "proved" || jsNavigation?.outcome === "proved" && jsNavigation.cleanup;
   if (c !== null && c !== undefined) need(object(c) && ["observed", "failed", "unsupported"].includes(c.outcome) && list(c.failures), "Malformed native cleanup outcome");
   if (c?.before && c.after) { resource(c.before); resource(c.after); same(c.retired, retired(c.before, c.released ?? c.after), "Cleanup retirement differs from raw ledger"); }
   if (c?.released) resource(c.released);
   if (e.cleanup?.nativePageScope !== undefined) same(e.cleanup.nativePageScope, c ?? null, "Harness/native cleanup sidecars differ");
-  if (c?.outcome !== "observed" || !c?.probe || !c?.dom || e.cleanup?.contextClosed !== true) block("Native closed-scope DOM/probe cleanup proof unavailable");
+  if ((!replaced && (c?.outcome !== "observed" || !c?.probe || !c?.dom)) || e.cleanup?.contextClosed !== true)
+    block("Native closed-scope DOM/probe cleanup proof unavailable");
   if (c?.outcome === "observed") {
     need(c.probe && c.dom && c.retired?.probeAvailable && c.retired.owned, "Claimed native cleanup lacks fresh observations");
     counts(c.probe.afterResources); counts(c.retired.owned); counts(c.probe.owned);
@@ -551,7 +565,7 @@ function replayCell(cell, profile, app, summary, records, block, endpoints, nati
       && finite(c.probe.at) && c.probe.afterAt - c.probe.at >= settings.observationMs, "Claimed cleanup lacks bounded unchanged-DOM evidence");
     same(c.probe.requests, [], "Cleanup probe emitted requests"); same(c.probe.errors, [], "Cleanup probe emitted errors");
   }
-  const requestProof = reconcileRequests(e);
+  const requestProof = reconcileRequests(e, navigation, jsNavigation);
   if (e.requestLedger !== undefined) requests(e.requestLedger); else block("Final raw browser request ledger unavailable");
   if (e.requestLedgerEndedAt === null || e.requestLedgerEndedAt === undefined) block("Final browser request ledger boundary unavailable");
   else need(finite(e.requestLedgerEndedAt) && e.requestLedgerEndedAt >= latestObservation, "Final browser request boundary predates retained observations or is malformed");
@@ -611,7 +625,7 @@ function replayCell(cell, profile, app, summary, records, block, endpoints, nati
     same(p.configuration, { cpus: 1, memoryBytes: 2 ** 30, marketplaceSource: profile.source, fixtureSha256: summary.fixtureSha256 }, "Native container configuration mismatch");
     if (!p.stillSameProcess) block("Native process continuity failed");
   }
-  const qualified = !e.failures.length && !e.gaps.length && c?.outcome === "observed";
+  const qualified = !e.failures.length && !e.gaps.length && (c?.outcome === "observed" || replaced);
   if (qualified) need(e.functionalChecksPassed === true && e.domChecksPassed === true, "Positive native cell lacks functional/DOM proof");
   const outcome = e.failures.length ? "failed" : qualified ? "captured" : "unsupported";
   same(cell.outcome, outcome, "Cell outcome differs from native failures/gaps/cleanup");
@@ -698,79 +712,16 @@ function readbackEntries(e) {
     [m?.otherContext?.after, "other-final", "mutation-other"], ...(m?.attempts ?? []).map((r) => [r.readback, `rejection-${r.kind}`, "application"])];
 }
 
-export function nativeToolIdentities(tools, canonicalLock) {
-  need([tools?.node, tools?.browser, tools?.lockSha256, canonicalLock].every((v) => typeof v === "string" && hash.test(v)), "Missing native tool/lock identity");
+// The bench lock (the binding parser's compiler) is proved here; the handoff keeps the root lock.
+export function nativeToolIdentities(tools, canonicalLock, canonicalBenchLock) {
+  need([tools?.node, tools?.browser, tools?.lockSha256, tools?.benchLockSha256, canonicalLock, canonicalBenchLock]
+    .every((v) => typeof v === "string" && hash.test(v)), "Missing native tool/lock identity");
   same(tools.lockSha256, canonicalLock, "Native tool lock differs from immutable source");
+  same(tools.benchLockSha256, canonicalBenchLock, "Native bench tool lock differs from immutable source");
   return { node: tools.node, browser: tools.browser, lockSha256: tools.lockSha256 };
 }
 
-// This is multiset conservation, not a guessed bijection between protocol IDs.
-export function reconcileNativeNetwork(evidence) {
-  const result = { outcome: "unknown", reasons: [], namespace: null, requests: [] };
-  try {
-    const j = evidence.platformLifecycle, events = j?.events;
-    need(Array.isArray(events) && events.length <= 100000, "Native network journal unavailable");
-    const observers = events.filter((e) => e.event === "native-network-observer");
-    need(observers.length === 1, "Native network observer namespace missing/duplicated");
-    const ns = observers[0];
-    exactKeys(ns, ["event", "namespaceKind", "observerSession", "targetId", "receivedAt"], "Unknown native observer namespace field");
-    need(ns.namespaceKind === "observer-assigned" && text(ns.observerSession) && text(ns.targetId) && ns.targetId === j.target?.target
-      && finite(ns.receivedAt) && ns.receivedAt <= j.boundaries?.startedAt, "Native observer/target binding unavailable");
-    const inventories = events.filter((e) => e.event === "Target.getTargets" && e.phase === "initial");
-    need(inventories.length === 1 && inventories[0].targets?.filter((t) => t.target === ns.targetId && t.context === j.target.context && t.type === "page").length === 1,
-      "Native observer target lacks actual discovery inventory");
-    const network = nativeNetworkRequests(j); need(!network.reasons.length, network.reasons.join("; "));
-    const bodies = events.filter((e) => ["native-document-body", "native-response-body"].includes(e.event)), byDispatch = new Map(), used = new Set(), origins = new Set();
-    for (const body of bodies) {
-      const key = JSON.stringify([body.request, body.dispatchAt]);
-      need(!byDispatch.has(key), "Duplicated native body receipt"); byDispatch.set(key, body);
-    }
-    const browser = new Map(), native = new Map();
-    const add = (groups, tuple, date) => { const key = JSON.stringify(tuple); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(date); };
-    for (const r of network.requests) {
-      const d = r.dispatch, redirected = r.terminal?.event === "native-redirect", failed = r.terminal?.event === "Network.loadingFailed";
-      const status = redirected ? r.terminal.status : r.response?.status ?? null;
-      let body = null;
-      if (!redirected && !failed) {
-        body = byDispatch.get(JSON.stringify([d.request, d.at])); need(body, "Completed native response lacks bounded body receipt"); used.add(body);
-        exactKeys(body, ["event", "observerSession", "targetId", "originId", "hop", "request", "dispatchAt", "frame", "loader", "urlSha256", "method", "status", "dateSha256", "bodySha256", "bytes", "queuedAt", "startedAt", "receivedAt"], "Unknown native body receipt field");
-        const originId = nativeOriginId(ns, d, r.hop);
-        same([body.event, body.observerSession, body.targetId, body.originId, body.hop, body.frame, body.loader, body.urlSha256, body.method, body.status],
-          [d.type === "Document" ? "native-document-body" : "native-response-body", ns.observerSession, ns.targetId, originId, r.hop, d.frame, d.loader, d.urlSha256, d.method, status], "Native response body/dispatch identity differs");
-        need(!origins.has(originId), "Duplicated native origin identity"); origins.add(originId);
-        need(hash.test(body.bodySha256 ?? "") && integer(body.bytes) && body.bytes <= 16 * 1024 ** 2
-          && [body.queuedAt, body.startedAt, body.receivedAt].every(finite) && r.terminal.receivedAt <= body.queuedAt
-          && body.queuedAt <= body.startedAt && body.startedAt <= body.receivedAt && body.receivedAt - body.queuedAt <= 1000
-          && body.receivedAt <= j.boundaries.endedAt, "Native body observation is missing/beyond its bounded window");
-        need(body.dateSha256 === null || hash.test(body.dateSha256 ?? ""), "Malformed optional native response date");
-        need(r.response.dateSha256 === null || r.response.dateSha256 === undefined || hash.test(r.response.dateSha256 ?? ""), "Malformed optional native response-header date");
-        if (body.dateSha256 && r.response.dateSha256) same(body.dateSha256, r.response.dateSha256, "Native response date consistency differs");
-      }
-      r.body = body;
-      add(native, [d.scheme, d.path, d.urlSha256, d.method, d.type.toLowerCase(), status, !failed, failed ? r.terminal.errorText : null,
-        body?.bodySha256 ?? null, body?.bytes ?? null], body?.dateSha256 ?? null);
-    }
-    need(used.size === bodies.length, "Orphan/late native response body receipt");
-    need(Array.isArray(evidence.requestLedger), "Semantic browser request ledger missing");
-    const ids = new Set();
-    for (const r of evidence.requestLedger) {
-      need(text(r.id) && !ids.has(r.id), "Duplicate/missing semantic request ID"); ids.add(r.id);
-      need(hash.test(r.urlSha256 ?? "") && typeof r.completed === "boolean" && !r.captureError, "Incomplete semantic request identity/body capture");
-      need(r.dateSha256 === null || r.dateSha256 === undefined || hash.test(r.dateSha256 ?? ""), "Malformed optional semantic response date");
-      need(!r.failure || r.completed === false, "Semantic failed request claims completion");
-      add(browser, [r.scheme, r.path, r.urlSha256, r.method, r.resource, r.status, r.completed, r.failure ?? null,
-        r.bodySha256 ?? null, r.bytes?.decodedBody ?? null], r.dateSha256 ?? null);
-    }
-    same([...native.keys()].sort(), [...browser.keys()].sort(), "Native/semantic request methods/paths/status/bodies/failures differ");
-    for (const [key, dates] of native) {
-      same(dates.length, browser.get(key).length, "Native/semantic request multiplicity differs");
-      // Optional dates can contradict a group; they never distinguish its IDs.
-      if (dates.every(text) && browser.get(key).every(text)) same([...dates].sort(), [...browser.get(key)].sort(), "Native/semantic response date consistency differs");
-    }
-    result.namespace = ns; result.requests = network.requests; result.outcome = "reconciled";
-  } catch (error) { result.reasons.push(error.message); }
-  return result;
-}
+export { reconcileNativeNetwork } from "./ledger.mjs";
 
 // This checks observational identities only; the installed leaf decodes reads.
 // Missing linkage stays unknown, while contradictory retained linkage rejects.
@@ -961,11 +912,12 @@ async function validateNativeV2(input) {
     const toolsBefore = root("toolsBefore", "tools-before"), toolsAfter = root("toolsAfter", "tools-after");
     const tools = replayTools(reader, toolsBefore); same(replayTools(reader, toolsAfter), tools, "Native tools changed during execution");
     same(toolsBefore, toolsAfter, "Native installed tool/package bytes changed");
-    const toolIdentities = nativeToolIdentities(tools, sourceMap.get("package-lock.json")?.sha256);
+    const toolIdentities = nativeToolIdentities(tools, sourceMap.get("package-lock.json")?.sha256, sourceMap.get("bench/package-lock.json")?.sha256);
     same(tools.browser, summary.browser?.executableSha256, "Native browser executable identity differs");
     const targets = root("targets", "targets"); validateTargets({ schema: "native-fullstack-browser-targets/v1", targets });
     same(sha256(JSON.stringify(targets)), summary.targetsSha256, "Bundled target manifest differs from run");
-    const executionValue = root("execution", "execution"), execution = replayExecution(reader, n.execution);
+    const executionValue = root("execution", "execution"),
+      execution = replayExecution(reader, n.execution, { isolated: summary.options?.isolated === true });
     same([executionValue.task, executionValue.commit], [summary.task, input.commit], "Native execution identity differs");
     need(Date.parse(summary.startedAt) <= execution.executionWindow.startedAt && execution.executionWindow.endedAt <= Date.parse(summary.finishedAt), "Native execution outside producer run");
     for (const reason of execution.blocked) block(`execution:${reason}`);
@@ -1075,9 +1027,11 @@ function replaySaved(input = {}, nativeProof = null) {
     same(summary.fixtureSha256, sha256(JSON.stringify(records)), "Fixture hash mismatch");
     const plan = createBrowserPlan({ records }); same(summary.effectivePlan, plan, "Plan/profile inventory differs from current contract"); same(summary.settings, settings, "Saved options/settings differ from current native settings");
     const options = summary.options;
-    need(object(options), "Missing run options"); exactKeys(options, ["round", "targets", "out", "apps", "cases", "build"], "Unknown/missing run option");
+    need(object(options), "Missing run options");
+    exactKeys(options, ["round", "targets", "out", "apps", "cases", "build", ...(nativeProof && options.isolated === true ? ["isolated"] : [])], "Unknown/missing run option");
     const args = [round, "--out", localPath(options.out), "--apps", list(options.apps) ? options.apps.join(",") : ""];
     if (options.build === true) args.push("--build"); else need(options.build === false, "Malformed build option");
+    if (options.isolated === true) args.push("--isolated");
     if (options.targets !== null) args.push("--targets", localPath(options.targets));
     if (options.cases !== null) { need(list(options.cases), "Malformed selected profiles"); args.push("--cases", options.cases.join(",")); }
     same(parseOptions(args), options, "Run options do not round-trip through current parser"); same(options.round, round, "Round mismatch");
@@ -1159,7 +1113,7 @@ function replaySaved(input = {}, nativeProof = null) {
         && summary.cells[app].every((saved) => {
           const c = readCell(saved, app);
           return c.outcome === "captured" && c.qualificationPassed && c.evidence?.functionalChecksPassed && c.evidence.domChecksPassed && !c.evidence.failures.length && !c.evidence.gaps.length
-            && c.evidence.nativeCleanup?.outcome === "observed" && c.evidence.cleanup?.contextClosed === true && c.evidence.provenance?.stillSameProcess === true;
+            && cleanupObserved(c.evidence) && c.evidence.cleanup?.contextClosed === true && c.evidence.provenance?.stillSameProcess === true;
         });
     });
     same(summary.qualificationPassed, Boolean(group), "Group qualification summary differs from current complete-matrix derivation");

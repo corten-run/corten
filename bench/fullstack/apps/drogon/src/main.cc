@@ -58,13 +58,13 @@ int main()
     {
         catalog::load();
         marketplace::load();
+        marketplace::routes();
     }
     catch (const std::exception &error)
     {
         std::fprintf(stderr, "record fixture startup: %s\n", error.what());
         return 1;
     }
-    marketplace::routes();
     const char *port = std::getenv("PORT");
     const char *profile = std::getenv("PROFILE");
     const bool catalogLean = profile && std::string_view(profile) == "catalog-lean";

@@ -21,7 +21,11 @@ async fn main() {
     let app = Router::new()
         .route("/api/items/{id}", axum::routing::get(item_page_leptos::app::item_json))
         .route("/api/catalog/{id}", axum::routing::get(item_page_leptos::catalog_page::catalog_json))
-        .route("/api/marketplace/{id}", axum::routing::get(item_page_leptos::marketplace_page::marketplace_json))
+        .route(
+            "/api/marketplace/{id}",
+            axum::routing::get(item_page_leptos::marketplace_page::marketplace_json)
+                .fallback(item_page_leptos::marketplace_page::marketplace_method_not_allowed),
+        )
         .route("/api/alerts", axum::routing::get(item_page_leptos::alerts::read))
         .route("/marketplace/{locale}/{id}", axum::routing::post(item_page_leptos::marketplace_page::marketplace_post))
         .merge(live::routes())
@@ -33,7 +37,7 @@ async fn main() {
     // The profile's cache policy is the pages' and the JSON's, not the static files' (the fallback
     // serves those).
     let app = if item_page_leptos::app::matched() {
-        app.route_layer(SetResponseHeaderLayer::if_not_present(
+        app.route("/health/live", axum::routing::get(production::health)).route_layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("private, no-cache"),
         ))
@@ -60,9 +64,11 @@ fn profile_layers(router: axum::Router) -> axum::Router {
 
     let header =
         |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
+    let hosts = production::Hosts::configured();
     router
         .layer(TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, Duration::from_secs(10)))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(hosts, production::check_host))
         .layer(header(header::CONTENT_SECURITY_POLICY, item_page_leptos::app::CSP_REST))
         .layer(header(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(header(header::REFERRER_POLICY, "strict-origin-when-cross-origin"))
@@ -73,6 +79,9 @@ fn profile_layers(router: axum::Router) -> axum::Router {
             "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
         ))
 }
+
+#[cfg(feature = "ssr")]
+mod production;
 
 #[cfg(not(feature = "ssr"))]
 pub fn main() {}

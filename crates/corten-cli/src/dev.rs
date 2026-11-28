@@ -19,18 +19,16 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::option;
-
 /// Directories that never trigger a rebuild.
 const IGNORED: &[&str] = &["target", ".git", "node_modules", ".idea", ".vscode"];
 
-pub fn run(args: &[String]) -> Result<(), String> {
+/// `flag_port` is the port `--port` named, read by `dev_flags` in `main.rs`.
+pub fn run(flag_port: Option<u16>) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
     if !root.join("Cargo.toml").is_file() {
         return Err("run corten dev in the app's directory (where Cargo.toml is)".into());
     }
-    let port =
-        option(args, "--port")?.map(str::to_string).or_else(|| std::env::var("PORT").ok()).unwrap_or_else(|| "3000".into());
+    let port = flag_port.map(|port| port.to_string()).or_else(|| std::env::var("PORT").ok()).unwrap_or_else(|| "3000".into());
     let mut server: Option<Child> = None;
     let mut roots = vec![root.clone()];
     let mut seen = snapshot(&roots);
@@ -138,27 +136,29 @@ fn only_under(before: &BTreeMap<PathBuf, SystemTime>, after: &BTreeMap<PathBuf, 
 
 /// `cargo build`, with diagnostics shown as usual; the path of the package's binary.
 fn build(root: &Path) -> Result<PathBuf, String> {
-    let mut child = Command::new("cargo")
-        .args(["build", "--message-format=json-render-diagnostics"])
-        .current_dir(root)
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run cargo: {e}"))?;
-    let mut binary = None;
+    let built = binaries_of(Command::new("cargo").args(["build", "--message-format=json-render-diagnostics"]).current_dir(root))?;
+    built.into_iter().next_back().ok_or_else(|| "the package has no binary to run".into())
+}
+
+/// Runs `build`, a `cargo build` that prints its messages as JSON (diagnostics still shown as
+/// usual), and gives the path of each binary it made, in the order Cargo reported them.
+pub(crate) fn binaries_of(build: &mut Command) -> Result<Vec<PathBuf>, String> {
+    let mut child = build.stdout(Stdio::piped()).spawn().map_err(|e| format!("could not run cargo: {e}"))?;
+    let mut binaries = Vec::new();
     for line in BufReader::new(child.stdout.take().expect("piped")).lines().map_while(Result::ok) {
         // A bin target's artifact line: {"reason":"compiler-artifact",...,"executable":"/path"}.
         if line.contains(r#""reason":"compiler-artifact""#)
             && line.contains(r#""kind":["bin"]"#)
             && let Some(path) = json_string_field(&line, "executable")
         {
-            binary = Some(PathBuf::from(path));
+            binaries.push(PathBuf::from(path));
         }
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() {
         return Err("the build failed".into());
     }
-    binary.ok_or_else(|| "the package has no binary to run".into())
+    Ok(binaries)
 }
 
 /// The string value of `"field":"..."` in a line of cargo's JSON output.

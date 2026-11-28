@@ -8,6 +8,8 @@ import { test } from "node:test";
 const prefix = "# Changelog\n\n## Unreleased\n\n";
 const pointer = "Pending entries are in [changelog.d/](changelog.d/).\n\n";
 const previous = "## 0.2.0 (2026-11-11)\n\n- A published entry.\n";
+const archiveIndex = (...versions) => "## Release archive\n\n" +
+  versions.map((v) => `- [${v}](CHANGELOG.${v}.md)\n`).join("");
 
 function checkout(t, changelog = prefix + previous) {
   const root = mkdtempSync(join(tmpdir(), "corten-changelog-"));
@@ -18,6 +20,11 @@ function checkout(t, changelog = prefix + previous) {
   const file = join(root, "CHANGELOG.md");
   const dir = join(root, "changelog.d");
   writeFileSync(file, changelog);
+  const run = (args, nodeArgs = []) => {
+    const result = spawnSync(process.execPath, [...nodeArgs, script, ...args], { cwd: root, encoding: "utf8" });
+    if (result.error) throw result.error;
+    return result;
+  };
   return {
     dir,
     write: (name, text) => {
@@ -28,12 +35,11 @@ function checkout(t, changelog = prefix + previous) {
       mkdirSync(dir, { recursive: true });
       copyFileSync(new URL("../changelog.d/README.md", import.meta.url), join(dir, "README.md"));
     },
-    run: (...args) => {
-      const result = spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
-      if (result.error) throw result.error;
-      return result;
-    },
+    run: (...args) => run(args),
+    runWithImport: (source, ...args) => run(args, ["--import", "data:text/javascript," + encodeURIComponent(source)]),
     read: () => readFileSync(file, "utf8"),
+    readArchive: (version) => readFileSync(join(root, `CHANGELOG.${version}.md`)),
+    writeArchive: (version, bytes) => writeFileSync(join(root, `CHANGELOG.${version}.md`), bytes),
     writeChangelog: (text) => writeFileSync(file, text),
   };
 }
@@ -89,7 +95,8 @@ test("release renders Breaking first in filename order within each group, then u
     "- Show the literal `**Breaking:**` marker.\n\n" +
     "- Document migration.\n  **Breaking:** is the label.\n\n" +
     "- A documentation note.\n\n" +
-    legacy + previous);
+    legacy + archiveIndex("0.2.0"));
+  assert.deepEqual(tree.readArchive("0.2.0"), Buffer.from(previous));
   assert.deepEqual(readdirSync(tree.dir), ["README.md"]);
   const check = tree.run("--check");
   assert.equal(check.status, 0, check.stderr);
@@ -100,7 +107,7 @@ test("release supports fragment-only and legacy-only notes", (t) => {
   tree.write("pr-12-1.md", "-  A fragment.\n");
   const release = tree.run("release", "0.3.0", "2026-11-19");
   assert.equal(release.status, 0, release.stderr);
-  assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n-  A fragment.\n\n" + previous);
+  assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n-  A fragment.\n\n" + archiveIndex("0.2.0"));
   assert.deepEqual(readdirSync(tree.dir), []);
 
   const crlf = (text) => text.replaceAll("\n", "\r\n");
@@ -108,7 +115,82 @@ test("release supports fragment-only and legacy-only notes", (t) => {
   const legacyTree = checkout(t, crlf(prefix + pointer + legacy + previous));
   const legacyRelease = legacyTree.run("release", "0.2.1", "2026-11-19");
   assert.equal(legacyRelease.status, 0, legacyRelease.stderr);
-  assert.equal(legacyTree.read(), crlf(prefix + pointer + "## 0.2.1 (2026-11-19)\n\n" + legacy + previous));
+  assert.equal(legacyTree.read(), crlf(prefix + pointer + "## 0.2.1 (2026-11-19)\n\n" + legacy + archiveIndex("0.2.0")));
+  assert.deepEqual(legacyTree.readArchive("0.2.0"), Buffer.from(crlf(previous)));
+});
+
+test("release moves existing sections byte-for-byte and keeps earlier archive links", (t) => {
+  const newest = "## 0.2.0 (2026-11-11)\n\n### Added\n\n- Café: [guide](docs/guide/kit.md).  \n\n";
+  const older = "## 0.1.0 (not tagged)\r\n\r\n- No final newline.";
+  const tree = checkout(t, prefix + pointer + newest + older);
+  tree.write("pr-12-1.md", "- A new release.\n");
+  const first = tree.run("release", "0.3.0", "2026-11-19");
+  assert.equal(first.status, 0, first.stderr);
+  const movedNewest = tree.readArchive("0.2.0");
+  const movedOlder = tree.readArchive("0.1.0");
+  assert.deepEqual(Buffer.concat([movedNewest, movedOlder]), Buffer.from(newest + older));
+  const issued = "## 0.3.0 (2026-11-19)\n\n- A new release.\n\n";
+  assert.equal(tree.read(), prefix + pointer + issued + archiveIndex("0.2.0", "0.1.0"));
+
+  tree.write("pr-13-1.md", "- A patch release.\n");
+  const second = tree.run("release", "0.3.1", "2026-11-20");
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(tree.read(), prefix + pointer + "## 0.3.1 (2026-11-20)\n\n- A patch release.\n\n" +
+    archiveIndex("0.3.0", "0.2.0", "0.1.0"));
+  assert.deepEqual(tree.readArchive("0.3.0"), Buffer.from(issued));
+  assert.deepEqual(tree.readArchive("0.2.0"), movedNewest);
+  assert.deepEqual(tree.readArchive("0.1.0"), movedOlder);
+  assert.equal(tree.run("--check-release").status, 0);
+});
+
+test("release retries after writing an archive but failing to write the index", (t) => {
+  const tree = checkout(t);
+  const note = "- Keep this pending entry.\n";
+  tree.write("pr-12-1.md", note);
+  const args = ["release", "0.3.0", "2026-11-19"];
+  const withBlockedWrite = (name) => tree.runWithImport(`
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    import { basename } from "node:path";
+    const write = fs.writeFileSync;
+    fs.writeFileSync = (path, ...args) => {
+      if (basename(path) === ${JSON.stringify(name)}) throw new Error("injected write failure: " + basename(path));
+      return write(path, ...args);
+    };
+    syncBuiltinESMExports();
+  `, ...args);
+  const failed = withBlockedWrite("CHANGELOG.md");
+  assert.equal(failed.status, 1, failed.stderr);
+  assert.match(failed.stderr, /injected write failure: CHANGELOG\.md/);
+  assert.deepEqual(tree.readArchive("0.2.0"), Buffer.from(previous));
+  assert.equal(tree.read(), prefix + previous);
+  assert.equal(readFileSync(join(tree.dir, "pr-12-1.md"), "utf8"), note);
+
+  const retried = withBlockedWrite("CHANGELOG.0.2.0.md");
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.deepEqual(tree.readArchive("0.2.0"), Buffer.from(previous));
+  assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n" + note + "\n" + archiveIndex("0.2.0"));
+  assert.deepEqual(readdirSync(tree.dir), []);
+  assert.equal(tree.run("--check-release").status, 0);
+});
+
+test("release does not overwrite an archive or reuse its version", (t) => {
+  const note = "- Keep this pending entry.\n";
+  for (const [version, error] of [
+    ["0.2.0", /CHANGELOG\.0\.2\.0\.md already exists and differs/],
+    ["0.3.0", /CHANGELOG\.0\.3\.0\.md already exists; refusing to reuse/],
+  ]) {
+    const tree = checkout(t);
+    tree.write("pr-12-1.md", note);
+    const bytes = Buffer.from(previous.replace("\n", "\r\n"));
+    tree.writeArchive(version, bytes);
+    const result = tree.run("release", "0.3.0", "2026-11-19");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, error);
+    assert.deepEqual(tree.readArchive(version), bytes);
+    assert.equal(tree.read(), prefix + previous);
+    assert.equal(readFileSync(join(tree.dir, "pr-12-1.md"), "utf8"), note);
+  }
 });
 
 test("a release candidate fails if a fragment arrives after preparation", (t) => {
@@ -151,11 +233,12 @@ test("a late inline note blocks the tag gate and a new cut keeps the pointer out
     assert.equal(tree.read(), candidate, "the tag gate does not consume notes or the pointer");
   }
 
-  tree.writeChangelog(prefix + late + pointer + previous);
+  tree.writeChangelog(prefix + late + pointer + archiveIndex("0.2.0"));
   tree.write("pr-12-1.md", note);
   const recut = tree.run("release", "0.3.0", "2026-11-19");
   assert.equal(recut.status, 0, recut.stderr);
-  assert.equal(tree.read(), prefix + pointer + "## 0.3.0 (2026-11-19)\n\n" + note + "\n" + late + previous);
+  assert.equal(tree.read(), prefix + pointer + "## 0.3.0 (2026-11-19)\n\n" + note + "\n" + late + archiveIndex("0.2.0"));
+  assert.deepEqual(tree.readArchive("0.2.0"), Buffer.from(previous));
   assert.equal(tree.run("--check-release").status, 0);
   assert.deepEqual(readdirSync(tree.dir), ["README.md"]);
 });
@@ -169,7 +252,76 @@ test("single-line absolute HTTPS links survive release unchanged", (t) => {
   assert.equal(check.status, 0, check.stderr);
   const released = tree.run("release", "0.3.0", "2026-11-19");
   assert.equal(released.status, 0, released.stderr);
-  assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n" + links + "\n" + previous);
+  assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n" + links + "\n" + archiveIndex("0.2.0"));
+});
+
+test("the visible length cap applies only to branch fragments and PRs after the cutoff", (t) => {
+  const tree = checkout(t);
+  const note = (length) => "- " + "x".repeat(length) + "\n";
+  tree.write("pr-1730-1.md", note(401));
+  tree.write("pr-1736-2.md", note(401));
+  tree.write("pr-1737-1.md", note(400));
+  const accepted = tree.run("--check");
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.match(accepted.stdout, /3 fragment\(s\) valid/);
+
+  for (const name of ["pr-1737-1.md", "branch-next-1.md"]) {
+    tree.write(name, note(401));
+    const rejected = tree.run("--check");
+    assert.equal(rejected.status, 1);
+    assert.ok(rejected.stderr.includes(name + ": 401 visible characters"), rejected.stderr);
+    tree.write(name, note(400));
+  }
+
+  const released = tree.run("release", "0.3.0", "2026-11-19");
+  assert.equal(released.status, 0, released.stderr);
+  assert.match(released.stdout, /4 fragment\(s\) released/);
+});
+
+test("check caps visible text at 400 Unicode code points, not Markdown link destinations", (t) => {
+  const tree = checkout(t);
+  const name = "pr-1737-1.md";
+  const path = "https://example.com/" + "x".repeat(500);
+  const note = "-    " + "\u{1F600}".repeat(389) + "  \r\n     [link](" + path + ") and ` x `";
+  tree.write(name, note + "\r\n");
+  assert.equal(tree.run("--check").status, 0); // 389 + wrap + 'link and x'.
+  tree.write(name, note + ".");
+  for (const args of [["--check"], ["release", "0.3.0", "2026-11-19"]]) {
+    const result = tree.run(...args);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /pr-1737-1\.md: 401 visible characters.*400-character limit/);
+  }
+  assert.equal(tree.read(), prefix + previous);
+
+  tree.write(name, "- `[link](" + path + ")`");
+  const literal = tree.run("--check");
+  assert.equal(literal.status, 1, "a URL printed inside a code span is visible");
+  assert.match(literal.stderr, /visible characters.*400-character limit/);
+});
+
+test("check counts a nonbreaking space after Markdown indentation", (t) => {
+  const tree = checkout(t);
+  const name = "pr-1737-1.md";
+  const note = (n) => "- " + "x".repeat(n) + "\n  \u00A0y\n";
+  tree.write(name, note(397));
+  assert.equal(tree.run("--check").status, 0);
+  tree.write(name, note(398));
+  const rejected = tree.run("--check");
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /pr-1737-1\.md: 401 visible characters.*400-character limit/);
+});
+
+test("check counts every space in an all-space code span", (t) => {
+  const tree = checkout(t);
+  const name = "pr-1737-1.md";
+  const note = (n) => "- " + "x".repeat(n) + " `   `\n";
+  tree.write(name, note(396));
+  const accepted = tree.run("--check");
+  assert.equal(accepted.status, 0, accepted.stderr);
+  tree.write(name, note(397));
+  const rejected = tree.run("--check");
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /pr-1737-1\.md: 401 visible characters.*400-character limit/);
 });
 
 test("check rejects unsupported link forms, including links split across lines", (t) => {
@@ -217,7 +369,6 @@ test("check and release reject malformed fragments without changing either file"
     "- <!-- No visible\n  note. -->\n",
     "- [guide]: https://corten.run/\n",
     "- [&#32;](https://corten.run/)\n",
-    "- ` `\n",
     "- A paragraph.\n  - A nested bullet.\n",
     "- # A heading instead of prose.\n",
     "- | Guide |\n  | --- |\n  | `[kit](../docs/guide/kit.md) | ` |\n",

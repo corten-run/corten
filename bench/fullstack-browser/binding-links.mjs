@@ -4,7 +4,7 @@ import { bindingFunctionText, bindingHash, indexBindingArtifact } from "./bindin
 import { effectFreeNames } from "./binding-effects.mjs";
 import { bindingRealm } from "./binding-intrinsics.mjs";
 import { emittedModules, reactContract } from "./binding-modules.mjs";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { performance } from "node:perf_hooks";
 const observers = new WeakMap();
 export async function observeFormConstruction(cdp, documentNode, windowObject, group) {

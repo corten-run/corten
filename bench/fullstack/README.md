@@ -1218,7 +1218,12 @@ folders':
 
 All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
 times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
-run them.
+run the `ab.mjs` rounds; one ran the floods and fault counts again for the thread cache's limit on
+2026-11-23, kept under the tag `evidence/thread-cache-1979-diagnostic`
+([design Choice 23](../../docs/design.md#choice-jemalloc-image)). From that change card-market's
+image, which `builds.mjs`, `cost-under-load.sh` and the commands below build, sets a 512 KiB thread
+cache where it set 64 KiB: a result recorded before it ran with 64 KiB, and a comparison across
+that change's merge changes the allocator's setting with the code.
 
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
@@ -1380,8 +1385,96 @@ three runs:
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
    longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
-   or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
-   droplet; the unit starts again at boot and the round goes on from the next step. A droplet
+   or prints nothing for an hour (SIGTERM to its process group, SIGKILL 30 s later, neither once
+   its process has been reaped). A call ends when its process exits: output that something it
+   started holds open is released 10 s after the exit, never taken as a clean exit. A call so
+   released, or a stopped call whose process is still running 40 s after its SIGTERM (which is
+   left), ends the round in whatever step it is, the build step included, with the reason in
+   `skipped.txt`: what held its output or the process itself was not seen to end, so no clean
+   slate, later call (the next app's build), step or summary runs beside it, and the round is
+   recorded failed. A call that could
+   not be started (no process) is taken as stopped, never as an exit. A kernel lockup (r8's) panics the kernel, which reboots the
+   droplet; the unit starts again at boot and the round goes on from the next step.
+   The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
+   seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
+   does not reach the probe's process group of its own) ends the round there, with the reason in
+   `skipped.txt`: no later step, clean slate or summary runs and the round is recorded failed, so
+   it does not start again at boot. `run-all.mjs` writes the boot's ID on the count step's start
+   line, and a round that starts again while its count step had not ended goes on only where that
+   ID is another boot's: one started again in the same boot (`run-all.mjs` itself killed or
+   stopped), or with no ID to compare, ends the round the same way, before its clean slate. Each
+   progress line is written whole and synced before its step starts (a write cut short stops the
+   round there, recorded failed), and a progress file whose last line was cut short is read as a
+   count step that had not ended. That is checked before a start writes anything, and the cut file
+   is left as it is, so a start stopped part way through cannot hide it from the next.
+   `droplet.mjs` on a droplet a round of that name ran on (`--host`, with or without `--from`)
+   checks the same before it removes anything that round left (its progress file, or all of
+   `/bench`). It refuses (exit 4) unless systemd confirms, each query succeeding, that its unit is
+   either unknown to it or was disabled and stopped (both succeeding), that it cannot start at
+   boot (`is-enabled` disabled, static or masked, and no wants or requires link to it left), that
+   it is inactive (or failed) with no job queued for it, both read from one `systemctl show` (its
+   state and its queued job in one reply: a start queued for a disabled unit leaves it inactive
+   with no control group until the job runs, and a state and a job queue read in two queries can
+   tear, a start that completes between them reading as inactive with nothing queued), and that
+   nothing is left anywhere in its control group (cgroup v2 `cgroup.events` reads `populated 0`,
+   which counts child groups too, or the group is absent). A second such snapshot, taken after
+   the control group, the boot's ID and the progress file are read, must be the same as the first
+   (state, queued job, invocation and the time its state last changed); one that differs, as after
+   a start that completed meanwhile, refuses. Agreeing snapshots show the unit ended at both
+   moments, not that no run came and went between them: systemd unloads a stopped unit that is not
+   enabled, which then reads as one that never ran. The clear's second check re-reads the progress
+   file (below). A unit not confirmed stopped so is refused, as the clear's refusal is below: the
+   launch downloads nothing and leaves the droplet, even one it created.
+   It refuses the launch when the round's progress file shows a count step that started in this
+   boot and did not end, or ends in a cut line. Such a round goes on from a new droplet, or, for a
+   count step that started in this boot, after a reboot. From that check until the round's unit
+   has started, the launch holds `/var/lib/corten-bench/launch-<round>.lock` on the droplet, a
+   link `ln -sT` makes only when nothing is at that path, and which must then read as this
+   launch's: another launch of the round refuses while it is held (or while anything else is
+   there), every later step that changes the droplet, the unit's start included, first checks it
+   is still this launch's and runs one at a time with the others (but the upload, which only writes
+   `/bench/src.tgz` for a step that does to unpack), and the clear runs in one step with a second
+   check that must read as the first did and only reads (it disables and stops nothing), so a unit
+   that started again since refuses. A step refused that way, or because another launch holds or
+   took the lock, downloads nothing (it would land beside the other launch's results) and leaves
+   the droplet, even one this launch created, with how to delete it. So does a step that checks the
+   lock whose answer never came back on its last try (no answer within its time limit, or ssh's own
+   failure such as a dropped connection), or that got no turn at the droplet's flock within its
+   wait (`flock -E` gives that its own exit status, 75, which another launch's step holding the
+   flock causes): it may have refused there, or never checked, so it is taken as refused. A step
+   that ran and failed for another reason (a build that failed) is an ordinary failure, and a
+   droplet this launch created is destroyed. The
+   start is sent once, and counts as acknowledged
+   only when `systemctl start` succeeded: it can fail having lost systemd's reply while its job
+   goes on, and nothing read afterwards ties the unit's state to that start. An acknowledged start
+   whose unit is then not read as active (the round already ended, or that check or its connection
+   failed) can no longer start anything: the launch goes on to watch the round as a started one,
+   and downloads from or destroys the droplet only once the watch has seen the round end (with
+   `--detach`, it leaves it for `--collect`, which waits for the same). A launch that fails
+   releases the lock; one interrupted (Ctrl-C), or whose unit's start was sent but not acknowledged
+   (it failed, or the connection dropped, so whether the round is starting is not known; such a
+   start is not tried again), leaves the lock and the droplet, and says how to check the
+   round read-only (`systemctl status` and `systemctl list-jobs`) and remove the lock once no
+   launch is running (`rm` it on the droplet). Do not `--collect` such a round until its unit is
+   running, or no start job for it is queued and it is inactive or failed: `--collect` waits for
+   a queued job, but a start still waiting its turn at the droplet's flock is not yet queued and
+   reads as a stopped round, and `--collect` then downloads partial results and destroys the
+   droplet. The watch (`--collect`, or a launch that waits) takes a round as ended, and downloads
+   from its droplet, only when two snapshots of its unit, each its state and queued job from one
+   query, one taken before the log is read and one after, agree and read inactive or failed with
+   no job queued; it destroys the droplet only once a snapshot after the download still reads the
+   same (otherwise it leaves it, exit 3). A unit still active, changing, or whose snapshot could not
+   be read is watched on (`--collect` leaves it, exit 3). A launch or `--attach` whose watch gives
+   up (the droplet stopped answering) downloads and destroys under the same rule: when the unit
+   cannot then be confirmed ended, nothing is downloaded and the droplet is left, with how to delete
+   it. The log's `all done` only says whether a round
+   that has ended finished or stopped short: it is printed before the unit's process exits, and a
+   round going on with `--from` keeps the earlier run's log, so one read while the unit is active
+   is not the round's end, whichever run printed it. The
+   upload leaves out the working tree's own
+   `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
+   archive that holds one, as the clear comes before the upload is unpacked.
+   A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
    only when DigitalOcean cannot be reached either). Either way the step it was in is skipped
@@ -1472,7 +1565,46 @@ three runs:
      local round uses unless `BENCH_API_CONTAINER=item-api` has none, and answers them 404.
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
-   median of 3. On a bench host the counters are on the app's pinned cores only (`-C` with
+   median of 3. User and kernel instructions come from two passes, each its own load of 5,000
+   requests: two independent loads drawn from the same request mix (`ssr-load.js` picks each
+   request's item at random), the kernel instructions' load later on the same app. The first
+   counts user instructions, user and kernel cycles and user L1i misses
+   (`cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u`, the set `bench/placement` counts),
+   the second `instructions:k` alone, since one `perf` session that counts `instructions:u` and
+   `instructions:k` together stops a Xeon Platinum 8358 guest as a whole, with `-C` or `-p`
+   ([#2151 Two bench hosts on a Xeon Platinum 8358 stopped as a whole within 30 s of the lockup settings, software watchdog and Docker setup, and did not restart](https://github.com/corten-run/corten/issues/2151)).
+   Each count a request is over its own pass's requests, and the row records the second pass's
+   requests and failures as `kernelPass`; kernel instructions are not from the load the cycles
+   are, so their sum with user instructions is two loads' (counts before this change were one
+   load's; `summarize.mjs` says which, by `kernelPass`, for each key: a second load, the same
+   load, or both across its runs). When user instructions are unusable in the first pass and its load had no failures,
+   it is repeated with `instructions:u` alone; the second pass is not repeated. A count is kept
+   only when each load's k6 summary gives its requests, failed requests and a status check a
+   request, both loads made 5,000 requests, the second had no failure, and the first no more
+   failed status checks than failed requests (its row records only the requests). A load that ran is
+   checked whole before anything else is read from it, so a first load short of
+   its requests is refused rather than repeated; the repeat is for counters, never for a load.
+   Each load is taken as counted whole on `perf`'s acknowledgments, not on a wait: `perf` starts with its events
+   disabled (`--delay=-1`), the load starts only once `perf` has acknowledged `enable` on its
+   control descriptor (`--control fd:3,4`), and once the load has ended `perf` must not have exited
+   and must acknowledge `disable` before it is asked to stop, each within 10 s, one
+   acknowledgment to each command in turn; a `perf` that ends before its load did, does not
+   acknowledge, or acknowledges a command it was not given (or writes anything else there,
+   including part of a line before the command it would answer), fails that pass
+   ([#2183 The catalog count reads a perf that ended before its load did as one that counted the whole load](https://github.com/corten-run/corten/issues/2183)).
+   `perf` is given its CPUs as `-a` or `-C` with a CPU list and nothing else, and prints each
+   CPU's count on a row of its own (`-A`), which `count.mjs` sums: `perf` 6.1 goes on past a CPU
+   whose counter it could not enable, and its own total sums the enabled and running times of every
+   CPU, so a total at 100% does not show that each CPU counted. An event is usable only when every
+   CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
+   count, a running time above zero and 100% of its enabled time (read from the digits perf
+   printed: a percentage above 100 is refused, not read as 100, and one just below 100 is not taken
+   as 100), and no other CPU did. A CPU the
+   app never ran on during the load gives no running time either and cannot be told from one whose
+   counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
+   CPU it is counted on (`BENCH_APP_CPUS=1`); an unpinned local count with `-a` is kept only where
+   the app ran on every online CPU.
+   On a bench host the counters are on the app's pinned cores only (`-C` with
    `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count should be the same,
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
    counting began, and the counters on the load generator's cores, switched at its every context
@@ -1484,9 +1616,29 @@ three runs:
    time; it does not see waiting (I/O, locks) or how well the instructions run.
    `node count.mjs <round> 3 <apps> page,json api` counts with items from the item API instead,
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).
-   It first writes the running kernel (and any package waiting for a reboot) to
-   `count-kernel.txt` and has `perf` count an idle second, stopping with the reason when `perf`
-   does not fit that kernel or cannot count; `droplet.mjs` turns off the droplet's automatic
+   It first writes the running kernel (and any package waiting for a reboot) and the CPU model to
+   `count-kernel.txt` and has `perf` count an idle second on the count's CPUs with each event set
+   a count gives it, one at a time (`instructions:u`, `instructions:k`, then the first pass's
+   whole set), each in a process group of its own that is killed after 30 s (never once its
+   leader has exited, when the group's number may be another's) and given up as no answer 5 s
+   after that rather than waited out; a probe whose `perf` exits while something it started
+   holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with the reason when `perf` does not fit that kernel, cannot count a set's
+   required event, or does not answer; the first pass's whole set failing by itself is noted, not
+   refused, since the count then repeats that load with `instructions:u` alone. Each set is written
+   to `count-kernel.txt` before it runs, so a host that stops during one leaves its name. A host
+   that stops cannot refuse: `droplet.mjs` notices one that does not answer (`--stall`). A count's
+   `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails
+   the count as no answer. A `perf`, probe or count, whose end is not seen may still count or be
+   stuck in the kernel, so the count is not retried and no further load runs: `count.mjs` exits 4,
+   whatever writing its diagnostics does then, and without waiting on Docker (it starts the
+   container's removal and does not wait for it),
+   and `count-pairs.mjs` stops its run there and refuses to go on with it, so the rest is counted
+   on a fresh host under a new prefix; a `count.mjs` stopped by a signal did not see its `perf`s
+   end either, and is taken the same way. `count-pairs.mjs` writes `count.mjs`'s exit to its ledger
+   before anything else it does for that invocation, so a 4 is kept whatever fails after it, and
+   past a 4 or a signal it asks Docker only to remove its lock, killed after 10 s and not waited
+   for past then, so a Docker client stuck in the kernel does not hold up the halt; run again, it
+   reads that halt from its ledger and refuses before it asks Docker anything. `droplet.mjs` turns off the droplet's automatic
    package updates before provisioning, so a reboot comes back on the kernel `perf` was installed
    for.
 6. Browser (`browser.mjs`): every app running at once on the app core, items from the item API,
@@ -1681,8 +1833,8 @@ The profile:
 The tier's load phases and browser pass reach each app through the edge (`edge.mjs`), as a
 deployed app is reached: Corten's design has HTTP/2 and HTTP/3 to browsers come from a proxy or
 CDN in front of `corten::serve` ([Limit 14](../../docs/design.md#limit-http1)), which usually ends
-TLS too, and the defaults tier measures every app without one. The edge is one nginx (1.29.8,
-pinned) with one config for every app, the one the deploy guide checks Corten with
+TLS too, and the defaults tier measures every app without one. The edge is one nginx (1.31.10,
+pinned by digest; rounds from 2026-11-20 to 2026-11-26 ran 1.31.9 and rounds before them 1.29.8; a round's load step records the image in `edge.json`, and its browser step, which starts its own edge, does not, and uses the image of the checkout it runs from whatever `edge.json` says) with one config for every app, the one the deploy guide checks Corten with
 ([nginx](../../docs/guide/deploy.md#nginx)) less its cache and with the app's own name as Host: a
 worker a core, each with its own listening socket (`reuseport`), TLS with a P-256
 certificate made for the run, HTTP/2 to k6 and Chromium (HTTP/1.1 to a client that asks; no
@@ -2030,6 +2182,159 @@ with the production profile. It reaches each app directly, with no edge, on the 
 c-8 and cores, so it measures the bare app: a deployment's proxy in front of it may absorb some of
 these clients first.
 
+### The catalog count and its A/A
+
+A change the catalog's item page or item JSON exercises is counted on one build of each side
+([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), item 2) with `count-pairs.mjs`, which
+runs `count.mjs <round> 1 corten <target>` once an invocation, the side's image tagged
+`cb-corten` first by the image ID pinned when the run started, and runs beside the change's
+pairs an A/A of its own: the same two side names, `base` and `head`, with the base's image under
+both, in the same run.
+
+```sh
+BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=4-7 node bench/fullstack/count-pairs.mjs <prefix> cb-corten-base cb-corten-head [pairs=100] [page,json]
+```
+
+Pair 0 of each target is not recorded and pairs 1 to 100 are; pair 0 gives no sample, but an
+invocation of it that is not valid fails its comparison as any other does. A pair is four invocations: the
+change's two and its A/A's two, the side named `base` and the A/A first in odd pairs, `head` and
+the change first in even ones. Each comparison's bound is the 59th smallest of its 100 changes in
+user plus kernel cycles a request, `head` over `base` less 1, and the A/A is read as recorded and
+with its labels swapped. The changes are ordered, and each bound less +1% is read against the
+band, exactly from the whole cycle counts a request (`count-perf.mjs` rounds each to a whole
+number), so a bound at an end of the band is inside. The pair count is a whole number from 5, the
+fewest that give a 95% bound, to 999, so every round name has one length, and each target is
+named once; anything else is refused before a lock is taken or Docker is called.
+
+Its records are in `results/<prefix>/`: `run.json`, written before the first invocation, with both
+images' IDs, the ordered schedule, what `count.mjs` is given (its arguments and the `BENCH_*`
+settings it reads), the SHA-256 and size of each file the count runs (`count.mjs` and every module
+it imports, the k6 script, `fixtures/items.json` it mounts into the app, and `count-pairs.mjs` and
+its imports), and the host as the count's environment reaches it (the Docker daemon's ID, version
+and name, `DOCKER_HOST` and `DOCKER_CONTEXT`, the `docker` and `perf` the count's PATH gives with
+their versions, the kernel, Node and the k6 image by digest); `invocations.jsonl`, each invocation
+as it starts and as it ends, with the SHA-256 and size of the four files it is read from (its
+`instructions.json` row, the k6 summaries of its two loads and `count-images.json`), and between
+those, as `count.mjs` is started and as it exits (its exit status written before the image read
+and the seals, which can fail; past an exit 4 or a signal neither is made); each invocation's log under
+`inv/`; and `report.json`. A wrapper that starts `count-pairs.mjs`, as a kit's `run.sh` does, is
+not among the files it binds; what it runs is. Each invocation's own output is
+`results/<round>/` as `count.mjs` writes it, and must not exist before it runs, since `count.mjs`
+merges into an `instructions.json` it finds: the run refuses to start if any does, and an
+invocation whose path appeared since is recorded as not valid and not run. An invocation is valid
+only when its tag succeeded and named the side's image before and after it, the container
+`count.mjs` counted was started from the side's image by ID (`count.mjs` records it in
+`count-images.json` before the warmup), `count.mjs` exited 0,
+and its one row has 5,000 requests in each of its two loads (`requests` and `kernelPass`), none
+failed, each of its five counts a whole number with
+perf's running percentage at 100% (user plus kernel cycles at most 2^53 - 1, so their sum is
+exact; both are from the first load), all of k6's checks passed in both loads, each load's k6
+summary gives the requests and failed requests its part of the row records, and the four files it is read
+from are the bytes sealed when it ended: one replaced, removed or never written leaves it not
+valid. The side's image is the ID `run.json` pins for the side of the invocation's slot in the
+schedule; a replay reads each record against that, not against the image the record names.
+`count.mjs` attaches `perf` to the counted container by the ID `docker run` gave and removes
+it by that ID. k6 reaches it by its name, `fsw-corten`, which Docker's DNS answers for every
+running container on the load's network that has it as its name or an alias, in any case
+(`FSW-CORTEN` too), so before `perf`
+attaches and again once it stops, `count.mjs` lists the network's containers and records the
+count failed unless exactly one answers to `fsw-corten` and it is that ID. It reads each
+container's endpoint by the network's name, as Docker keys it, even where `BENCH_NETWORK` gives
+the network's ID. A container that joins
+and leaves the network between those two checks is not seen. An invocation that was started is never started again: the command run again goes on from
+the first one not started, and refuses where `count.mjs` was started for one and its end was not
+recorded (its exit not kept may have been 4, and one kept was not sealed) or where it exited 4 or
+was stopped by a signal, or if the images' IDs, the schedule, a setting, a file the
+count runs or the host differ from `run.json`, or the host cannot be established; one
+interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
+honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a
+container named `corten-count-pairs-lock` (made from the base's image, with no network, and
+running `sleep` for seven days, so `docker container prune`, which
+removes stopped containers, leaves it while a run goes on) keep two runners apart, whatever directory each starts from: the daemon makes that container for one
+runner only, and the lock stands for its `cb-corten` tag and the `fsw-corten` container
+`count.mjs` starts. Each lock is made only where none is and removed only by the runner that made
+it (the container by the ID it was made with), so one left by a runner that was killed is removed
+by hand (`docker rm -f`), as its message says. Other tools that tag `cb-corten` (a round's steps) do not take it.
+Before each invocation, as each ends and before the report, the runner checks that
+`corten-count-pairs-lock` is still the container it made and still running (a hand can remove
+it and another runner make its own) and that each file `run.json` binds still has its bytes. Where either does
+not, it stops, naming the lost lock or the file, with no further invocation and no report, and
+exits 2; an invocation that ran while it changed is recorded as not valid. The report gives each comparison's bounds and, as diagnostics, each
+side's median user cycles, kernel cycles, user and kernel instructions and user L1
+instruction-cache misses a request, with the median per-pair change in each; a pair not valid
+is named by its comparison, pair and side.
+
+The supported procedure needs, for the run's whole length, a resumed run included, a Docker
+host and network the run has to itself and a private checkout no one changes. The checks above
+are made at their checkpoints and no more: the lock keeps out another `count-pairs.mjs`, not
+other tools; the network check sees a container answering to `fsw-corten` only while it is there
+at a check; and the kit's hashes detect a change to a file that is still present when the next
+check reads it, not one made and undone between two checks. A run's records (`run.json`,
+`invocations.jsonl`, `inv/` and `report.json`) and each invocation's `results/<round>/` are
+kept together, as one run's: the seals tie each invocation's files to the ledger's lines, and
+nothing ties a ledger to its run, so another run's ledger and outputs put in their place pass
+them.
+
+Until a run's own A/A resolves, the count neither holds nor clears. The A/A resolves when both of
+its bounds, less +1%, are inside the default band (-2.98% to +3.33%, as
+[design Choice 72](../../docs/design.md#choice-placement-runs) prints it); then the change's bound
+is read against the band as item 2 reads it: above, a miss; below, it meets +1%; inside, not
+decided. Where the A/A has both bounds and either is outside the band, the change is "not
+decided", read as one inside the band is, whatever its own bound: a miss there no longer holds
+the pull request by itself. Where the A/A has no bound (an invocation that failed, pair 0's included, too few
+pairs), the count failed, as one whose change has no bound has: it returns to the maintainer and
+does not pass until the maintainer decides. The A/A doubles a run's time: 808 invocations for
+both targets where the change alone is 404, about 7.8 hours at the 34.8 s an invocation took on
+the host of
+[#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+(measured per invocation there; the total is estimated). It shows only whether this run's two
+base-against-base bounds landed inside the band; it does not say why when they did not.
+
+Why: on that host (8 CPUs of a Xeon Platinum 8168 as `lscpu` prints them, one thread a core, the
+app on CPU 1 and k6 on CPUs 4 to 7) the count of the base's image against itself read `json`'s
+bound at +9.85%, outside the band, and `page`'s at +1.34%
+([#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)).
+What that A/A run's posted pairs show, and what they do not. Each figure below is worked from its
+100 recorded pairs of each target (`page` then `json` in each pair, the base first in odd pairs),
+except where it says it is read from the kit's posted tables:
+
+1. Label swaps. Each recorded A/A pair of a target has its two values swapped with probability
+   one half, independently, and each draw is read by the actual rule: both bounds, as drawn and
+   with its labels swapped, the 59th smallest of 100, less +1%, inside the default band.
+   Of 100,000 draws (mulberry32, seed 2150), 49.3% for `json` and 19.6% for `page` do not resolve;
+   the drawn bound alone is outside in 24.8% and 9.8%. With these pairs' spread, that host did not
+   reliably resolve the band for an image against itself.
+2. Spread. One image's 200 recorded A/A values of a target (both sides) range up to 1.78 times
+   their least for `json` and 1.68 for `page`, and 77 and 72 of them are within 10% of their
+   least. User instructions a request stay within 0.8% across one image's invocations in the
+   posted tables, so user instructions did not change in number as the cycles did; that does not
+   rule out more work in the kernel, whose cycles a request ran from 53,720 to 80,815 on the
+   A/A's `json` (posted tables). Whether user and kernel cycles rise in the same invocations is
+   not in the posted tables.
+3. Order in time. Over the 400 recorded A/A invocations in run order, the logarithm of each value
+   over its target's median has a lag-1 Pearson correlation of -0.02. That says one invocation's
+   value does not predict the next's linearly; it does not show the invocations are independent.
+4. Names and order within a pair. Nothing `count.mjs` or the kit's `run.sh`
+   (`plan-2066/catalog-kit/catalog/run.sh` under the tag `evidence/shutdown-poll-plan`) does differs by
+   the side's name in an A/A: the image tagged is one image, and the name reaches only the
+   round's name (`base` and `head` are four letters each) and the directories and labels made
+   from it. The side run second was higher in 57 of 100 `page` pairs and 56 of 100 `json` pairs
+   (exact binomial test at one half, one-sided, P = 0.097 and 0.136). `head` was higher than
+   `base` in 62 of 100 `json` pairs (exact binomial, two-sided, P = 0.021), for one of two targets
+   read (`page`: 45 of 100). The median of `json`'s `head` values over the median of its `base`
+   values, less 1, is +11.62%; the label-swap draws above reach a difference at least that large
+   either way in 18.7% of draws.
+
+What sets an invocation's level is not shown. Two hypotheses fit the pairs: where a fresh
+container's code and data land (its addresses and physical pages, set at each start), or another
+CPU on the app's physical core, which a VM's `lscpu` does not show, being busy for that
+invocation (k6's four CPUs among the candidates). One run on such a host would locate the
+variation without identifying its cause: one app container kept running, counted for ten windows
+of 5,000 requests in a row, then started again, twenty times. Levels steady inside a container
+and apart between containers put the variation between starts; levels that move as much inside a
+container put it within one. The 808 invocations' records saved for that issue would also say,
+with no run, whether user and kernel cycles rise together in an invocation.
+
 ### Drift across rounds
 
 A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
@@ -2116,7 +2421,8 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or cannot
    serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked failed.
    Each could be tuned further (caching, streaming, more workers). None of the apps cache rendered
-   pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
+   pages: Corten keeps a `Public` page by default, and its app turns that off
+   (`App::kept_answers(0)`). Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
    default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO
    thread per core, as its docs advise, and counts its cores from its CPU affinity capped by the
    container's CPU quota, since its own count (`0`) sees every core of the host. FastAPI runs
@@ -2131,7 +2437,39 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    connection cap (httpx's default keeps 20 idle and allows 100 in all), Phoenix's Req client uses
    a Finch pool of 1,024 connections to the item API, opened as needed (Req's own pool holds Finch's
    50 per host), and Drogon keeps one `HttpClient` (one connection) per request in flight on each
-   thread. Drogon also hands the fixture
+   thread. No app in this matrix reuses a pooled upstream connection idle for 5 s: the item API and
+   the catalog and marketplace fixtures are Node HTTP servers that answer `Keep-Alive: timeout=5`
+   and close an idle connection after those 5 s plus Node's 1 s buffer, and a request written to a
+   connection as it closes can be lost before the upstream sees it. Where a client's default keeps
+   idle connections longer, the app does not reuse one idle for 4 s: reqwest (Corten, axum + Maud,
+   topcoat, Leptos), Go's transport (Gin), httpx (FastAPI, whose default is the advertised 5 s),
+   .NET's `SocketsHttpHandler` (both ASP.NET apps) and Finch (Phoenix, `conn_max_idle_time`)
+   close it; urllib3 under `requests` (Django, which otherwise keeps a connection until it sees
+   the close) and Drogon's clients skip it when they next take a connection from the pool. The JDK
+   client (Spring) gets 1 s, since it drops an expired connection late (with 4 s set, it reused
+   connections idle 4.8 to 5.3 s in four of five runs of the check). Node's `fetch` (the JavaScript apps) and Rails' `Net::HTTP` (2 s by
+   default) already stay under 5 s, and Laravel's client opens a connection per request. None of
+   these adds a retry; Go's transport and the JDK client retry a request lost on a reused connection
+   on their own, which hides the loss without preventing it. The Express-on-Bun deployment
+   (`bench/deployments/express-bun`) is an exception: it runs the same Express handlers under Bun
+   1.4.5, whose `fetch` keeps an idle connection for 5 minutes unless told otherwise (the
+   pinned source's `arm_idle_timeout` in `src/http/HTTPContext.rs`). It is a functional
+   qualification with no timed load, and the shared Express source is left unchanged for it, so no
+   idle bound is claimed or checked there; a timed Bun run would need its own bound and this check
+   first. `node bench/fullstack/idle-close.mjs <image>` checks an image against an upstream that
+   resets any connection reused after 5 s idle: it probes each read once its warmed connections
+   are idle 4.5 s and fails a client that still reuses a connection, so it verifies that idle
+   connections are dropped by the probe, under the upstream's 5 s close, not the configured 4 s
+   itself, which a pool expiring between 4 s and the probe would also pass. The probe is judged at
+   the upstream: when each of its requests arrives, every connection that answered the read's
+   warm-up must have been idle 4.5 to below 4.75 s, or closed under 4.75 s idle before the probe;
+   when the app replies does not matter. A request arrives when the read that completes its head
+   reaches the upstream, before the upstream prepares its answer. A probe outside that window (a
+   late timer, an app that holds a request before sending it upstream, the still-open warmed
+   connections' answers spread over 250 ms or more), or after any upstream request between the
+   warm-up and the probe, is
+   inconclusive and fails the check (`--bound-ms` sets the bound; see the script's header). It also requires the
+   pool to reuse a connection before the idle, so Laravel's image needs `--no-reuse`. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
    in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
    item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits
@@ -2189,9 +2527,73 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     and stylesheets in every app, and r13 the first with all eighteen; in each, and in r15 and r16 (the
     round these tables come from), parity passed on 17 pages and `look.mjs` on 4 pages in 4 views,
     with no failures.
-13. Build times depend on the toolchain images' versions (`rust:1-bookworm`, `node:24-bookworm-slim`
-    and the rest move to their newest release) and, for dependencies, on the network and the
-    package registries at the time. The rebuild keeps each tool's cache, which favors the tools
+13. Build times depend on the toolchain images' versions (the rounds above built on `rust:1-bookworm`,
+    `node:24-bookworm-slim` and the rest at their newest release; later rounds record their own,
+    since 2026-11-24 `rust:1.100.0-trixie` and `node:26.13.1-trixie-slim` by digest, which are
+    different inputs, not a measured speedup) and, for dependencies, on the network and the
+    package registries at the time. Since
+    [#1763 Catalog CI: Spring image build could not resolve the pinned Maven parent POM](https://github.com/corten-run/corten/issues/1763),
+    Spring's Maven retries a 429 or 503 from Maven Central up to four times, waiting 10, 20, 30 and
+    40 seconds or the registry's Retry-After up to 40 seconds (a longer Retry-After ends the retries
+    at once; it is not shortened to 40), and a retryable I/O error up to four times
+    (`apps/spring/.mvn/maven.config`); one request waits at most 160 seconds between its
+    retries. The retries alone did not keep a hosted runner building: Central still answered its
+    dependency download with 429 after them
+    ([parity (spring) job, 2026-11-25](https://github.com/corten-run/corten/actions/runs/45688904356/job/139486660000)).
+    So Spring's Maven reaches Central through Google's public mirror of it,
+    `https://maven-central.storage-download.googleapis.com/maven2/`, which Maven's mirror guidance
+    lists (`apps/spring/.mvn/settings.xml`, a mirror of `central` only, which `maven.config`
+    names), with strict checksums (`--strict-checksums`): a download whose bytes do not match the
+    checksum the mirror serves, or that has none, fails instead of warning. This is a host change,
+    not a dependency change: the same coordinates and versions. A checksum from the same mirror
+    cannot catch a mirror that serves other bytes with a matching checksum. A cold local image
+    build on 2026-11-25 downloaded all 747 of its files (POMs and jars) from the mirror and none
+    from Central, in 63 seconds (measured once, on a workstation). Its image also bounds each
+    Maven run, the dependency download at 15 minutes and `package` at 3, and runs both without
+    `-q`, so a successful image build also logs differently: each transfer and Maven's progress. `package` stays online. Two cold local builds saw it make
+    no transfers after the download, in 41 and 59 seconds, so its 3-minute bound is provisional,
+    and its margin on a hosted runner is unverified: one request's 160 seconds of retries plus the
+    packaging could exceed it. Each Maven bound fits the deadline that directly contains it, which
+    `builds.test.mjs` checks: the image's two Maven runs (18m20s with their kill grace) inside each
+    shared runner's 60-minute image build, the native Spring test step's image build and 10-minute
+    `mvn test` inside its 30 minutes, the transport proof's two 270-second runs inside its
+    12-minute step, and the image's Maven runs inside each 20-minute measured build of the Docker
+    rebuild benchmark (`docker-rebuild.mjs`), a nominal 1m40s left for the rest, and in the image
+    builds of Mixed Production, the hardening evidence check (20 minutes each) and JSON API
+    (60 minutes). The setup step of a default or legacy Live round on a droplet (`droplet.mjs`)
+    builds every image inside one 90-minute limit that all of them share; it is not Spring's
+    own, and `builds.test.mjs` checks only that Spring's Maven runs alone fit in it. Two
+    enclosing limits are checked as sums: the Catalog parity job's 95 minutes cover the Spring
+    test and proof steps' own limits and the image's Maven runs in both shared runners' builds,
+    counting each step whose condition runs it for Spring (1h18m40s), which leaves 16m20s for
+    the rest of the job, which the sum does not reserve; and an unattended round's 90-minute
+    build call for an app (`round.mjs`), at which `run-all.mjs` stops it, covers one 20-minute
+    measured build when Spring opts into the Docker rebuild benchmark
+    (`BENCH_DOCKER_REBUILD_APPS`), a limit the call's other builds share.
+    The mirror, retries and bounds change Spring's build-cost inputs, the host it downloads
+    from, its retries when a download fails transiently and what a successful build logs, not its
+    dependency pins, what it downloads or the jar it builds; their performance effect was not
+    measured. Two timed paths see it differently: the Docker rebuild benchmark builds this Dockerfile, so it times the bounded,
+    verbose Maven runs, while the build-cost recipe in `builds.mjs` still runs quiet Maven without
+    the bound. Run directly, `build.mjs` stops a measured step at its two-hour per-command
+    deadline. In an unattended round `run-all.mjs` also stops the app's whole build call at its
+    90-minute limit and at 60 minutes without output; `build.mjs` prints a step's output only when
+    it returns, so a quiet step meets whichever of the three comes first, which a step started late
+    in the call can be the call limit. The two-hour deadline and the idle cutoff are longer than the
+    image's 18m20s of Maven, which `builds.test.mjs` checks; the call limit is shared by the call's
+    builds. It copies `.mvn`, so only its download host, checksum policy and retry policy change.
+    Hosted CI still downloads Spring's dependencies from Central, through the mirror, on each run:
+    both shared runners (`bench/catalog/run.mjs`, `bench/marketplace/run.mjs`) build with a
+    plain `docker build` that imports and exports no layer cache, so the first build on a fresh hosted runner starts cold.
+    Later builds in the same job, such as the second runner's or the Spring test stage's, may reuse
+    the layers that job's Docker already built. A CI-only Buildx invocation could keep a cache
+    across runs on a separate cache-capable builder without changing the official commands. We decline that as
+    a tradeoff: it adds a second builder and a cache store to CI, its cache would serve only that
+    invocation's build while the runners' builds stay cold, and the mirror, with the bounded
+    retries, is how a cold build avoids the throttling that issue reported. Within one CI job, the
+    transport proof reuses the Maven repository of the Spring tests before it and can still fetch
+    what that lacks, such as the dependencies its WebFlux POM adds, through the same mirror.
+    The rebuild keeps each tool's cache, which favors the tools
     that keep one; a Docker build without a cache mount starts each rebuild without it. Each
     rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not
     carry over, as on a fresh CI runner. Peak memory is anonymous memory only: the files rustc
@@ -2273,9 +2675,11 @@ node look.mjs [apps]        # every app's pages in Chromium against Corten's, bo
 node build.mjs legacy1 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 node docker-rebuild.mjs legacy1 [apps] [runs=3]   # the app's own docker build after the edit, BuildKit's cache warm
 node rust-analyzer.mjs legacy1 [apps] [runs=5]    # rust-analyzer's own latency (the Rust apps)
-# One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
+# One request's instructions by stage and crate (callgrind), from the repository root, items in memory,
+# in the Rust bench apps' builder (the committed tables ran in rust:1-bookworm, Debian 12; a run in
+# this Debian 13 image has a newer compiler, glibc and valgrind, so compare it with its own runs):
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
-  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
+  -e CARGO_TARGET_DIR=/target rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 bash bench/fullstack/cost-by-crate.sh
 node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.out /tmp/cg/cg-card-market-page-fixture-1300.out
 # The axum + Maud app the same way: add -e APP=axum-maud (dumps cg-axum-maud-*.out). Writing each
 # page with what it calls: INCLUSIVE='render_into|^item_page_axum_maud::pages::item$' before node
@@ -2285,7 +2689,7 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 # What each production default costs: card-market built as it is and with each ablate/ patch, then
 # measured; builds go to /tmp/defaults/bins and are reused, so a stopped run measures at once:
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
-  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
+  -e CARGO_TARGET_DIR=/target rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 # The same builds' requests per CPU-second under load (a round's image of each, ab.mjs on pinned
 # cores; on a c-8, the app on CPU 1 and k6 on 2-7; without them the app gets --cpus 1 unpinned),
@@ -2306,9 +2710,15 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`,
    `docker-rebuild.json`, `rust-analyzer.json`, `bytes.json`, `cold-start.json`,
-   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and, in
-   a round committed before this, `raw.txt` (below). Its raw output
-   (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
+   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and
+   `raw.txt` (below). Its raw output (each app's k6, CPU and startup files, every count) is one
+   archive beside them, `raw.tar.xz`, which Git ignores (`bench/fullstack/.gitignore`). Only
+   the packed archive is ignored: the loose raw files of a round not yet packed are not, so pack a
+   round before committing its summaries. A maintainer publishes the archive where it will be kept,
+   and the round's `raw.txt` records where it can be fetched and its SHA-256
+   ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
+   `node bench/fullstack/pack.mjs <round>` prints the archive's size and SHA-256; it does not
+   publish the archive or write `raw.txt`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
    hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
    and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
@@ -2319,9 +2729,21 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
    the files back for a look at one run.
 3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed
    from the tree. Each one's `raw.txt` names the commit that still has it and the command that
-   brings it back; remove it when a round brought back is packed again. The history is not
+   brings it back; when a round brought back is packed again, its `raw.txt` records where the
+   new archive can be fetched and its SHA-256 instead. The history is not
    rewritten, so their blobs stay in it and a clone still downloads them once (Git's pack was 41.7
    MiB); a checkout has 142 files of results (5.7 MB) instead of 11,150 (22.1 MB), and a new round
-   adds one archive instead of a thousand files.
-4. The raw output stays in the repository, not in a CI artifact (kept for 90 days at most) or a
-   release download, so the runs behind every table stay with the commit that reports them.
+   packs its raw output into one archive instead of a thousand files.
+4. The rounds packed before raw output left the tree (r15, r16, `cost-under-load` and the
+   `ab-jemalloc` rounds) keep their `raw.tar.xz` where it is, listed in `scripts/bench-size.allow`:
+   their paths are cited, and removing them at the tip would shrink no full clone, since their
+   blobs stay reachable in history. A new round's archive is not committed, because a normal full
+   clone fetches every version of a committed file still reachable in history; `npm run check` fails on a file under `bench/` with an archive suffix that the
+   base's list does not have, in any commit of the pull request, and the list only shrinks
+   ([#1719 Benchmark runs commit raw output and archives under bench/, so every clone grows with every run](https://github.com/corten-run/corten/issues/1719)).
+   A kept file is held to 256 KiB the same way: r16's log and summary, over it, are listed, and a
+   new round's over it fails the check until it is made smaller or its detail moves to the archive.
+   A dependency lock file is source input, not output: the size limit skips one at a path listed
+   in `LOCKS` in `scripts/bench-size.mjs` beside its manifest (Laravel's `composer.lock` with
+   `composer.json`, Nuxt's `package-lock.json` with `package.json`); a new one over the limit
+   is added there, for review.

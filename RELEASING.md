@@ -22,7 +22,21 @@ keeping or changing the cadence. No schedule is in effect until approved.
 2. Require passing [checks](CONTRIBUTING.md#checks), [independent review](CONTRIBUTING.md#review)
    and [performance evidence](CONTRIBUTING.md#pull-requests) where a change affects rendering,
    the runtime or the request path. Apply these to the changes being shipped, not only the
-   version bump.
+   version bump. Take
+   [`bench/request-cost`](bench/request-cost/README.md)'s counts of the candidate and of the
+   last release's tag and record both in the release-preparation pull request, or that its
+   probe does not build against that tag, unless
+   [the trend's page](bench/placement/trend/README.md) has a row to cite in their place: its
+   base is the last release's tag, its head is the commit of `main` to which the candidate
+   adds that pull request alone, and every workload is read. The row stands in for the counts
+   only when that pull request adds no change to code a request runs. The first row, of
+   2026-11-26, reads `main` at `056aba61c` against `v0.2.0`, so a candidate made from a later
+   commit of `main` has no such row until a run reads that commit. A row past its threshold is
+   no gate. The first release to record the counts is
+   the baseline:
+   the changes before it were not counted. From the release after it, a case that counts over
+   2% more is no gate: it reopens
+   [design Choice 76](docs/design.md#choice-counted-or-measured).
 3. Make the changelog explain what users get and what they need to do. Ship related breaking
    changes as one coherent upgrade, with updated guides and migration steps, not successive
    releases that leave users between APIs. Before 1.0, a release that changes the API bumps the
@@ -61,18 +75,25 @@ publication. Coordinate disclosure with the fixed release so users know what to 
 3. Run `node scripts/changelog.mjs release X.Y.Z YYYY-MM-DD` with the release version and date.
    It puts fragments starting with `**Breaking:**` first, then the rest, in filename order within
    each group. It moves any inline Unreleased entries after them without reordering and keeps the
-   pending-notes link under `## Unreleased`. Review the changelog diff and include the fragment
-   deletions in the preparation pull request. Check the versioned section contains any upgrade
-   instructions. Get the preparation pull request independently reviewed and merge after its
-   required checks pass.
+   pending-notes link under `## Unreleased`. It moves the previous release section unchanged to
+   `CHANGELOG.X.Y.Z.md` beside `CHANGELOG.md` and adds its link under `## Release archive`.
+   If archive creation succeeded but the index is unchanged after a failure, rerun the same
+   command. It reuses byte-identical archives and refuses to overwrite a differing archive.
+   Review the changelog diff and include the archive and fragment deletions in the preparation
+   pull request. Repoint links that named the moved headings in `CHANGELOG.md`; `npm run check`
+   checks anchors in both the current changelog and archives, accepting known anchors and skipping
+   unmatched ones only if the target file has a heading whose anchor cannot be determined.
+   Check the new section contains any upgrade instructions. Get the preparation pull request
+   independently reviewed and merge after its required checks pass.
 4. Record the resulting commit SHA on `main`. Confirm the release gates against that exact
    commit, including green CI, the workspace publish dry run in the checks and
    `node scripts/changelog.mjs --check-release` from a clean checkout of that SHA. The command
    fails if any fragments or inline Unreleased entries remain. The pending-notes link may stay.
    If a fragment or an inline entry lands after collection, rerun preparation from the updated
    base. If preparation already merged, restore its consumed fragments and prior inline
-   Unreleased entries, remove its untagged version section, and rerun step 3 in a follow-up
-   preparation PR, keeping any notes that arrived since the original cut. A check on the pull
+   Unreleased entries, remove its untagged version section (leaving the archive and its links
+   alone), and rerun step 3 in a follow-up preparation PR, keeping any notes that arrived since
+   the original cut. A check on the pull
    request head or a later tip is not a check on this candidate. If the candidate changes,
    repeat validation on the new SHA before tagging it.
 
@@ -112,9 +133,11 @@ branch for one patch, not a maintained release branch.
    which is what users install and what `SECURITY.md` means by the newest published minor. If a
    newer minor shipped meanwhile, patch from its tag instead. Prepare one release at a time, so a
    patch and a minor are never tagged in parallel. Then [publish](#publish) that SHA.
-5. After the release, add its versioned `CHANGELOG.md` section to `main` in a pull request, so
-   `main`'s changelog records every published version. Remove the fix's pending entry from
-   `changelog.d/` (or from `## Unreleased` if it was an inline entry) so it is not released twice.
+5. After the release, add its versioned section to `main` in a pull request, keeping only the
+   newest release in `CHANGELOG.md`. Move the older of the two sections unchanged into its
+   own `CHANGELOG.X.Y.Z.md` and link it under `## Release archive` in version order. Remove the
+   fix's pending entry from `changelog.d/` (or from `## Unreleased` if it was an inline entry)
+   so it is not released twice.
 
 ## Publish
 
@@ -188,6 +211,12 @@ substitute for checking the public outputs.
    release with `cargo update -p corten-run --precise X.Y.Z` and confirm `Cargo.lock` has the
    expected crates.io versions of the Corten packages it uses. Run `corten check` with
    [supported TypeScript](docs/guide/getting-started.md#install-and-create-an-app) and no skips.
+   Then build the app's image with a profile, with the script from
+   [A profile-guided build](docs/guide/deploy.md#a-profile-guided-build) saved in the app as
+   `train.sh`: `docker build --progress=plain --build-arg PROFILE_FROM=train.sh .`. This is the one place the
+   Dockerfile's install line runs as written, since it names the release just published: the
+   build fails if that release's `corten build` has no `--profile-from`, and its output names
+   the four steps of a profiled build when it has.
 4. Record the candidate SHA, run, version and verification results in the release-preparation
    pull request. Treat a missing or failing output as incomplete and use the recovery below.
 

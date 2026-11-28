@@ -1,8 +1,8 @@
-# Native lifecycle evidence proposal
+# Native lifecycle evidence
 
-This is an evidence proposal, not an approved oracle variant. Existing strict
-`browser-journey-capture/v1` gates are unchanged. A document replaced by native navigation
-still has unknown retired DOM/probe results, never fabricated zero resource counts.
+Same-realm `browser-journey-capture/v1` gates still require a fresh retired-root probe.
+An ordinary script-disabled full-document journey can instead prove replacement before
+harness teardown. Its dead realm's retired DOM, counts and event probe remain unavailable.
 
 ## Receipts
 
@@ -143,60 +143,57 @@ Chromium socket and keeps the intact journal positive and unchanged. This is sti
 peer-closure evidence or a shared-oracle waiver.
 
 Raw journey sidecars include `platformRetirementProofs`, `platformCleanupProof` when relevant,
-and `noJSRequestProof` for no-JS profiles. Strict captures still use the unchanged oracle.
+and `noJSRequestProof` for no-JS profiles. These individual diagnostics cannot qualify a case.
 
-## Separately reviewed contract delta
+## Script-disabled full-document journeys
 
-A proposed alternative retirement record should retain old realm/context/unique/frame/loader
-IDs; replacement frame/loader/default-context IDs; the actual destruction and commit receipts;
-the pre-navigation owned/unattributed ledger; and fresh observation endpoints for every known
-socket, stream, dedicated/shared/service worker target and upstream request. Missing discovery,
-unmatched IDs, BFCache-frozen contexts, reused realms and target swaps without destruction must
-not pass. BFCache requires its own policy and post-freeze/resume probes, not this proof.
+The runner, exporter and verifier derive `documentNavigationProof` from the pre-teardown raw
+receipts. Every action after arrival must replace its previously bound default realm. The new
+loader, active scope and parser observation must identify the same document within the action
+window. The real header link must lead to one successful landing document, with a clean live
+resource checkpoint both before and after bounded terminal observation. Each old context
+must be destroyed and fail its unique-context read. Reused realms, BFCache, scope swaps and
+extra navigation do not qualify.
 
-The terminal strategy should use the unique-context constant-read probe, then a fresh complete
-target/request/socket journal over the approved observation interval, before harness teardown.
-All known old-loader requests need terminal receipts. `upstreamLedger` now retains and
-reconciles actual numeric-source counters through actions, mutation probes, cleanup and the
-final pre-harness interval, using stable source/request IDs and append-only snapshot checks.
-Its terminal finish/close receipts are not application-server socket peer closure. Missing
-phases, pending work, changed history and new requests outside the recorded phases stay unknown.
-The final browser request ledger is also checked against every action and cleanup assignment
-before export; a late failed POST or body-capture error cannot disappear in projection.
-A missing socket close or worker destruction stays unknown. No-event silence
-cannot replace a missing native lifecycle endpoint, and page-session network silence cannot
-prove worker-network silence. Only observations with declared complete relevant coverage can
-support an absence-of-work claim.
+The capture marks retired scopes with `basis: "platform-destruction"` and `owned: null`. Final
+cleanup has null dead-realm counts, DOM and event probe, and retains all cleanup requests.
+The original same-realm rules for live callbacks, DOM mutations, resources and event probes
+still apply. Native image, DOM, functional, process and apparatus proof still apply.
 
-It must explicitly mark retired DOM/resource/probe observations unavailable rather than fill
-zeros. Any lingering/unowned process, worker network work, same-realm post-retirement callback,
-DOM mutation or pending upstream work still blocks the relevant proof. Timing must end before
-harness teardown. No such variant is implemented or accepted here; the parent owns a separate
-shared-contract change and independent review.
+Continuous discovery and terminal inventory must prove that there were no relevant workers and
+no long-lived application peers. Ordinary completed HTTP keepalive is not a long-lived peer.
+A present worker, stream or socket remains unproved even after CDP close; the runner has no
+server-side peer receipt collector. The independent numeric source and browser request ledgers
+must reconcile through the terminal observation window, with no pending or unassigned work.
 
-Complete target discovery starting before app execution, with no worker target in the app's
-browser context throughout the interval, could establish that worker-network coverage is not
-applicable. That is different from assuming unknown workers are absent. Existing targets,
-unknown browser-context ownership, discovery gaps and targets without terminal receipts need
-an explicit outcome; a persistent framework worker is not an automatic exemption. A final
-target inventory is now captured and reconciled by the owned pure predicate above. Peer-side
-stream/socket receipts remain unimplemented, explicitly unclaimed evidence endpoints.
+## JS-enabled document replacement
+
+The JS producer, exporter and verifier independently derive `jsDocumentNavigationProof` for
+the actions whose default realm really changes. A same-document action still needs its
+ordinary resource observations and its framework's native request transport. The proof
+binds each replacement to its native document request, matched context destruction,
+replacement loader, and terminal unique-context probe. It uses strict JS request
+reconciliation, not the no-JS parser or disabled-preload exceptions.
+
+When the actual cleanup link replaces the document, landing work must settle within the
+cleanup deadline and before terminal observation. This variant supports the landing document
+and its successful ordinary same-origin parser scripts, stylesheets and images only. The
+settled and terminal landing checkpoints must both be clean. Worker and long-lived peer
+absence and the final upstream ledger must be proved. A native request dispatched after
+landing settlement blocks cleanup even if the summary assigns it to an earlier action.
+Nonempty landing work, unknown coverage and missing observations also stay unsupported.
+Dead-realm counts, DOM and the event probe remain null. Same-document cleanup still runs
+the original event probe.
 
 ## No-JS request boundary
 
-The unchanged oracle currently requires every no-JS request to have transport `document`.
-Real no-JS Chromium also makes parser stylesheet requests and reports intentionally blocked
-script/module preloads. The raw ledger preserves resource type, content type, native failure,
-CSP/DOM preload evidence and completion; the strict exporter does not delete these requests.
-Thus admitting platform-destroyed retirement alone will not resolve this second mismatch.
-
-A separately reviewed request variant should distinguish native document navigation/form
-POSTs, parser assets and application fetch/router requests. All no-JS workload actions still
-need native documents and no application JS transport. Parser assets require actual resource
-and document/stylesheet provenance; intentionally disabled script preloads require the existing
-strict script-disabled/CSP/preload proof, not a general aborted-request exception. Keep every
-failed/unfinished request in the complete ledger, with its native outcome, and explicitly
-reject unrelated aborts, missing document errors, unbound data fetches and body-capture errors.
+The alternative keeps `document` transport for no-JS workload actions, including form POSTs.
+Successfully observed parser assets and intentionally disabled preloads are classified separately,
+not dropped. Each action request must match its native method, URL, frame/loader, outcome and
+phase. Only a classified same-origin script preload that Chromium blocked before the HTTP
+stack, with the native `csp` terminal and independent failed browser receipt, lacks the usual
+stack dispatch receipt. A real CSP, an abort, an extra application fetch, a body-capture failure
+or unmatched/pending work still blocks the proof.
 
 ## Bounded native observations
 

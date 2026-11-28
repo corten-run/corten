@@ -7,5 +7,5 @@ const reportOnSignal = process.report.reportOnSignal;
 process.report.reportOnSignal = false;
 after(() => { process.report.reportOnSignal = reportOnSignal; });
 const engine = await import("./cloud-provider-engine.mjs");
-export const { isSettledAccountFailure } = engine;
+export const { isSettledAccountFailure, isSettledCatalogFailure } = engine;
 export const createProviderEngine = (options) => engine.createProviderEngine({ createMode: "dedicated", ...options });

@@ -28,6 +28,9 @@ const [name = "run", rounds = "20", repeat = "5", gapsArg = "0,1000,10000"] = ar
 const gaps = gapsArg.split(",").map(Number);
 const apps = ["default", "on", "off"];
 const network = "nodelay";
+// nginx 1.31.10 since 2026-11-26 (1.31.9 from 2026-11-20); the run README.md reports (2026-11-11) used
+// 1.29.8, and each result records `nginx -v`, so compare across those changes as a changed input.
+const nginxImage = "nginx:1.31.10-alpine@sha256:7fc0fb4af7bf006aeb31aea88069976060f8f0a0a86b667126742cc17f4e31ae";
 const docker = (...a) => {
   const run = spawnSync("docker", a, { encoding: "utf8", maxBuffer: 1 << 28 });
   if (run.status !== 0) throw new Error(`docker ${a.join(" ")}: ${run.stderr}`);
@@ -47,7 +50,7 @@ try {
     const env = ["-e", "HOSTS=nodelay-nginx", ...(app === "default" ? [] : ["-e", `NODELAY=${app}`])];
     docker("run", "-d", "--rm", "--name", `nodelay-${app}`, "--network", network, ...labels, ...env, image);
   }
-  docker("run", "-d", "--rm", "--name", "nodelay-nginx", "--network", network, ...labels, "-v", `${join(here, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, "nginx:1.29-alpine");
+  docker("run", "-d", "--rm", "--name", "nodelay-nginx", "--network", network, ...labels, "-v", `${join(here, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, nginxImage);
   const urls = gaps.flatMap((gap) => apps.map((app) => `http://nodelay-nginx/${app}/burst/${gap}`));
   const client = (rounds, repeat) =>
     docker("run", "--rm", "--network", network, ...labels, "-v", `${here}:/nodelay:ro`, "node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5", "node", "/nodelay/client.mjs", String(rounds), String(repeat), ...urls);
@@ -119,11 +122,19 @@ try {
       summary[`${app} gap=${gap}us ${regime}`] = cell;
     }
   }
+  // nginx -v writes its version line to stderr; a failed probe or one without that line is recorded
+  // as unknown, not as a version.
+  const nginxProbe = spawnSync("docker", ["run", "--rm", ...labels, nginxImage, "nginx", "-v"], { encoding: "utf8" });
+  const nginxLine = !nginxProbe.error && nginxProbe.status === 0
+    ? (nginxProbe.stderr ?? "").split(/\r?\n/).find((line) => /^nginx version: nginx\/\d+(?:\.\d+)+$/.test(line))
+    : undefined;
+  const nginxVersion = nginxLine
+    ?? `unknown (nginx -v: ${nginxProbe.error?.message ?? (nginxProbe.signal ? `signal ${nginxProbe.signal}` : nginxProbe.status === 0 ? "no version line" : `exit ${nginxProbe.status}`)})`;
   const result = {
     name,
     image,
     taken: new Date().toISOString(),
-    nginx: spawnSync("docker", ["run", "--rm", ...labels, "nginx:1.29-alpine", "nginx", "-v"], { encoding: "utf8" }).stderr.trim(),
+    nginx: nginxVersion,
     kernel: docker("run", "--rm", ...labels, "alpine:3", "uname", "-r").trim(),
     rounds: Number(rounds),
     repeat: Number(repeat),

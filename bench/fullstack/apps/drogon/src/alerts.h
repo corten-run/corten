@@ -7,7 +7,7 @@
 namespace marketplace {
 class Alerts {
  public:
-  bool append(const drogon::HttpRequestPtr &request, const drogon::HttpResponsePtr &response, Json::Value row);
+  bool append(const drogon::HttpRequestPtr &request, const drogon::HttpResponsePtr &response, Json::Value row, bool publicTLS = false);
   Json::Value read(const drogon::HttpRequestPtr &request);
  private:
   struct Session {

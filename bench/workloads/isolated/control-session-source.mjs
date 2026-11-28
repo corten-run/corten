@@ -124,9 +124,14 @@ def load(root, name):
     return json.loads(read(root / name))
 
 
+def task_text(path):
+    # Linux comm is a byte string. Even a UTF-8 name can be truncated mid-character.
+    return path.read_text(encoding="utf-8", errors="surrogateescape")
+
+
 def proc(pid):
     directory = pathlib.Path("/proc") / str(pid)
-    raw = (directory / "stat").read_text()
+    raw = task_text(directory / "stat")
     match = re.fullmatch(r"([1-9]\d*) \([\s\S]*\) [A-Za-z] ([\s\S]*)\n", raw)
     assert match and int(match[1]) == pid
     fields = match[2].split()
@@ -140,14 +145,14 @@ def proc(pid):
             executable = {"device": str(exe.st_dev), "inode": str(exe.st_ino)}
         except FileNotFoundError:
             # PF_EXITING (stat field 9) may precede Z/X. Keep this identity until reaped.
-            closing = (directory / "stat").read_text()
+            closing = task_text(directory / "stat")
             current = closing.rsplit(") ", 1)[1].split()
             assert (closing.startswith(str(pid) + " (") and current[19] == fields[18]
                     and (current[0] in ("Z", "X") or int(current[6]) & 0x4)), "userspace executable unresolved"
             raw = closing
     value = {"pid": pid, "startTicks": fields[18], "cgroup": cgroup, "stat": raw,
              "executable": executable, "commandSha256": sha((directory / "cmdline").read_bytes())}
-    assert (directory / "stat").read_text().split(") ")[-1].split()[19] == value["startTicks"]
+    assert task_text(directory / "stat").rsplit(") ", 1)[1].split()[19] == value["startTicks"]
     return value
 
 
@@ -668,12 +673,7 @@ def main(args):
             watch(root, args[2])
         except Exception as error:
             # Only a line in this exact hashed helper, never exception text or process data.
-            frame, line = error.__traceback__, 0
-            while frame:
-                if frame.tb_frame.f_code.co_filename == watch.__code__.co_filename:
-                    line = frame.tb_lineno
-                frame = frame.tb_next
-            write(root / ("watch-failure-" + args[2] + ".json"), encoded({"helperLine": line}))
+            write(root / ("watch-failure-" + args[2] + ".json"), encoded({"helperLine": helper_line(error)}))
             raise
     elif mode == "inspect":
         assert args[2] in ("bootstrap", "audit-json-api", "audit-mixed-production")

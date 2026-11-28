@@ -6,38 +6,41 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { summarizeSamples } from "../catalog/stats.mjs";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps, groupNames } from "./groups.mjs";
-import { featureProfile, qualification, qualificationSettings } from "./feature-contract.mjs";
-import { qualificationProbes } from "./qualification-fixture.mjs";
-import { appStop, cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
+import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
+import { appStop, cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v5Schema } from "./run-contract.mjs";
 import { leftoverDroplets, nightly, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, validatePlan, validateState } from "./droplet-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { compare } from "./compare.mjs";
 import { betweenDroplets, cleanOutcome, mergeParts, outcomeFields } from "./split.mjs";
-import { launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
+import { controller, launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
+import { evidenceVersion } from "./raw-contract.mjs";
 
 const commit = "a".repeat(40), group = "production";
-const qualified = () => Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)]));
-// Raw evidence of a candidate that lacks a required feature: no Content-Security-Policy.
-function unsupported() {
-  const probes = qualificationProbes(); delete probes.page.headers["content-security-policy"];
-  return { fixture: qualification(probes, "fixture"), api: qualification(probes, "api") };
-}
+const qualified = (historical = false, missingCsp = false) => Object.fromEntries(sources.map((source) => {
+  const probes = historical ? qualificationProbes() : boundedQualificationProbes(source);
+  if (missingCsp) delete probes.page.headers["content-security-policy"];
+  return [source, historical ? qualification(probes, source) : produceBoundedQualification(probes, source)];
+}));
 // Excluded by its raw qualification: not timed, so no runs or aggregates.
-const exclude = (a) => Object.assign(a, { qualification: unsupported(), runs: {}, phases: {} });
+const exclude = (a, historical = false) => Object.assign(a, { qualification: qualified(historical, true), runs: {}, phases: {} });
 // A whole round of a named group shaped like run.mjs writes it: candidate i serves 1000 + 37i +
 // pass requests per phase, and every candidate qualified on both sources.
-function full(round = "r17", g = group) {
+function full(round = "r17", g = group, schema = resultSchema) {
+  const timedProfiles = timedProfilesFor(schema);
+  const historical = schema === v5Schema;
   const apps = groupApps(g);
-  const s = { schema: resultSchema, workload, round, runId: `marketplace-${round}-0000000000`, commit, dirty: false, complete: true, checksPassed: true,
+  const s = { schema, workload, round, runId: `marketplace-${round}-0000000000`, commit, dirty: false, complete: true, checksPassed: true,
     failures: [], cleanupFailures: [], finishedCommit: commit, finishedDirty: false,
     startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T01:00:00.000Z", options: { round, build: true, apps, checkOnly: false, ...nightly, startupTimeout: 120, group: g }, apps: {},
     host: { cpu: "Synthetic CPU", onlineCpus: "0-7", platform: "test", release: "test", node: "test", docker: "test" }, tools: Object.fromEntries(["upstream", "checker", "k6"].map((k) => [k, { imageId: `sha256:${"b".repeat(64)}` }])),
-    fixtureSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), measurement: { profiles: timedProfiles, upstream: "Synthetic test only", cpuWindow: "Not measured", coldClock: "Synthetic test only", cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, featureProfile, qualificationSettings } };
+    fixtureSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), measurement: { profiles: timedProfiles, upstream: "Synthetic test only", cpuWindow: "Not measured", coldClock: "Synthetic test only", cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, featureProfile: historical ? featureProfile : boundedFeatureProfile, qualificationSettings: historical ? qualificationSettings : boundedQualificationSettings } };
   apps.forEach((app, i) => {
-    const a = s.apps[app] = { label: app, image: `cb-marketplace-production-${app}`, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {}, qualification: qualified() };
+    const a = s.apps[app] = { label: app, image: `cb-marketplace-production-${app}`, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {}, qualification: qualified(historical) };
     for (const source of sources) {
       a.checks[source] = { workload, source, jsonRecords: 500, pages: 264, profiles: locales.flatMap((locale) => [false, true].flatMap((javaScriptEnabled) => [false, true].map((mobile) => ({ locale, javaScriptEnabled, mobile, passed: true })))),
         upstream: source === "api" ? { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true } : null };
@@ -47,7 +50,7 @@ function full(round = "r17", g = group) {
           const stats = { cpuUsec: 1000000, samples: 3, cpuAvgPct: 100, cpuMaxPct: 110, memAvgMiB: 10, memMaxMiB: 11 };
           const n = 1000 + 37 * i + pass;
           return { pass, locale, complete: true, startedAt: "2026-01-01T00:01:00.000Z", finishedAt: "2026-01-01T00:03:00.000Z",
-            cold: { containerStartedAt: "2026-01-01T00:02:00.000Z", first200At: "2026-01-01T00:02:01.000Z", first200MsFromContainerStart: 1000, measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
+            cold: { containerStartedAt: "2026-01-01T00:02:00.000Z", first200At: "2026-01-01T00:02:01.000Z", first200MsFromContainerStart: 1000, measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? "en-US" : locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
             warmup, phases: Object.fromEntries(phases.map((p) => [p, { ...warmup, ...stats, requests: n, rps: n, perCpuSecond: n, upstream: source === "api" ? { ...stats, cpuAvgPct: 50, highCpu: false } : null }])) };
         });
         a.phases[key] = Object.fromEntries(phases.map((p) => [p, stageAggregate(a.runs[key], p, 3)]));
@@ -65,15 +68,15 @@ function scale(a, f) {
 }
 // Droplet k's part of a group round split n ways, as run.mjs --group g --part k/n writes it:
 // its share of the candidates, each qualified, the ones in excluded not timed.
-function part(k, n, { round = "r17", g = group, cortenScale = 1, excluded = [] } = {}) {
-  const s = full(round, g), share = splitApps(g, n)[k - 1];
+function part(k, n, { round = "r17", g = group, cortenScale = 1, excluded = [], schema = resultSchema } = {}) {
+  const s = full(round, g, schema), share = splitApps(g, n)[k - 1];
   s.options = { ...s.options, apps: share, part: { index: k, of: n } };
   s.apps = Object.fromEntries(share.map((app) => [app, s.apps[app]]));
   s.runId = `marketplace-${round}-d${k}`;
   s.host = { ...s.host, cpu: `Synthetic CPU d${k}` };
   if (k > 1) s.finishedAt = `2026-01-01T01:00:0${k}.000Z`;
   if (cortenScale !== 1) scale(s.apps.corten, cortenScale);
-  for (const app of excluded) exclude(s.apps[app]);
+  for (const app of excluded) exclude(s.apps[app], schema === v5Schema);
   return validateSummary(s);
 }
 // The app's container stopped in this pass and phase: the run keeps the phases before it, and no
@@ -88,6 +91,22 @@ function stopRuns(a, key, pass, phase) {
   for (const p of phases) a.phases[key][p] = stageAggregate(runs, p, 3);
 }
 const merged = (n, options = {}) => validateSummary(mergeParts(options.round ?? "r17", Array.from({ length: n }, (_, i) => part(i + 1, n, i === 1 ? options : { round: options.round }))));
+
+for (const schema of [v5Schema, resultSchema]) test(`${schema} split keeps a part's representable memory mean without claiming native receipts`, () => {
+  const parts = [part(1, 2, { schema }), part(2, 2, { schema })];
+  for (const p of parts) p.evidenceVersion = evidenceVersion;
+  const upstream = parts[1].apps.corten.runs["api-neutral-json"][0].phases.sat64.upstream;
+  const { samples, memAvgMiB, memMaxMiB } = summarizeSamples(Array(31).fill({ cpu: 50, mem: 100.9 }));
+  assert.ok(memAvgMiB > memMaxMiB);
+  Object.assign(upstream, { samples, memAvgMiB, memMaxMiB });
+  parts.forEach(validateSummary);
+  const summary = mergeParts("r17", parts);
+  assert.equal(summary.evidenceVersion, undefined);
+  assert.equal(summary.split.parts[1].corten.runs["api-neutral-json"][0].phases.sat64.upstream.memAvgMiB, memAvgMiB);
+  assert.match(report(summary), /split across 2 droplets/);
+  upstream.memAvgMiB = 100.90000000000005;
+  assert.throws(() => validateSummary(summary), /missing\/invalid measurement/);
+});
 
 test("a split gives every droplet Corten and each other candidate of its group to exactly one droplet, in the group's order", () => {
   assert.equal(splitSubject, "corten");
@@ -208,11 +227,28 @@ test("droplets' parts merge into one round of the group, each candidate from its
   assert.throws(() => mergeParts("r18", parts));
   assert.throws(() => mergeParts("r17", [parts[0]]), "one part is not a split");
   for (const change of [(v) => { v.split.parts[1].apps.pop(); }, (v) => { delete v.split.parts[1].corten; }, (v) => { v.split.parts[0].host = { ...v.split.parts[0].host, cpu: "other" }; },
-    (v) => { v.split.parts[1].corten.phases["fixture-en-US-page"].sat64.rps.median++; }, (v) => { v.split.parts[1].startedAt = "2025-12-31T00:00:00.000Z"; }, (v) => { v.options.part = { index: 1, of: 2 }; },
+    (v) => { v.split.parts[1].corten.phases["fixture-rotating-page"].sat64.rps.median++; }, (v) => { v.split.parts[1].startedAt = "2025-12-31T00:00:00.000Z"; }, (v) => { v.options.part = { index: 1, of: 2 }; },
     (v) => { delete v.apps.leptos; }, (v) => { v.options.apps = v.options.apps.slice(0, 4); }, (v) => { delete v.options.group; }, (v) => { v.schema = "marketplace-results/v4"; }]) {
     const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad));
   }
   assert.throws(() => validateSummary({ ...parts[1], apps: { ...parts[1].apps, aspnet: undefined } }));
+});
+
+test("bounded split parts merge only with the same qualification contract", () => {
+  const archived = [part(1, 2, { schema: v5Schema }), part(2, 2, { schema: v5Schema })];
+  const active = structuredClone(archived);
+  for (const s of active) {
+    s.measurement.featureProfile = boundedFeatureProfile;
+    s.measurement.qualificationSettings = boundedQualificationSettings;
+    for (const a of Object.values(s.apps)) a.qualification = Object.fromEntries(sources.map((source) =>
+      [source, produceBoundedQualification(boundedQualificationProbes(source), source)]));
+    validateSummary(s);
+  }
+  assert.throws(() => mergeParts("r17", [active[0], archived[1]]), /measurement differs/);
+  const mergedActive = structuredClone(mergeParts("r17", active));
+  assert.match(report(mergedActive), /^Connection-flood resistance: not measured\.$/m);
+  mergedActive.split.parts[1].corten.qualification.api = archived[1].apps.corten.qualification.api;
+  assert.throws(() => validateSummary(mergedActive));
 });
 
 test("every candidate is accounted for once, timed when admitted and kept with its evidence when excluded", () => {
@@ -262,11 +298,11 @@ test("a split round's parts ran together, each its own run", () => {
 });
 
 test("a ratio with a stopped stage on either side, its droplet's Corten or its own, is -", () => {
-  const s = structuredClone(merged(2)), key = "fixture-en-US-page";
+  const s = structuredClone(merged(2)), key = "fixture-rotating-page";
   stopRuns(s.split.parts[1].corten, key, 2, "sat64"); // d2's Corten
   stopRuns(s.apps.nextjs, key, 3, "sat256"); // a candidate on d1
   validateSummary(s);
-  const text = report(s), start = text.indexOf("## en-US\n");
+  const text = report(s), start = text.indexOf("## Rotating pages (en-US/fr-FR/de-DE)\n");
   const rows = text.slice(start, text.indexOf("### HTTP source", start)).split("\n");
   const stopped = (a) => phases.filter((p) => a.phases[key][p].stopped).length;
   const dashes = (prefix) => rows.filter((l) => l.startsWith(prefix) && l.endsWith("| - | - |")).length;
@@ -289,13 +325,13 @@ test("a part whose peers are all excluded is no comparison: it fails alone and i
   assert.throws(() => validateSummary(mergeParts("r17", [d1, part(2, 2)])));
 });
 
-test("the v5 reader keeps its whole-inventory check for a single host and takes no arbitrary subset", () => {
+test("the group reader keeps its whole-inventory check for a single host and takes no arbitrary subset", () => {
   // A whole round's candidates are its whole group; a share of them is a part, only with its part.
   const subset = full(); subset.options.apps = splitApps(group, 2)[0]; subset.apps = Object.fromEntries(subset.options.apps.map((a) => [a, subset.apps[a]]));
   assert.throws(() => validateSummary(subset));
   const wrongShare = structuredClone(part(1, 2)); wrongShare.options.part = { index: 2, of: 2 };
   assert.throws(() => validateSummary(wrongShare));
-  const ungrouped = structuredClone(part(1, 2)); delete ungrouped.options.group; ungrouped.schema = "marketplace-results/v4";
+  const ungrouped = structuredClone(part(1, 2, { schema: v5Schema })); delete ungrouped.options.group; ungrouped.schema = "marketplace-results/v4";
   for (const app of Object.values(ungrouped.apps)) delete app.qualification;
   assert.throws(() => validateSummary(ungrouped), /named group/);
   validateSummary(full());
@@ -308,12 +344,12 @@ test("a merged round prints every droplet's Corten in every table, with each can
   assert.match(text, /CPU: d1 Synthetic CPU d1 \(online CPUs 0-7\); d2 Synthetic CPU d2 \(online CPUs 0-7\)\./);
   assert.match(text, /on its own droplet before that droplet's load/);
   const tables = text.split("\n").filter((l) => l.startsWith("| Framework |"));
-  assert.equal(tables.length, 8 * 4);
+  assert.equal(tables.length, 4 * 4);
   for (const header of tables) assert.match(header, /^\| Framework \| Droplet \|/);
   for (const header of tables.filter((h) => h.includes("req/s |"))) assert.match(header, /req\/s ratio to Corten \| CPU us\/request ratio to Corten \|$/);
   // Measured rows; the Feature Qualification table has one more row for each droplet's Corten.
-  for (const droplet of ["r17-d1", "r17-d2"]) assert.equal(text.split("\n").filter((l) => l.startsWith(`| corten | ${droplet} |`) && !l.includes("admitted")).length, 8 * 4, droplet);
-  assert.equal(text.split("\n").filter((l) => l.startsWith("| nextjs |") && !l.includes("admitted")).length, 8 * 4);
+  for (const droplet of ["r17-d1", "r17-d2"]) assert.equal(text.split("\n").filter((l) => l.startsWith(`| corten | ${droplet} |`) && !l.includes("admitted")).length, 4 * 4, droplet);
+  assert.equal(text.split("\n").filter((l) => l.startsWith("| nextjs |") && !l.includes("admitted")).length, 4 * 4);
   // axum-maud is outside the production group: listed as omitted, never a row or an anchor.
   assert.match(text, /^Omitted adapters: .*axum-maud/m);
   assert.doesNotMatch(text, /^\| axum-maud|anchor/m);
@@ -322,7 +358,7 @@ test("a merged round prints every droplet's Corten in every table, with each can
   assert.match(text, /^\| leptos \| r17-d2 \|.* \| 1\.22 \| 0\.82 \|$/m);
   assert.match(text, /^## Between droplets$/m);
   assert.match(text, /^\| r17-d2 \| Synthetic CPU d2 \| 0-7 \| corten, aspnet, express, leptos \|$/m);
-  assert.match(text, /^Flagged: none\. Corten's numbers on no two droplets differ by more than the noise in any of the 48 stages\.$/m);
+  assert.match(text, /^Flagged: none\. Corten's numbers on no two droplets differ by more than the noise in any of the 24 stages\.$/m);
   const part2 = report(part(2, 3));
   assert.match(part2, /^# Marketplace v2 r17 part d2 of 3$/m);
   assert.match(part2, /This part qualifies its share of the group's candidates \(corten, aspnet, topcoat\)/);
@@ -334,18 +370,27 @@ test("droplets are flagged where Corten's own numbers differ beyond the noise", 
   const faster = merged(2, { cortenScale: 1.2 });
   const check = betweenDroplets(faster);
   // Corten is 20% faster on d2: its req/s and its CPU per request differ in every stage.
-  assert.equal(check.flagged.length, 48);
+  assert.equal(check.flagged.length, 24);
   assert.ok(check.flagged.every((r) => r.differ.length === 1 && r.differ[0].join() === "1,2"));
   const text = report(faster);
-  assert.match(text, /^Flagged: 48 of 48 stages \(d1 and d2 differ\)\.$/m);
-  assert.match(text, /^\| fixture-en-US-page \| sat64 \| req\/s \| 1002\.00 \[1001\.00-1003\.00\] \| 1202\.00 \[1201\.00-1204\.00\] \| d1 and d2 differ \|$/m);
+  assert.match(text, /^Flagged: 24 of 24 stages \(d1 and d2 differ\)\.$/m);
+  assert.match(text, /^\| fixture-rotating-page \| sat64 \| req\/s \| 1002\.00 \[1001\.00-1003\.00\] \| 1202\.00 \[1201\.00-1204\.00\] \| d1 and d2 differ \|$/m);
   // Each candidate's ratio uses its own droplet's Corten, so d2's are lower against the faster Corten.
   assert.match(text, /^\| leptos \| r17-d2 \|.* \| 1\.02 \| /m);
   const even = betweenDroplets(merged(2));
   assert.equal(even.flagged.length, 0);
   // With three droplets each pair that differs is named.
   const three = validateSummary(mergeParts("r17", [part(1, 3), part(2, 3), part(3, 3, { cortenScale: 1.5 })]));
-  assert.match(report(three), /^Flagged: 48 of 48 stages \(d1 and d3 differ; d2 and d3 differ\)\.$/m);
+  assert.match(report(three), /^Flagged: 24 of 24 stages \(d1 and d3 differ; d2 and d3 differ\)\.$/m);
+});
+
+test("split parts retain their historical matrix and cannot merge across the rotation boundary", () => {
+  const old = [part(1, 2, { schema: v5Schema }), part(2, 2, { schema: v5Schema })];
+  const summary = validateSummary(mergeParts("r17", old));
+  assert.equal(betweenDroplets(summary).stages.length, 8 * 3 * 2);
+  assert.match(report(summary), /^\| api-de-DE-page \| sat256 \| req\/s \|/m);
+  assert.throws(() => mergeParts("r17", [old[0], part(2, 2)]), /schema differs/);
+  assert.throws(() => mergeParts("r17", [part(1, 2), old[1]]), /schema differs/);
 });
 
 test("a split round compares only with one split the same way, droplet by droplet", () => {
@@ -403,28 +448,37 @@ test("plan mode prints the split and every command without git, doctl or ssh", (
 
 // A fake DigitalOcean account and droplets for the split launcher: each droplet k answers SSH at
 // 192.0.2.k, runs its unit until finish(k), and serves the archive a part's job would pack.
-function fleet(t, { limit = 10, existing = [], failDelete = 0 } = {}) {
+function fleet(t, { limit = 10, existing = [], failDelete = 0, delayedDelete = false } = {}) {
   const temp = mkdtempSync(join(tmpdir(), "marketplace-split-test-"));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const repo = join(temp, "repo"), local = join(temp, "control"), remote = join(temp, "remote");
   mkdirSync(repo); mkdirSync(remote);
   let droplets = [...existing];
-  const active = new Set(), installed = new Set(), calls = [], deleted = [];
+  const active = new Set(), installed = new Set(), calls = [], deleted = [], waits = [];
+  let clock = 0, stale;
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const host = (args) => Number(args.find((a) => /^root@/.test(a)).split(/[@:]/)[1].split(".").at(-1));
   const run = (binary, args) => {
     calls.push([binary, ...args]);
     if (binary === "git") return good(args[0] === "rev-parse" ? commit : "");
     if (binary === "doctl") {
-      if (args[0] === "account") return good(JSON.stringify({ droplet_limit: limit, email: "test" }));
-      if (args[2] === "list") return good(JSON.stringify(droplets));
+      if (args[0] === "account") return good(JSON.stringify({ droplet_limit: limit, uuid: "bench-account" }));
+      if (args[2] === "list") {
+        return good(JSON.stringify(droplets));
+      }
+      if (args[2] === "get") {
+        const listing = stale ?? droplets; stale = undefined;
+        const found = listing.filter((d) => String(d.id) === args[3]);
+        return found.length ? good(JSON.stringify(found)) : { status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+      }
       if (args[2] === "create") {
-        const k = Number(args[3].split("-d").at(-1));
+        const k = Number(args[3].match(/-d(\d+)$/)?.[1] ?? 1);
         droplets.push({ id: 100 + k, name: args[3], tags: args[args.indexOf("--tag-names") + 1].split(","), networks: { v4: [{ type: "public", ip_address: `192.0.2.${k}` }] }, size: { price_hourly: 0.25 } });
         return good();
       }
       if (args[2] === "delete") {
-        if (String(100 + failDelete) === args[3]) throw new Error("delete failed");
+        if (String(100 + failDelete) === args[3]) return { status: 1, stdout: "", stderr: "delete failed" };
+        if (delayedDelete) stale = droplets;
         droplets = droplets.filter((d) => String(d.id) !== args[3]); deleted.push(args[3]); return good();
       }
     }
@@ -444,20 +498,31 @@ function fleet(t, { limit = 10, existing = [], failDelete = 0 } = {}) {
     if (binary === "tar") { const r = spawnSync(binary, args, { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r; }
     throw new Error(`unexpected command ${binary} ${args.join(" ")}`);
   };
-  return { repo, local, run, calls, deleted, add(d) { droplets.push(d); },
+  const dependencies = (effects) => ({
+    run: effects, repo, now: () => clock, sleep: async (ms) => { clock += ms; waits.push(ms); },
+    providerFactory: () => Object.assign(async (args) => {
+      assert.deepEqual(args.slice(-2), ["--context", "bench"]);
+      return effects("doctl", args);
+    }, { close: async () => {} }),
+  });
+  const options = { round: "r17", stateDir: local, sshKey: "42", context: "bench", group };
+  return { repo, local, run, calls, deleted, waits, add(d) { droplets.push(d); },
     // Someone deleted droplet id by hand.
     drop(id) { droplets = droplets.filter((d) => d.id !== id); },
     // Droplet k's job finished: its unit is inactive and its archive holds its part's results.
     finish(k, n, { exitCode = 0, change = () => {} } = {}) {
       active.delete(k);
-      const dir = join(remote, String(k)), results = `repo/bench/marketplace/results/r17/d${k}`;
+      const dir = join(remote, String(k)), results = `repo/bench/marketplace/results/r17${n ? `/d${k}` : ""}`;
       mkdirSync(join(dir, results), { recursive: true });
-      const summary = part(k, n); change(summary);
+      const summary = n ? part(k, n) : full(); change(summary);
       writeFileSync(join(dir, results, "summary.json"), JSON.stringify(summary));
       writeFileSync(join(dir, "exit-code"), `${exitCode}\n`); writeFileSync(join(dir, "run.log"), "all done\n");
       const r = spawnSync("tar", ["-czf", join(dir, "results.tgz"), "-C", dir, "run.log", "exit-code", results], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr);
     },
-    task(droplets) { return splitController({ round: "r17", stateDir: local, sshKey: "42", ...(droplets ? { droplets } : {}) }, { run, repo, sleep: async () => {} }); },
+    task(droplets, effects = run, deps = {}) {
+      return splitController({ ...options, ...(droplets ? { droplets } : {}) }, { ...dependencies(effects), ...deps });
+    },
+    ordinary() { return controller(options, dependencies(run)); },
   };
 }
 const quiet = async (t, fn) => {
@@ -465,6 +530,78 @@ const quiet = async (t, fn) => {
   console.log = (...a) => out.push(a.join(" ")); console.error = (...a) => out.push(a.join(" "));
   try { return { value: await fn(), out: out.join("\n") }; } finally { console.log = log; console.error = error; }
 };
+
+test("ordinary launch and terminal collection confirm one exact-ID deletion", async (t) => {
+  const f = fleet(t, { delayedDelete: true });
+  await quiet(t, () => f.ordinary().launch());
+  f.finish(1);
+  const result = await quiet(t, () => f.ordinary().collect());
+  assert.equal(result.value, 0, result.out);
+  assert.match(result.out, /all done[\s\S]*droplet 101 deletion confirmed/);
+  assert.deepEqual(f.deleted, ["101"]);
+  assert.deepEqual(f.waits, [3000]);
+  const state = JSON.parse(readFileSync(join(f.local, "state.json"), "utf8"));
+  assert.deepEqual(state.deletionTarget, { id: "101", account: "user:bench-account", context: "bench" });
+  assert.ok(state.destroyedAt);
+});
+
+test("an unsupported durable publisher refuses a fresh split launch before any cloud command", async (t) => {
+  const f = fleet(t);
+  const publishIntent = () => { throw new Error("scripts are disabled on this system"); };
+  await assert.rejects(quiet(t, () => f.task(2, f.run, { publishIntent }).launch()), /publisher preflight failed.*no droplet created.*scripts are disabled/);
+  assert.ok(!f.calls.some((c) => c[0] === "doctl" || c[0] === "ssh"));
+  assert.equal(existsSync(join(f.local, "split.json")), false);
+  assert.equal(existsSync(join(f.local, "launch.lock")), false);
+});
+
+test("a different account's empty inventory cannot retire two still-live starting parts", async (t) => {
+  const f = fleet(t);
+  await quiet(t, () => f.task(2).launch());
+  assert.equal((await quiet(t, () => f.task().collect())).value, 3);
+  for (const k of [1, 2]) {
+    const path = join(f.local, `d${k}`, "state.json");
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    if (k === 1) delete saved.collectionTarget; // Historical unbound reservation.
+    writeFileSync(path, JSON.stringify({ ...saved, status: "starting" }));
+  }
+  const before = f.calls.length;
+  const wrongAccount = (binary, args) => {
+    if (binary === "doctl") {
+      if (args[0] === "account") return { status: 0, stdout: '{"uuid":"another-account"}' };
+      if (args[2] === "list") return { status: 0, stdout: "[]" };
+      if (args[2] === "get") return { status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+    }
+    return f.run(binary, args);
+  };
+  const result = await quiet(t, () => f.task(undefined, wrongAccount).collect());
+  assert.equal(result.value, 2, result.out);
+  assert.match(result.out, /r17-d1: collection error;.*absence unconfirmed: no saved account binding/);
+  assert.match(result.out, /r17-d2: collection error;.*provider account changed; absence unconfirmed/);
+  assert.doesNotMatch(result.out, /deletion is confirmed|droplet is gone/);
+  assert.ok(!f.calls.slice(before).some((c) => c[0] === "ssh" || c[3] === "delete"));
+  assert.deepEqual(f.deleted, []);
+});
+
+test("the final stale inventory cannot override exact 404s for the two retired parts", async (t) => {
+  const f = fleet(t);
+  await quiet(t, () => f.task(2).launch());
+  const stale = f.run("doctl", ["compute", "droplet", "list", "--output", "json"]);
+  f.finish(1, 2); f.finish(2, 2);
+  const effects = (binary, args) => binary === "doctl" && args[2] === "list" && f.deleted.length === 2 ? stale : f.run(binary, args);
+  const result = await quiet(t, () => f.task(undefined, effects).collect());
+  assert.equal(result.value, 0, result.out);
+  assert.match(result.out, /every droplet's deletion is confirmed/);
+  assert.doesNotMatch(result.out, /leftover droplet|doctl compute droplet delete/);
+  assert.deepEqual(f.deleted, ["101", "102"]);
+  for (const id of ["101", "102"]) assert.ok(f.calls.some((c) => c[3] === "get" && c[4] === id));
+  const withExtra = { ...stale, stdout: JSON.stringify([...JSON.parse(stale.stdout), { id: 103, name: "corten-marketplace-r17-d1" }]) };
+  const extra = await quiet(t, () => f.task(undefined, (binary, args) =>
+    binary === "doctl" && args[2] === "list" ? withExtra : f.run(binary, args)).collect());
+  assert.equal(extra.value, 2, extra.out);
+  assert.match(extra.out, /leftover droplet 103 /);
+  assert.doesNotMatch(extra.out, /leftover droplet 10[12] |doctl compute droplet delete/);
+  assert.deepEqual(f.deleted, ["101", "102"]);
+});
 
 test("a split launch plans once, creates every droplet before starting any, and refuses a second launch", async (t) => {
   const f = fleet(t);
@@ -481,7 +618,7 @@ test("a split launch plans once, creates every droplet before starting any, and 
   }
   assert.ok(f.calls.filter((c) => c[0] === "ssh").every((c) => c.some((a) => a.includes(`control/d${c.find((x) => x.startsWith("root@")).at(-1)}/known_hosts`))), "each droplet has its own known_hosts");
   const calls = f.calls.length;
-  await assert.rejects(f.task(2).launch(), new RegExp(`r17 is already planned in .*split\\.json at commit ${commit}; never launch a split round twice: collect it \\(node bench/marketplace/droplet\\.mjs r17 --state-dir ".*control" --collect\\)`));
+  await assert.rejects(f.task(2).launch(), new RegExp(`r17 is already planned in .*split\\.json at commit ${commit}; never launch a split round twice: collect it \\(node bench/marketplace/droplet\\.mjs r17 --state-dir ".*control" --collect --context bench\\)`));
   assert.equal(f.calls.length, calls, "a second launch calls nothing");
 });
 
@@ -532,18 +669,19 @@ test("a signal during a split launch stops it between steps and says what each d
 });
 
 test("a split round finishes only when every droplet has, deleting each as it finishes, then merges", async (t) => {
-  const f = fleet(t);
+  const f = fleet(t, { delayedDelete: true });
   await quiet(t, () => f.task(2).launch());
   f.finish(1, 2);
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 3);
   assert.deepEqual(f.deleted, ["101"]);
-  assert.match(first.out, /r17 is not finished: r17-d2 still running\. Finished droplets are collected and deleted; run .* --collect again later\./);
+  assert.match(first.out, /r17 is not finished: r17-d2 still running\. Finished droplets are collected and deleted; run .* --collect --context bench again later\./);
   assert.equal(existsSync(join(f.local, "round")), false);
   f.finish(2, 2);
   const done = await quiet(t, () => f.task().collect());
   assert.equal(done.value, 0, done.out);
   assert.deepEqual(f.deleted, ["101", "102"]);
+  assert.deepEqual(f.waits, [3000, 3000]);
   const folder = join(f.local, "round", "r17");
   const s = validateSummary(JSON.parse(readFileSync(join(folder, "summary.json"), "utf8")));
   assert.equal(s.split.droplets, 2);
@@ -559,15 +697,19 @@ test("a failed delete, a failed part or a leftover droplet keeps a split round f
   failing.finish(1, 2); failing.finish(2, 2);
   const deleteFailed = await quiet(t, () => failing.task().collect());
   assert.equal(deleteFailed.value, 2);
-  assert.match(deleteFailed.out, /r17-d2: collection error; its droplet and evidence are preserved: delete failed/);
-  assert.match(deleteFailed.out, /collection error on r17-d2: droplets that still exist are preserved and still billed\. Fix the error and run .* --collect again; never relaunch r17\./);
+  assert.match(deleteFailed.out, /r17-d2: collection error; its droplet and evidence are preserved: droplet 102 deletion not confirmed \(DELETE acknowledgement unavailable\)/);
+  assert.match(deleteFailed.out, /collection error on r17-d2: droplets that still exist are preserved and still billed\. Fix the error and run .* --collect --context bench again; never relaunch r17\./);
+  const calls = failing.calls.length;
+  failing.drop(102); // The fake account now proves absence on resume, without another DELETE.
+  assert.equal((await quiet(t, () => failing.task().collect())).value, 0);
+  assert.ok(failing.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || ["get", "list"].includes(c[3]))));
 
   const partial = fleet(t);
   await quiet(t, () => partial.task(2).launch());
   partial.finish(1, 2); partial.finish(2, 2, { exitCode: 1 });
   const failed = await quiet(t, () => partial.task().collect());
   assert.equal(failed.value, 1);
-  assert.match(failed.out, /r17 is partial: r17-d2 did not finish its part\. Every droplet's deletion is confirmed; there is no merged round\./);
+  assert.match(failed.out, /r17 is partial: r17-d2 did not finish its part\. Exact IDs confirmed absent: 101, 102\. There is no merged round\./);
   assert.equal(existsSync(join(partial.local, "round")), false);
 
   const extra = fleet(t);
@@ -576,7 +718,21 @@ test("a failed delete, a failed part or a leftover droplet keeps a split round f
   extra.add({ id: 103, name: "corten-marketplace-r17-d3", tags: ["corten-bench"] });
   const leftover = await quiet(t, () => extra.task().collect());
   assert.equal(leftover.value, 2);
-  assert.match(leftover.out, /leftover droplet 103 \(corten-marketplace-r17-d3\) belongs to no live part of r17; check it is not another run's, then delete it: doctl compute droplet delete 103 --force/);
+  assert.match(leftover.out, /leftover droplet 103 \(corten-marketplace-r17-d3\) belongs to no live part of r17; check exact identity and ownership before any action/);
+});
+
+test("split leftover warnings do not suggest another DELETE for an intended ID", async (t) => {
+  const f = fleet(t, { failDelete: 2 });
+  await quiet(t, () => f.task(2).launch());
+  f.finish(1, 2); f.finish(2, 2);
+  assert.equal((await quiet(t, () => f.task().collect())).value, 2);
+  f.drop(102);
+  f.add({ id: 102, name: "corten-marketplace-r17-d3", tags: [] });
+  const listed = await quiet(t, () => f.task().collect());
+  assert.equal(listed.value, 2);
+  assert.match(listed.out, /droplet 102 is still listed despite a saved deletion record/);
+  assert.doesNotMatch(listed.out, /doctl compute droplet delete 102/);
+  assert.equal(f.calls.filter((c) => c[0] === "doctl" && c[3] === "delete" && c[4] === "102").length, 1);
 });
 
 test("a round whose start check fails stays starting, not never started, and is collected", async (t) => {
@@ -599,7 +755,7 @@ test("a round whose start check fails stays starting, not never started, and is 
 
   // d1's round runs; d2 never reached systemctl start, so only d2 gets a delete command. The
   // round cannot merge, so exit 2 also says how to stop d1.
-  const stopD1 = /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect again/;
+  const stopD1 = /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect --context bench again/;
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 2, first.out);
   assert.match(first.out, /r17-d2: droplet 102 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
@@ -612,7 +768,7 @@ test("a round whose start check fails stays starting, not never started, and is 
   f.drop(102);
   const running = await quiet(t, () => f.task().collect());
   assert.equal(running.value, 3, running.out);
-  assert.match(running.out, /r17-d2 never started its round and has no droplet/);
+  assert.match(running.out, /r17-d2 never started its round, but its exact droplet 102 is absent in the saved account/);
   assert.match(running.out, stopD1);
   assert.doesNotMatch(running.out, /is not finished/);
 
@@ -648,11 +804,11 @@ test("a failed create on d2 leaves it creating with no id, and collect looks for
   assert.match(error.message, new RegExp(`r17-d2: its create may have succeeded; look for a droplet named corten-marketplace-r17-d2 tagged ${d2.tag} before deleting anything\\.`));
   assert.ok(!f.calls.some((c) => c[0] === "ssh"), "no round starts when a create fails");
 
-  // No d2 droplet: d2 is missing, and d1 never reached systemctl start, so d1 gets a delete command.
+  // No exact ID found for d2: its create remains unconfirmed while the owned d1 gets a delete command.
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 2, first.out);
   assert.match(first.out, /r17-d1: droplet 101 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 101 --force/);
-  assert.match(first.out, /r17-d2 never started its round and has no droplet/);
+  assert.match(first.out, /r17-d2: collection error;.*no exact droplet ID found for this reservation; absence unconfirmed/);
   assert.doesNotMatch(first.out, /cannot merge/, "no droplet runs, so there is nothing to stop");
   assert.ok(!f.calls.some((c) => c[0] === "ssh"), "collect needs no SSH to droplets that never started");
 
@@ -680,22 +836,23 @@ test("a starting droplet that never answers SSH is not deleted on a guess", asyn
     if (!allowFail) throw new Error("ssh: timed out");
     return { status: 255, stdout: "", stderr: "timed out" };
   };
-  const result = await quiet(t, () => splitController({ round: "r17", stateDir: f.local, sshKey: "42" }, { run, repo: f.repo, sleep: async () => {} }).collect());
+  const result = await quiet(t, () => f.task(undefined, run).collect());
   assert.equal(result.value, 2, result.out);
   assert.match(result.out, /r17-d2: collection error; its droplet and evidence are preserved: ssh: timed out/);
   assert.doesNotMatch(result.out, /delete 102/);
   assert.equal(JSON.parse(readFileSync(file, "utf8")).status, "starting");
 });
 
-test("a starting part whose droplet is gone may have started: it is missing, not never started", async (t) => {
+test("a bound starting part with an exact 404 may have started: it is missing, not never started", async (t) => {
   const f = fleet(t);
   await quiet(t, () => f.task(2).launch());
+  assert.equal((await quiet(t, () => f.task().collect())).value, 3);
   const file = join(f.local, "d2", "state.json"), s = JSON.parse(readFileSync(file, "utf8"));
   writeFileSync(file, JSON.stringify({ ...s, status: "starting" }));
   f.drop(102);
   const result = await quiet(t, () => f.task().collect());
   assert.equal(result.value, 3, result.out);
-  assert.match(result.out, /r17-d2 may have started its round, but its droplet is gone; nothing to collect/);
+  assert.match(result.out, /r17-d2 may have started its round, but its exact droplet 102 is absent in the saved account; nothing to collect/);
   assert.doesNotMatch(result.out, /r17-d2 never started/);
   assert.match(result.out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh .*\/d1\/known_hosts" root@192\.0\.2\.1 /);
 });
@@ -707,7 +864,7 @@ test("code 3 with a partial part says to stop the running droplets, since the ro
   const running = await quiet(t, () => f.task().collect());
   assert.equal(running.value, 3, running.out);
   assert.deepEqual(f.deleted, ["101"]);
-  assert.match(running.out, /r17 cannot merge: r17-d1 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d2\/known_hosts" root@192\.0\.2\.2 systemctl stop corten-marketplace-r17-d2\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect again/);
+  assert.match(running.out, /r17 cannot merge: r17-d1 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d2\/known_hosts" root@192\.0\.2\.2 systemctl stop corten-marketplace-r17-d2\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect --context bench again/);
   assert.doesNotMatch(running.out, /is not finished/);
   // Once stopped, d2 is collected and deleted, and the round is partial.
   f.finish(2, 2);
@@ -770,7 +927,7 @@ test("a stopped launch keeps its own error when saying what each droplet is left
   };
   const launch = splitController({ round: "r17", stateDir: f.local, sshKey: "42", droplets: 2 }, { run, repo: f.repo, sleep: async () => {}, interrupted: () => signal });
   const { value: error } = await quiet(t, () => launch.launch().catch((e) => e));
-  assert.match(error.message, /^SIGINT received\nWhat each droplet is left doing is unknown: .*JSON.*\. Collect the round: node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect\nThis is also saved in .*launch-stopped\.txt\.$/s);
+  assert.match(error.message, /^SIGINT received\nWhat each droplet is left doing is unknown: .*JSON.*\. Collect the round: node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect --context <saved-context>\nThis is also saved in .*launch-stopped\.txt\.$/s);
   assert.equal(error.cause.message, "SIGINT received");
 });
 
@@ -814,24 +971,22 @@ test("collect refuses while a live launch holds launch.lock, and takes over a st
   assert.equal(existsSync(lock), false);
 });
 
-test("a droplet list that fails is that part's collection error, and the stop commands still print", async (t) => {
+test("exact read and final census failures remain distinguishable, and stop commands still print", async (t) => {
   // d1 runs its round; d2 never reached systemctl start.
   const f = fleet(t);
   let starts = 0;
   const run = (binary, args) => { const r = f.run(binary, args); if (binary === "ssh" && args.at(-1).includes("systemctl start")) starts++; return r; };
   const launch = splitController({ round: "r17", stateDir: f.local, sshKey: "42", droplets: 2 }, { run, repo: f.repo, sleep: async () => {}, interrupted: () => starts ? "SIGINT" : null });
   await quiet(t, () => launch.launch().catch((e) => e));
-  const flaky = (fail) => {
-    let lists = 0;
-    return (binary, args) => { if (binary === "doctl" && args[2] === "list" && fail.includes(++lists)) throw new Error("doctl: connection reset"); return f.run(binary, args); };
-  };
-  const collect = (fail) => quiet(t, () => splitController({ round: "r17", stateDir: f.local, sshKey: "42" }, { run: flaky(fail), repo: f.repo, sleep: async () => {} }).collect());
-  // d1's collect lists once; the second list is d2's, the third the leftover check.
-  const part = await collect([2]);
+  const collect = (fail) => quiet(t, () => f.task(undefined, (binary, args) => {
+    if (binary === "doctl" && fail(args)) throw new Error("doctl: connection reset");
+    return f.run(binary, args);
+  }).collect());
+  const part = await collect((args) => args[2] === "get" && args[3] === "102");
   assert.equal(part.value, 2, part.out);
   assert.match(part.out, /r17-d2: collection error; its droplet and evidence are preserved: doctl: connection reset/);
   assert.match(part.out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh .*\/d1\/known_hosts" root@192\.0\.2\.1 /);
-  const leftovers = await collect([3]);
+  const leftovers = await collect((args) => args[2] === "list");
   assert.equal(leftovers.value, 2, leftovers.out);
   assert.match(leftovers.out, /the droplet list failed, so leftover droplets are unknown: doctl: connection reset/);
   assert.match(leftovers.out, /r17-d2: droplet 102 was created but never started its round/);
@@ -839,9 +994,10 @@ test("a droplet list that fails is that part's collection error, and the stop co
 
   // A droplet listed under d2's id but with another name and no tags is not deleted.
   f.drop(102); f.add({ id: 102, name: "someone-else", tags: [] });
-  const other = await collect([]);
+  const other = await collect(() => false);
   assert.equal(other.value, 2, other.out);
-  assert.match(other.out, /r17-d2: droplet 102 is listed for this part but lacks its name or ownership tags; not ours to delete: check it/);
+  assert.match(other.out, /r17-d2: collection error;/);
+  assert.match(other.out, /someone-else/);
   assert.doesNotMatch(other.out, /delete 102/);
 });
 

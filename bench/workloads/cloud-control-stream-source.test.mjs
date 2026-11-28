@@ -13,10 +13,18 @@ function kernel(mode) {
 test("actual fixed guardian registers and pins exact socket ancestry, streams audit pending, seals and proves terminal disappearance", () => {
   const result = kernel("normal"), registration = result.registration;
   assert.equal(result.failed, false); assert.equal(result.terminal, true); assert.equal(result.invalid, false);
+  assert.equal(result.drainStatus, 0);
   assert.deepEqual(result.pinned, [10, 20, 21]); assert.equal(result.auditPublished, true); assert.ok(result.seal);
   verifyApparatus(result.binding, registration, { host: registration.host, monoNs: registration.createdMonoNs, members: registration.members, listener: registration.listener });
   assert.equal(verifyStreamDrain(result.binding, registration, result.drain).remoteDrained, true);
   assert.ok(result.frames.includes("progress") && result.frames.includes("audit-end") && result.frames.includes("delivery-sealed") && result.frames.at(-1) === "terminal");
+});
+test("a failed group with no audit closes the guardian and admits a separate disappearance proof", () => {
+  const r = kernel("failed-group");
+  assert.deepEqual(r.frames.filter((kind) => kind !== "challenge"), ["registered", "progress", "terminal"]);
+  assert.equal(r.terminal, true); assert.equal(r.invalid, false); assert.ok(r.seal);
+  assert.equal(r.auditPublished, false);
+  assert.equal(verifyStreamDrain(r.binding, r.registration, r.drain).remoteDrained, true);
 });
 for (const mode of ["early-job-exit", "already-exited", "exit-after-renewals"])
   test("an exited job without progress preserves registration but is never a result: " + mode, () => {
@@ -31,6 +39,12 @@ for (const mode of ["early-job-exit", "already-exited", "exit-after-renewals"])
 for (const mode of ["lost-lease", "new-child", "namespace", "affinity", "unknown-login", "replayed-renewal", "unknown-input", "native-delivery"])
   test("actual guardian intentional negative: " + mode, () => {
     const result = kernel(mode); assert.equal(result.failed, true); assert.equal(result.invalid, true); assert.equal(result.terminal, false); assert.equal(result.drain, null);
+    const fault = /^CORTEN_MONITOR_FAULT ([a-f0-9]{32}) ([1-9][0-9]{0,4})\n$/.exec(result.diagnostic);
+    assert.ok(fault); assert.equal(fault[1], result.registration.id);
+    if (mode === "unknown-login") assert.match(guardianSource.split("\n")[Number(fault[2]) - 1], /foreign SSH\/login participant/);
   });
-for (const mode of ["drain-survivor", "drain-unknown"])
-  test("actual guardian refuses disappearance proof: " + mode, () => { const result = kernel(mode); assert.equal(result.terminal, true); assert.equal(result.drain, null); });
+for (const [mode, status] of [["drain-survivor", 3], ["drain-listener", 254], ["drain-scope", 254], ["drain-unknown", 254]])
+  test("actual guarded probe withholds disappearance proof: " + mode, () => {
+    const result = kernel(mode);
+    assert.equal(result.terminal, true); assert.equal(result.drain, null); assert.equal(result.drainStatus, status);
+  });

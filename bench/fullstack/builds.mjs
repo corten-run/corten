@@ -45,7 +45,7 @@ const htmx = (/** @type {string} */ dest) => `--checksum=sha256:a0abb04f2f45a1f8
 const hostTarget = '--target "$(rustc -vV | sed -n "s/^host: //p")"';
 
 const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */ env) => ({
-  tools: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
+  tools: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
   context: "",
   workdir: "/app",
   env,
@@ -55,6 +55,9 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
   build: "npm run build",
   edit: file,
 });
+
+/** How long docker-rebuild.mjs gives each measured image build before it stops it. */
+export const rebuildTimeoutMs = 20 * 60_000;
 
 /**
  * The apps' recipes. `context` is relative to the repository root (empty: the app's directory
@@ -97,8 +100,8 @@ export const recipes = {
     env: { ZSTD_SYS_USE_PKG_CONFIG: "1" },
     // The workspace's lockfile names every example's dependencies, so this downloads more than
     // card-market builds; the build compiles only what card-market needs.
-    deps: `cargo fetch ${hostTarget}`,
-    build: "cargo build --release -p card-market",
+    deps: `cargo fetch --locked ${hostTarget}`,
+    build: "cargo build --release --locked -p card-market",
     dev: "cargo build -p card-market",
     check: "cargo check -p card-market --all-targets",
     test: "cargo test -p card-market --no-run",
@@ -215,7 +218,7 @@ export const recipes = {
     edit: "Pages/Item.cshtml",
   },
   spring: {
-    tools: "maven:3.10-eclipse-temurin-27@sha256:3175c44b207d6698aecb9bbb5bf285b5b4efcf7f567d6f65d88cd218276a6ab2",
+    tools: "maven:3.10-eclipse-temurin-27@sha256:a83dca2f65c72ace081f55a63231adbd6d88741caa4fdc68f7d5c9e450d1070c",
     context: "",
     workdir: "/src",
     add: htmx("src/main/resources/static/htmx.min.js"),
@@ -234,7 +237,7 @@ export const recipes = {
     edit: "templates/item.html",
   },
   express: {
-    tools: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
+    tools: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
     context: "",
     workdir: "/app",
     env: { NODE_ENV: "production" },

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import test from "node:test";
 import { contractSha256, definition, groupNames, groups, retainedFamilies, selectedApps, validateInventory } from "./registry.mjs";
 import { coverage } from "./evidence.mjs";
+import { resultSchema, timedProfilesFor, v5Schema } from "../marketplace/run-contract.mjs";
 import { groupApps, scheduledGroup } from "../marketplace/groups.mjs";
 import { parseDropletArgs, remoteFiles, nightly } from "../marketplace/droplet-contract.mjs";
 
@@ -10,8 +11,8 @@ test("approved membership is independent of current qualification and includes e
   assert.equal(validateInventory(), true);
   assert.equal(groupNames.length, 9);
   const expected = {
-    "catalog-page": ["corten", "aspnet", "express", "fastapi", "axum-maud", "drogon", "gin"],
-    "json-api": ["corten", "aspnet", "fastapi", "express", "spring", "axum-maud", "drogon", "gin", "aspnet-aot"],
+    "catalog-page": ["corten", "aspnet", "express", "fastapi", "axum-maud", "drogon", "gin", "proa"],
+    "json-api": ["corten", "aspnet", "fastapi", "express", "spring", "axum-maud", "drogon", "gin", "aspnet-aot", "ntex"],
     "localized-marketplace": ["corten", "nextjs", "aspnet", "django", "topcoat", "leptos", "gin", "drogon"],
     "mixed-production": ["corten", "aspnet", "spring", "django", "express", "fastapi", "topcoat", "gin", "drogon"],
     "fullstack-browser": ["corten", "nextjs", "nuxt", "react-router", "rails", "laravel", "sveltekit", "astro", "tanstack-start", "leptos"],
@@ -32,11 +33,26 @@ test("approved membership is independent of current qualification and includes e
   assert.throws(() => groups["catalog-page"].popular.pop());
 });
 
+test("hardening keeps both deployments and cannot reuse the old pressure workload's evidence", () => {
+  assert.notEqual(contractSha256("hardening"), "651c5f73eda0cc5030fc80e85d6ead2b0021ed36161830a08dc8410e387bd33c");
+  assert.deepEqual(definition("hardening").cases.map(c => c.key), ["direct", "deployed-edge"]);
+  const capabilities = definition("hardening").capabilities;
+  for (const required of ["bounded-client-deadline", "bounded-request-limit", "dependency-recovery"]) assert.ok(capabilities.includes(required), required);
+  for (const retired of ["slow-headers-bodies-readers", "oversized-requests"]) assert.ok(!capabilities.includes(retired), retired);
+});
+
 test("locale/source/target work is explicit, numeric JSON is not repeated under locales", () => {
-  const pages = definition("localized-marketplace").cases;
-  assert.equal(pages.filter((c) => c.target === "page").length, 6);
-  assert.equal(pages.filter((c) => c.target === "json").length, 2);
-  assert.ok(pages.filter((c) => c.target === "json").every((c) => c.locale === null));
+  const group = "localized-marketplace", d = definition(group);
+  const nativeCases = (schema) => timedProfilesFor(schema).map((p) => ({ ...p, payload: "marketplace-v2", key: `marketplace-v2-${p.key}` }));
+  assert.equal(d.nativeResultSchema, resultSchema);
+  assert.deepEqual(d.cases, nativeCases(resultSchema));
+  assert.deepEqual(d.parityCases, nativeCases(v5Schema));
+  const measured = { app: "corten", case: "marketplace-v2-api-rotating-page", implementation: "implemented", parity: "passed",
+    measurement: "complete", reason: "synthetic test", artifact: "raw.json" };
+  const ledger = coverage(group, [measured]);
+  assert.equal(ledger.cells.length, selectedApps(group).length * 4);
+  assert.ok(ledger.cells.includes(measured));
+  assert.throws(() => coverage(group, [{ ...measured, case: "marketplace-v2-api-fr-FR-page" }]), /unknown case/);
   const json = definition("json-api").cases;
   assert.equal(json.length, 4);
   assert.equal(new Set(json.map((c) => c.payload)).size, 2);

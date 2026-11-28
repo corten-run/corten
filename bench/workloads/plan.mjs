@@ -18,7 +18,7 @@ const nativeScope = {
   "client-heavy": "Native production bundles and browser observations; bounded local verification is not an isolated performance ranking.",
   "live-delivery": "Native live captures; complete native inventory and reviewed fanout measurement are still required.",
   "recoverable-live": "Native replay/resnapshot captures; complete native inventory and reviewed recovery load measurement are still required.",
-  hardening: "Native attack apparatus; full parity, controls and complete direct/edge evidence are still required.",
+  hardening: "Bounded request deadlines, request limits and dependency recovery; requires matching parity, controls and direct/edge evidence.",
 };
 
 export function plan(name, evidence = []) {
@@ -61,7 +61,7 @@ export function plan(name, evidence = []) {
 export function markdown() {
   const names = { corten: "Corten", aspnet: "ASP.NET Core", "aspnet-aot": "ASP.NET Core Native AOT (JSON only)",
     nextjs: "Next.js (Pages Router)", express: "Express", fastapi: "FastAPI", spring: "Spring Boot", django: "Django",
-    "axum-maud": "axum + Maud", drogon: "Drogon", gin: "Gin + templ", leptos: "Leptos", topcoat: "Topcoat",
+    "axum-maud": "axum + Maud", drogon: "Drogon", gin: "Gin + templ", leptos: "Leptos", topcoat: "Topcoat", proa: "Proa", ntex: "ntex",
     "react-router": "React Router", rails: "Rails + Hotwire", laravel: "Laravel + Livewire", nuxt: "Nuxt", sveltekit: "SvelteKit",
     astro: "Astro", "tanstack-start": "TanStack Start", phoenix: "Phoenix", react: "React", vue: "Vue", solid: "Solid", svelte: "Svelte", remix: "Remix" };
   return ["| Group | Popular challengers | Performance-oriented challengers | Required work |", "|---|---|---|---|",

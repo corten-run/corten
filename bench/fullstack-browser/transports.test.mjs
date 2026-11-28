@@ -1,7 +1,7 @@
 // Apparatus tests only. No synthetic fixture below is a native contender capture.
 import test from "node:test";
 import assert from "node:assert/strict";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { observeNetwork, sanitizeNative } from "./observe.mjs";

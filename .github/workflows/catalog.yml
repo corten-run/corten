@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - id: scope
         env:
           PUSH_BEFORE: ${{ github.event.before }}
@@ -49,15 +49,45 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      # Native replay's binding parser loads the classic TypeScript compiler (bench/package.json).
+      - run: npm --prefix bench ci --no-audit --no-fund
+      # The browser checks run in Playwright's image, which has Chromium and the system libraries it
+      # needs, for the @playwright/test version in package.json. Installing them on the runner
+      # (`npx playwright install --with-deps chromium`) fetched their apt packages from the Ubuntu
+      # mirror on every run; when the mirror slowed it took eight of this job's ten minutes and
+      # cancelled the run (#2011). They run as the checkout's owner, so what they write stays the
+      # runner's. PLAYWRIGHT_WITH_DOCKER adds the runner's Docker CLI and socket and its /tmp, and the
+      # checkout is at its runner path, so a directory a check hands the daemon to mount is the same.
+      # That gives the image the runner's Docker daemon. It is the image framework CI already runs
+      # (ci.yml), from the same publisher by the same version tag: the same publisher trust, now in
+      # more jobs. The tag follows package.json, where a digest pin would have to change in both
+      # workflows with every Playwright bump. Node in the image is the Node 26 Playwright's image
+      # installs, not setup-node's .node-version; the step prints which, for the browser checks'
+      # record. That probe is bounded and only a diagnostic: when it fails or prints nothing, the log
+      # says the image's Node is unavailable and the browser checks still run. Each browser check
+      # names its command as ${NAME:?}, so one this step did not set fails rather than running on the runner.
+      - name: Playwright's image
+        run: |
+          image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
+          docker pull "$image"
+          status=0
+          image_node=$(timeout -k 5 60 docker run --rm "$image" node --version) || status=$?
+          if [ "$status" != 0 ] || [ -z "$image_node" ]; then
+            echo "::warning::Could not read the Node version in $image (docker run exit $status, 124 is a timeout); the browser checks' Node is not recorded."
+            image_node=unavailable
+          fi
+          echo "Node on the runner $(node --version), in $image $image_node"
+          run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
+          echo "PLAYWRIGHT=$run $image" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e CATALOG_DOCKER_TESTS -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
       - run: node bench/catalog/fixtures.mjs
       - run: node bench/marketplace/fixtures.mjs
-      - run: npm run check:marketplace
+      - run: ${PLAYWRIGHT:?} npm run check:marketplace
       - run: node --test bench/fullstack/apps/gin/compiled-check.test.mjs
       - run: node --test bench/fullstack/apps/fastapi/catalog-lean.test.mjs
-      - run: node --test bench/catalog/*.test.mjs
+      - run: ${PLAYWRIGHT_WITH_DOCKER:?} node --test bench/catalog/*.test.mjs
         env:
           CATALOG_DOCKER_TESTS: "1"
       - run: node --test bench/fullstack/apps/*/catalog.test.mjs
@@ -75,7 +105,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
       - run: node bench/catalog/fixtures.mjs
       - run: node bench/marketplace/fixtures.mjs
@@ -108,11 +138,29 @@ jobs:
         run: node --test bench/catalog/gin-permissions.test.mjs
         env:
           CATALOG_GIN_DOCKER_TESTS: "1"
-      - name: Test native Gin lean logging and panic recovery
+      - name: Compile the native Gin tests
         if: matrix.app == 'gin'
         run: |
           docker build --target build -t cb-catalog-gin-tests bench/fullstack/apps/gin
-          docker run --rm --cpus 1 --memory 1g cb-catalog-gin-tests go test -run '^TestCatalogLeanLoggingAndRecovery$' -count=1 .
+          mkdir "$RUNNER_TEMP/gin-tests"
+          docker run --rm --cpus 1 --memory 2g -v "$RUNNER_TEMP/gin-tests:/test-out" cb-catalog-gin-tests sh -c '
+            status=0
+            go test -c -o /test-out/itempage.test . || status=$?
+            echo "Go test compile exit: $status"
+            for file in memory.events memory.peak; do
+              if [ -r "/sys/fs/cgroup/$file" ]; then echo "$file:"; cat "/sys/fs/cgroup/$file"; fi
+            done
+            exit "$status"
+          '
+      - name: Test the native Gin app
+        if: matrix.app == 'gin'
+        run: |
+          docker run --rm --cpus 1 --memory 1g -v "$RUNNER_TEMP/gin-tests:/test-out:ro" cb-catalog-gin-tests sh -ec '
+            for name in TestCatalogLeanLoggingAndRecovery TestNativeProductionBoundsAndFollowup; do
+              test "$(/test-out/itempage.test -test.list "^$name$")" = "$name"
+            done
+            exec /test-out/itempage.test -test.v -test.count=1 -test.timeout=10m -test.paniconexit0
+          '
       - name: Test native FastAPI record boundaries
         if: matrix.app == 'fastapi'
         run: |
@@ -121,7 +169,50 @@ jobs:
           node bench/fullstack/apps/fastapi/check-native.mjs cb-catalog-fastapi
           node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources
+        id: marketplace
         run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
+      # The gate's script-free phone alert cases, repeated in both sources with exact POST,
+      # redirect, document and message checks (#1251). Its diagnostics upload with the results.
+      # It also runs after a failed gate, to diagnose it, when the gate built the image; the job
+      # still fails on the gate. Each source's probe stops between cases at its budget.
+      # --deadline is under the step's timeout and keeps its last two minutes for removal and
+      # cleanup.json, so a stalled probe cannot leave the step killed before its receipt. After a
+      # failed gate, the image check is bounded (30 s with its kill) inside the same 15 minutes. Only
+      # Docker's "No such image" skips the probe; a check that fails otherwise or times out fails
+      # the step and leaves preflight.log for the upload.
+      - name: Probe React Router script-free alert forms in both sources
+        if: always() && matrix.app == 'react-router' && (steps.marketplace.outcome == 'success' || steps.marketplace.outcome == 'failure')
+        timeout-minutes: 15
+        env:
+          GATE: ${{ steps.marketplace.outcome }}
+        run: |
+          results=bench/marketplace/results/alert-probe
+          if [ "$GATE" = failure ]; then
+            status=0
+            inspect=$(timeout -k 5 25 docker image inspect --format '{{.Id}}' cb-marketplace-react-router 2>&1) || status=$?
+            case "$status:$inspect" in
+              0:*) ;;
+              1:*"No such image"*)
+                echo "The marketplace gate failed before building cb-marketplace-react-router; no probe."
+                exit 0 ;;
+              *)
+                mkdir -p "$results"
+                printf 'docker image inspect cb-marketplace-react-router: exit %s (124 is a timeout)\n%s\n' "$status" "$inspect" > "$results/preflight.log"
+                echo "::error::Could not tell whether the marketplace gate built cb-marketplace-react-router (docker image inspect exit $status); no probe. See preflight.log."
+                exit 1 ;;
+            esac
+          fi
+          node bench/marketplace/alert-probe-run.mjs cb-marketplace-react-router 10 "$results" --budget 240 --deadline 840
+      - name: Qualify Next.js marketplace methods and alert writes in both sources
+        if: matrix.app == 'nextjs'
+        working-directory: bench/fullstack/apps/nextjs
+        env:
+          PROFILE: matched
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          node --test --test-name-pattern='^(native matched bounded production qualification:|enhanced alert POST|marketplace forms use the configured public origin)' production.test.mjs
       - name: Test native router alert stores and localized targets
         if: contains(fromJSON('["nextjs","nuxt","react-router","sveltekit","astro","tanstack-start"]'), matrix.app)
         run: node --test bench/fullstack/apps/${{ matrix.app }}/alerts.test.mjs
@@ -130,11 +221,56 @@ jobs:
         run: |
           docker run --rm --cpus 1 --memory 1g cb-catalog-django python -m django test itempage --verbosity 1
           docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-django python -m django test itempage --verbosity 1
+      - name: Probe Django Mixed ASGI and WSGI over loopback
+        if: matrix.app == 'django'
+        timeout-minutes: 10
+        run: |
+          docker build --build-arg PROFILE=matched-asgi -t cb-catalog-django-mixed-asgi bench/fullstack/apps/django
+          container=$(docker run --detach --init --network none --cpus 1 --memory 1g \
+            -e API_BASE=http://127.0.0.1:18080 cb-catalog-django-mixed-asgi)
+          trap 'status=$?; if [ "$status" -ne 0 ]; then docker logs "$container" >&2 || true; fi; docker rm -fv "$container" >/dev/null' EXIT
+          docker exec "$container" python -m unittest -v \
+            test_mixed_asgi_socket.ShippedAsgiSocketTests.test_default_container_command_serves_and_cancels \
+            test_mixed_asgi_socket.MixedAsgiSocketTests test_mixed_asgi_socket.SocketTimingTests
       - name: Test native Spring alert persistence and source boundaries
         if: matrix.app == 'spring'
+        # The test-stage build's Maven runs (Dockerfile), the tests below, and room to pull images.
+        timeout-minutes: 30
         run: |
           docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
-          docker run --rm --cpus 2 --memory 2g cb-spring-tests mvn -q -B test
+          # Maven's retries are per request (.mvn/maven.config), so the whole run has a budget too,
+          # and it logs each transfer to name one in flight (#1763). The proof below reuses this
+          # volume, the image's Maven repository plus what these tests fetched, and can still fetch
+          # what it lacks, such as the dependencies its WebFlux POM adds, from Central through the
+          # app's mirror (.mvn/settings.xml).
+          docker run --rm --cpus 2 --memory 2g --mount type=volume,source=cb-spring-m2,target=/root/.m2 \
+            cb-spring-tests timeout --verbose --kill-after=10s 10m mvn -B test
+      - name: Probe Spring HTTP disconnect behavior with Reactor Netty
+        id: spring_proof
+        if: matrix.app == 'spring'
+        timeout-minutes: 12
+        run: |
+          evidence=$(mktemp -d "$RUNNER_TEMP/spring-transport-proof.XXXXXXXX")
+          printf 'evidence=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+          docker run --rm --cpus 2 --memory 2g \
+            --mount "type=bind,source=$PWD/bench/fullstack/apps/spring/transport-proof,target=/proof,readonly" \
+              --mount "type=bind,source=$evidence,target=/evidence" \
+              --mount type=volume,source=cb-spring-m2,target=/root/.m2 \
+              cb-spring-tests sh -eu -c '
+                # This is the untouched image of package -DskipTests, before adding proof sources.
+                test -f target/test-classes/bench/itempage/MarketplaceDeadlineTest.class
+                for class in MarketplaceDisconnectHttpTest transport/DisconnectSockets transport/WebFluxDisconnectHttpTest; do
+                  if [ -e "target/test-classes/bench/itempage/$class.class" ]; then
+                    echo "Ordinary Spring package compiled a socket proof class: $class" >&2
+                    exit 1
+                  fi
+                done
+                echo "Ordinary Spring package compiled the deadline test but no socket proof classes."
+                exec sh /proof/run.sh /src /evidence
+              '
+      - name: Test matched Leptos marketplace HTTP cells in both sources
+        if: matrix.app == 'leptos'
+        run: node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-marketplace-leptos
       - name: Test native Express alert persistence and rejected writes
         if: matrix.app == 'express'
         run: |
@@ -149,27 +285,101 @@ jobs:
           -v "$PWD/bench/fullstack/apps/aspnet:/src" -w /src
           mcr.microsoft.com/dotnet/sdk:11.0.100
           dotnet test tests/Marketplace.Tests.csproj -c Release
-      - name: Test native compiled alert forms and independent readback
+      # Chromium for the compiled-app browser checks comes from Playwright's image, as in the
+      # harness job (#2011), with the same trust in it. The checks that start app containers
+      # need the runner's Docker; the matched Topcoat probe runs its binary on local loopback.
+      - name: Playwright's image
         if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
         run: |
-          npx playwright install --with-deps chromium
-          node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
+          image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
+          docker pull "$image"
+          status=0
+          image_node=$(timeout -k 5 60 docker run --rm "$image" node --version) || status=$?
+          if [ "$status" != 0 ] || [ -z "$image_node" ]; then
+            echo "::warning::Could not read the Node version in $image (docker run exit $status, 124 is a timeout); the browser checks' Node is not recorded."
+            image_node=unavailable
+          fi
+          echo "Node on the runner $(node --version), in $image $image_node"
+          run="docker run --rm --network host --ipc host --user $(id -u):$(id -g) -e HOME=/tmp -v $PWD:$PWD -w $PWD"
+          echo "PLAYWRIGHT_IMAGE=$image" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_WITH_DOCKER=$run --group-add $(stat -c %g /var/run/docker.sock) -v /tmp:/tmp -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock -e RUNNER_ENVIRONMENT $image" >> "$GITHUB_ENV"
+      # Use the release binary and assets from the Marketplace check-only build above. Both
+      # matched sources and Chromium run in the same isolated loopback namespace, with no socket mount.
+      - name: Test matched Topcoat Marketplace HTTP and Chromium in both sources
+        if: matrix.app == 'topcoat'
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          image="${PLAYWRIGHT_IMAGE:?}"
+          docker run --rm --network none --entrypoint tar cb-marketplace-topcoat -c -C /app server assets |
+            docker run --rm --init -i --network none --cpus 2 --memory 2g --shm-size 1g \
+              --user "$(id -u):$(id -g)" -e HOME=/tmp \
+              --mount "type=bind,source=$PWD,target=/repo,readonly" -w /repo "$image" sh -ec '
+                mkdir /tmp/topcoat
+                tar -x -C /tmp/topcoat
+                exec node bench/fullstack/apps/topcoat/tests/check-parity.mjs /tmp/topcoat/server --browser
+              '
+      - name: Test native compiled alert forms and independent readback
+        if: contains(fromJSON('["gin","drogon","topcoat","leptos"]'), matrix.app)
+        run: ${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
+      - name: Qualify the matched Drogon marketplace image with both sources
+        if: matrix.app == 'drogon'
+        run: ${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched
       - name: Test native Gin production boundaries and matched forms
         if: matrix.app == 'gin'
         run: |
           node bench/fullstack/apps/gin/check-production.mjs cb-catalog-gin bench/fullstack/apps/gin/production-results
-          node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched
-      - uses: actions/upload-artifact@v6
+          ${PLAYWRIGHT_WITH_DOCKER:?} node bench/fullstack/apps/gin/check-alerts.mjs gin cb-catalog-gin matched
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: catalog-contract-${{ matrix.app }}
           path: |
             bench/catalog/results/c1/
             bench/marketplace/results/w1/
+            bench/marketplace/results/alert-probe/
             bench/fullstack/apps/fastapi/tests/results/
             bench/fullstack/apps/gin/production-results/
+            bench/fullstack/apps/nextjs/work/bounded-qualification-fixture.json
+            bench/fullstack/apps/nextjs/work/bounded-qualification-api.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Upload scoped Spring socket test reports
+        if: always() && matrix.app == 'spring' && steps.spring_proof.outputs.evidence != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: spring-transport-proof
+          path: |
+            ${{ steps.spring_proof.outputs.evidence }}/mvc-surefire.txt
+            ${{ steps.spring_proof.outputs.evidence }}/webflux-surefire.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The alternate Spring image has its own build and HTTP test budget. Keep it
+  # out of the MVC parity job's budget for its test and transport proof builds.
+  spring-mixed-parity:
+    needs: [scope, harness]
+    if: contains(fromJSON(needs.scope.outputs.apps), 'spring')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - run: npm ci --no-audit --no-fund
+      - name: Qualify the Spring Mixed WebFlux image and check HTTP cancellation
+        timeout-minutes: 28
+        shell: bash
+        run: |
+          iid_file=$(mktemp "$RUNNER_TEMP/spring-mixed-iid.XXXXXXXX")
+          trap 'rm -f "$iid_file"' EXIT
+          app=bench/fullstack/apps/spring
+          timeout --kill-after=10s 20m docker build --iidfile "$iid_file" -f "$app/Dockerfile.mixed" "$app"
+          image=$(cat "$iid_file")
+          SPRING_MIXED_IMAGE="$image" node --test "$app/mixed-http.test.mjs"
 
   json-harness:
     needs: scope
@@ -180,8 +390,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
+      # Native replay's binding parser loads the classic TypeScript compiler (bench/package.json).
+      - run: npm --prefix bench ci --no-audit --no-fund
       - run: npm run check:json-api
 
   json-aot:
@@ -193,7 +405,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
       - name: Test reflection-disabled native record sources
         run: >-
@@ -205,7 +417,7 @@ jobs:
         run: docker build -t catalog-json-aot bench/fullstack/apps/aspnet-aot
       - name: Verify both complete payloads and sources on the native executable
         run: node bench/fullstack/apps/aspnet-aot/tests/check-native.mjs catalog-json-aot
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: catalog-json-aot-evidence

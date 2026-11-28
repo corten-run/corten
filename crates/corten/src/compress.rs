@@ -48,7 +48,7 @@ use http_body::Body as HttpBody;
 use crate::{body::Body, response::Response};
 
 /// Bodies smaller than this are sent as they are: compression would not save a packet.
-const MIN_SIZE: u64 = 1024;
+pub(crate) const MIN_SIZE: u64 = 1024;
 const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
@@ -114,37 +114,62 @@ pub(crate) fn accepted(headers: &HeaderMap, offered: &[Coding]) -> Option<Coding
     best.map(|(_, _, coding)| coding)
 }
 
+/// The `Accept-Encoding` lines browsers send, each with the codings of Corten's it names, none
+/// with a weight. Playwright 1.65.1's browsers on Linux sent these three on 2026-11-23: Chromium
+/// 159 and Firefox 159 the first, WebKit 27.2 the second over HTTPS and the third over plain
+/// HTTP. A line that is one of these byte for byte is not parsed ([`each_accepted`]), and
+/// `a_browsers_line_is_read_as_the_parser_reads_it` holds each to what the parser makes of it; a
+/// browser that sends another line (Playwright's WebKit on Windows: `deflate, gzip, br`), or one
+/// whose line a proxy rewrote, is parsed as any client's is. `docs/design.md#choice-fixed-stages`
+/// holds the list's premises and when to read them again.
+const BROWSER_LINES: [(&[u8], &[Coding]); 3] = [
+    (b"gzip, deflate, br, zstd", &[Coding::Gzip, Coding::Brotli, Coding::Zstd]),
+    (b"gzip, deflate, br", &[Coding::Gzip, Coding::Brotli]),
+    (b"gzip, deflate", &[Coding::Gzip]),
+];
+
 /// Calls `f` with each coding `Accept-Encoding` allows and its q-value (in thousandths).
 /// Read as bytes, and a q-value parsed only where an item has one: every request reads this header.
+/// A browser's line is compared whole first ([`BROWSER_LINES`]), which costs less than parsing its
+/// four items.
 fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
     for value in headers.get_all(header::ACCEPT_ENCODING) {
         let header = value.as_bytes();
-        for range in crate::http::list_items(header) {
-            let item = &header[range];
-            let (name, params) = match item.iter().position(|&b| b == b';') {
-                Some(at) => (&item[..at], Some(&item[at + 1..])),
-                None => (item, None),
-            };
-            let is = |coding: &[u8]| name.trim_ascii().eq_ignore_ascii_case(coding);
-            let coding = if is(b"zstd") {
-                Coding::Zstd
-            } else if is(b"br") {
-                Coding::Brotli
-            } else if is(b"gzip") || is(b"x-gzip") {
-                Coding::Gzip
-            } else {
-                continue;
-            };
-            // A malformed weight skips its coding, so it cannot make that coding preferable.
-            if let Some(q @ 1..) = params.map_or(Some(1000), crate::http::weight) {
-                f(q, coding);
-            }
+        if let Some((_, codings)) = BROWSER_LINES.iter().find(|(line, _)| *line == header) {
+            codings.iter().for_each(|&coding| f(1000, coding));
+            continue;
+        }
+        each_listed(header, &mut f);
+    }
+}
+
+/// [`each_accepted`] for one line, parsed.
+fn each_listed(header: &[u8], mut f: impl FnMut(u16, Coding)) {
+    for range in crate::http::list_items(header) {
+        let item = &header[range];
+        let (name, params) = match item.iter().position(|&b| b == b';') {
+            Some(at) => (&item[..at], Some(&item[at + 1..])),
+            None => (item, None),
+        };
+        let is = |coding: &[u8]| name.trim_ascii().eq_ignore_ascii_case(coding);
+        let coding = if is(b"zstd") {
+            Coding::Zstd
+        } else if is(b"br") {
+            Coding::Brotli
+        } else if is(b"gzip") || is(b"x-gzip") {
+            Coding::Gzip
+        } else {
+            continue;
+        };
+        // A malformed weight skips its coding, so it cannot make that coding preferable.
+        if let Some(q @ 1..) = params.map_or(Some(1000), crate::http::weight) {
+            f(q, coding);
         }
     }
 }
 
-fn compressible(content_type: &str) -> bool {
-    let essence = crate::api::media_type(content_type);
+/// Whether a media type (`essence`, without its parameters) is worth compressing.
+fn compressible(essence: &str) -> bool {
     (essence.starts_with("text/") && essence != "text/event-stream")
         || matches!(
             essence,
@@ -272,14 +297,15 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     }
     let headers = res.headers();
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    let event_stream = crate::api::media_type(content_type) == "text/event-stream";
-    if event_stream {
+    // Read once: every answer passes here, and the checks below ask about the same type.
+    let essence = crate::api::media_type(content_type);
+    if essence == "text/event-stream" {
         return stream(res, accepts.streamed());
     }
     // A `Media::stream`: a chunk at a time as it comes, never collected, when its type is worth
     // it. Only a body of no stated size can be one, so a buffered answer pays one size check.
     if http_body::Body::size_hint(res.body()).exact().is_none() && res.extensions().get::<crate::answer::Streamed>().is_some() {
-        if !varies(content_type, headers) || headers.contains_key(header::CONTENT_ENCODING) {
+        if !varies_as(essence, headers) || headers.contains_key(header::CONTENT_ENCODING) {
             return res;
         }
         // One whose length is too small to be worth it keeps it, as a buffered body does.
@@ -291,7 +317,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
         }
         return stream(res, accepts.streamed());
     }
-    if !varies(content_type, headers)
+    if !varies_as(essence, headers)
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
         || matches!(res.status(), StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
@@ -307,7 +333,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     // Exact size: a buffered page or JSON body, never a stream, so collecting it does not wait
     // (one held `Bytes` comes back as it is, with no copy).
     let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
-        return Response::from_parts(parts, Body::empty());
+        return crate::cache::unread(parts);
     };
     // A held value's stored form, only while the body is still its bytes: a handler or a
     // middleware that replaced the body keeps the extension, not the bytes it stood for.
@@ -318,7 +344,11 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     });
     let (encoded, coding) = match stored {
         Some(made) => made,
-        None => (Bytes::from(encode(coding, &bytes, Level::Fast)), coding),
+        // A kept answer's bytes in this coding are made once ([`crate::kept`]).
+        None => {
+            let encode = || Bytes::from(encode(coding, &bytes, Level::Fast));
+            (crate::kept::Kept::coded(&parts.extensions, &bytes, coding, encode), coding)
+        }
     };
     parts.headers.insert(header::CONTENT_ENCODING, coding.header());
     parts.headers.remove(header::CONTENT_LENGTH);
@@ -338,9 +368,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
 /// for the end takes it as whole; one that fails is cut where it failed, without that end.
 fn stream(res: Response, coding: Option<Coding>) -> Response {
     let headers = res.headers();
-    if headers.contains_key(header::CONTENT_ENCODING)
-        || headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
-    {
+    if headers.contains_key(header::CONTENT_ENCODING) || headers.get(header::CACHE_CONTROL).is_some_and(no_transform) {
         return res;
     }
     let (mut parts, body) = res.into_parts();
@@ -504,15 +532,34 @@ impl Drop for StreamCoder {
 /// `accept-encoding`, whatever its size: a type worth compressing that does not say
 /// `no-transform`. A `304` in place of such an answer sends the same `Vary` (`cache::tag`).
 pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
-    compressible(content_type)
-        && !headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
+    varies_as(crate::api::media_type(content_type), headers)
 }
 
-/// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.
+/// [`varies`], for a media type already read from its `Content-Type`.
+fn varies_as(essence: &str, headers: &HeaderMap) -> bool {
+    compressible(essence) && !headers.get(header::CACHE_CONTROL).is_some_and(no_transform)
+}
+
+/// Whether a `Cache-Control` line says `no-transform`. The line the stages give an answer that
+/// says nothing of caching is compared first: most answers carry it, and `str::contains` prepares
+/// a search made for long text before it looks. A test holds that line to what the search says
+/// of it.
+fn no_transform(line: &HeaderValue) -> bool {
+    *line != crate::cache::PRIVATE && line.to_str().is_ok_and(|line| line.contains("no-transform"))
+}
+
+/// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding. A page's own line
+/// (`page::VARY`, `page::VARY_LANGUAGE`) does not name it, and every page has one: a line is
+/// compared with those before it is split, and a test holds the two to what splitting them finds.
 pub(crate) fn vary(headers: &mut HeaderMap) {
+    let page = |line: &&HeaderValue| {
+        let line = line.as_bytes();
+        line == crate::page::VARY.as_bytes() || line == crate::page::VARY_LANGUAGE.as_bytes()
+    };
     let already = headers
         .get_all(header::VARY)
         .iter()
+        .filter(|line| !page(line))
         .filter_map(|v| v.to_str().ok())
         .any(|v| v.split(',').map(str::trim_ascii).any(|f| f.eq_ignore_ascii_case("accept-encoding") || f == "*"));
     if !already {
@@ -563,7 +610,7 @@ impl Precompressed {
     /// could use a compressed form starts making them; it and any request before they are done
     /// get the identity bytes (which `apply` compresses at the fast level).
     pub fn pick(&self, headers: &HeaderMap) -> (Bytes, Option<Coding>) {
-        if !compressible(self.content_type) || (self.identity.len() as u64) < MIN_SIZE {
+        if !compressible(crate::api::media_type(self.content_type)) || (self.identity.len() as u64) < MIN_SIZE {
             return (self.identity.clone(), None);
         }
         let Some(coding) = accepted(headers, &[Coding::Brotli, Coding::Gzip]) else {
@@ -670,7 +717,7 @@ fn held_worker() -> Option<&'static std::sync::mpsc::SyncSender<Job>> {
 
 /// Sets the headers for a body [`Precompressed::pick`] chose.
 pub(crate) fn encoded_headers(headers: &mut HeaderMap, content_type: &str, coding: Option<Coding>) {
-    if compressible(content_type) {
+    if compressible(crate::api::media_type(content_type)) {
         vary(headers);
     }
     if let Some(coding) = coding {
@@ -722,6 +769,53 @@ mod tests {
         assert_eq!(accepted(&accept("GZIP, Br;Q=0.5"), &all), Some(Coding::Gzip), "names are case-insensitive");
         assert_eq!(accepted(&HeaderMap::new(), &all), None);
         assert_eq!(accepted(&accept("zstd, gzip"), &[Coding::Brotli, Coding::Gzip]), Some(Coding::Gzip));
+    }
+
+    /// A browser's line is found in a list, not parsed ([`BROWSER_LINES`]): each is read as the
+    /// parser reads it, weights included, alone and beside a second line that has weights.
+    #[test]
+    fn a_browsers_line_is_read_as_the_parser_reads_it() {
+        let read = |headers: &HeaderMap| {
+            let mut read = Vec::new();
+            each_accepted(headers, |q, coding| read.push((q, coding)));
+            read
+        };
+        for (line, _) in BROWSER_LINES {
+            let text = std::str::from_utf8(line).unwrap();
+            let mut parsed = Vec::new();
+            each_listed(line, |q, coding| parsed.push((q, coding)));
+            assert!(!parsed.is_empty(), "{text}");
+            assert_eq!(read(&accept(text)), parsed, "{text}");
+            // In another case the line is not in the list, so it is parsed.
+            let upper = text.to_uppercase();
+            assert_eq!(read(&accept(&upper)), parsed, "{text}");
+            let second = |mut headers: HeaderMap| {
+                headers.append(header::ACCEPT_ENCODING, HeaderValue::from_static("zstd;q=0.5, br;q=0.25"));
+                headers
+            };
+            assert_eq!(read(&second(accept(text))), read(&second(accept(&upper))), "{text}");
+            assert_eq!(negotiate(&second(accept(text))), negotiate(&second(accept(&upper))), "{text}");
+        }
+    }
+
+    /// The lines the stages compare whole before they search one ([`no_transform`], [`vary`]) say
+    /// what the search finds in them, so comparing them changes no answer.
+    #[test]
+    fn the_lines_compared_whole_say_what_a_search_of_them_finds() {
+        let default = crate::cache::PRIVATE;
+        assert!(!default.to_str().unwrap().contains("no-transform"));
+        assert!(!no_transform(&default));
+        assert!(no_transform(&HeaderValue::from_static("private, no-cache, no-transform")));
+        for line in [crate::page::VARY, crate::page::VARY_LANGUAGE] {
+            // The same line in another case is not compared whole: it is split.
+            for line in [line.to_string(), line.to_uppercase()] {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::VARY, HeaderValue::from_str(&line).unwrap());
+                vary(&mut headers);
+                let lines: Vec<_> = headers.get_all(header::VARY).iter().map(|v| v.to_str().unwrap()).collect();
+                assert_eq!(lines, [line.as_str(), "accept-encoding"]);
+            }
+        }
     }
 
     #[test]

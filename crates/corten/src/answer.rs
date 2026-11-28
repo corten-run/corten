@@ -102,6 +102,54 @@ pub trait Answer: IntoResponse + Sized {
     /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
+    /// The answer is one whole body that only the handler's inputs decide (JSON, text, a file): what the
+    /// app keeps for a [`Public`] route from 1,024 bytes, as it keeps a page
+    /// ([`crate::kept`]). Not a public API:
+    /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
+    /// (`Json` of a type of the app's is `Json`'s answer, kept under the checks every kept answer
+    /// passes).
+    ///
+    /// ```compile_fail,E0326
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     const WHOLE: bool = true;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0603
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     const WHOLE: corten::answer::sealed::Whole = corten::answer::sealed::Whole(true);
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    #[doc(hidden)]
+    const WHOLE: sealed::Whole = sealed::Whole(false);
     /// What a request from the runtime ([`crate::Mode::Action`]) or a script's read can get:
     /// [`Patches`] for `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch
     /// whenever the runtime asked; [`Screen<T>`] for `HtmlResult<Screen<T>>` (and `Public<..>` or
@@ -680,6 +728,14 @@ pub(crate) mod sealed {
     pub trait Sealed {}
     impl Sealed for super::ForOne {}
 
+    /// What [`super::Anonymous::KEYED`] says. Only Corten can name it, so only Corten's own
+    /// inputs say yes.
+    pub struct Keyed(pub(crate) bool);
+
+    /// What [`super::Answer::WHOLE`] says. Only Corten can name it, so only Corten's own answers
+    /// say yes.
+    pub struct Whole(pub(crate) bool);
+
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
@@ -997,18 +1053,12 @@ impl<A: Shareable> Shareable for std::result::Result<A, JsonError> {
 }
 
 #[cfg(feature = "json")]
-impl<T> Shareable for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Shareable for crate::Json<T> {
     type ForAll = Self;
 }
 
 #[cfg(feature = "json")]
-impl<T> ForEveryone for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> ForEveryone for crate::Json<T> {
     type Named = Self;
 
     fn for_all(self) -> Self {
@@ -1302,7 +1352,7 @@ impl JsonError {
             std::panic::Location::caller()
         );
         assert!(!strict, "corten: {message}");
-        JsonError::Error(Error::new(message))
+        JsonError::Error(Error::corten(message))
     }
 }
 
@@ -1335,17 +1385,16 @@ impl IntoResponse for JsonError {
 impl<A: Answer> Answer for std::result::Result<A, JsonError> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
     type Kind = AnyAnswer;
 }
 
 #[cfg(feature = "json")]
-impl<T> Answer for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Answer for crate::Json<T> {
     const FORMAT: Format = Format::Json;
+    const WHOLE: sealed::Whole = T::__KEPT;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1354,6 +1403,7 @@ where
 impl<A: Answer> Answer for Result<A, Error> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
     type Kind = <A::Kind as KindOf<A>>::InResult;
@@ -1361,6 +1411,7 @@ impl<A: Answer> Answer for Result<A, Error> {
 
 impl Answer for &'static str {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1368,6 +1419,7 @@ impl Answer for &'static str {
 
 impl Answer for String {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1480,7 +1532,16 @@ impl Answer for Relay {
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
-/// as any `Public` handler cannot.
+/// as any `Public` handler cannot. A [`Public::new`] one of 1,024 bytes or more, whatever its
+/// type (a CSV, an SVG, a PNG, a PDF), is kept by the app
+/// as `Public` text is, with its headers, and given again in the handler's place to a request
+/// that shows nothing about who asks, until its lifetime ends
+/// ([`App::kept_answers`](crate::App::kept_answers)): the app then holds a second copy of its
+/// bytes while it is kept, and makes its `ETag` once and not for each such request. Any other from such
+/// a route is the handler's for every request: a smaller one, a stream, an immutable one, one
+/// larger than an eighth of what the app keeps, and any from an unstaged route. One a page
+/// route answers in its page's place ([`PageOr`]) is kept as that page would be, also under
+/// 1,024 bytes.
 ///
 /// ```
 /// use corten::{prelude::*, Media};
@@ -1511,6 +1572,8 @@ impl Media {
         use http::header;
         use http::HeaderValue;
         let mut res = Response::new(crate::body::Body::from(bytes.into()));
+        // Room for the headers `App` adds too, so the map is allocated once.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         Media(res)
     }
@@ -1617,6 +1680,8 @@ impl Media {
             }
         });
         let mut res = Response::new(crate::body::Body::from_stream(checked));
+        // Room for the headers `App` adds too, as `Media::new` leaves.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         res.extensions_mut().insert(Streamed);
         Media(res)
@@ -1736,6 +1801,7 @@ impl IntoResponse for Media {
 
 impl Answer for Media {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -2128,8 +2194,9 @@ impl<A: Shareable> Public<A> {
     ///
     /// The name is checked when the app builds (`cargo build`, `cargo test`; `cargo check` does
     /// not evaluate it). A header that would make the answer one visitor's (`set-cookie`), one
-    /// Corten sets itself (`cache-control` and a CDN's `*-cache-control`, `vary`, the encoding
-    /// and length, the security headers, CORS, `corten-*`), one the answer has (`content-type`,
+    /// Corten sets itself (`cache-control`, any `*-cache-control` and the other caching headers a
+    /// CDN reads first, `surrogate-control`, `edge-control` and `x-accel-expires`, `vary`, the
+    /// encoding and length, the security headers, CORS, `corten-*`), one the answer has (`content-type`,
     /// `location`, `content-disposition`) or one of the connection's does not compile, and neither does a name that is
     /// not a lowercase header name:
     ///
@@ -2203,14 +2270,13 @@ headers! {
 /// those the answer itself has (its type, the place a redirect goes, a range, a download's file
 /// name, which [`Media::attachment`] writes escaped), and those that are
 /// the connection's, not the answer's. Names under `corten-` and `access-control-` (an API's
-/// CORS) are Corten's too, and so is any `*cache-control` and `surrogate-control`: a CDN
-/// obeys them over `Cache-Control`, which Corten makes `private` for an answer it must not
-/// share.
-const NOT_SHARED: [&str; 28] = [
+/// CORS) are Corten's too, and so are the caching headers a CDN obeys over `Cache-Control`, which
+/// Corten makes `private` for an answer it must not share: those it removes from such an answer
+/// (`crate::cache::CDN_CACHING`, the same list) and any other `*cache-control`.
+const NOT_SHARED: [&str; 27] = [
     "set-cookie",
     "clear-site-data",
     "cache-control",
-    "surrogate-control",
     "expires",
     "age",
     "date",
@@ -2253,21 +2319,27 @@ const fn has(name: &[u8], part: &[u8], at_end: bool) -> bool {
     true
 }
 
-/// Whether a [`Public`] answer may set the header `name` (lowercase), when the app compiles.
-const fn shared_header(name: &str) -> bool {
-    let name = name.as_bytes();
-    if has(name, b"corten-", false) || has(name, b"access-control-", false) || has(name, b"cache-control", true) {
-        return false;
-    }
+/// Whether `name` is one of `names`, when the app compiles.
+const fn listed(name: &[u8], names: &[&str]) -> bool {
     let mut n = 0;
-    while n < NOT_SHARED.len() {
-        let refused = NOT_SHARED[n].as_bytes();
-        if refused.len() == name.len() && has(name, refused, false) {
-            return false;
+    while n < names.len() {
+        let listed = names[n].as_bytes();
+        if listed.len() == name.len() && has(name, listed, false) {
+            return true;
         }
         n += 1;
     }
-    true
+    false
+}
+
+/// Whether a [`Public`] answer may set the header `name` (lowercase), when the app compiles.
+const fn shared_header(name: &str) -> bool {
+    let name = name.as_bytes();
+    !(has(name, b"corten-", false)
+        || has(name, b"access-control-", false)
+        || has(name, b"cache-control", true)
+        || listed(name, &NOT_SHARED)
+        || listed(name, &crate::cache::CDN_CACHING))
 }
 
 impl<A: Shareable> IntoResponse for Public<A> {
@@ -2291,17 +2363,20 @@ impl<A: Shareable> IntoResponse for Public<A> {
 impl<A: Answer + Shareable> Answer for Public<A> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
     type Kind = <A::Kind as KindOf<A>>::InPublic;
 }
 
-/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
-/// statement, a one-time code. `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's
-/// back/forward cache may not restore the page either. It applies to a failure the handler returns
-/// too: the error page that replaces it is `no-store`. A request refused before the handler runs
-/// (a path that does not parse), a handler that panics and one past its deadline never reach it,
-/// and get the default. In a routes module the route can say it instead,
+/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: private, no-store`,
+/// `private` for a CDN that ignores a bare `no-store`): a statement, a one-time code.
+/// `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's back/forward cache may not
+/// restore the page either. It applies to a failure the handler returns too: the error page that
+/// replaces it is `private, no-store`. A request refused before the handler runs
+/// (a path that does not parse), a handler that panics and one past its deadline never reach it:
+/// their error page is never shared either, but is `private, no-cache` unless a middleware's
+/// header named `no-store`. In a routes module the route can say it instead,
 /// `#[route("/statement", get = statement, no_store)]`: the handler keeps its own result and its
 /// `?`, and a request its extractors refuse is `no-store` too; `no_store(post)` covers only the
 /// methods it names (see [`crate::routes`]).
@@ -2405,17 +2480,86 @@ impl Unshared for AnyInputs {}
     label = "`{Self}` may tell who is asking",
     note = "return a private answer, or implement `corten::answer::Anonymous` for an extractor of the app's own that never reads who is asking"
 )]
-pub trait Anonymous {}
+pub trait Anonymous {
+    /// Whether all it reads of a page's request is what the app keeps a `Public` page by
+    /// (`crate::kept`): the URL, the `Host` and the language asked for. Not so for an extractor
+    /// of the app's own, which may read another header and still not tell who is asking, so a
+    /// page whose handler takes one is made for every request. An app cannot say otherwise: the
+    /// constant's type is one it cannot name.
+    ///
+    /// ```compile_fail,E0326
+    /// struct Device;
+    ///
+    /// impl corten::answer::Anonymous for Device {
+    ///     const KEYED: bool = true;
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0603
+    /// struct Device;
+    ///
+    /// impl corten::answer::Anonymous for Device {
+    ///     const KEYED: corten::answer::sealed::Keyed = corten::answer::sealed::Keyed(true);
+    /// }
+    /// ```
+    ///
+    /// Corten's own inputs are keyed only as Corten fills them: a `Form` of a type its extractor
+    /// cannot read, which only an extractor of the app's own could fill, is not one at all.
+    ///
+    /// ```
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// input::<corten::Form<String>>();
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// struct Raw;
+    /// input::<corten::Form<Raw>>();
+    /// ```
+    #[doc(hidden)]
+    const KEYED: sealed::Keyed = sealed::Keyed(false);
 
-impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
-impl<T> Anonymous for crate::Form<T> {}
-impl<T> Anonymous for crate::form::Upload<T> {}
-impl<T> Anonymous for State<T> {}
+    /// Whether it is keyed in a place before the handler's last, where Corten fills only what
+    /// reads the request's head (`FromRequestParts`): a `Form` there is the app's own.
+    #[doc(hidden)]
+    const KEYED_BEFORE_LAST: sealed::Keyed = Self::KEYED;
+}
+
+// Each is keyed only with the bounds Corten's own extractor for it has, so a type that falls
+// outside them, which the app could fill with an extractor of its own for Corten's type, is not.
+impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R>
+where
+    R::Path: crate::route::__private::ReadPath,
+    R::Params: Send,
+{
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
+}
+impl<T: serde::de::DeserializeOwned> Anonymous for crate::Form<T> {
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
+    // Corten reads a form only as the last argument, from the body.
+    const KEYED_BEFORE_LAST: sealed::Keyed = sealed::Keyed(false);
+}
+impl<T> Anonymous for State<T> {
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
+}
+impl Anonymous for Req {
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
+}
+impl Anonymous for Signal {
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
+}
+impl Anonymous for Method {
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
+}
+impl Anonymous for Uri {
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
+}
+// Corten fills an `Option` only through `OptionalFromRequestParts`, which none of its keyed
+// inputs implement, so an `Option` of one is filled by the app's own code: not keyed.
 impl<T: Anonymous> Anonymous for Option<T> {}
-impl Anonymous for Req {}
-impl Anonymous for Signal {}
-impl Anonymous for Method {}
-impl Anonymous for Uri {}
+// What these read is not in the key (a body, where a stream stopped): a page whose handler takes
+// one is not kept.
+impl<T> Anonymous for crate::form::Upload<T> {}
 impl Anonymous for crate::LiveSince {}
 #[cfg(feature = "json")]
 impl<T> Anonymous for crate::Json<T> {}
@@ -2424,7 +2568,10 @@ impl Anonymous for corten_feed::Since {}
 
 /// Every argument is [`Anonymous`].
 #[doc(hidden)]
-pub trait AllAnonymous {}
+pub trait AllAnonymous {
+    /// Every argument is one the kept page's key covers ([`Anonymous::KEYED`]).
+    const KEYED: bool;
+}
 
 /// An input a route that says `unstaged` may take: its URL. No stage runs there, so nothing gives
 /// the request its signal, its nonce or who is asking, and an extractor that reads one of those
@@ -2456,10 +2603,13 @@ impl AllUnstaged for () {}
 pub trait Accepts<Args> {
     /// The answer is the same for everyone ([`Public`], the only one with [`AnonymousInputs`]).
     const SHARED: bool = false;
+    /// And all its handler reads of a page's request is what the app keeps the page by.
+    const KEYED: bool = false;
 }
 impl<A> Accepts<A> for AnyInputs {}
 impl<A: AllAnonymous> Accepts<A> for AnonymousInputs {
     const SHARED: bool = true;
+    const KEYED: bool = A::KEYED;
 }
 
 /// A handler's arguments and result, by the shapes Corten's `Handler` uses.
@@ -2478,7 +2628,9 @@ where
     type Out = Fut::Output;
 }
 
-impl AllAnonymous for () {}
+impl AllAnonymous for () {
+    const KEYED: bool = true;
+}
 
 /// For one arity, `Holds<T, At<N>>` with `T` at each position `N` in turn: the arguments before it
 /// keep their names, the one at it is `T`, the rest keep theirs.
@@ -2492,6 +2644,13 @@ macro_rules! holds {
     };
 }
 
+/// Each argument keyed in its place: the last as Corten fills it there, the others as it fills
+/// one before the last.
+macro_rules! keyed {
+    ($last:ident) => { $last::KEYED.0 };
+    ($first:ident, $($rest:ident),+) => { $first::KEYED_BEFORE_LAST.0 && keyed!($($rest),+) };
+}
+
 macro_rules! arities {
     ($($ty:ident),*) => {
         impl<F, Fut, M, $($ty,)*> Signature<(M, $($ty,)*)> for F
@@ -2503,7 +2662,9 @@ macro_rules! arities {
             type Out = Fut::Output;
         }
 
-        impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
+        impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {
+            const KEYED: bool = keyed!($($ty),*);
+        }
         impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
         holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
@@ -2559,11 +2720,13 @@ pub struct Endpoint<H, O> {
     pub(crate) answer: PhantomData<fn() -> O>,
     /// The answer is [`Public`] (its inputs are [`AnonymousInputs`]).
     pub(crate) shared: bool,
+    /// And each input is one the kept answer's key covers ([`Anonymous::KEYED`]).
+    pub(crate) keyed: bool,
 }
 
 impl<H: Clone, O> Clone for Endpoint<H, O> {
     fn clone(&self) -> Self {
-        Endpoint { handler: self.handler.clone(), answer: PhantomData, shared: self.shared }
+        Endpoint { handler: self.handler.clone(), answer: PhantomData, shared: self.shared, keyed: self.keyed }
     }
 }
 
@@ -2591,6 +2754,26 @@ where
     T: 'static,
 {
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
+
+    fn keeps(&self) -> Option<crate::kept::Shape> {
+        self.public()?.ok()
+    }
+
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        use crate::kept::{Shape, Verdict};
+        if !self.shared {
+            return None;
+        }
+        Some(if !self.keyed {
+            Err(Verdict::Unkeyed)
+        } else if O::PAGE {
+            Ok(Shape::Page)
+        } else if O::WHOLE.0 {
+            Ok(Shape::Body)
+        } else {
+            Err(Verdict::NotWhole)
+        })
+    }
 
     #[inline]
     fn call(self, mut req: Request, state: S) -> impl Future<Output = Response> + Send + 'static {
@@ -2808,15 +2991,25 @@ mod tests {
 
     #[test]
     fn a_public_answer_takes_the_app_s_headers_and_not_corten_s_or_the_connection_s() {
-        for name in ["x-robots-tag", "link", "content-language", "etag", "last-modified", "x-cache-tag"] {
+        for name in
+            ["x-robots-tag", "link", "content-language", "etag", "last-modified", "x-cache-tag", "surrogate-key", "cache-tag"]
+        {
             assert!(super::shared_header(name), "{name}");
+        }
+        // The caching headers a CDN reads first, which Corten removes from a page that draws a
+        // submit key: the same list.
+        for name in crate::cache::CDN_CACHING {
+            assert!(!super::shared_header(name), "{name}");
         }
         for name in [
             "set-cookie",
             "cache-control",
             "cdn-cache-control",
             "cloudflare-cdn-cache-control",
+            "vercel-cdn-cache-control",
             "surrogate-control",
+            "edge-control",
+            "x-accel-expires",
             "access-control-allow-origin",
             "corten-mode",
             "content-type",

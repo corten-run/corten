@@ -12,15 +12,15 @@ import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
 import { cpuSettings } from "../catalog/contract.mjs";
 import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
 import { spread } from "../fullstack/passes.mjs";
-import { featureProfile, qualification, sourceFeatures, validateProbes } from "../marketplace/feature-contract.mjs";
+import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, qualification, sourceFeatures, validateProbes } from "../marketplace/feature-contract.mjs";
 import { checkCell, combine, emptyCapture, expectedOutcome, oracle, sha256, upstreamEvidence } from "./capture.mjs";
 import { calibrationPolicy, deriveWindow, observedCpuCeiling } from "./metrics.mjs";
 import { resourceCoveragePolicy, mergeResourceSamples } from "./resources.mjs";
 import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-ledger.mjs";
-import { buildInputPaths, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
+import { buildInputPaths, sourceAuditIdentity, verifySourceAudit, nativeDeployment, validateDeploymentOption, verifyImageDeployment } from "./source-audit.mjs";
 import { replayResponseEvidence } from "./response-evidence.mjs";
 import { replayExecutionInputs } from "./execution-inputs.mjs";
-import { replayQualificationEvidence } from "./qualification-evidence.mjs";
+import { producerEvidenceFiles, qualificationProbeKeys, qualificationScope, replayQualificationEvidence } from "./qualification-evidence.mjs";
 import { replayCpuBoundary } from "./producer-evidence.mjs";
 import { replayStatsClient } from "./stats.mjs";
 
@@ -33,6 +33,28 @@ export const limits = Object.freeze({ files: 100000, bytes: 1024 ** 3, fileBytes
   jsonBytes: 32 * 1024 ** 2, depth: 64, gitTimeoutMs: 60000 });
 const equal = (a, b) => assert.ok(isDeepStrictEqual(a, b), "saved evidence differs");
 const keys = (value, expected) => equal(Object.keys(value).sort(), [...expected].sort());
+// Exact pre-migration mixed-production registry digest, not an alternative active
+// identity. The workload, roster and case definitions themselves did not change.
+const historicalContractSha256 = "65b1b953d9524aa7e72aaa4e04b8e5d2ce350930f46de874395a24ccbeea2676";
+export function mixedQualificationProfile(summary) {
+  const group = "mixed-production", current = definition(group);
+  if (summary.contractSha256 === historicalContractSha256) {
+    const capabilities = current.capabilities.map((key) => key === "bounded-production-http/v2" ? "production-http" : key);
+    equal(summary.definition, { ...current, capabilities });
+    if (summary.timing) {
+      assert.ok(!Object.hasOwn(summary.timing, "qualificationProfile"));
+      equal(summary.timing.connectionFloodResistance, undefined);
+    }
+    return featureProfile;
+  }
+  equal(summary.contractSha256, contractSha256(group));
+  equal(summary.definition, current);
+  if (summary.timing) {
+    equal(summary.timing.qualificationProfile, boundedFeatureProfile);
+    equal(summary.timing.connectionFloodResistance, qualificationScope);
+  }
+  return boundedFeatureProfile;
+}
 // Audited local executable closure of this verifier's replay imports. The loader
 // regression checks this list through actual reads during validation, not imports.
 const replayFiles = [
@@ -424,14 +446,16 @@ function validateWindowSlot(slot, stage, pass) {
   }
 }
 
-function validateQualificationReceipt(raw, source) {
+function validateQualificationReceipt(raw, source, profile) {
   assert.equal(typeof raw.eligible, "boolean");
   assert.ok(raw.failure === null || raw.failure === "native-production-qualification-failed");
   if (raw.failure !== null) equal(raw.eligible, false);
-  const features = sourceFeatures(source), expected = features.map((f) => f.key);
-  if (raw.profile !== undefined) equal(raw.profile, featureProfile);
+  const active = profile === boundedFeatureProfile;
+  const features = sourceFeatures(source).filter((f) => !active || boundedQualificationSettings.required[source].includes(f.key));
+  const expected = features.map((f) => f.key);
+  if (active || raw.profile !== undefined) equal(raw.profile, profile);
   if (raw.cells !== undefined) {
-    assert.ok(raw.cells && typeof raw.cells === "object" && !Array.isArray(raw.cells)); keys(raw.cells, expected); equal(raw.profile, featureProfile);
+    assert.ok(raw.cells && typeof raw.cells === "object" && !Array.isArray(raw.cells)); keys(raw.cells, expected); equal(raw.profile, profile);
     for (const cell of Object.values(raw.cells)) assert.ok(typeof cell === "string" && cell.length <= 4096);
     const missing = features.filter((f) => !f.meets(raw.cells[f.key])).map((f) => f.key);
     equal(raw.missing, missing); equal(raw.eligible, raw.failure === null && missing.length === 0);
@@ -442,8 +466,8 @@ function validateQualificationReceipt(raw, source) {
   if (raw.probes === undefined) return;
   assert.ok(raw.probes && typeof raw.probes === "object" && !Array.isArray(raw.probes));
   const hashed = Object.values(raw.probes).some((probe) => probe?.sha256 !== undefined);
-  const allowed = new Set(["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost", "bigHead",
-    "form", "ownPost", "crossSite", "bigBody", "afterBig", "liveness", "live", "page500", "json500", "slow", "afterUpstream", "unfinishedHead", "cap", "afterConnections"]);
+  if (active) assert.ok(hashed, "bounded qualification must retain only probe hashes and safe numeric facts");
+  const allowed = qualificationProbeKeys(profile);
   for (const [key, probe] of Object.entries(raw.probes)) {
     assert.ok(allowed.has(key), "unrecognized native qualification probe");
     if (hashed) assert.ok(probe?.sha256 !== undefined, "mixed raw/hash-only qualification probes");
@@ -452,7 +476,9 @@ function validateQualificationReceipt(raw, source) {
     if (probe.sha256 !== undefined) {
       assert.ok(!Array.isArray(probe));
       assert.match(probe.sha256, /^(?!0{64}$)[a-f0-9]{64}$/);
-      assert.ok(Object.keys(probe).every((k) => ["sha256", "status", "ms", "bodyLength", "closedMs", "timedOutMs", "timedOut", "error"].includes(k)));
+      const allowedFacts = active ? ["sha256", "status", "ms", "bodyLength"]
+        : ["sha256", "status", "ms", "bodyLength", "closedMs", "timedOutMs", "timedOut", "error"];
+      assert.ok(Object.keys(probe).every((k) => allowedFacts.includes(k)));
       for (const name of ["ms", "bodyLength", "closedMs", "timedOutMs"]) if (probe[name] !== undefined) {
         assert.ok(Number.isFinite(probe[name]) && probe[name] >= 0);
         if (name !== "ms") assert.ok(Number.isSafeInteger(probe[name]));
@@ -599,12 +625,14 @@ export async function validateSaved({ folder, round, commit } = {}) {
     checkpoint = "identity";
     const summary = fs.read("summary.json"), records = fs.read("marketplace.json"), plan = fs.read("plan.json"), inventory = selectedApps("mixed-production");
     equal([summary.schema, summary.group, summary.round], ["mixed-native-run/v1", "mixed-production", round]);
-    equal(summary.inventory, inventory); keys(summary.apps, inventory); equal(summary.definition, definition("mixed-production"));
-    equal(summary.contractSha256, contractSha256("mixed-production")); equal(summary.retainedFamilies, retainedFamilies);
+    equal(summary.inventory, inventory); keys(summary.apps, inventory);
+    const profile = mixedQualificationProfile(summary);
+    equal(summary.retainedFamilies, retainedFamilies);
     const options = summary.options;
     measureRequested = options.measure;
     checkpoint = "configuration";
-    keys(options, ["round", "apps", "images", "readbacks", "nativeAudits", "build", "buildRef", "seed", "clients", "repetitions", "measure", "profile", "passes", "duration", "warmup", "calibration", "tailSeconds", "maxCycles", "requestTimeoutMs", "completeDelayMs", "slowDelayMs", "cancelAfterMs", "cleanupMs", "startupTimeoutMs"]);
+    keys(options, ["round", "apps", "images", "readbacks", "nativeAudits", "build", "buildRef", "seed", "clients", "repetitions", "measure", "profile", "passes", "duration", "warmup", "calibration", "tailSeconds", "maxCycles", "requestTimeoutMs", "completeDelayMs", "slowDelayMs", "cancelAfterMs", "cleanupMs", "startupTimeoutMs",
+      ...["djangoDeployment", "springDeployment"].filter((key) => Object.hasOwn(options, key))]);
     equal(options.round, round); assert.ok(["matched", "defaults"].includes(options.profile));
     assert.ok(typeof options.build === "boolean" && typeof options.measure === "boolean");
     assert.match(summary.runId, new RegExp(`^mixed-${round}-[a-f0-9]{8}$`));
@@ -614,6 +642,7 @@ export async function validateSaved({ folder, round, commit } = {}) {
     assert.ok(Number.isSafeInteger(options.clients) && options.clients >= 1 && options.clients <= 32);
     assert.ok(Number.isSafeInteger(options.repetitions) && options.repetitions >= 1 && options.repetitions <= 10);
     assert.ok(Array.isArray(options.apps) && new Set(options.apps).size === options.apps.length && options.apps.every((a) => inventory.includes(a)));
+    validateDeploymentOption(options);
     for (const [key, max] of [["passes", 5], ["duration", 300], ["warmup", 120], ["calibration", 120], ["maxCycles", 128], ["tailSeconds", 120]])
       assert.ok(Number.isSafeInteger(options[key]) && options[key] >= 1 && options[key] <= max);
     checkpoint = "fixture-plan";
@@ -718,6 +747,7 @@ export async function validateSaved({ folder, round, commit } = {}) {
         equal(entry.buildInputs, sourceFiles);
         const image = entry.image; assert.match(image.id, /^sha256:[a-f0-9]{64}$/);
         equal([image.buildCommit, image.buildDirty, image.profile], [commit, "false", options.profile]);
+        verifyImageDeployment(image, nativeDeployment(options, app));
         if (options.build) {
           const hash = fs.digest(`${app}-build-context.tar`);
           equal([entry.contextArchiveSha256, image.contextArchiveSha256, fs.digest(`${app}-build-context.tar`)], [hash, hash, hash]);
@@ -847,13 +877,14 @@ export async function validateSaved({ folder, round, commit } = {}) {
     if (!result.functionalPassed) issue("blocked", "complete-native-functional-gate-not-passed", "functional");
     if (summary.timing) {
       checkpoint = "measurement";
-      const timing = summary.timing, derived = result.measurement = { qualified: false, calibrated: false, complete: false, comparisonEligible: false, cells: {} };
+      const timing = summary.timing, active = profile === boundedFeatureProfile;
+      const derived = result.measurement = { qualificationProfile: profile,
+        ...(active ? { connectionFloodResistance: qualificationScope } : {}),
+        qualified: false, calibrated: false, complete: false, comparisonEligible: false, cells: {} };
       if (summary.executionInputs) attempt("measurement/producer-provenance", () => {
         const provenance = fs.read("measurement/producer-provenance.json");
         keys(provenance, ["schema", "commit", "files"]); equal([provenance.schema, provenance.commit], ["mixed-native-producer-evidence/v1", commit]);
-        const files = ["bench/mixed-production/producer-evidence.mjs", "bench/mixed-production/qualification-evidence.mjs",
-          "bench/catalog/cgroup.mjs", "bench/marketplace/qualify.mjs", "bench/marketplace/feature-contract.mjs",
-          "bench/fullstack/conformance.mjs", "bench/fullstack/conform-probe.mjs", "bench/fullstack/conform-hold.mjs"];
+        const files = producerEvidenceFiles(profile);
         keys(provenance.files, files);
         for (const path of files) assert.ok([sha256(tracked[path]), sha256(Buffer.from(tracked[path].toString("utf8").replace(/\r?\n/g, "\r\n")))].includes(provenance.files[path]));
       });
@@ -889,10 +920,12 @@ export async function validateSaved({ folder, round, commit } = {}) {
             equal([raw.schema, raw.app, raw.source, raw.imageId, raw.nativeProfile], ["mixed-native-qualification/v1", app, source, summary.apps[app].image.id, options.profile]);
             // v1 explicitly stores sanitized probes, not the contract's original probes.
             // Even a self-consistent positive cell or hash cannot substitute for them.
-            validateQualificationReceipt(raw, source);
+            validateQualificationReceipt(raw, source, profile);
             if (summary.executionInputs && fs.has(`measurement/${app}/${source}/qualification/qualification-evidence.json`)) {
               replayed = replayQualificationEvidence(fs.read(`measurement/${app}/${source}/qualification/qualification-evidence.json`), raw,
-                { app, source, imageId: summary.apps[app].image.id, nativeProfile: options.profile });
+                { app, source, imageId: summary.apps[app].image.id, nativeProfile: options.profile }, profile);
+            } else if (active) {
+              issue("blocked", "bounded-qualification-journal-not-retained", `${app}/${source}`);
             } else if (Object.values(raw.probes ?? {}).some((p) => p?.sha256 !== undefined)) {
               issue("blocked", "v1-qualification-raw-probes-not-retained", `${app}/${source}`);
             } else if (raw.probes && Object.keys(raw.probes).length) {
@@ -1019,7 +1052,7 @@ export async function validateSaved({ folder, round, commit } = {}) {
     for (const issue of result.issues) issue.kind = "target-failed";
   }
   if (result.verdict === "verified" && result.attemptComplete && result.dispositions?.gate === null && result.measurement?.complete) {
-    result.comparisonEligible = completeComparison;
+    result.comparisonEligible = completeComparison && result.measurement.qualificationProfile === boundedFeatureProfile;
   }
   if (result.verdict !== "verified") result.comparisonEligible = false;
   if (result.measurement) result.measurement.comparisonEligible = result.comparisonEligible;

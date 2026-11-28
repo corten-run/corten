@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { contractSha256, selectedApps } from "../../registry.mjs";
 import { coverage } from "../../evidence.mjs";
+import { liveCaptureSchema, liveContracts } from "../../live.mjs";
+import { negativeRequests } from "../../../live/admission.mjs";
 import { inventory, scenarios, settingsFor, workloadFor } from "../../../live/native.mjs";
 import { fanoutProfile } from "../../../live/fanout.mjs";
 import { verifyRound } from "../../../live/verify.mjs";
@@ -20,13 +22,13 @@ const paths = { runner: "bench/live/parity.mjs", verifier: "bench/live/verify.mj
 
 // Synthetic retained FAILURE apparatus, never a native positive qualification.
 // Every test uses the real statically imported verifier; no validator is mocked.
-export async function syntheticFixture(t, group = "live-delivery", { allRegistered = false, round = "synthetic-adapter" } = {}) {
+export async function syntheticFixture(t, group = "live-delivery", { allRegistered = false, round = "synthetic-adapter", profile = "native-feed" } = {}) {
   const folder = await mkdtemp(join(tmpdir(), "isolated-live-adapter-test-"));
   t.after(async () => {
     const rel = relative(resolve(tmpdir()), resolve(folder)); assert.ok(rel && rel !== ".." && !rel.startsWith(`..${sep}`));
     await rm(folder, { recursive: true, force: true });
   });
-  const apps = selectedApps(group), profile = "native-feed", commit = "a".repeat(40);
+  const apps = selectedApps(group), commit = "a".repeat(40);
   // Preserve a historical missing-port control independently of today's registrations.
   const entries = inventory(group, profile).map((entry, index, rows) => !allRegistered && index === rows.length - 1
     ? { app: entry.app, implementation: "not-implemented",
@@ -86,6 +88,38 @@ export async function rewriteArtifact(f, app, index, change) {
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   const { inspectSaved } = await import("./live-delivery.mjs");
+  test("official replay preserves a cancelled attempt's failure and marks the remaining cases unattempted", async (t) => {
+    const f = await syntheticFixture(t, "live-delivery", { allRegistered: true });
+    const [first, ...later] = f.plan.apps;
+    for (const app of f.plan.apps) {
+      const name = `${app}-artifacts.json`;
+      const manifest = JSON.parse(await readFile(join(f.folder, name), "utf8"));
+      for (const { file } of manifest.files.slice(app === first ? 1 : 0)) await rm(join(f.folder, file));
+      if (app === first) {
+        manifest.files.length = 1;
+        await f.json(name, manifest);
+      } else {
+        await rm(join(f.folder, name));
+        const cell = f.ledger.cells.find((r) => r.app === app);
+        delete cell.artifact;
+        Object.assign(cell, { parity: "not-run", reason: "Cancelled before adapter started" });
+      }
+    }
+    f.ledger.cancelled = true;
+    await f.json("coverage.json", f.ledger);
+    const r = await inspectSaved(f.binding, f.folder);
+    assert.equal(r.status, "blocked"); assert.equal(r.attemptComplete, false);
+    assert.equal(r.cleanupComplete, false);
+    assert.deepEqual(r.outcomes, [{ app: first, outcome: "failed" }, ...later.map((app) => ({ app, outcome: "not-run" }))]);
+    assert.ok(r.blockers.includes("native-live-run-cancelled"));
+    const native = await verifyRound(f.folder);
+    assert.deepEqual(native.inspected, [`${first}-${f.plan.scenarios[0]}.json.gz`]);
+    assert.deepEqual(native.notAttempted[first], { scenarios: f.plan.scenarios.slice(1), clients: [] });
+    delete f.ledger.cancelled;
+    await f.json("coverage.json", f.ledger);
+    assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
+  });
+
   for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: current registered matrix binds native HTTP code without qualifying failed targets`, async (t) => {
     const f = await syntheticFixture(t, group, { allRegistered: true });
     const { inspectLiveSaved } = await import("./live-delivery.mjs");
@@ -133,6 +167,41 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
     assert.deepEqual(r.outcomes.map((o) => o.app), f.binding.selection.apps);
     assert.ok(r.blockers.includes("native-effective-invocation-build-proof-not-produced"));
     assert.ok(r.blockers.includes("native-positive-os-terminal-cleanup-proof-not-produced"));
+  });
+  test("isolated replay cannot clear actor proof using historical live evidence", async (t) => {
+    const f = await syntheticFixture(t);
+    f.binding.execution.effectiveOptions.isolated = true;
+    f.binding.resources.actorCpus = { application: "1", browser: "4-7" };
+    f.plan.isolated = true; await f.json("plan.json", f.plan);
+    const r = await inspectSaved(f.binding, f.folder);
+    assert.equal(r.resources, "blocked"); assert.equal(r.attemptComplete, false);
+    assert.ok(r.blockers.includes("native-live-actor-tools-missing"));
+    assert.ok(r.blockers.includes("native-live-actor-window-missing:corten"));
+    assert.ok(r.outcomes.some((o) => o.outcome === "unsupported"));
+  });
+  for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: a retained functional control contradicts a missing renderer`, async (t) => {
+    const f = await syntheticFixture(t, group);
+    f.binding.execution.effectiveOptions.isolated = f.plan.isolated = true;
+    f.binding.resources.actorCpus = { application: "1", browser: "4-7" };
+    await f.json("plan.json", f.plan);
+    const { inspectLiveSaved } = await import("./live-delivery.mjs");
+    const app = f.plan.inventory.find((entry) => entry.implementation === "implemented").app;
+    await rewriteArtifact(f, app, 0, (a) => {
+      a.actorWindow = { startedAt: 10, endedAt: 20, renderer: null };
+      a.controls = []; a.network = []; a.failures = []; a.html = "";
+      a.capture = { schema: liveCaptureSchema, contract: liveContracts[group], records: [] };
+    });
+    // A genuine failure before page creation may have an empty page journal.
+    const early = await inspectLiveSaved(f.binding, f.folder, group);
+    assert.equal(early.status, "blocked");
+    assert.equal(early.resources, "blocked");
+    assert.equal(early.outcomes.find((row) => row.app === app).outcome, "failed");
+    await rewriteArtifact(f, app, 0, (a) => {
+      a.controls.push({ request: negativeRequests(a.workload, a.profile)[0], status: 400, body: "rejected" });
+    });
+    const contradicted = await inspectLiveSaved(f.binding, f.folder, group);
+    assert.equal(contradicted.status, "invalid");
+    assert.ok(contradicted.blockers.includes("native-live-evidence-contradictory"));
   });
   for (const [name, change] of [
     ["group", (f) => { f.plan.group = "recoverable-live"; }], ["round", (f) => { f.plan.round = "another"; }],

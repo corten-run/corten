@@ -832,7 +832,7 @@ impl Scoper<'_> {
             }
             if text.starts_with('@') {
                 let (name, _) = self.at_rule(&text, start)?;
-                match name {
+                match name.to_ascii_lowercase().as_str() {
                     "custom-media" => {
                         return Err(self.error(
                             start,
@@ -2243,7 +2243,18 @@ mod tests {
             scope("@scope (.a:is(:/* gap */ :marker,.b)){.a p{color:green}}", "x").unwrap().css,
             "@scope (.x__a:is(: :marker,.x__b)){.x__a p{color:green}}"
         );
-        for name in ["LAYER_other", "LAYER", "layer_other"] {
+        assert_eq!(scope("@LAYER foo; .a{color:green}", "x").unwrap().css, "@LAYER foo;.x__a{color:green}");
+        for (source, reason) in [
+            ("@IMPORT x;", "@import loads a stylesheet the component does not own"),
+            (
+                "@CUSTOM-MEDIA --phone (width < 40rem);",
+                "@custom-media: a component's stylesheet names the token file's breakpoints",
+            ),
+        ] {
+            let error = scope(source, "x").unwrap_err();
+            assert!(error.contains(reason), "{error}");
+        }
+        for name in ["LAYER_other", "layer_other"] {
             let error = scope(&format!("@{name} foo; .a{{color:green}}"), "x").unwrap_err();
             assert!(error.contains(&format!("@{name} is not supported")), "{error}");
         }
@@ -2360,6 +2371,7 @@ mod tests {
             assert!(sheet.css.starts_with(format!("@{name} {prelude}").trim()));
         }
         assert_eq!(scope("@charset 'utf-8'; @layer base, widgets;", "x").unwrap().css, "@layer base, widgets;");
+        assert_eq!(scope("@CHARSET 'utf-8'; @LAYER a, b;", "x").unwrap().css, "@LAYER a, b;");
         let error = scope("@supports_other (position-area:top){.a{color:red}}", "x").unwrap_err();
         assert!(error.contains("@supports_other is not supported"), "{error}");
         for name in ["import", "IMPORT", "custom-media", "CUSTOM-MEDIA", "namespace", "document", "unknown"] {

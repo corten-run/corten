@@ -3,17 +3,18 @@ import { linkSync, lstatSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { campaignRounds } from "./campaign-contract.mjs";
-import { catalogFleetPlacement } from "../cloud-contract.mjs";
+import { auditWaitMs, campaignRounds } from "./campaign-contract.mjs";
+import { alternateCampaignPlacements } from "./contract.mjs";
+import { catalogFleetPlacement, jsonFleetPlacementFor } from "../cloud-contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { digest, durable, physical, readRegular } from "./evidence.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
 
-export const auditWaitMs = 24 * 60 * 60 * 1000;
+export { auditWaitMs };
 export function parseCampaignArgs(args) {
   assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string"));
-  assert.ok([5, 7, 9].includes(args.length), "usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP [--load-layout c16-generator-v1]]");
-  const [round, commitFlag, commit, stateFlag, stateRoot, groupFlag, group, layoutFlag, loadLayout] = args;
+  assert.ok([5, 7, 9].includes(args.length), `usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP [--load-layout c16-generator-v1|json-c16-generator-v1|json-c32-generator-v1 | --placement ${alternateCampaignPlacements.join("|")}]]`);
+  const [round, commitFlag, commit, stateFlag, stateRoot, groupFlag, group, modeFlag, mode] = args;
   campaignRounds(round);
   assert.equal(commitFlag, "--commit"); assert.match(commit, /^[a-f0-9]{40}$/);
   assert.equal(stateFlag, "--state-dir"); assert.equal(stateRoot, "/bench/campaign", "one fixed host reservation root required");
@@ -21,11 +22,12 @@ export function parseCampaignArgs(args) {
     assert.equal(groupFlag, "--group"); assert.ok(groupNames.includes(group), "unknown registry group");
   }
   if (args.length === 9) {
-    assert.equal(layoutFlag, "--load-layout"); assert.equal(group, "catalog-page");
-    assert.equal(loadLayout, catalogFleetPlacement.loadLayout);
+    assert.ok(modeFlag === "--load-layout" && group === "catalog-page" && mode === catalogFleetPlacement.loadLayout
+      || modeFlag === "--load-layout" && jsonFleetPlacementFor(group, mode)
+      || modeFlag === "--placement" && group !== "catalog-page" && alternateCampaignPlacements.includes(mode), "unknown group placement");
   }
   return Object.freeze({ round, commit, stateRoot, ...(group === undefined ? {} : { group }),
-    ...(loadLayout === undefined ? {} : { loadLayout }) });
+    ...(modeFlag === "--load-layout" ? { loadLayout: mode } : modeFlag === "--placement" ? { placement: mode } : {}) });
 }
 
 // The parent/operator controls delivery to this same-UID private inbox. JSON fields
@@ -61,29 +63,49 @@ export async function runCampaignEntry(args) {
       && readAuditInbox(handle.directory, transport.group)?.sha256 === transport.sha256;
   } });
   try {
-    const control = bootstrapControl(input);
+    const { offlineHandoff, ...control } = bootstrapControl(input);
+    if (offlineHandoff) assert.ok(input.group, "offline handoff requires one group");
     const admission = await waitControlAdmission(control, "bootstrap", { signal: abort.signal, deadline: Date.now() + 45 * 60000 });
+    if (offlineHandoff) assert.equal(admission.apparatus, undefined, "offline handoff has a stream apparatus");
     if (admission.apparatus) {
       stream = await superviseControlStream(control, admission, abort);
     }
     controlOperation(control, "activate");
     const request = { round: input.round, commit: input.commit };
-    const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group }, input.loadLayout);
-    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal, control: { binding: control, admission, stream } });
+    const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group }, input.loadLayout ?? input.placement);
+    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal,
+      control: { binding: control, admission, stream, ...(offlineHandoff ? { offlineHandoff: true } : {}) } });
     let status = campaign.status(handle), deadline = null;
     while (status.state === "active" || status.state === "blocked-review-needed") {
       stream?.progress(status);
       if (abort.signal.aborted) { status = campaign.stop(handle); break; }
       if (status.state === "active") { deadline = null; status = await campaign.advance(handle, { signal: abort.signal }); }
       else {
-        deadline ??= Date.now() + auditWaitMs;
-        if (Date.now() >= deadline) { status = campaign.stop(handle, "independent native audit delivery deadline expired"); break; }
+        let remaining;
+        if (offlineHandoff) {
+          remaining = campaign.offlineAuditRemainingMs(handle);
+          if (remaining === 0) {
+            const collection = campaign.expireOfflineAudit(handle);
+            durable(join(handle.directory, "collection-manifest.json"), `${JSON.stringify(collection, null, 2)}\n`);
+            return 2; // An exact failed archive, never a completed timing run.
+          }
+        } else {
+          deadline ??= Date.now() + auditWaitMs;
+          if (Date.now() >= deadline) {
+            status = campaign.stop(handle, "independent native audit delivery deadline expired"); break;
+          }
+        }
         const group = status.auditGroup ?? "json-api", prefix = group === "mixed-production" ? "mixed" : "json";
         const pending = join(handle.directory, `${prefix}-audit-delivery-pending.json`);
         if (lstatSync(pending, { throwIfNoEntry: false })) {
           if (stream) campaign.recordStreamAudit(handle, stream.audit(group, readRegular(pending)));
           else {
-            const proof = await waitControlAdmission(control, `audit-${group}`, { signal: abort.signal, deadline });
+            // Offline admission uses the remaining monotonic budget, not the
+            // wall deadline used by the existing bootstrap/monitored path.
+            const proof = await waitControlAdmission(control, `audit-${group}`, offlineHandoff
+              ? { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(remaining)]), deadline: Infinity }
+              : { signal: abort.signal, deadline });
+            if (offlineHandoff) assert.ok(campaign.offlineAuditRemainingMs(handle) > 0, "offline audit admission reached the deadline");
             campaign.recordControlAdmission(handle, proof);
           }
           // Exclusive hard-link publication; no overwrite, symlink traversal or shell.
@@ -96,6 +118,7 @@ export async function runCampaignEntry(args) {
         }
         const inbox = readAuditInbox(handle.directory, group);
         if (inbox) {
+          if (offlineHandoff) assert.ok(campaign.offlineAuditRemainingMs(handle) > 0, "offline audit delivery reached the deadline");
           transport = { sha256: inbox.sha256, group, subjectSha256: group === "mixed-production" ? status.mixedAuditSubjectSha256 : status.auditSubjectSha256 };
           status = group === "mixed-production" ? await campaign.submitMixedAudit(handle, inbox.delivery) : await campaign.submitJsonAudit(handle, inbox.delivery);
           transport = null;

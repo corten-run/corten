@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
@@ -126,13 +127,49 @@ func (r *marketplaceRecord) validate() error {
 }
 
 type marketplaceSource struct {
-	fixture map[string]*marketplaceRecord
-	client  *http.Client
-	base    string
+	fixture      map[string]*marketplaceRecord
+	client       *http.Client
+	base         string
+	publicOrigin *url.URL
+}
+
+var publicOriginHost = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+
+func parseMarketplacePublicOrigin(value string) (*url.URL, error) {
+	if value == "" {
+		return nil, nil
+	}
+	invalid := fmt.Errorf("MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin")
+	u, err := url.Parse(value)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || value != u.Scheme+"://"+u.Host {
+		return nil, invalid
+	}
+	if _, err := parseAuthority(u.Host); err != nil {
+		return nil, invalid
+	}
+	if port := u.Port(); strings.HasPrefix(port, "0") || (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		return nil, invalid
+	}
+	if u.Hostname() != strings.ToLower(u.Hostname()) {
+		return nil, invalid
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		addr, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !addr.Is6() || addr.Zone() != "" {
+			return nil, invalid
+		}
+	} else if !publicOriginHost.MatchString(u.Hostname()) {
+		return nil, invalid
+	}
+	return u, nil
 }
 
 func newMarketplaceSource() (*marketplaceSource, error) {
-	s := &marketplaceSource{base: strings.TrimRight(envOr("API_BASE", "http://localhost:8080"), "/")}
+	publicOrigin, err := parseMarketplacePublicOrigin(os.Getenv("MARKETPLACE_PUBLIC_ORIGIN"))
+	if err != nil {
+		return nil, err
+	}
+	s := &marketplaceSource{base: strings.TrimRight(envOr("API_BASE", "http://localhost:8080"), "/"), publicOrigin: publicOrigin}
 	if os.Getenv("MARKETPLACE_SOURCE") == "fixture" {
 		file, err := os.Open(envOr("MARKETPLACE_FIXTURE_PATH", "/fixtures/marketplace.json"))
 		if err != nil {
@@ -344,7 +381,7 @@ func newMarketplaceView(record *marketplaceRecord, locale string, query url.Valu
 	return v
 }
 func (s *marketplaceSource) routes(r *gin.Engine) {
-	alerts := &alertStore{}
+	alerts := &alertStore{publicOrigin: s.publicOrigin}
 	r.GET("/api/alerts", alerts.read)
 	page := func(c *gin.Context) {
 		ctx := marketplaceReadContext(c.Request)
@@ -360,12 +397,18 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 		if c.Request.Method == http.MethodPost {
 			c.Header("Cache-Control", "no-store")
 			origin := c.GetHeader("Origin")
-			scheme := "http"
+			expectedScheme := "http"
 			if c.Request.TLS != nil {
-				scheme = "https"
+				expectedScheme = "https"
+			}
+			atPublicHost := s.publicOrigin != nil && c.Request.Host == s.publicOrigin.Host
+			if atPublicHost {
+				expectedScheme = s.publicOrigin.Scheme
 			}
 			site := c.GetHeader("Sec-Fetch-Site")
-			if (site != "" && site != "same-origin" && site != "none") || len(c.Request.Header.Values("Origin")) > 1 || len(c.Request.Header.Values("Sec-Fetch-Site")) > 1 || (origin != "" && origin != scheme+"://"+c.Request.Host) {
+			if (site != "" && site != "same-origin" && site != "none") ||
+				len(c.Request.Header.Values("Origin")) > 1 || len(c.Request.Header.Values("Sec-Fetch-Site")) > 1 ||
+				((atPublicHost || origin != "") && origin != expectedScheme+"://"+c.Request.Host) {
 				c.Status(http.StatusForbidden)
 				return
 			}

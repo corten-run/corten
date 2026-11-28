@@ -467,26 +467,25 @@ try {
   const plain = await (await browser.newContext({ javaScriptEnabled: false })).newPage();
   await plain.goto(base);
   const before = await deck(plain);
-  await plain.locator('tbody tr[data-key="salt-oracle"] td:last-child button').click();
-  await plain.waitForLoadState("load");
+  await Promise.all([plain.waitForEvent("load"), plain.locator('tbody tr[data-key="salt-oracle"] td:last-child button').click()]);
   check("without JavaScript Add posts the deck with the card added", (await deck(plain))["salt-oracle"] === (before["salt-oracle"] ?? 0) + 1, JSON.stringify(await deck(plain)));
   await plain.locator('tbody tr[data-key="regent-of-ash"] input[type=checkbox]').check();
   await plain.locator('tbody tr[data-key="crown-of-thorns-and-glass"] input[type=checkbox]').check();
-  await plain.click("button:has-text('Add selected')");
-  await plain.waitForLoadState("load");
+  await Promise.all([plain.waitForEvent("load"), plain.click("button:has-text('Add selected')")]);
   const added = await deck(plain);
   check("Add selected posts every checked card", added["regent-of-ash"] === 1 && added["crown-of-thorns-and-glass"] === 1, JSON.stringify(added));
   await plain.fill('li[data-key="regent-of-ash"] input[type=number]', "");
-  await plain.click("form button:has-text('Save')");
-  await plain.waitForLoadState("load");
+  await Promise.all([plain.waitForEvent("load"), plain.click("form button:has-text('Save')")]);
   check("Save posts the counts as typed: a cleared one leaves the deck", (await deck(plain))["regent-of-ash"] === undefined);
   await plain.fill('li[data-key="crown-of-thorns-and-glass"] input[type=number]', "2");
-  const refusedPage = plain.waitForResponse((res) => res.url().endsWith("/deck"));
-  await plain.click("form button:has-text('Save')");
-  check("a refused save answers 422 with the page and the reason", (await (await refusedPage).status()) === 422 && (await plain.textContent("#save-note")) === "Not saved: You own 1 copy of Crown of Thorns and Glass.");
+  const [refusedPage] = await Promise.all([
+    plain.waitForResponse((res) => res.url().endsWith("/deck")),
+    plain.waitForEvent("load"),
+    plain.click("form button:has-text('Save')"),
+  ]);
+  check("a refused save answers 422 with the page and the reason", refusedPage.status() === 422 && (await plain.textContent("#save-note")) === "Not saved: You own 1 copy of Crown of Thorns and Glass.");
   await plain.fill("input[type=search]", "oracle");
-  await plain.click("form[role=search] button");
-  await plain.waitForLoadState("load");
+  await Promise.all([plain.waitForEvent("load"), plain.click("form[role=search] button")]);
   check("the filter is a GET form the server answers", plain.url().includes("q=oracle") && (await plain.locator("tbody tr:not([hidden])").count()) === 1);
 
   const reducedContext = await browser.newContext();

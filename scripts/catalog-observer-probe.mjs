@@ -6,15 +6,20 @@ import { join } from "node:path";
 import { beginLifetime, inspectLifetime } from "../bench/workloads/isolated/host-lifetime.mjs";
 import { supervise } from "../bench/workloads/isolated/process.mjs";
 
-// Only fixed stages, error codes and numeric observations leave this disposable runner.
+// Never log a producer-supplied operation, code or diagnostic verbatim unless allowlisted.
 const codes = ["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"];
+const operations = ["process-name-recheck", "process-pid-changed", "process-start-changed", "process-stat-recheck",
+  "snapshot-membership-recheck", "executable-capture", "executable-proof",
+  "executable-recheck", "executable-recheck-renamed", "executable-recheck-reference", "executable-recheck-inode",
+  "executable-recheck-size-or-mtime", "executable-recheck-ctime", "executable-recheck-pin", "executable-recheck-successor"];
 const codeOf = code => codes.includes(code) ? code : "unknown";
 const number = value => Number.isSafeInteger(value) ? value : null;
-const capture = item => item && ({ code: codeOf(item.code), samples: number(item.samples),
+export const capture = item => item == null ? null : ({ operation: operations.includes(item.operation) ? item.operation : "unknown",
+  code: codeOf(item.code), samples: number(item.samples),
   entryGapMs: number(item.catalogCensus?.entryGapMs), censusMs: number(item.catalogCensus?.censusMs),
   attempts: number(item.catalogCensus?.attempts) });
 let stage = "preflight";
-try {
+async function main() {
   const round = "c900000001";
   const campaign = /^0::\/system\.slice\/corten-bench-groups-(r900000001-[a-f0-9]{16})\.service\/supervisor\s*$/
     .exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
@@ -97,7 +102,8 @@ try {
   });
   if (!hostOK || !nativeOK) process.exitCode = 1;
   else console.log("Corten image built; both source checks and host replay passed. No throughput measured.");
-} catch (error) {
+}
+if (import.meta.main) await main().catch(error => {
   console.error(JSON.stringify({ diagnostic: "failed", stage, code: codeOf(error?.code) }));
   process.exitCode = 1;
-}
+});

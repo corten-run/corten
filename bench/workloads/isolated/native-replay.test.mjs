@@ -31,7 +31,8 @@ for (const [path, { group, name }] of seams) mock.module(urls.get(path), { expor
     outcomes: selectedApps(group).map((app) => ({ app, outcome: "passed" })), comparisonEligibleApps: selectedApps(group) } };
   if (group === "localized-marketplace") return JSON.parse(readFileSync(join(input.folder, "summary.json")));
   if (group === "client-api") return { schema: action === "client-v3" ? "client-heavy-saved-verification/v3"
-    : action === "client-unknown" ? "client-heavy-saved-verification/v4" : "client-heavy-saved-verification/v2" };
+    : action === "client-v4" ? "client-heavy-saved-verification/v4"
+      : action === "client-unknown" ? "client-heavy-saved-verification/v5" : "client-heavy-saved-verification/v2" };
   if (action === "mutate") appendFileSync(join(folder, "raw.log"), "changed");
   if (action === "malformed") return { status: "SYNTHETIC_PRIVATE_SENTINEL" };
   return { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "verified",
@@ -47,6 +48,10 @@ function fixture(t, group) {
     execution: { effectiveOptions: {} }, resources: { expectedCpus: {}, requestedCpuEnv: {} } };
   const summary = { round: binding.request.round, commit: binding.request.commit, options: {}, measurement: { cpus: {} }, complete: true,
     apps: Object.fromEntries(binding.selection.apps.map((a) => [a, { qualification: { fixture: { eligible: true }, api: { eligible: true } }, runs: {} }])) };
+  if (group === "localized-marketplace") {
+    summary.schema = "marketplace-results/v6";
+    summary.measurement.featureProfile = "marketplace-production/v2";
+  }
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); writeFileSync(join(folder, "raw.log"), "synthetic\n");
   return { folder, binding, summary };
 }
@@ -113,9 +118,9 @@ test("catalog worker source receipts must match the bound commit even after full
   assert.equal((await inspectNative(f.binding, f.folder)).status, "blocked");
 });
 
-test("client registered replay uses the same saved verifier for exact historical v2 and candidate v3, never unknown schemas", async (t) => {
+test("client registered replay uses the same saved verifier for v2, v3 and v4, never unknown schemas", async (t) => {
   const f = fixture(t, "client-heavy");
-  for (const [mode, valid] of [["normal", true], ["client-v3", true], ["client-unknown", false]]) {
+  for (const [mode, valid] of [["normal", true], ["client-v3", true], ["client-v4", true], ["client-unknown", false]]) {
     action = mode; calls = [];
     const result = await inspectNative(f.binding, f.folder);
     assert.equal(result.status, valid ? "verified" : "invalid", JSON.stringify(result));
@@ -178,6 +183,18 @@ test("all registry groups have fixed awaited native APIs, with the real strict J
   summary.apps[summary.group.apps[0]].checks = {}; writeFileSync(join(f.folder, "summary.json"), JSON.stringify(summary));
   assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid", "missing raw functional evidence is not success");
 });
+test("marketplace replay binds old and rotating native results only to their own selected contract", async (t) => {
+  action = "normal";
+  const { binding, folder, summary } = fixture(t, "localized-marketplace");
+  const current = binding.selection.contractSha256, previous = "e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb";
+  for (const [hash, schema, status] of [[current, "marketplace-results/v6", "verified"], [previous, "marketplace-results/v5", "verified"],
+    [previous, "marketplace-results/v6", "invalid"], [current, "marketplace-results/v5", "invalid"], [undefined, "marketplace-results/v6", "invalid"]]) {
+    binding.selection.contractSha256 = hash;
+    writeFileSync(join(folder, "summary.json"), JSON.stringify({ ...summary, schema }));
+    assert.equal((await inspectNative(binding, folder)).status, status);
+  }
+});
+
 test("marketplace replay's actual summary return preserves observed exclusions as selected failures", async (t) => {
   action = "normal"; const f = fixture(t, "localized-marketplace"), first = f.binding.selection.apps[0];
   f.summary.apps[first].qualification.fixture.eligible = false; writeFileSync(join(f.folder, "summary.json"), JSON.stringify(f.summary));

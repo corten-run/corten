@@ -31,17 +31,18 @@ jobs:
   rust:
     needs: [rust-checks, rust-release]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - run: |
           echo "rust-checks: ${{ needs.rust-checks.result }}, rust-release: ${{ needs.rust-release.result }}"
           test "${{ needs.rust-checks.result }}" = success && test "${{ needs.rust-release.result }}" = success
 
   rust-checks:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
-      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      # The CLI's profile-build tests merge a profile with the toolchain's llvm-profdata (llvm-tools).
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
@@ -52,14 +53,9 @@ jobs:
       # app need not, and `json` builds without `types` (the schemas and `RawValue`).
       - run: cargo check -p corten-run --no-default-features --features json --all-targets
       - run: cargo check -p corten-run --no-default-features --features agent,feed
-      # Checkout-backed apps use the typescript7 alias. Install the same compiler globally
-      # for the separate PATH check below, which temporarily removes that alias.
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-      - run: |
-          npm install --global $(node -p "require('./package.json').devDependencies.typescript7.slice(4)")
-          tsc --version
       - run: npm ci
       - name: Minimum supported TypeScript checks the runtime and kit scripts
         run: |
@@ -70,25 +66,20 @@ jobs:
         run: cargo test -p corten-cli the_pinned_repository_compiler_checks_template_scripts -- --ignored --nocapture
       # No cargo build between the commands: corten new and corten ui add write the lock the
       # check requires, so this is the path a developer takes straight after creating the app.
+      # The app, outside the checkout, finds the pinned compiler on the PATH as an app finds a
+      # global one; the checkout itself finds it as node_modules/.bin/tsc.
       - name: corten new writes an app that passes corten check, and so does every kit component in it
+        shell: bash
         run: |
+          export PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH"
+          version=$(node -p "require('./package.json').devDependencies.typescript")
           cargo build -q -p corten-cli
           target/debug/corten new "$RUNNER_TEMP/app" --corten-path crates/corten
           cd "$RUNNER_TEMP/app"
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check 2>&1 | tee "$RUNNER_TEMP/check.log"
+          grep -F "corten: script types: TypeScript $version (tsc)" "$RUNNER_TEMP/check.log"
           "$GITHUB_WORKSPACE/target/debug/corten" ui init && "$GITHUB_WORKSPACE/target/debug/corten" ui add --all
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
-      - name: PATH compiler checks an app without the checkout alias
-        shell: bash
-        run: |
-          version=$(node -p "require('./package.json').devDependencies.typescript7.split('@').at(-1)")
-          alias="$GITHUB_WORKSPACE/node_modules/typescript7"
-          mv "$alias" "$RUNNER_TEMP/typescript7-alias"
-          trap 'mv "$RUNNER_TEMP/typescript7-alias" "$alias"' EXIT
-          "$GITHUB_WORKSPACE/target/debug/corten" new "$RUNNER_TEMP/path-app" --corten-path "$GITHUB_WORKSPACE/crates/corten"
-          cd "$RUNNER_TEMP/path-app"
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check 2>&1 | tee "$RUNNER_TEMP/path-check.log"
-          grep -F "corten: script types: TypeScript $version (tsc)" "$RUNNER_TEMP/path-check.log"
       # Every published crate still packages and builds on its own from the .crate files, in a
       # target of its own: cargo treats a registry crate as unchanged while its version is, so the
       # cached target could hand it an earlier build of corten-run 0.1.0.
@@ -99,16 +90,17 @@ jobs:
   # smokes (#947), and not after the checks above, where they made the job a release build longer
   # (#1086); `rust` above still requires them.
   rust-release:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
-      # The CLI integration tests run `corten check` (Clippy and rustfmt); the kit tests use rustfmt too.
-      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      # The CLI integration tests run `corten check` (Clippy and rustfmt) and a profile build
+      # (llvm-tools); the kit tests use rustfmt too.
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --workspace --all-features
 
   msrv:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       # Keep in step with workspace.package.rust-version in Cargo.toml.
@@ -124,7 +116,7 @@ jobs:
   browser:
     needs: smoke
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -152,12 +144,13 @@ jobs:
   # own (#1085): the watchlist's smoke, the longest, split by engine, one engine in each group with
   # the other examples beside it. Each group builds its own images and starts its own servers, so
   # no two share a port, a container or a database. Every check runs in every engine it ran in
-  # before; the watchlist's checks that use no browser run in each of its three groups.
+  # before; the watchlist's checks that use no browser run in each of its three groups. Beside
+  # them, `npm run check` and the benchmark apparatus run in two groups of their own: one after
+  # the other they came within three minutes of the timeout (#2208).
   smoke:
     name: smoke (${{ matrix.group }})
-    runs-on: ubuntu-24.04
-    # A passing group takes 7 to 8.5 minutes (measured, one run of the three); a hung one would
-    # hold the runner for six hours (#317).
+    runs-on: ubuntu-26.04
+    # Bound each group independently so a hung check cannot hold the runner for six hours.
     timeout-minutes: 30
     strategy:
       # Every group reports, so one failure does not hide another.
@@ -166,8 +159,14 @@ jobs:
         # `parts`: the steps the group runs, each named in its step's condition (`PARTS` below), in
         # lowercase letters and hyphens, which is all the check in `browser` reads as a part.
         include:
+          - group: benchmark-checks
+            parts: npm-check
+          # The marketplace browser oracle and the native apparatus run in the Git-capable
+          # test-tools image, which only this group builds (in the step "Playwright's image").
+          - group: benchmark-apparatus
+            parts: marketplace-oracle group-apparatus
           - group: chromium-examples
-            parts: npm-check watchlist-chromium card-market seller-desk deck-builder
+            parts: watchlist-chromium card-market seller-desk deck-builder
           - group: firefox-feeds
             parts: watchlist-firefox auction-room listings-feed
           # watchlist-dev runs the image the watchlist step builds, so it stays in its group.
@@ -178,7 +177,8 @@ jobs:
     steps:
       # npm run check resolves every commit the Markdown cites (scripts/design-refs.mjs), so the group
       # that runs it takes the whole history, and with it every tag: refs/tags/evidence/<sha> keeps a
-      # cited commit no branch has. A depth of 0 fetches +refs/tags/*; the others take one commit.
+      # cited commit no branch has. scripts/bench-size.mjs reads every commit between its base and the
+      # tip and refuses a shallow clone. A depth of 0 fetches +refs/tags/*; the others take one commit.
       - uses: actions/checkout@v7
         with:
           fetch-depth: ${{ contains(env.PARTS, ' npm-check ') && '0' || '1' }}
@@ -186,12 +186,45 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            bench/package-lock.json
       - run: npm ci
+      # The benchmark harness's classic compiler API, which npm run check:workloads and
+      # check:groups:browser parse with (bench/package.json).
+      - run: npm --prefix bench ci
+        if: contains(env.PARTS, ' npm-check ') || contains(env.PARTS, ' group-apparatus ')
+      # scripts/bench-size.mjs checks every commit since the base, which it does not guess here: a
+      # pull request's checkout is its merge with the base, whose first parent is the base; a push's
+      # base is the commit the branch was at before it, all zeros for a new branch or tag (the
+      # script then takes the merge base with origin/main). Release calls this on a tag's push. Any
+      # other event fails until its base is wired here.
+      - name: The bench size check's base
+        if: contains(env.PARTS, ' npm-check ')
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+                echo "::error::the pull request's checkout is not a merge commit, so it has no base to check bench/ against"
+                exit 1
+              fi
+              base=$(git rev-parse 'HEAD^1') ;;
+            push) base=$BEFORE ;;
+            *) base= ;;
+          esac
+          if [ -z "$base" ]; then
+            echo "::error::no base for scripts/bench-size.mjs on a $GITHUB_EVENT_NAME event; give it one in .github/workflows/ci.yml"
+            exit 1
+          fi
+          echo "CORTEN_BENCH_SIZE_BASE=$base" >> "$GITHUB_ENV"
       - name: npm run check
         if: contains(env.PARTS, ' npm-check ')
         run: |
           npm run check
-          npm run check:workloads
+          # The runner image has Python 3, so the workload checks that need it run here and fail without it.
+          CORTEN_REQUIRE_PYTHON=1 npm run check:workloads
           npm run check:groups:host
           node --test bench/load-tool.test.mjs bench/fullstack/load-tool.test.mjs
           mapfile -t marketplace_tests < <(find bench/marketplace -maxdepth 1 -name '*.test.mjs' ! -name check.test.mjs -print | sort)
@@ -203,12 +236,14 @@ jobs:
       # the runner (`npx playwright install --with-deps`) fetched about a hundred apt packages from
       # the Ubuntu mirror on every run, and when the mirror slowed to a few KB/s the step stalled
       # until it was cancelled. `--network host` reaches the example servers at localhost.
+      # The group that runs only `npm-check` uses no browser, so it pulls no image.
       - name: Playwright's image
+        if: env.PARTS != ' npm-check '
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
           docker pull "$image"
           # Only the apparatus checks replay immutable Git sources; the other groups use the base.
-          if [[ "$PARTS" == *" npm-check "* ]]; then
+          if [[ "$PARTS" == *" group-apparatus "* ]]; then
             docker build --build-arg PLAYWRIGHT_IMAGE="$image" -f bench/workloads/test-tools.Dockerfile -t corten-playwright-tools .
             image="corten-playwright-tools"
           fi
@@ -219,11 +254,15 @@ jobs:
           # For a test that restarts its server: the runner's docker CLI and socket as well.
           echo "PLAYWRIGHT_WITH_DOCKER=$run -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock $image" >> "$GITHUB_ENV"
       - name: Marketplace browser oracle
-        if: contains(env.PARTS, ' npm-check ')
-        run: $PLAYWRIGHT node --test --test-concurrency=1 bench/marketplace/check.test.mjs
+        if: contains(env.PARTS, ' marketplace-oracle ')
+        run: |
+          $PLAYWRIGHT node --test --test-concurrency=1 bench/marketplace/check.test.mjs
+          echo marketplace-oracle >> "$RUNNER_TEMP/ran"
       - name: Native workload group apparatus
-        if: contains(env.PARTS, ' npm-check ')
-        run: $PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser
+        if: contains(env.PARTS, ' group-apparatus ')
+        run: |
+          $PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser
+          echo group-apparatus >> "$RUNNER_TEMP/ran"
       - name: watchlist
         if: contains(env.PARTS, ' watchlist-chromium ') || contains(env.PARTS, ' watchlist-firefox ') || contains(env.PARTS, ' watchlist-webkit ')
         run: |
@@ -307,11 +346,10 @@ jobs:
         if: contains(env.PARTS, ' listings-feed ')
         run: |
           docker network create feeds
-          docker run -d --name feeds-pg --network feeds -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:18-alpine
+          docker run -d --name feeds-pg --network feeds -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:19-alpine
           docker run -d --name feeds-nats --network feeds nats:2-alpine -js
           docker build -f examples/listings-feed/Dockerfile -t corten-listings-feed .
           docker run -d --name corten-listings-feed --network feeds -p 18485:8080 -e DATABASE_URL=postgres://postgres:postgres@feeds-pg/feeds -e NATS_URL=nats://feeds-nats:4222 corten-listings-feed
-          timeout 120 sh -c 'until curl -sf -o /dev/null http://localhost:18485/health/ready; do sleep 1; done'
           $PLAYWRIGHT node examples/listings-feed/smoke.mjs http://localhost:18485 || { docker logs corten-listings-feed; docker logs feeds-nats; exit 1; }
           docker rm -f -v corten-listings-feed feeds-pg feeds-nats
           docker network rm feeds

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, link } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readFile, realpath, truncate, writeFile, rm, symlink, link } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -10,7 +10,9 @@ import { defaults, options, run, serve, journey, dispatchOperation, finishRun } 
 import { selectedApps } from "../workloads/registry.mjs";
 import { validateSaved, snapshot } from "./verify.mjs";
 import { vendorConfiguration } from "./build.mjs";
-import { artifactProfile } from "./verify-v2.mjs";
+import { artifactProfile, replayToolIdentity } from "./verify-v2.mjs";
+import { fixtureGitEnv, withFixtureGitEnv } from "../../scripts/fixture-git.mjs";
+import { captureExecutable, executableBytes } from "./launch.mjs";
 
 // All fixtures here are collector unit inputs, NOT saved native framework evidence.
 async function fixture(t) {
@@ -39,18 +41,20 @@ test("source before/after saves real bytes, commit, binary diff and clean observ
   const f = await fixture(t);
   await f.write(".gitignore", "saved/\n"); await f.write("bench/client-heavy/probe.mjs", "// Collector unit fixture\n");
   await f.write("Cargo.toml", "# Collector unit fixture\n");
-  const git = (...args) => execFileSync("git", args, { cwd: f.root, stdio: ["ignore", "pipe", "pipe"] });
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() });
   git("init", "--quiet"); git("add", ".gitignore", "Cargo.toml", "bench/client-heavy/probe.mjs");
   await mkdir(join(f.root, "hooks"));
   git("-c", "user.name=Collector unit fixture", "-c", "user.email=unit@example.invalid", "-c", "commit.gpgsign=false",
     "-c", `core.hooksPath=${join(f.root, "hooks")}`, "commit", "--quiet", "-m", "Collector unit fixture");
-  // Empty untracked hooks directory does not affect the clean observation.
-  const before = await f.evidence.source("before"), after = await f.evidence.source("after");
+  // Empty untracked hooks directory does not affect the clean observation. source() runs Git on the
+  // process's environment, so it reads the fixture only without the caller's selectors.
+  const source = (/** @type {string} */ stage) => withFixtureGitEnv(() => f.evidence.source(stage));
+  const before = await source("before"), after = await source("after");
   assert.match(before.commit, /^[a-f0-9]{40}$/); assert.equal(before.status.bytes, 0);
   assert.deepEqual(before.entries, after.entries); assert.deepEqual(before.unavailable, []);
   for (const entry of before.entries) assert.equal(sha256(await readFile(join(f.out, entry.blob))), entry.sha256);
   await f.write("bench/client-heavy/probe.mjs", "// Changed collector unit fixture\n");
-  const changed = await f.evidence.source("changed");
+  const changed = await source("changed");
   assert.notDeepEqual(before.entries, changed.entries); assert.ok(changed.status.bytes > 0 && changed.diff.bytes > 0);
   assert.ok(f.evidence.blockers.includes("source-changed-not-clean"));
 });
@@ -81,13 +85,69 @@ test("only the v2 Cargo vendor tree accepts SemVer build metadata in filenames",
 
 test("larger executable blobs seal with their explicit bound; ordinary artifacts do not", async (t) => {
   const f = await fixture(t); f.evidence.limits.fileBytes = 8;
-  await f.write("image", "large executable bytes");
+  const image = Buffer.from("large executable bytes");
+  await f.write("image", image);
   const ref = await f.evidence.file(f.root, "image", 32);
+  await f.evidence.file(f.root, "image", 32);
+  assert.equal(f.evidence.bytes, image.length); // Unique blobs still count once.
+  await assert.rejects(f.evidence.blob(image), /evidence-byte-limit/);
   const subject = await f.evidence.seal({ group: "client-heavy", round: "unit", commit: "a".repeat(40) });
   assert.equal(subject.files[0].path, ref.blob);
   await rm(join(f.out, "review-subject.json"));
   await f.write("saved/ordinary", "large ordinary bytes");
   await assert.rejects(f.evidence.seal({}), /saved-evidence-byte-limit/);
+});
+
+test("NodeSource-sized Node executable survives capture, sealing and saved replay", { timeout: 60000 }, async (t) => {
+  const f = await fixture(t), source = join(await realpath(f.root), "node-image");
+  const size = 150_348_872; // NodeSource 26.13.1 amd64 file size; synthetic bytes, never executed.
+  const handle = await open(source, "wx");
+  try {
+    const tail = Buffer.from("node-size-control");
+    await handle.truncate(size);
+    assert.equal((await handle.write(tail, 0, tail.length, size - tail.length)).bytesWritten, tail.length);
+  } finally { await handle.close(); }
+  await assert.rejects(f.evidence.file(dirname(source), "node-image"), /evidence-file-limit/);
+  const identity = { version: "fixture", ...await captureExecutable(f.evidence, "node", source) };
+  await f.evidence.save("evidence/node.json", identity);
+  const ref = identity.executable;
+  assert.equal(ref.bytes, size);
+  const subject = await f.evidence.seal({ group: "client-heavy", round: "unit", commit: "a".repeat(40) });
+  assert.deepEqual(subject.files.find(({ path }) => path === ref.blob), { path: ref.blob, bytes: size, sha256: ref.sha256 });
+  const files = await snapshot(f.out, artifactProfile);
+  assert.deepEqual(replayToolIdentity(files, "node"), identity);
+
+  // Reject at stat, before allocating a buffer of the untrusted size.
+  await truncate(source, executableBytes.node + 1);
+  await assert.rejects(captureExecutable(f.evidence, "node", source), /evidence-file-limit/);
+});
+
+test("Node's oversized path rejects missing, substituted, truncated, malformed and over-limit evidence", async (t) => {
+  const f = await fixture(t), source = join(f.root, "node-image"), ordinary = 2048;
+  const profile = { ...artifactProfile, limits: { ...artifactProfile.limits, fileBytes: ordinary } };
+  await f.write("node-image", Buffer.alloc(ordinary + 1, 41));
+  const identity = { version: "fixture", ...await captureExecutable(f.evidence, "node", source) };
+  const ref = identity.executable, path = join(f.out, ref.blob);
+  const save = (executable) => f.evidence.save("evidence/node.json", { ...identity, executable });
+  const read = () => snapshot(f.out, profile);
+  await f.evidence.save("evidence/other.json", identity);
+  assert.equal(replayToolIdentity(new Map(), "node"), undefined);
+  await assert.rejects(read(), /oversized-blob-not-tool-executable/);
+  await save({ ...ref, blob: "evidence/blobs/" + "f".repeat(64) });
+  await assert.rejects(read(), /oversized-blob-not-tool-executable/);
+  await save({ ...ref, sha256: "f".repeat(64) });
+  await assert.rejects(read(), /invalid-blob-reference/);
+  await save(ref);
+  await writeFile(path, Buffer.alloc(ref.bytes, 42));
+  const substituted = await read();
+  assert.throws(() => replayToolIdentity(substituted, "node"), /missing-or-mismatched-blob/);
+  await truncate(path, ordinary);
+  const truncated = await read();
+  assert.throws(() => replayToolIdentity(truncated, "node"), /missing-or-mismatched-blob/);
+  const overLimit = { ...ref, bytes: executableBytes.node + 1 };
+  await save(overLimit);
+  await truncate(path, overLimit.bytes);
+  await assert.rejects(read(), /invalid-blob-reference/);
 });
 
 test("snapshot keeps ordinary-file, unique-blob and saved-total bounds independent", async (t) => {
@@ -97,7 +157,7 @@ test("snapshot keeps ordinary-file, unique-blob and saved-total bounds independe
   await assert.rejects(snapshot(f.out, profile), /unique-blob-byte-limit/);
   await assert.rejects(snapshot(f.out, { ...profile, blobTotalBytes: 10, limits: { ...profile.limits, totalBytes: 5 } }), /artifact-byte-limit/);
   await f.write("saved/result.json", "12345");
-  await assert.rejects(snapshot(f.out, { ...profile, blobTotalBytes: 10 }), /oversized-blob-not-browser-executable/);
+  await assert.rejects(snapshot(f.out, { ...profile, blobTotalBytes: 10 }), /oversized-blob-not-tool-executable/);
 });
 
 test("missing, linked and oversized dependencies explicitly block incomplete collection", async (t) => {
@@ -249,11 +309,8 @@ test("a real failed producer invocation saves complete six-app accounting but no
   assert.deepEqual(JSON.parse(await readFile(join(out, "plan.json"), "utf8")).invocation.argv, args);
   for (const app of selectedApps("client-heavy")) {
     assert.deepEqual(JSON.parse(await readFile(join(out, `${app}.json`), "utf8")), saved.cells[app]);
-    if (app === "solid") {
-      assert.equal(saved.cells[app].outcome, "unsupported");
-      assert.equal(saved.cells[app].reason, "latest-stable-solid-2-needs-compatible-stable-compiler");
-      assert.equal(saved.cells[app].qualification, null);
-    } else assert.ok(["passed", "failed", "not-run"].includes(saved.cells[app].outcome));
+    assert.equal(saved.cells[app].outcome, "not-run");
+    assert.equal(saved.cells[app].qualification, null);
     if (saved.cells[app].outcome !== "passed") assert.equal(saved.cells[app].measurement, null);
   }
   // Missing Cargo guarantees no Rust build and no Corten performance qualification,

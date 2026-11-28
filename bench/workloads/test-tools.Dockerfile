@@ -1,19 +1,31 @@
 ARG PLAYWRIGHT_IMAGE
-FROM ${PLAYWRIGHT_IMAGE}
+FROM ${PLAYWRIGHT_IMAGE} AS playwright
+FROM playwright AS build
 
-# Keep the upstream stable PPA and its exact signing key, without the Launchpad
-# metadata API used by add-apt-repository. Interrupted API reads blocked CI.
-RUN apt-get update -qq \
-    && apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg \
-    && install -d -m 0755 /etc/apt/keyrings \
-    && curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF911AB184317630C59970973E363C90F8F1B6217' -o /tmp/corten-git-ppa.asc \
-    && gpg --batch --show-keys --with-colons /tmp/corten-git-ppa.asc > /tmp/corten-git-ppa.keys \
-    && git_primary_fingerprints=$(awk -F: '$1 == "pub" { primary=1; next } primary && $1 == "fpr" { print $10; primary=0 }' /tmp/corten-git-ppa.keys) \
-    && test "$git_primary_fingerprints" = F911AB184317630C59970973E363C90F8F1B6217 \
-    && install -m 0644 /tmp/corten-git-ppa.asc /etc/apt/keyrings/corten-git-ppa.asc \
-    && install -m 0644 /dev/null /etc/apt/sources.list.d/corten-git-ppa.list \
-    && printf '%s\n' 'deb [signed-by=/etc/apt/keyrings/corten-git-ppa.asc] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main' > /etc/apt/sources.list.d/corten-git-ppa.list \
-    && apt-get -o Acquire::Retries=5 update -qq --error-on=any \
-    && apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends git \
-    && git --no-replace-objects --no-lazy-fetch --version \
-    && rm -rf /var/lib/apt/lists/* /tmp/corten-git-ppa.keys /tmp/corten-git-ppa.asc
+RUN apt-get -o Acquire::Retries=5 update -qq --error-on=any \
+    && apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends \
+      build-essential ca-certificates curl gpg gpgv libcurl4-gnutls-dev libexpat1-dev \
+      libpcre2-dev libssl-dev perl pkg-config xz-utils zlib1g-dev
+WORKDIR /tmp/git-build
+COPY scripts/benchmark-evidence-git.sh /tmp/verify-git.sh
+RUN sh /tmp/verify-git.sh
+RUN --network=none tar -xf git.tar && cd git-2.56.1 \
+    && make -j2 prefix=/usr DESTDIR=/out INSTALL_STRIP=-s INSTALL_SYMLINKS=1 \
+      NO_RUST=1 NO_GETTEXT=1 NO_TCLTK=1 NO_GITWEB=1 USE_LIBPCRE2=1 install
+
+FROM playwright
+COPY --from=build /out/ /
+RUN --network=none set -eu; \
+    test "$(command -v git)" = /usr/bin/git; \
+    test "$(git --no-replace-objects --no-lazy-fetch --version)" = 'git version 2.56.1'; \
+    repo=$(mktemp -d); git init -q "$repo/source"; \
+    printf evidence > "$repo/source/blob"; git -C "$repo/source" add blob; \
+    git -C "$repo/source" -c user.name=CI -c user.email=ci@example.invalid commit -qm fixture; \
+    git -C "$repo/source" config uploadpack.allowFilter true; \
+    git clone -q --no-local --no-checkout --filter=blob:none "$repo/source" "$repo/replay"; \
+    git -C "$repo/replay" config protocol.file.allow always; \
+    oid=$(git -C "$repo/source" rev-parse HEAD:blob); \
+    if git --no-replace-objects --no-lazy-fetch -C "$repo/replay" cat-file blob "$oid" >/dev/null 2>&1; then exit 1; fi; \
+    test "$(git --no-replace-objects -C "$repo/replay" cat-file blob "$oid")" = evidence; \
+    test "$(git --no-replace-objects --no-lazy-fetch -C "$repo/replay" cat-file blob "$oid")" = evidence; \
+    rm -rf "$repo"

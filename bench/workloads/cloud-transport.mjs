@@ -19,6 +19,10 @@ export const controlEnvironment = (binary) => {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   return { ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
 };
+export function pinnedHostOptions(path) {
+  return ["-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no",
+    "-o", `UserKnownHostsFile=${process.platform === "win32" ? path.replaceAll("\\", "/") : path}`];
+}
 export function shellTransport({ repo, spawn = spawnSync, streamSpawn, sealExec = spawn === spawnSync ? execFile : undefined } = {}) {
   assert.ok(isAbsolute(repo));
   // Capture inherited credentials/config locations once, never re-read mutable
@@ -43,7 +47,7 @@ export function shellTransport({ repo, spawn = spawnSync, streamSpawn, sealExec 
       });
       const argv = ["-F", "none", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "ControlMaster=no", "-o", "ControlPath=none", ...fixedArgs, command];
       return import("./cloud-control-stream.mjs").then(({ openControlStream }) => openControlStream({ repo, argv,
-        env: { ...environments.get("ssh") }, expected: control.expected, local: control.local, interrupted: control.interrupted,
+        env: { ...environments.get("ssh") }, expected: control.expected, local: control.local, interrupted: control.interrupted, peerLease: control.peerLease,
         ...(streamSpawn ? { launch: streamSpawn } : {}) }));
     }
     let argv = [...args], input, executable = binary;
@@ -102,20 +106,30 @@ export function shellTransport({ repo, spawn = spawnSync, streamSpawn, sealExec 
   };
 }
 
+// Keep provenance private; neither an exception's text nor raw SSH output is a
+// diagnostic. Callers decide whether to report the failed check for their phase.
+const controlFailures = new WeakMap();
+export const controlResultFailure = (error) => controlFailures.get(error);
+function uncertainControl(message, detail) {
+  const error = Object.assign(new Error(message), { controlTreeUncertain: true });
+  controlFailures.set(error, detail);
+  return error;
+}
+
 function checked(result, binary, allowFail, control) {
   const failed = result.error || result.status !== 0 || result.signal;
   // A child result only proves the direct child has ended. On every platform a
   // timeout/signal/overflow can leave descendants alive. Never retry, and keep
   // the lifecycle locks until an operator establishes the whole tree is gone.
   if (result.error || result.signal || !Number.isInteger(result.status))
-    throw Object.assign(new Error("control tree uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true });
+    throw uncertainControl("control tree uncertain; preserve locks/state/evidence/host", "local-control-uncertain");
   if (control) {
     const id = control.request.invocation.id;
     assert.match(id, /^[a-f0-9]{32}$/);
     const ack = new RegExp(`^CORTEN_CONTROL ${id} ([a-f0-9]{64})\\r?$`, "m").exec(result.stderr ?? "");
     const terminal = new RegExp(`^CORTEN_RESULT ${id} ([0-9]{1,3})\\r?$`, "m").exec(result.stderr ?? "");
     if (!ack || !terminal || result.status === 255 || Number(terminal[1]) !== result.status)
-      throw Object.assign(new Error("remote control completion uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true });
+      throw uncertainControl("remote control completion uncertain; preserve locks/state/evidence/host", "remote-completion-unconfirmed");
   }
   if (failed && !allowFail) throw new Error("control process failed or uncertain; preserve state/evidence/host");
   // Keep stdout only for fixed parsers. Never return credentials/stacks/stderr.

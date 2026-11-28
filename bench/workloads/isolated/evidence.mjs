@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { deploymentSha256 } from "../deployments.mjs";
+import { contractSha256, definition } from "../registry.mjs";
 import { validateCollected } from "../../catalog/droplet-contract.mjs";
 import { inspectCatalog } from "../../catalog/report.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { reader } from "../../json-api/artifacts.mjs";
-import { inspectJson } from "../../json-api/report.mjs";
-import { producerSources } from "../../json-api/production.mjs";
+import { inspectBoundJson } from "../../json-api/report.mjs";
+import { producerSourceNames } from "../../json-api/production.mjs";
+import { scheduledProducerMarker, scheduledProducerSchema } from "../../json-api/contract.mjs";
 import { timedSummarySchema } from "../../json-api/timed-outcomes.mjs";
 import { validateSummary } from "../../marketplace/report.mjs";
-import { admitted } from "../../marketplace/feature-contract.mjs";
+import { admitted, boundedFeatureProfile } from "../../marketplace/feature-contract.mjs";
 import { inspectRawSupport } from "./raw-support.mjs";
 import { portableEvidenceSegment } from "../cloud-contract.mjs";
 
@@ -36,14 +38,18 @@ export function physical(path, directory = true) {
   return path;
 }
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every((k) => a[k] === b[k]);
-export function readRegular(path) {
+export function readRegular(path) { return readEvidenceFile(path, false); }
+function readEvidenceFile(path, sync) {
   physical(dirname(path));
   const before = lstatSync(path);
   assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1, "link/special evidence file refused");
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  // Windows requires write access for FlushFileBuffers even though we only read.
+  const access = sync && process.platform === "win32" ? constants.O_RDWR : constants.O_RDONLY;
+  const fd = openSync(path, access | (constants.O_NOFOLLOW ?? 0));
   try {
     assert.ok(same(before, fstatSync(fd)), "file replaced before read");
     const bytes = readFileSync(fd);
+    if (sync) fsyncSync(fd);
     assert.ok(same(before, fstatSync(fd)) && same(before, lstatSync(path)), "file mutated while reading");
     physical(dirname(path));
     return bytes;
@@ -55,6 +61,24 @@ export function durable(path, bytes) {
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
   syncDirectory(dirname(path));
 }
+export function publishDurable(path, bytes) {
+  const staged = `${path}.pending`;
+  durable(staged, bytes);
+  const identity = lstatSync(staged);
+  assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined, "evidence publication already exists");
+  try {
+    renameSync(staged, path); syncDirectory(dirname(path));
+  } catch (error) {
+    // Withdraw only this publication if directory sync did not complete.
+    try {
+      const current = lstatSync(path, { throwIfNoEntry: false });
+      if (current?.dev === identity.dev && current.ino === identity.ino && !lstatSync(staged, { throwIfNoEntry: false })) {
+        renameSync(path, staged); syncDirectory(dirname(path));
+      }
+    } catch { /* Leave unproven evidence in place. */ }
+    throw error;
+  }
+}
 export function syncDirectory(path) {
   if (process.platform === "win32") return;
   const fd = openSync(path, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
@@ -62,7 +86,8 @@ export function syncDirectory(path) {
 function safeName(name) {
   assert.ok(portableEvidenceSegment(name), "unsafe evidence path segment");
 }
-export function tree(root) {
+export function tree(root) { return inventory(root, false); }
+function inventory(root, sync) {
   physical(root);
   const entries = [], seen = new Set();
   function walk(path, key) {
@@ -76,13 +101,27 @@ export function tree(root) {
         assert.ok(!seen.has(folded), "case-colliding evidence paths"); seen.add(folded);
         walk(join(path, name), next);
       }
+      if (sync) syncDirectory(path);
     } else {
-      const bytes = readRegular(path);
+      const bytes = readEvidenceFile(path, sync);
       entries.push({ path: key, type: "file", bytes: bytes.length, sha256: digest(bytes) });
     }
   }
   walk(root, "");
   return { entries, sha256: deploymentSha256(entries) };
+}
+
+// Called only for a fresh, owned output after verified terminal command lifetime.
+// On a different filesystem, rename fails and leaves the source for custody.
+export function transferEvidence(source, destination) {
+  assert.ok(!inside(source, destination) && !inside(destination, source), "source/destination overlap");
+  physical(dirname(destination));
+  assert.equal(lstatSync(destination, { throwIfNoEntry: false }), undefined, "native evidence destination already exists");
+  const before = inventory(source, true);
+  renameSync(source, destination);
+  syncDirectory(dirname(destination)); syncDirectory(dirname(source));
+  assert.ok(isDeepStrictEqual(tree(destination), before), "transferred evidence differs");
+  return before;
 }
 
 // JSON image observations are appended only after the safely collected prepare
@@ -116,20 +155,34 @@ export function copyEvidence(source, destination) {
 }
 
 export function verifyJsonProducer(binding, summary) {
-  assert.equal(summary.schema, timedSummarySchema, "current JSON campaign requires v2 evidence");
-  assert.equal(summary.producer?.schema, "json-api-producer/v2");
-  assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...producerSources].sort(), "JSON producer inventory differs");
-  assert.equal(binding.sources?.commit, binding.request.commit, "JSON producer commit differs");
+  assert.ok(summary.schema === timedSummarySchema, "current JSON campaign requires v2 evidence");
+  const names = producerSourceNames(summary.producer?.schema);
+  assert.ok(isDeepStrictEqual(Object.keys(summary.producer.sources).sort(), [...names].sort()), "JSON producer inventory differs");
+  assert.ok(binding.sources?.commit === binding.request.commit, "JSON producer commit differs");
   const files = binding.sources.files;
   assert.ok(Array.isArray(files), "JSON bound sources missing");
   const sources = new Map(files.map((row) => [row.path, row.sha256]));
   assert.equal(sources.size, files.length, "duplicate bound source");
-  for (const name of producerSources) {
+  if (sources.has(scheduledProducerMarker)) assert.ok(summary.producer.schema === scheduledProducerSchema,
+    "JSON producer cannot downgrade the bound load-resource capture");
+  for (const name of names) {
     const path = `bench/json-api/${name}`;
     assert.ok(sources.has(path), "JSON producer missing from bound commit");
-    assert.match(summary.producer.sources[name], /^[a-f0-9]{64}$/);
-    assert.equal(summary.producer.sources[name], sources.get(path), "JSON producer differs from bound commit");
+    const sha256 = summary.producer.sources[name];
+    assert.ok(typeof sha256 === "string" && /^[a-f0-9]{64}$/.test(sha256), `invalid JSON producer digest: ${name}`);
+    assert.ok(sha256 === sources.get(path), `JSON producer differs from bound commit: ${name}`);
   }
+}
+
+// The native reader can replay both matrices. The selected group, not the
+// archive, decides which one this request requires. Neither waives qualification.
+export function checkMarketplaceContract(binding, summary) {
+  const group = "localized-marketplace", selected = binding.selection.contractSha256;
+  const perLocale = "e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb";
+  assert.ok(selected === perLocale || selected === contractSha256(group), "unknown marketplace group contract");
+  assert.equal(summary.schema, selected === perLocale ? "marketplace-results/v5" : definition(group).nativeResultSchema,
+    "native marketplace result schema differs from the selected group contract");
+  assert.equal(summary.measurement.featureProfile, boundedFeatureProfile, "current group requires bounded qualification");
 }
 
 /** Native APIs are independent gates; a process exit or complete flag is insufficient. */
@@ -148,11 +201,13 @@ export function inspectEvidence(binding, root) {
       options: binding.execution.effectiveOptions, cpus: binding.resources.expectedCpus }, inspectCatalog);
     report = rawProofBlocked(group, diagnosticNativeReport, inspectRawSupport(group, summary, root, before));
   } else if (group === "json-api") {
-    verifyJsonProducer(binding, summary);
-    report = inspectJson(summary, { load: reader(root), commit });
+    // The opt-in c-16 binding requests JSON_API_LOAD_LAYOUT; a default binding requests none and its result records none.
+    assert.equal(summary.measurement?.loadLayout, binding.resources.requestedCpuEnv?.JSON_API_LOAD_LAYOUT, "JSON API load layout differs from binding");
+    report = inspectBoundJson(summary, { load: reader(root), commit, verifyBoundProducer: (value) => verifyJsonProducer(binding, value) });
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {
     validateSummary(summary);
+    checkMarketplaceContract(binding, summary);
     assert.equal(summary.split, undefined, "split evidence is not this isolated native command");
     report = rawProofBlocked(group, { outcomes: Object.fromEntries(binding.selection.apps.map((app) => [app,
       admitted(summary.apps[app]) ? "admitted-native-outcome" : "excluded-not-timed"])) }, inspectRawSupport(group, summary, root, before));
