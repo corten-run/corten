@@ -532,7 +532,9 @@ test("PR diff excludes base-only changes and includes both sides of an app renam
   const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
   const output = join(cwd, "output");
   const env = fixtureGitEnv({ ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
-  for (const job of ["catalog", "evidence"]) execFileSync(process.execPath, [script, job], { cwd, env });
+  for (const command of ["catalog-cumulative-v1", "evidence-cumulative-v1"]) {
+    execFileSync(process.execPath, [script, command], { cwd, env });
+  }
   assert.equal(readFileSync(output, "utf8"), 'apps=["nextjs","rails"]\njson=false\nrun=true\nkernel=true\n');
 });
 
