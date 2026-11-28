@@ -258,13 +258,14 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
     }
 
     /// The `value` of an `<input type="number">` using these bounds. Text sent back by a form
-    /// stays as typed. A programmatic value is shown with the step's decimals, or with any step,
+    /// stays as typed. A programmatic value is shown with the decimals of the minimum or step,
+    /// whichever has more, or with any step,
     /// uses exponent notation if writing it out would take more than 18 digits. This avoids
     /// native validation problems with long fixed spellings. Like [`super::Entry`], this leaves
     /// out an unset value.
     #[inline]
     pub fn input_value<'a>(&self, entry: &'a super::Entry<T>) -> impl AttrValue + use<'a, T, S> {
-        InputValue { entry, step: self.step }
+        InputValue { entry, min: self.min, step: self.step }
     }
 
     /// What a typed field reads as when it is a number these bounds hold: `None` when it is blank,
@@ -284,6 +285,7 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
 
 struct InputValue<'a, T, S> {
     entry: &'a super::Entry<T>,
+    min: T,
     step: S,
 }
 
@@ -293,7 +295,7 @@ impl<T: Numeric, S: Spacing<T>> AttrValue for InputValue<'_, T, S> {
         if let Some(text) = self.entry.text() {
             text.write_attr(name, out);
         } else if let Some(value) = self.entry.value() {
-            self.step.write_value_attr(name, value, out);
+            self.step.write_value_attr_from(self.min, name, value, out);
         }
     }
 }
@@ -319,6 +321,10 @@ pub trait Spacing<T: Numeric>: Copy + sealed::Sealed + 'static {
     fn render_attrs(bounds: &Bounds<T, Self>, out: &mut String);
     #[doc(hidden)]
     fn write_value_attr(self, name: &str, value: T, out: &mut String);
+    #[doc(hidden)]
+    fn write_value_attr_from(self, _min: T, name: &str, value: T, out: &mut String) {
+        self.write_value_attr(name, value, out);
+    }
 }
 
 impl<T: Numeric> Spacing<T> for T {
@@ -338,6 +344,10 @@ impl<T: Numeric> Spacing<T> for T {
 
     fn write_value_attr(self, name: &str, value: T, out: &mut String) {
         quoted(name, &value.shown(self), out);
+    }
+
+    fn write_value_attr_from(self, min: T, name: &str, value: T, out: &mut String) {
+        quoted(name, &value.shown_from(min, self), out);
     }
 }
 
@@ -409,6 +419,10 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     /// `12.50`. A whole number as it is.
     #[doc(hidden)]
     fn shown(self, step: Self) -> String;
+    #[doc(hidden)]
+    fn shown_from(self, _min: Self, step: Self) -> String {
+        self.shown(step)
+    }
 }
 
 mod sealed {
@@ -534,9 +548,24 @@ macro_rules! float {
                 })
             }
             fn shown(self, step: Self) -> String {
-                let text = step.to_string();
-                let decimals = text.split_once('.').map_or(0, |(_, fraction)| fraction.len());
-                format!("{self:.decimals$}")
+                self.shown_from(0.0, step)
+            }
+            fn shown_from(self, min: Self, step: Self) -> String {
+                use std::fmt::Write;
+                let mut text = String::new();
+                let mut decimals = 0;
+                for n in [step, min] {
+                    if n.trunc() != n {
+                        text.clear();
+                        write!(text, "{n}").unwrap();
+                        if let Some((_, fraction)) = text.split_once('.') {
+                            decimals = decimals.max(fraction.len());
+                        }
+                    }
+                }
+                text.clear();
+                write!(text, "{self:.decimals$}").unwrap();
+                text
             }
         }
     )*};
@@ -846,6 +875,24 @@ mod tests {
         bounds.input_value(&Entry::typed("0.00000000000000000001")).write_attr(" value", &mut out);
         bounds.input_value(&Entry::typed("\"<&")).write_attr(" value", &mut out);
         assert_eq!(out, r#" value="0.00000000000000000001" value="&quot;&lt;&amp;""#);
+    }
+
+    #[test]
+    fn a_stepped_prefill_keeps_the_value_the_handler_accepts() {
+        for (min, step, value, expected) in [(0.5, 1.0, 1.5, "1.5"), (0.25, 0.5, 0.75, "0.75"), (-0.75, 1.0, -0.75, "-0.75")] {
+            let bounds = Bounds::new(min, 10.0f64).step(step);
+            let mut attr = String::new();
+            bounds.input_value(&Entry::from(value)).write_attr(" value", &mut attr);
+            let drawn = attr.strip_prefix(" value=\"").unwrap().strip_suffix('"').unwrap();
+            assert_eq!(drawn, expected);
+            assert_eq!(bounds.read(&Entry::typed(drawn)), Some(value));
+        }
+        // This f32's shortest spelling is 1234567.3, which is off the browser's grid.
+        let bounds = Bounds::new(0.25f32, 2e6).step(1.0);
+        let mut attr = String::new();
+        bounds.input_value(&Entry::from(1234567.25)).write_attr(" value", &mut attr);
+        assert_eq!(attr, r#" value="1234567.25""#);
+        assert_eq!(bounds.read(&Entry::typed("1234567.25")), Some(1234567.25));
     }
 
     #[test]

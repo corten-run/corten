@@ -510,7 +510,8 @@ It still draws submitted text as typed after a refusal. Standalone `Entry` attri
 existing formatting. See [Choice 64](../design.md#choice-exclusive-ends) for when to revisit this choice.
 
 Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
-`Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
+`Bounds::new(0.1, 16.0).step(0.1)`. A stepped float prefill uses the greater of the
+minimum's and step's decimal places, so a half size stays `1.5` with minimum `0.5` and step `1`. Integers
 cannot opt into any step: a number input that allows `2.5` cannot feed an integer.
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the

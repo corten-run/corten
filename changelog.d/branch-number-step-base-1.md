@@ -1,0 +1,1 @@
+- NumberField preserves fractional step bases when rendering and stepping. With a minimum of `0.5` and step `1`, `1.5` stays valid instead of being rounded to `2`. [#2311 A NumberField whose min has more decimals than its step draws and steps values off their step, so the form cannot be sent (min 0.5, step 1: 1.5 becomes 2)](https://github.com/corten-run/corten/issues/2311)
