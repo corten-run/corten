@@ -205,6 +205,853 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     assert!(<dyn crate::Href>::prefetch(&crate::Route::at(&print, QtyId)));
 }
 
+/// An entry whose page also answers at another address (an older one stored links still carry) is
+/// current there by the same rule as at its own URL, its link still going to its own, and the
+/// other addresses name its group (#2119).
+#[test]
+fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    #[derive(crate::Route)]
+    #[route("/catalog")]
+    struct Catalog;
+    #[derive(crate::Route)]
+    #[route("/catalog/integrations/settings")]
+    struct Settings;
+    #[derive(crate::Route)]
+    #[route("/catalog/integrations/governance")]
+    struct Governance;
+    #[derive(crate::Route)]
+    #[route("/desk")]
+    struct Desk;
+    #[derive(crate::Route)]
+    #[route("/seller-desk")]
+    struct OldDesk;
+    let old = Local::parse("/old/settings?tab=a#b").unwrap();
+    let written = |path: &str, entries: Vec<NavTo>| {
+        nav_links(path, entries.into_iter().map(|e| (e, ())))
+            .links()
+            .map(|(link, ())| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out
+            })
+            .collect::<Vec<_>>()
+    };
+    let current = |path: &str| {
+        written(
+            path,
+            vec![
+                NavTo::section(&Catalog),
+                NavTo::page(&Settings).also(&Governance).also(&old),
+                NavTo::section(&Desk).also(&OldDesk),
+            ],
+        )
+        .iter()
+        .map(|link| link.contains(r#" aria-current="page""#))
+        .collect::<Vec<_>>()
+    };
+
+    // At the older address the entry, not the section above it, is current: its other address is
+    // deeper than the section, as its own URL is.
+    let links = written(
+        "/catalog/integrations/governance",
+        vec![NavTo::section(&Catalog), NavTo::page(&Settings).also(&Governance).also(&old)],
+    );
+    let group = links[1].split(r#" data-nav-group=""#).nth(1).unwrap().split('"').next().unwrap();
+    assert!(group.len() == 9 && group.ends_with('+'), "a group with other addresses says so: {group}");
+    assert_eq!(links[0], format!(r#" href="/catalog" data-nav="section" data-nav-group="{group}""#));
+    assert_eq!(
+        links[1],
+        format!(
+            r#" href="/catalog/integrations/settings" data-nav data-nav-group="{group}" data-nav-also="/catalog/integrations/governance /old/settings" aria-current="page""#
+        ),
+        "the other addresses are written by their paths alone, the query and fragment left out"
+    );
+    assert_eq!(current("/catalog/integrations/governance"), [false, true, false]);
+    assert_eq!(current("/catalog/integrations/settings"), [false, true, false]);
+    assert_eq!(current("/old/settings"), [false, true, false], "a path from data takes part");
+    assert_eq!(current("/old/settings/more"), [false, false, false], "a page entry holds its addresses alone");
+    assert_eq!(current("/catalog/other"), [true, false, false]);
+    // A section is current under its other address as under its own.
+    assert_eq!(current("/seller-desk/money"), [false, false, true]);
+    assert_eq!(current("/seller-desk"), [false, false, true]);
+    assert_eq!(current("/elsewhere"), [false, false, false]);
+
+    // An entry with no other address writes no attribute, and the other addresses name the group.
+    let group =
+        |links: Vec<String>| links[0].split(r#" data-nav-group=""#).nth(1).unwrap().split('"').next().unwrap().to_string();
+    let plain = written("/", vec![NavTo::page(&Settings)]);
+    assert!(!plain[0].contains("data-nav-also"), "{plain:?}");
+    let also = group(written("/", vec![NavTo::page(&Settings).also(&Governance)]));
+    assert_ne!(group(plain), also);
+    assert_eq!(group(written("/catalog", vec![NavTo::page(&Settings).also(&Governance)])), also);
+    assert_ne!(group(written("/", vec![NavTo::page(&Settings).also(&old)])), also);
+    assert_ne!(
+        group(written("/", vec![NavTo::page(&Settings).also(&Governance), NavTo::page(&Desk)])),
+        group(written("/", vec![NavTo::page(&Settings), NavTo::page(&Desk).also(&Governance)])),
+        "which entry an address belongs to names the group too"
+    );
+
+    // A nav with no other addresses names the same group as before they existed.
+    assert_eq!(group(written("/", vec![NavTo::page(&Settings)])), "b6f787d3");
+
+    // A route written by hand whose path has a space is written with it encoded, as the browser
+    // asks for it, so the runtime can split the attribute on spaces.
+    struct Spaced;
+    impl crate::Route for Spaced {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old settings";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str("/old settings?x=a b");
+        }
+    }
+    let links = written("/old%20settings", vec![NavTo::page(&Settings).also(&Spaced).also(&Governance)]);
+    assert!(
+        links[0].contains(r#" data-nav-also="/old%20settings /catalog/integrations/governance" aria-current="page""#),
+        "{links:?}"
+    );
+
+    // One whose path has a character beyond ASCII is written and compared as the browser's
+    // `pathname` has it, percent-encoded, which is how the browser asks for it: the server marks
+    // the entry at that request as the runtime does at that `location.pathname`.
+    struct Cafe;
+    impl crate::Route for Cafe {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old/caf\u{e9}";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str("/old/caf\u{e9}\\menu|\t?x=\u{e9}");
+        }
+    }
+    let links = written("/old/caf%C3%A9/menu%7C", vec![NavTo::section(&Catalog), NavTo::section(&Settings).also(&Cafe)]);
+    assert!(!links[0].contains("aria-current"), "{links:?}");
+    assert!(links[1].ends_with(r#" data-nav-also="/old/caf%C3%A9/menu%7C" aria-current="page""#), "{links:?}");
+    let under = written("/old/caf%C3%A9/menu%7C/more", vec![NavTo::section(&Settings).also(&Cafe)]);
+    assert!(under[0].ends_with(r#" aria-current="page""#), "a section under it too: {under:?}");
+
+    // One whose path holds characters HTML escapes (`&`, `'`), which the browser keeps in a path,
+    // is escaped in the attribute, the entry's other addresses beside it and another entry's before
+    // it written as they are.
+    let amp = Local::parse("/old/a&copy;'b").unwrap();
+    let links = written(
+        "/old/a&copy;'b",
+        vec![NavTo::section(&Desk).also(&OldDesk), NavTo::page(&Settings).also(&amp).also(&Governance)],
+    );
+    assert!(links[0].contains(r#" data-nav-also="/seller-desk""#), "{links:?}");
+    assert!(
+        links[1].ends_with(r#" data-nav-also="/old/a&amp;copy;&#39;b /catalog/integrations/governance" aria-current="page""#),
+        "{links:?}"
+    );
+}
+
+/// The other addresses name the group by each entry's whole boundaries: two navs of the same text
+/// whose entries split it 65,536 bytes apart are two groups, so ranked in one page neither can make
+/// the other's current link lose its mark. That holds for where each entry's own URL ends too, not
+/// only where its other addresses do.
+#[test]
+fn nav_entries_with_other_addresses_name_their_group_by_whole_boundaries() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    #[derive(crate::Route)]
+    #[route("/x")]
+    struct X;
+    #[derive(crate::Route)]
+    #[route("/y")]
+    struct Y;
+    let long = "b".repeat(65_535);
+    let (a, bc) = (Local::parse("/a").unwrap(), Local::parse(&format!("/{long}/c")).unwrap());
+    let (ab, c) = (Local::parse(&format!("/a/{long}")).unwrap(), Local::parse("/c").unwrap());
+    let group = |entries: [NavTo; 2]| {
+        let nav = nav_links("/", entries.map(|e| (e, ())));
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        out.split(r#" data-nav-group=""#).nth(1).unwrap().split('"').next().unwrap().to_string()
+    };
+    // The same text, `/a/bbb..b/c`, split after `/a` or after `/a/bbb..b`.
+    assert_ne!(
+        group([NavTo::page(&X).also(&a), NavTo::page(&Y).also(&bc)]),
+        group([NavTo::page(&X).also(&ab), NavTo::page(&Y).also(&c)])
+    );
+    // The entries' own URLs split the same text 65,536 bytes apart, and only the second has an
+    // other address, the same one in both, which ends where the whole text does.
+    assert_ne!(
+        group([NavTo::page(&a), NavTo::page(&bc).also(&X)]),
+        group([NavTo::page(&ab), NavTo::page(&c).also(&X)]),
+        "the URLs end at 2 and 65,538, the same in their low 16 bits"
+    );
+}
+
+/// An entry's other address is written as `location.pathname` shows it at that address, by the URL
+/// Standard, made a comparison key, and both the server and the runtime compare the page's path's
+/// key with that text alone: `.` and `..` segments resolved (`%2e` too), the ends of the URL trimmed,
+/// `|` read as `%7C` in both, which Chromium shows and Firefox and WebKit keep, and an escape's hex
+/// digits uppercase, never decoded, so every engine marks the same entry (#2119).
+#[test]
+fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    #[derive(crate::Route)]
+    #[route("/new-settings")]
+    struct Settings;
+    /// A route written by hand, as an app's own may write one.
+    struct Written(&'static str);
+    impl crate::Route for Written {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/written";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let link = |path: &str, also: &Written| {
+        let nav = nav_links(path, [(NavTo::page(&Settings).also(also), ())]);
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        let paths = out.split(r#" data-nav-also=""#).nth(1).unwrap().split('"').next().unwrap().to_string();
+        (paths, out.contains(r#" aria-current="page""#))
+    };
+    for (written, shown) in [
+        ("/old/%2e%2E/settings", "/settings"),
+        ("/old/../settings", "/settings"),
+        ("/a/./b/.%2E/c", "/a/c"),
+        ("/a/b/..", "/a/"),
+        ("/a/%2E", "/a/"),
+        ("/..", "/"),
+        ("/a/../..", "/"),
+        ("/a/...", "/a/..."),
+        ("/old ", "/old"),
+        ("/old ?x", "/old%20"),
+        ("/o\tl\nd\r", "/old"),
+        ("/old x/", "/old%20x/"),
+        ("/old\\x", "/old/x"),
+        ("/old|x", "/old%7Cx"),
+        ("/old%7Cx", "/old%7Cx"),
+        ("/old%7cx", "/old%7Cx"),
+        ("/caf%c3%a9/%zz/%7", "/caf%C3%A9/%zz/%7"),
+        ("/old/%2541/%7%", "/old/%2541/%7%"),
+        ("/old^`{}\"<>", "/old%5E%60%7B%7D%22%3C%3E"),
+        ("/old/caf\u{e9}", "/old/caf%C3%A9"),
+    ] {
+        assert_eq!(link(shown, &Written(written)), (shown.to_string(), true), "{written:?}");
+    }
+    let dotted = Written("/old/%2e%2E/settings");
+    assert!(!link("/old/%2e%2E/settings", &dotted).1, "the page is at /settings, which a browser asks for");
+    // A raw `|`, as Firefox and WebKit ask for it and show it, holds as Chromium's `%7C` does, and
+    // only there: under a section as well.
+    let piped = Written("/old|x");
+    assert!(link("/old|x", &piped).1 && link("/old%7Cx", &piped).1);
+    assert!(!link("/old", &piped).1 && !link("/old%7Cy", &piped).1);
+    // A lowercase escape is one key with its uppercase form, not decoded: WebKit keeps `%7c` in
+    // `location.pathname` but asks for `%7C`, where Chromium and Firefox ask for `%7c` as written.
+    assert!(link("/old%7cx", &piped).1);
+    let lower = Local::parse("/old%7chome").unwrap();
+    let at = |path: &str| {
+        let nav = nav_links(path, [(NavTo::page(&Settings).also(&lower), ())]);
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        out
+    };
+    assert!(at("/old%7Chome").ends_with(r#" data-nav-also="/old%7Chome" aria-current="page""#), "{}", at("/old%7Chome"));
+    assert!(at("/old%7chome").contains("aria-current") && at("/old|home").contains("aria-current"));
+    assert!(!at("/old%7Chomes").contains("aria-current") && !at("/old%257chome").contains("aria-current"));
+    let local = Local::parse("/old|x").unwrap();
+    let section = |path: &str| {
+        let nav = nav_links(path, [(NavTo::section(&Settings).also(&local), ())]);
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        out.contains(r#" aria-current="page""#)
+    };
+    assert!(section("/old|x/more") && section("/old%7Cx/more") && !section("/old|xy"));
+}
+
+/// The server marks an entry at its other address for each request a browser sends for that
+/// address, not only for the comparison key: measured in Playwright 1.65.1's builds (Linux),
+/// Chromium and Firefox ask for the path as written, `|` as `%7C` in Chromium, and WebKit
+/// uppercases each escape, while its `location.pathname` keeps the path as written. WebKit also
+/// asks for an escape of an unreserved character (`%2e`, `%41`, `%7e`) decoded, so an address with
+/// one, which only a route implemented by hand writes, is left out on both sides, and a path with
+/// one typed by hand is compared as written: it is never the entry whose URL has the plain
+/// character (#2119).
+#[test]
+fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+    };
+    #[derive(crate::Route)]
+    #[route("/new-settings")]
+    struct Settings;
+    /// A route written by hand, as an app's own may write one: a `Local` refuses an escaped
+    /// unreserved character.
+    struct Written(&'static str);
+    impl crate::Route for Written {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/written";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let drawn = |path: &str, also: &'static str| {
+        let nav = nav_links(path, [(NavTo::page(&Settings).also(&Written(also)), ())]);
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        out
+    };
+    let marked = |path: &str, also: &'static str| drawn(path, also).contains(r#" aria-current="page""#);
+    // Each older address as a page writes it, then what Chromium, Firefox and WebKit ask for.
+    for (written, sent) in [
+        ("/old/%7c", ["/old/%7c", "/old/%7c", "/old/%7C"]),
+        ("/old/|", ["/old/%7C", "/old/|", "/old/|"]),
+        ("/old/caf%c3%a9", ["/old/caf%c3%a9", "/old/caf%c3%a9", "/old/caf%C3%A9"]),
+        ("/old/%5b%2f%3a", ["/old/%5b%2f%3a", "/old/%5b%2f%3a", "/old/%5B%2F%3A"]),
+    ] {
+        for sent in sent {
+            assert!(marked(sent, written), "{written} at {sent}");
+        }
+    }
+    // An address with an escaped unreserved character is left out, at every spelling: not written,
+    // and the nav drawn as one without other addresses (no `+` in its group).
+    for (written, sent) in [
+        ("/old/%2e%2ex", ["/old/%2e%2ex", "/old/..x"]),
+        ("/old/x%2Ey", ["/old/x%2Ey", "/old/x.y"]),
+        ("/old/%41b%61", ["/old/%41b%61", "/old/Aba"]),
+        ("/old/%2d%5f%7e%30", ["/old/%2d%5f%7e%30", "/old/-_~0"]),
+        ("/old/%7%33x", ["/old/%7%33x", "/old/%73x"]),
+    ] {
+        for sent in sent {
+            let out = drawn(sent, written);
+            assert!(
+                !out.contains("aria-current") && !out.contains("data-nav-also") && !out.contains('+'),
+                "{written} at {sent}: {out}"
+            );
+        }
+    }
+    // Only that address is left out: another of the same entry is still written and holds.
+    let nav = nav_links("/old/b", [(NavTo::page(&Settings).also(&Written("/old/%41")).also(&Written("/old/b")), ())]);
+    let (link, ()) = nav.links().next().unwrap();
+    let mut out = String::new();
+    link.render_attrs(&mut out);
+    assert!(out.ends_with(r#"+" data-nav-also="/old/b" aria-current="page""#), "{out}");
+    // An escape of a reserved character, or of `%`, is not the character.
+    assert!(!marked("/old/a/b", "/old/a%2fb") && marked("/old/a%2Fb", "/old/a%2fb"));
+    // `%252e` is `%` and the text `2e`, which no browser asks for as `%252E`.
+    assert!(!marked("/old/a%2e", "/old/a%252e") && !marked("/old/a.", "/old/a%252e") && marked("/old/a%252e", "/old/a%252e"));
+    assert!(!marked("/old/a%252E", "/old/a%252e"));
+    // A path typed by hand with an escaped unreserved character is compared as written, as
+    // Chromium and Firefox ask for it, and so is not the address with the plain character; nor is
+    // a `%` without two hex digits read with the escape after it (`%7%33` is not `%73`, `s`).
+    assert!(marked("/old/a.b", "/old/a.b") && !marked("/old/a%2eb", "/old/a.b") && !marked("/old/a%252eb", "/old/a.b"));
+    for typed in ["/old/%73ettings", "/old/%7%33ettings", "/old/%7%73ettings", "/old/%73%65ttings"] {
+        assert!(!marked(typed, "/old/settings"), "{typed}");
+    }
+    // The check is made once the `.` and `..` segments are resolved, escaped or not, as every
+    // engine resolves them: `/old/%2e%2e/x` is `/x`, and kept.
+    assert!(
+        drawn("/x", "/old/%2e%2e/x").ends_with(r#"+" data-nav-also="/x" aria-current="page""#),
+        "{}",
+        drawn("/x", "/old/%2e%2e/x")
+    );
+}
+
+/// A URL whose path is its own comparison key, as every typed route's without an escape is, is kept
+/// as written in a nav with other addresses rather than keyed: the text is the key `pathname` makes
+/// of it, and every URL that is not, it leaves to `pathname` (#2119).
+#[test]
+fn a_url_is_its_own_key_only_when_the_key_is_the_url() {
+    use crate::page::own_key_for_tests as own_key;
+    #[derive(crate::Route)]
+    #[route("/p/{name}")]
+    struct P {
+        name: String,
+    }
+    let mut typed = Vec::new();
+    for name in ["plain", "a.b", "...", "-._~!$&'()*+,;=:@", "a b", "a|b", "caf\u{e9}", "%41", "a/b"] {
+        let mut out = String::new();
+        crate::Route::write_href(&P { name: name.into() }, &mut out, false);
+        typed.push(out);
+    }
+    let own = ["/", "/a", "/a/", "//a", "/a?b=c", "/a#f", "/a?b#c", "/a.b", "/...", "/a/.../b", "/-._~!$&'()*+,;=:@", "/A1/z9"];
+    let not = [
+        "",
+        "a",
+        "?a",
+        "/%41",
+        "/%7c",
+        "/a|b",
+        "/a\\b",
+        "/a b",
+        " /a",
+        "/a\tb",
+        "/.",
+        "/..",
+        "/a/./b",
+        "/a/../b",
+        "/a/.",
+        "/a/..?x",
+        "/a/.#x",
+        "/caf\u{e9}",
+        "/a^b",
+        "/a[b]",
+        "/a\"b",
+        "/a`b",
+        "/a{b}",
+        "/a<b>",
+    ];
+    for url in own.iter().copied().chain(not).chain(typed.iter().map(String::as_str)) {
+        let (end, key) = own_key(url);
+        if let Some(end) = end {
+            assert_eq!(&url[..end], key, "{url:?}");
+        }
+        assert_eq!(end.is_some(), own.contains(&url) || (typed.iter().any(|t| t == url) && !url.contains('%')), "{url:?}");
+    }
+}
+
+/// A link of a nav with other addresses carries them in the group text it already writes, so a
+/// link of any nav is as large as before they existed: its URL, its group and three flags (#2119).
+#[test]
+fn a_nav_link_is_no_larger_than_before_other_addresses() {
+    assert_eq!(std::mem::size_of::<crate::page::NavLink<'_>>(), std::mem::size_of::<(&str, &str, [bool; 3])>());
+}
+
+/// An entry is as deep as the deepest of its addresses that holds the page, not as its own URL: an
+/// other address deeper than the entry's URL wins over an entry whose URL is between the two, and
+/// one shallower, holding the page or not, leaves it as deep as its URL (#2119).
+#[test]
+fn a_nav_entry_is_as_deep_as_the_address_that_holds_the_page() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    let catalog = Local::parse("/catalog").unwrap();
+    let integrations = Local::parse("/catalog/integrations").unwrap();
+    let legacy = Local::parse("/catalog/integrations/legacy").unwrap();
+    let old = Local::parse("/c").unwrap();
+    let marked = |path: &str, entries: [(NavTo<'_>, &'static str); 2]| {
+        nav_links(path, entries)
+            .links()
+            .filter(|(link, _)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out.contains(r#" aria-current="page""#)
+            })
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>()
+    };
+    // `/catalog` (depth 8) holds the page at its other address (28), deeper than
+    // `/catalog/integrations` (21), in either order.
+    for path in ["/catalog/integrations/legacy", "/catalog/integrations/legacy/x"] {
+        let catalog = || (NavTo::section(&catalog).also(&legacy), "Catalog");
+        let integrations = || (NavTo::section(&integrations), "Integrations");
+        assert_eq!(marked(path, [catalog(), integrations()]), ["Catalog"], "{path}");
+        assert_eq!(marked(path, [integrations(), catalog()]), ["Catalog"], "{path}");
+    }
+    // Under the other entry but not under the deeper address, the other entry is deeper.
+    let path = "/catalog/integrations/x";
+    assert_eq!(
+        marked(path, [(NavTo::section(&catalog).also(&legacy), "Catalog"), (NavTo::section(&integrations), "Integrations")]),
+        ["Integrations"]
+    );
+    // A shallower other address that holds the page too (`/catalog`, 8) does not make the entry
+    // shallower than its own URL (`/catalog/integrations/legacy`, 28), which still wins over the
+    // entry between the two (`/catalog/integrations`, 21), in either order.
+    for path in ["/catalog/integrations/legacy", "/catalog/integrations/legacy/x"] {
+        let legacy = || (NavTo::section(&legacy).also(&catalog), "Legacy");
+        let integrations = || (NavTo::section(&integrations), "Integrations");
+        assert_eq!(marked(path, [legacy(), integrations()]), ["Legacy"], "{path}");
+        assert_eq!(marked(path, [integrations(), legacy()]), ["Legacy"], "{path}");
+    }
+    // Nor does one that does not hold the page (`/c`, 2).
+    assert_eq!(
+        marked(path, [(NavTo::section(&catalog).also(&old), "Catalog"), (NavTo::section(&integrations), "Integrations")]),
+        ["Integrations"]
+    );
+    // Without the other address, the deeper URL wins at the older path.
+    assert_eq!(
+        marked(
+            "/catalog/integrations/legacy",
+            [(NavTo::section(&catalog), "Catalog"), (NavTo::section(&integrations), "Integrations")]
+        ),
+        ["Integrations"]
+    );
+}
+
+/// In a nav with other addresses the entries' own URLs are compared by the same key as the other
+/// addresses, on the server as in the runtime: a deeper entry's own URL that WebKit asks for in
+/// another spelling (`%7c` as `%7C`) still wins over a shallower entry's other address (#2119).
+/// A nav without other addresses compares its URLs as before they existed.
+#[test]
+fn a_nav_with_other_addresses_compares_its_own_urls_by_the_same_key() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    let settings = Local::parse("/settings").unwrap();
+    let team = Local::parse("/old%7c/team").unwrap();
+    let people = Local::parse("/old%7c/team/people").unwrap();
+    let current = |path: &str| {
+        nav_links(path, [(NavTo::section(&settings).also(&team), "Settings"), (NavTo::section(&people), "People")])
+            .links()
+            .filter(|(link, _)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out.contains(r#" aria-current="page""#)
+            })
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>()
+    };
+    for path in ["/old%7c/team/people/alex", "/old%7C/team/people/alex", "/old|/team/people/alex", "/old%7C/team/people"] {
+        assert_eq!(current(path), ["People"], "{path}");
+    }
+    for path in ["/old%7c/team/alex", "/old%7C/team", "/settings/x"] {
+        assert_eq!(current(path), ["Settings"], "{path}");
+    }
+    assert_eq!(current("/old%7c/teams"), [] as [&str; 0]);
+    // Without other addresses, the URL is compared as written.
+    let plain = nav_links("/old%7C/team/people", [(NavTo::section(&people), ())]);
+    let (link, ()) = plain.links().next().unwrap();
+    let mut out = String::new();
+    link.render_attrs(&mut out);
+    assert!(!out.contains("aria-current"), "{out}");
+    // Nor does a key decode: `/settings` typed as `/%73ettings`, which Chromium and Firefox ask for
+    // as written and Corten's router does not serve as `/settings`, holds neither entry, under the
+    // section `/` aside, which holds every path.
+    let root = Local::parse("/").unwrap();
+    let marks = |path: &str| {
+        nav_links(path, [(NavTo::section(&root), "Root"), (NavTo::page(&settings).also(&team), "Settings")])
+            .links()
+            .filter(|(link, _)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out.contains(r#" aria-current="page""#)
+            })
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(marks("/settings"), ["Settings"]);
+    for typed in ["/%73ettings", "/%7%33ettings", "/%53ettings", "/settings%2F"] {
+        assert_eq!(marks(typed), ["Root"], "{typed}");
+    }
+}
+
+/// A nav URL that is not a path on this site (`//host/x`, `/\host/x`, `/<tab>/host/x`, a full or a
+/// relative URL) is never current, and is never compared as a path: not as an entry's own URL, in a
+/// nav with other addresses or without, and not as an other address, which is left out of
+/// `data-nav-also`. The browser reads such a link's pathname as another host's, and the runtime's
+/// `isPath` tests the same text, so the server and the runtime mark the same entry (#2119).
+#[test]
+fn a_nav_url_that_is_not_a_path_on_this_site_is_never_current() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    /// A URL as a route implemented by hand writes it.
+    struct Hand(&'static str);
+    impl crate::Route for Hand {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let drawn = |path: &str, entries: Vec<(NavTo, &'static str)>| {
+        nav_links(path, entries)
+            .links()
+            .map(|(link, label)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                (*label, out)
+            })
+            .collect::<Vec<_>>()
+    };
+    let marked = |links: &[(&'static str, String)]| {
+        links.iter().filter(|(_, out)| out.contains(r#" aria-current="page""#)).map(|(label, _)| *label).collect::<Vec<_>>()
+    };
+    let (root, older, here) = (Local::parse("/").unwrap(), Local::parse("/older").unwrap(), Local::parse("/here").unwrap());
+    let far = ["//corten.invalid/old", "/\\corten.invalid/old", "/\t/corten.invalid/old", "/\n/corten.invalid/old", "/\r/x"];
+
+    // An entry whose own URL leads off the site, in a nav with other addresses: only the section
+    // holds the page, at the path the browser shows for it and at the entry's other address, which
+    // is not written.
+    for url in far {
+        let (to, alias) = (Hand(url), Hand("/elsewhere"));
+        for path in ["/old", "/older", "/elsewhere", "//corten.invalid/old", url] {
+            let links = drawn(
+                path,
+                vec![
+                    (NavTo::section(&root), "Root"),
+                    (NavTo::page(&to).also(&older), "Far"),
+                    (NavTo::page(&here).also(&alias), "Here"),
+                ],
+            );
+            let expected: &[&str] = if path == "/elsewhere" { &["Here"] } else { &["Root"] };
+            assert_eq!(marked(&links), expected, "{url:?} at {path:?}");
+            assert!(!links[1].1.contains("data-nav-also"), "{url:?}: {}", links[1].1);
+        }
+    }
+
+    // Such an address of an entry is left out, and the entry holds the page at its others alone.
+    let (a, b, c) = (Hand(far[0]), Hand(far[1]), Hand(far[2]));
+    // Nor is one that does not start with its one `/` as written, which the runtime would not
+    // compare as a path either, though the URL Standard trims it to one.
+    let (spaced, backslashed) = (Hand(" \t/old\u{1} "), Hand("\\old\\x"));
+    let entry = || NavTo::page(&here).also(&a).also(&b).also(&older).also(&c).also(&spaced).also(&backslashed);
+    let links = drawn("/here", vec![(NavTo::section(&root), "Root"), (entry(), "Here")]);
+    assert!(links[1].1.contains(r#" data-nav-also="/older""#), "{}", links[1].1);
+    for path in ["//corten.invalid/old", "/old"] {
+        assert_eq!(marked(&drawn(path, vec![(NavTo::section(&root), "Root"), (entry(), "Here")])), ["Root"], "{path:?}");
+    }
+    assert_eq!(marked(&drawn("/older", vec![(NavTo::section(&root), "Root"), (entry(), "Here")])), ["Here"]);
+    // An entry left with no address is written as one without them.
+    let only = || NavTo::page(&here).also(&a);
+    let links = drawn("/old", vec![(NavTo::section(&root), "Root"), (only(), "Here")]);
+    assert!(links.iter().all(|(_, out)| !out.contains("data-nav-also") && !out.contains(r#"+""#)), "{links:?}");
+
+    // Without other addresses, and for a lone link, the same: never current, even where the
+    // request path is the URL's text.
+    for url in far.into_iter().chain(["https://corten.invalid/old", "old", "?tab=2", " /old", "", "//["]) {
+        let to = Hand(url);
+        for path in ["/old", "//corten.invalid/old", url] {
+            let expected: &[&str] = if path.starts_with('/') { &["Root"] } else { &[] };
+            assert_eq!(
+                marked(&drawn(path, vec![(NavTo::section(&root), "Root"), (NavTo::page(&to), "Far")])),
+                expected,
+                "{url:?} at {path:?}"
+            );
+            assert!(
+                !crate::page::is_current_for_tests(path, url, false) && !crate::page::is_current_for_tests(path, url, true),
+                "{url:?} at {path:?}"
+            );
+        }
+    }
+    // A path on this site stays one, `/` and a query or fragment straight after it included.
+    for (path, url) in [("/", "/"), ("/", "/?tab=2"), ("/", "/#top"), ("/a//b", "/a//b"), ("/a", "/a?b//c")] {
+        assert!(crate::page::is_current_for_tests(path, url, false), "{url:?} at {path:?}");
+    }
+}
+
+/// A NUL in an entry's own URL, which only a route implemented by hand writes, is read by the HTML
+/// parser as U+FFFD in the `href` the runtime parses, so the link goes to `/old%EF%BF%BDx`, not
+/// `/old%00x`. In a nav with other addresses the server ranks the entry at the path the runtime
+/// gets, so both mark the same entry: the entry at `/old%EF%BF%BDx` and at its other address, the
+/// section at `/old%00x`. An other address is not an `href`, and one holding a raw NUL is not a
+/// usable address: Chromium and WebKit ask for it with `%00` and Firefox cuts it at the NUL, so it
+/// is left out of `data-nav-also` and never makes the entry current, at any request an engine sends
+/// for it. One written with the escape, `%00`, is kept (#2119).
+#[test]
+fn a_nav_entry_with_a_nul_in_its_url_is_ranked_where_the_link_goes() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    /// A URL as a route implemented by hand writes it.
+    struct Hand(&'static str);
+    impl crate::Route for Hand {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let (root, older) = (Local::parse("/").unwrap(), Local::parse("/older").unwrap());
+    let drawn = |path: &str, entry: NavTo| {
+        nav_links(path, [(NavTo::section(&root), "Root"), (entry, "Old")])
+            .links()
+            .map(|(link, label)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                (*label, out)
+            })
+            .collect::<Vec<_>>()
+    };
+    let marked = |path: &str, entry: NavTo| {
+        drawn(path, entry)
+            .into_iter()
+            .filter(|(_, out)| out.contains(r#" aria-current="page""#))
+            .map(|(label, _)| label)
+            .collect::<Vec<_>>()
+    };
+    for url in ["/old\0x", "/old\0x?tab=2"] {
+        let to = Hand(url);
+        assert_eq!(marked("/old%EF%BF%BDx", NavTo::page(&to).also(&older)), ["Old"], "{url:?}");
+        assert_eq!(marked("/older", NavTo::page(&to).also(&older)), ["Old"], "{url:?}");
+        assert_eq!(marked("/old%00x", NavTo::page(&to).also(&older)), ["Root"], "{url:?}");
+        assert_eq!(marked("/old%EF%BF%BDx/more", NavTo::section(&to).also(&older)), ["Old"], "{url:?}");
+        assert_eq!(marked("/old%00x/more", NavTo::section(&to).also(&older)), ["Root"], "{url:?}");
+        let links = drawn("/older", NavTo::page(&to).also(&older));
+        assert!(links[1].1.contains(r#" data-nav-also="/older""#), "{url:?}: {links:?}");
+    }
+    // A NUL at the end is not trimmed as a control character is: the parser has made it U+FFFD.
+    let to = Hand("/old\0");
+    assert_eq!(marked("/old%EF%BF%BD", NavTo::page(&to).also(&older)), ["Old"]);
+    assert_eq!(marked("/old", NavTo::page(&to).also(&older)), ["Root"]);
+    // An other address with a raw NUL is left out, alone or beside a kept one, wherever the NUL
+    // is, and no request an engine sends for it marks the entry.
+    let here = Local::parse("/here").unwrap();
+    for url in ["/older\0x", "/older\0", "/older\0x?tab=2", "/older?tab=\0", "/\0"] {
+        let nul = Hand(url);
+        for path in ["/older%00x", "/older%00", "/older", "/older%EF%BF%BDx", "/%00", "/"] {
+            assert_eq!(marked(path, NavTo::page(&here).also(&nul)), ["Root"], "{url:?} at {path:?}");
+            let links = drawn(path, NavTo::page(&here).also(&nul));
+            assert!(links.iter().all(|(_, out)| !out.contains("data-nav-also") && !out.contains(r#"+""#)), "{url:?}: {links:?}");
+        }
+        let links = drawn("/kept", NavTo::page(&here).also(&nul).also(&older));
+        assert!(links[1].1.contains(r#" data-nav-also="/older""#), "{url:?}: {links:?}");
+    }
+    // The address written with the escape is kept, and current where every engine asks for it.
+    let escaped = Hand("/older%00x");
+    let links = drawn("/older%00x", NavTo::page(&here).also(&escaped));
+    assert!(links[1].1.contains(r#" data-nav-also="/older%00x" aria-current="page""#), "{links:?}");
+    assert_eq!(marked("/older", NavTo::page(&here).also(&escaped)), ["Root"]);
+}
+
+/// An entry whose URL is empty ends where the entry before it does, so it is not taken for that
+/// entry when its other addresses (`NavTo::also`) are written: only the entry that has them writes
+/// `data-nav-also` (#2119).
+#[test]
+fn an_empty_nav_url_does_not_write_the_entry_before_its_other_addresses() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    /// A URL as a route implemented by hand writes it.
+    struct Hand(&'static str);
+    impl crate::Route for Hand {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let (settings, old, empty, after) =
+        (Local::parse("/settings").unwrap(), Local::parse("/old").unwrap(), Hand(""), Hand("?tab=2"));
+    for path in ["/settings", "/old", "/"] {
+        let links: Vec<String> = nav_links(
+            path,
+            [(NavTo::page(&settings).also(&old), "Settings"), (NavTo::page(&empty), "Empty"), (NavTo::page(&after), "Query")],
+        )
+        .links()
+        .map(|(link, _)| {
+            let mut out = String::new();
+            link.render_attrs(&mut out);
+            out
+        })
+        .collect();
+        assert!(links[0].contains(r#" data-nav-also="/old""#), "{path}: {links:?}");
+        assert_eq!(links[0].contains("aria-current"), path != "/", "{path}: {links:?}");
+        for link in &links[1..] {
+            assert!(!link.contains("data-nav-also") && !link.contains("aria-current"), "{path}: {links:?}");
+        }
+    }
+}
+
+/// What a page whose nav is an eight-entry `Req::nav_of` with no other addresses (`NavTo::also`)
+/// costs: `NAV_PAGES` (200) requests in process, one at a time; with `NAV_TARGET=local` the
+/// entries are `Local` paths read from data, otherwise typed routes. With `NAV_ALSO=primary` or
+/// `NAV_ALSO=alias` the same nav's fourth entry, `/n/3`, is current at `/old/3` too, and the page is
+/// asked for at `/n/3` or at `/old/3`. With `NAV_ALSO=escaped` that other address is the `Local`
+/// `/old/a&copy;`, which `data-nav-also` writes escaped, and the page is asked for there. Counting it
+/// under callgrind at two numbers of requests gives the instructions per request. Run in release:
+/// `NAV_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_a_nav_of_costs`
+#[test]
+#[ignore]
+fn what_a_page_with_a_nav_of_costs() {
+    use crate::{page::NavTo, Local};
+    #[derive(crate::Route)]
+    #[route("/n/{n}")]
+    struct N {
+        n: u32,
+    }
+    #[derive(crate::Route)]
+    #[route("/old/{n}")]
+    struct Old {
+        n: u32,
+    }
+    async fn typed(req: Req) -> HtmlResult {
+        let to: Vec<N> = (0..8).map(|n| N { n }).collect();
+        let nav = req.nav_of(to.iter().map(|to| (NavTo::page(to), "Entry")));
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    async fn local(req: Req) -> HtmlResult {
+        let to: Vec<Local> = (0..8).map(|n| Local::parse(&format!("/n/{n}")).expect("a local path")).collect();
+        let nav = req.nav_of(to.iter().map(|to| (NavTo::page(to), "Entry")));
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    async fn typed_also(req: Req) -> HtmlResult {
+        let to: Vec<N> = (0..8).map(|n| N { n }).collect();
+        let old = Old { n: 3 };
+        let nav = req.nav_of(to.iter().map(|to| (if to.n == 3 { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")));
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    async fn local_also(req: Req) -> HtmlResult {
+        let to: Vec<Local> = (0..8).map(|n| Local::parse(&format!("/n/{n}")).expect("a local path")).collect();
+        let old = Local::parse("/old/3").expect("a local path");
+        let nav = req.nav_of(
+            to.iter().map(|to| (if to.path() == "/n/3" { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")),
+        );
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    async fn typed_escaped(req: Req) -> HtmlResult {
+        let to: Vec<N> = (0..8).map(|n| N { n }).collect();
+        let old = Local::parse("/old/a&copy;").expect("a local path");
+        let nav = req.nav_of(to.iter().map(|to| (if to.n == 3 { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")));
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    async fn local_escaped(req: Req) -> HtmlResult {
+        let to: Vec<Local> = (0..8).map(|n| Local::parse(&format!("/n/{n}")).expect("a local path")).collect();
+        let old = Local::parse("/old/a&copy;").expect("a local path");
+        let nav = req.nav_of(
+            to.iter().map(|to| (if to.path() == "/n/3" { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")),
+        );
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    let pages: usize = std::env::var("NAV_PAGES").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let local_target = std::env::var("NAV_TARGET").is_ok_and(|v| v == "local");
+    let also = std::env::var("NAV_ALSO").ok();
+    let (routes, at) = match (also.as_deref(), local_target) {
+        (None, false) => (Table::new().route("/n/{n}", get(typed)), "/n/3"),
+        (None, true) => (Table::new().route("/n/{n}", get(local)), "/n/3"),
+        (Some("escaped"), local_target) => {
+            let handler = if local_target { get(local_escaped) } else { get(typed_escaped) };
+            (Table::new().route("/n/{n}", handler.clone()).route("/old/{n}", handler), "/old/a&copy;")
+        }
+        (Some(at), local_target) => {
+            let handler = if local_target { get(local_also) } else { get(typed_also) };
+            let at = match at {
+                "primary" => "/n/3",
+                "alias" => "/old/3",
+                other => panic!("NAV_ALSO is primary, alias or escaped, not {other}"),
+            };
+            (Table::new().route("/n/{n}", handler.clone()).route("/old/{n}", handler), at)
+        }
+    };
+    let router = app(routes, None);
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..pages {
+            let (status, _, body) = call_with(router.clone(), "GET", at, None, None).await;
+            assert!(status == StatusCode::OK && body.matches(r#"aria-current="page""#).count() == 1, "{body}");
+        }
+    });
+}
+
 async fn steps() -> &'static str {
     "steps"
 }
