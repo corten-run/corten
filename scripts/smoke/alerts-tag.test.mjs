@@ -66,6 +66,40 @@ for (const [name, wrong] of [
   }
 });
 
+test("both alerts parts must read this receipt; a reload without it is still a page read", { timeout: 30_000 }, async (t) => {
+  const browser = await firefox.launch();
+  t.after(() => browser.close());
+  const url = "http://localhost/alerts?saved=1", other = "http://localhost/alerts?saved=2";
+  for (const [name, reads] of [
+    ["receipt-less reload", [url, url]],
+    ["changed first receipt", [other, url]],
+    ["changed second receipt", [url, other]],
+  ]) await t.test(name, async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route("**/*", (r) => r.fulfill({ contentType: "text/html", body: "<main></main>" }));
+      await page.goto(url);
+      const fixture = alertsReadFixture(url);
+      page.on("request", fixture.onPart);
+      for (const target of reads) await page.evaluate((target) => fetch(target, { headers: { corten: "action" } }).then(r => r.text()), target);
+      assert.deepEqual(fixture.parts, reads);
+      if (name !== "receipt-less reload") return assert.equal(fixture.stopped(), false);
+      await page.evaluate(async () => {
+        await fetch("/other/alerts?saved=1");
+        await fetch("http://127.0.0.1/alerts?saved=1", { mode: "no-cors" });
+        await fetch("/alerts?saved=1", { method: "POST" });
+      });
+      assert.equal(fixture.stopped(), true);
+      await page.evaluate(() => history.replaceState(null, "", "/alerts"));
+      await page.reload();
+      assert.equal(fixture.stopped(), false);
+      assert.deepEqual([...fixture.whole].map(r => r.url()), ["http://localhost/alerts"]);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
 test("an extra part read during unroute counts even though the alerts fixture aborts it", { timeout: 30_000 }, async (t) => {
   const browser = await firefox.launch();
   t.after(() => browser.close());

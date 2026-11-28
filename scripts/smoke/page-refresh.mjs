@@ -39,7 +39,9 @@ export function alertsReadFixture(/** @type {string} */ url) {
   const parts = [], whole = new Set();
   let opening = false, initial, retry;
   const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
-    if (r.method() !== "GET" || !r.url().includes("/alerts?saved=")) return;
+    if (r.method() !== "GET") return;
+    const target = new URL(r.url());
+    if (target.origin !== fixture.origin || target.pathname !== "/alerts") return;
     if (r.headers()["corten"] === "action") parts.push(r.url());
     else {
       whole.add(r);
@@ -88,7 +90,7 @@ export function alertsReadFixture(/** @type {string} */ url) {
   return {
     first, next, saving, parts, whole, onPart,
     // The first part asks again; its follow-up is terminal. Count even a read aborted by close().
-    stopped: () => parts.length === 2 && whole.size === 0,
+    stopped: () => parts.length === 2 && parts.every(part => part === url) && whole.size === 0,
     async goto(page) {
       opening = true;
       try {
@@ -178,7 +180,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         });
         check(
           "a page part's answer that asks again takes the place of the tag that asked",
-          askingInPlace(tagged, parts[0]),
+          parts[0] === url && askingInPlace(tagged, url),
           `${JSON.stringify(tagged)} after ${parts[0]}`,
         );
         fixture.next.resolve();
@@ -191,7 +193,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const terminal = await step(saved);
         check(
           "a page's part waiting for a write is read again after a full load, not the page",
-          region.text === "Saving..." && terminal === "Saved." && parts.length >= 2 && whole.size === 0 && page.url() === url,
+          region.text === "Saving..." && terminal === "Saved." && fixture.stopped() && page.url() === url,
           `${region.text} -> ${terminal} after ${parts.length} part and ${whole.size} page reads`,
         );
         const kept = await step(() => page.evaluate(() => ({
@@ -218,7 +220,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         });
       }
       await page.waitForTimeout(2200);
-      check("a page's part stops once its patch no longer asks", fixture.stopped(), `${parts.length} part and ${whole.size} page reads; expected 2 and 0`);
+      check("a page's part stops once its patch no longer asks", fixture.stopped(), `expected two reads of ${url}; got ${JSON.stringify(parts)} and ${whole.size} page reads`);
       if (swaps) {
         const from = parts.length;
         await go(await pending());
