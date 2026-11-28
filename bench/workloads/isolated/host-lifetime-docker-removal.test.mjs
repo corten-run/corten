@@ -486,6 +486,82 @@ for (const phase of ["interval", "finish"]) {
   });
 }
 
+for (const mode of ["success", "churn", "at-deadline", "exhausted", "malformed", "unbound", "abort", "cancelled", "forced"]) {
+  test(`Browser final cgroup capture: ${mode}`, linux, async (t) => {
+    const gate = mode === "unbound" ? undefined : anchor(t).gate;
+    const stop = new AbortController();
+    const acceptedCancellation = mode === "cancelled" || mode === "forced";
+    const command = acceptedCancellation ? { terminal: true, code: null, signal: mode === "forced" ? "SIGKILL" : "SIGTERM",
+      cancelled: mode === "cancelled", forced: mode === "forced", success: false, error: null } : undefined;
+    let faults = 0, settled = 0, reads = 0;
+    const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate, stop.signal);
+    f.clock += 100; await f.tick();
+    const previous = f.samples().at(-1).at, budgets = [];
+    f.flock = (_args, options, acquire) => { budgets.push(options.timeout); return acquire(); };
+    let lists = 0;
+    f.docker = () => { lists++; return ""; };
+    f.clock += 100;
+    const beforeCapture = () => { f.override = (path) => {
+      if (path !== `/sys/fs/cgroup${f.scope}/cgroup.procs`) return;
+      reads++;
+      if (reads === 1 && mode === "malformed") return "invalid\n";
+      if (reads === 2 || (mode === "exhausted" && reads === 4)) {
+        f.clock += reads === 4 ? 1001 : mode === "at-deadline" ? 900 : 901;
+        if (mode === "abort" || acceptedCancellation) stop.abort();
+        // Opening census and real scope stay empty; only the bookend races.
+        return mode === "success" ? "" : "5000\n";
+      }
+    }; };
+    const finished = f.finish(true, () => { settled++; }, { beforeCapture, command });
+    if (mode === "abort") {
+      await assert.rejects(finished, /host observation cancelled during storage drain/);
+      assert.equal(f.hasTerminal(), false); assert.equal(f.removed, undefined);
+      assert.deepEqual(budgets, [800]); assert.equal(reads, 2); assert.equal(lists, 0);
+      assert.equal(faults, 0); assert.equal(settled, 0);
+      return;
+    }
+    const proof = await finished;
+    const drained = acceptedCancellation || ["success", "churn", "at-deadline"].includes(mode);
+    const second = drained || mode === "exhausted";
+    assert.equal(proof.status, "blocked"); assert.equal(proof.cleanupComplete, false);
+    assert.equal(proof.checks.observer, false);
+    assert.equal(proof.checks.unforced, !acceptedCancellation);
+    assert.deepEqual(f.terminal.observerFailures.first, { phase: "finish",
+      operation: mode === "success" ? "snapshot" : mode === "malformed" ? "snapshot-membership" : "snapshot-membership-recheck",
+      code: mode === "success" ? "unknown" : "ERR_ASSERTION",
+      at: previous + (mode === "malformed" ? 100 : mode === "at-deadline" ? 1000 : 1001), samples: 3, lastSampleAt: previous });
+    assert.equal(f.terminal.observerFailures.count, mode === "exhausted" ? 2 : 1);
+    if (mode === "exhausted") assert.equal(f.terminal.observerFailures.last.at, previous + 2002);
+    assert.equal(f.samples().at(-1).at, drained ? f.clock : previous);
+    assert.equal(proof.checks.terminal, drained); assert.equal(proof.checks.empty, drained);
+    assert.equal(Boolean(f.removed), drained); assert.equal(settled, drained ? 1 : 0);
+    assert.deepEqual(budgets, gate ? (second ? [800, 1000] : [800]) : []);
+    assert.equal(reads, drained ? 5 : mode === "exhausted" ? 4 : mode === "malformed" ? 1 : 2);
+    assert.equal(lists, drained ? 1 : 0); assert.equal(faults, 0);
+    assert.equal(Object.hasOwn(f.terminal, "terminalClock"), false);
+  });
+}
+
+for (const elapsed of [899, 901]) test(`Browser final malformed Docker inventory after ${elapsed} ms`, linux, async (t) => {
+  const { gate } = anchor(t);
+  const f = await fixture(t, [], true, undefined, 0, false, null, gate);
+  f.clock += 100; await f.tick();
+  const previous = f.samples().at(-1).at, budgets = [];
+  f.clock += 100;
+  f.docker = (_argv, { timeout }) => {
+    budgets.push(timeout);
+    if (budgets.length === 1) { f.clock += elapsed; return "MALFORMED_INVENTORY"; }
+    return "";
+  };
+  const proof = await f.finish();
+  const drained = elapsed === 901;
+  assert.equal(proof.status, "blocked"); assert.equal(proof.checks.empty, drained);
+  assert.equal(Boolean(f.removed), drained);
+  assert.deepEqual(f.terminal.observerFailures.first, { phase: "finish", operation: "docker-inventory", code: "ERR_ASSERTION",
+    at: previous + 100 + elapsed, samples: 3, lastSampleAt: previous });
+  assert.deepEqual(budgets, drained ? [900, 1000] : [900]);
+});
+
 test("Browser finish does not renew a terminal drain that also misses its deadline", linux, async (t) => {
   const { gate } = anchor(t);
   let faults = 0, settled = 0;

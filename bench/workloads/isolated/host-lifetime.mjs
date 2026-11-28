@@ -802,6 +802,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function failure(phase, error, timing) {
     // Retain fixed public codes only, never messages, stacks, paths or arbitrary
     // error properties. First/last plus a count bound disk and memory on failure.
+    if (error instanceof BrowserSampleDeadline) error = error.cause ?? error;
     const proofFailure = phase === "executables" ? error : null;
     const code = proofFailure?.code ?? (["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown");
     const executableRecheckReason = executableRecheckReasons.get(error);
@@ -865,6 +866,13 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       });
       sampleOperation = "docker-inventory";
       if (captureDocker) observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck, gateDeadline);
+    } catch (error) {
+      // A failed capture can spend the continuity budget before reaching the
+      // success-path deadline checks. Keep its diagnostic when reporting the gap.
+      if (gateDeadline !== undefined && (sampleOperation === "snapshot" || sampleOperation === "docker-inventory")
+        && !(error instanceof BrowserSampleDeadline) && performance.now() >= gateDeadline)
+        throw new BrowserSampleDeadline("Browser sample continuity deadline exceeded", { cause: error });
+      throw error;
     } finally { unlock?.(); }
     if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
       const path = groupPath(kernel.cgroup);
@@ -941,6 +949,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     get pendingStorage() { return writer.settled; },
     async finish(result, retainTerminalClock = false, onSettled) {
       assert.equal(closed, false); closed = true; stopSampling(); releaseStartup();
+      const abortContradictsResult = () => signal?.aborted && !result.cancelled && !result.forced;
       let empty = false;
       try {
         // A faulted interval can't renew its deadline. A settled command gets
@@ -950,7 +959,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         const terminalGateDeadline = captureGate && observerError !== null ? drainDeadline() : undefined;
         try { sample(undefined, terminalGateDeadline); }
         catch (error) {
-          if (!result.terminal || terminalGateDeadline !== undefined || !(error instanceof BrowserSampleDeadline)) throw error;
+          if (!captureGate || !result.terminal || abortContradictsResult() || terminalGateDeadline !== undefined
+            || !(error instanceof BrowserSampleDeadline)) throw error;
           finishFault(error);
           sample(undefined, drainDeadline());
         }
@@ -976,7 +986,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       // An already-cancelled, fully drained command keeps its old nonqualifying
       // evidence contract. A new abort during asynchronous finish cannot seal
       // an earlier, contradictorily clean command result.
-      assert.ok(!signal?.aborted || result.cancelled || result.forced, "host observation cancelled during storage drain");
+      assert.ok(!abortContradictsResult(), "host observation cancelled during storage drain");
       const terminal = result.terminal && empty;
       const terminalClock = retainTerminalClock && terminal && !result.cancelled && !result.forced && observerError === null
         ? hostTerminalClock() : undefined;

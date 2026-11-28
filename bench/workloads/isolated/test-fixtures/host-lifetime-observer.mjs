@@ -208,10 +208,12 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   f.tick = async () => { f.capture(); await f.drain(); };
   f.samples = () => original.readFileSync(join(directory, "samples.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   f.records = () => original.readdirSync(join(directory, "processes")).map((name) => JSON.parse(original.readFileSync(join(directory, "processes", name))));
-  f.finish = async (retainTerminalClock = false, onSettled) => {
-    f.override = () => {}; f.members = []; f.children = []; finished = true; await observer.finish(result, retainTerminalClock, onSettled);
+  f.finish = async (retainTerminalClock = false, onSettled, { beforeCapture, command = result } = {}) => {
+    f.override = () => {}; f.members = []; f.children = [];
+    beforeCapture?.();
+    finished = true; await observer.finish(command, retainTerminalClock, onSettled);
     f.terminal = JSON.parse(original.readFileSync(join(directory, "terminal.json")));
-    return inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result, ...(browser ? { phase: "timing" } : {}) });
+    return inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result: command, ...(browser ? { phase: "timing" } : {}) });
   };
   return f;
 }
