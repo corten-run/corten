@@ -11946,8 +11946,14 @@ rules something out.
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
     2,645 bytes a connection between runs: three runs a build, and a rise only when the median
     of head's growths of resident memory, in bytes, is above base's by more than the larger of
-    base's three span and four pages. Resident memory is reported a page at a time, so base's
-    three can agree exactly and one page is the least step a run can show. One page was the
+    base's three span and four pages. The required readings leave the allocator observer off.
+    A [separate matched diagnostic](../bench/request-cost/README.md#allocator-diagnostics)
+    prints each of its runs' growth in jemalloc live bytes (allocated less thread-cache bytes),
+    the serving thread's net allocated bytes and jemalloc active bytes, alongside RSS from
+    that same run. The observer itself can move RSS, so none of those diagnostic figures
+    decides the rule.
+    Resident memory is reported a page at a time, so base's three can agree exactly and one
+    page is the least step a run can show. One page was the
     least allowed, the step of the reading and not a measured bound on its accuracy, from
     [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
     until 2026-11-27, when the maintainer raised it to four (The idle floor, below): four pages
@@ -12351,7 +12357,13 @@ rules something out.
     46060985339 on `969ac34e4`, whose two probes printed one checksum and whose reading before
     any byte was 16,384 bytes over base's with 16,384 allowed, and `job.sh` and `build.sh` read
     at `969ac34e4` for what a checksum covers: the probe's binary alone, built from each side's
-    crates in one directory, the scripts that run it being the checkout's for both sides.
+    crates in one directory, the scripts that run it being the checkout's for both sides;
+    2026-11-27, for the allocator observer, the kit's page at `cb6cce8d3` and the control reported in
+    [#2272 Report allocator live bytes beside resident growth in the request-cost idle reading](https://github.com/corten-run/corten/pull/2272):
+    six alternating local runs of one release binary over 5,000 connections, three per mode.
+    Resident growth with the observer off was 62,820,352, 62,816,256 and 62,828,544 bytes.
+    With it on, it was 62,812,160, 62,812,160 and 62,816,256 bytes. That is 1 to 3 pages lower
+    (8,192 bytes by the medians), not evidence that the shift is equal across builds.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

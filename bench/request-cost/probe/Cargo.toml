@@ -18,7 +18,7 @@ path = "src/main.rs"
 # Features: the template's (the defaults and compress) and json.
 [dependencies]
 corten = { package = "corten-run", path = "../work/crates/corten", features = ["json", "compress"] }
-tokio = { version = "1", features = ["macros", "net", "rt"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "signal"] }
 
 # The repository's release profile.
 [profile.release]

@@ -128,11 +128,48 @@ async function running(script, args, asked = {}, { preload = true } = {}) {
     // The request heads each connection to the probe sent, which the stand-in notes as it stops.
     const noted = join(stand.directory, "connections.json");
     const connections = existsSync(noted) ? /** @type {string[][]} */ (JSON.parse(readFileSync(noted, "utf8"))) : null;
-    return { ...run, port, started: existsSync(join(stand.directory, "started.json")), connections };
+    const started = existsSync(join(stand.directory, "started.json"));
+    return { ...run, port, started, observer: started ? stand.notes("started.json").PROBE_IDLE_MEMORY : null, connections };
   } finally {
     stand.remove();
   }
 }
+
+test("probe startup leaves no readiness timer after READY or an early child exit", { skip }, () => {
+  const stand = standIns();
+  try {
+    const script = `
+      import { start } from ${JSON.stringify(new URL("./probe.mjs", import.meta.url).href)};
+      try {
+        const probe = await start(process.argv[1], "api", { cpu: "3", port: 0, idleMemory: true });
+        await probe.stop();
+        console.log("stopped after READY");
+      } catch (error) {
+        console.error(error);
+        process.exitCode = 1;
+      }
+    `;
+    const run = () => spawnSync(process.execPath, ["--input-type=module", "-e", script, stand.probe], {
+      env: stand.env, encoding: "utf8", timeout: 5000,
+    });
+
+    // A real child that stays alive for stop(), with its own bound if the caller fails.
+    writeFileSync(stand.probe, "#!/bin/sh\nprintf 'READY fixture\\n' >&2\nexec sleep 2\n");
+    const ready = run();
+    assert.ifError(ready.error);
+    assert.equal(ready.status, 0, ready.stderr);
+    assert.equal(ready.stdout.trim(), "stopped after READY");
+
+    writeFileSync(stand.probe, "#!/bin/sh\nprintf 'observer startup refused\\n' >&2\nexit 42\n");
+    const failed = run();
+    assert.match(failed.stderr, /Error: the probe stopped before it was ready:[\s\S]*observer startup refused/);
+    assert.ifError(failed.error);
+    assert.equal(failed.status, 1, failed.stderr);
+    assert.equal(failed.stdout, "");
+  } finally {
+    stand.remove();
+  }
+});
 
 test("a count is the first thread's dump of the 1,000 requests after the 240, on the one connection, before it closes", { skip }, async () => {
   const { window, started, parts, taskset } = await counting("get", 1);
@@ -153,6 +190,7 @@ test("a count is the first thread's dump of the 1,000 requests after the 240, on
   assert.equal(taskset, "-c 3\n");
   assert.deepEqual(started.options.filter((/** @type {string} */ option) => !option.startsWith("--callgrind-out-file=")), ["--tool=callgrind", "--separate-threads=yes", "--compress-strings=no", "--compress-pos=no"]);
   assert.equal(started.configuration, "api");
+  assert.equal(started.PROBE_IDLE_MEMORY, null);
   assert.deepEqual([started.LD_PRELOAD, started.MALLOC_CONF, started.PROBE_ALLOCATOR], ["libjemalloc.so.2", "background_thread:false,tcache_max:524288", "jemalloc"]);
 });
 
@@ -245,8 +283,10 @@ test("count.mjs --allocations prints calls a request, and no figure for a dump w
 });
 
 test("idle.mjs prints a figure when the probe's open files grew by the connections, counted from after the warm ones closed", { skip }, async () => {
-  const run = await running("idle.mjs", ["--connections", "40"]);
+  // The required invocation does not inherit the idle observer or depend on a reply.
+  const run = await running("idle.mjs", ["--connections", "40"], { PROBE_IDLE_MEMORY: "1", STAND_IN_SWEEP_FRAME: "missing" });
   assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.observer, null);
   printedWhole(run.stdout, "answered 1 pipeline", { requests: 1 });
   // Without the preload it reads the process's own status in /proc, as on a host, though STAND_IN
   // names the directory the stand-in wrote its status in: idle.mjs has no way to read another.
@@ -296,15 +336,55 @@ test("idle.mjs prints no figure when a connection's answer is not the case's", {
   assert.doesNotMatch(run.stdout, /bytes a connection/);
 });
 
+test("idle.mjs skips unrelated logs and reads an observer frame split across writes", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json", "--allocator"], { STAND_IN_SWEEP_LOG: "1", STAND_IN_SWEEP_FRAME: "split" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.observer, "1");
+  const { kind, allocator, sweepNanos } = JSON.parse(run.stdout);
+  assert.equal(kind, "idle-allocator");
+  assert.deepEqual(allocator, { live: 4920, threadNet: -120, active: 163840 });
+  assert.deepEqual(sweepNanos, [246_002, 246_003]);
+});
+
+for (const [ending, error] of /** @type {const} */ ([
+  ["eof", /the probe did not give an idle allocator sample/],
+  ["cr", /the probe did not give an idle allocator sample/],
+  ["missing", /the probe did not give an idle allocator sample/],
+  ["oversized", /the probe gave an invalid idle allocator sample/],
+])) {
+  test(`idle.mjs refuses a final observer frame with ${ending} and stops the probe`, { skip }, async () => {
+    const run = await running("idle.mjs", ["--connections", "40", "--json", "--allocator"], { STAND_IN_SWEEP_FRAME: ending });
+    assert.equal(run.status, 1, run.stderr || run.stdout);
+    assert.match(run.stderr, error);
+    assert.equal(run.stdout, "");
+    assert.equal(run.connections?.length, 90); // The probe's SIGTERM handler ran.
+  });
+}
+
+test("idle.mjs refuses an invalid observer frame even when a valid frame follows", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json", "--allocator"], { STAND_IN_SWEEP_LOG: "1", STAND_IN_BAD_SWEEP: "3" });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /the probe gave an invalid idle allocator sample/);
+  assert.equal(run.stdout, "");
+});
+
+test("idle.mjs prints no figure when the final allocator sweep loses a connection", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json", "--allocator"], { STAND_IN_CLOSE_ON_SWEEP: "3" });
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  assert.match(run.stderr, /not a measurement: the probe (?:had closed 1 of the 40 connections|held 39 more open files for 40 connections)/);
+  assert.equal(run.stdout, "");
+});
+
 test("each kind of run compare.mjs asks for is one the kit takes, and its --json is what was measured, the whole figure compare.mjs reads", { skip }, async () => {
-  const plan = Object.fromEntries(compare.readings().map((reading) => [reading.file, reading]));
+  const plan = Object.fromEntries([...compare.readings(), ...compare.readings({ allocator: true })].map((reading) => [reading.file, reading]));
   const take = async (/** @type {string} */ file, /** @type {string[]} */ more = [], asked = {}, /** @type {Record<string, string>} */ environment = {}) => {
     const { script, options, expect } = /** @type {ReturnType<typeof compare.readings>[number]} */ (plan[file]);
     const run = await running(script, [...options, ...more], environment);
     assert.equal(run.status, 0, `${file}: ${run.stderr}`);
     // One line, and nothing of the table printed for people.
     assert.match(run.stdout, /^\{.*\}\n$/, file);
-    return { text: run.stdout, expect, found: compare.figure(run.stdout, { ...expect, ...asked }) };
+    const connections = run.connections?.map((heads) => heads.map((head) => head.replaceAll(`:${run.port}`, ":<port>")));
+    return { text: run.stdout, expect, found: compare.figure(run.stdout, { ...expect, ...asked }), connections };
   };
   const count = (await take("count-get.json")).found;
   assert.deepEqual([count.median, count.counts, count.windows.map((/** @type {any} */ window) => [window.instructions, window.others, window.threads])], [1001, [1001, 1001, 1001], Array(3).fill([1_000_600, 243, 1])]);
@@ -317,11 +397,19 @@ test("each kind of run compare.mjs asks for is one the kit takes, and its --json
   assert.deepEqual([calls.requests, calls.allocations, calls.frees, calls.calls], [1000, 16_000, 0, { malloc: 16_000 }]);
   // The stand-in's 40 connections are a whole run of 40, and not the reading of 5,000 asked for.
   for (const [file, requests] of /** @type {const} */ ([["idle-request-1.json", 1], ["idle-browser-1.json", 3], ["idle-silent-1.json", 0]])) {
-    const { text, expect, found } = await take(file, ["--connections", "40"], { connections: 40 });
+    const { text, expect, found, connections } = await take(file, ["--connections", "40"], { connections: 40 });
     // The growth and the page size the gate decides by, beside the rounded figure.
     const [before, after, grown, bytes] = standInReadings(requests);
     assert.deepEqual([found.requests, found.connections, found.before, found.after, found.grown, found.page, found.bytes], [requests, 40, before, after, grown, 4096, bytes], file);
+    assert.equal(found.kind, "idle", file);
+    assert.equal(Object.hasOwn(found, "allocator") || Object.hasOwn(found, "sweepNanos"), false, file);
     assert.equal(compare.figure(text, expect), null, file);
+    const diagnostic = await take(file.replace("idle-", "idle-allocator-"), ["--connections", "40"], { connections: 40 });
+    assert.equal(diagnostic.found.kind, "idle-allocator", file);
+    assert.deepEqual(diagnostic.found.allocator, { live: 4920, threadNet: -120, active: 163840 }, file);
+    assert.deepEqual(diagnostic.found.sweepNanos, [246_002, 246_003], file);
+    assert.deepEqual(diagnostic.connections, connections, file);
+    assert.equal(compare.figure(diagnostic.text, { ...expect, connections: 40 }), null, file);
   }
   // The page size getconf gives is the one the JSON carries. Its resident memory is still the
   // stand-in's, in 4,096-byte pages: the printed JSON is read here, and the 65,536-byte rule is

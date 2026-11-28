@@ -5,13 +5,14 @@
 // prints against the reader here.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
-import { RUNS, STOPPED, compare, declared, figure, over, readings } from "./compare.mjs";
+import { RUNS, STOPPED, allocatorReport, compare, declared, figure, over, readings } from "./compare.mjs";
 import { median } from "./figures.mjs";
 import { cases } from "./requests.mjs";
 
@@ -21,6 +22,33 @@ const kit = dirname(fileURLToPath(import.meta.url));
 const names = Object.keys(cases);
 /** What each run's JSON must say it is of, by its file. */
 const expect = Object.fromEntries(readings().map((reading) => [reading.file, reading.expect]));
+const diagnosticPlan = readings({ allocator: true });
+const observed = { allocator: { live: 0, threadNet: -1, active: 4096 }, sweepNanos: [123, 456] };
+
+/** A diagnostic fixture separate from the original runs, but using their settings.
+ * @param {{ base: string, head: string }} runs
+ */
+function diagnostics(runs) {
+  const directory = join(dirname(runs.base), "diagnostics");
+  const sides = /** @type {const} */ (["base", "head"]);
+  for (const side of sides) mkdirSync(join(directory, side), { recursive: true });
+  const observer = (/** @type {"base" | "head"} */ side, /** @type {string} */ file, changes = {}) => {
+    const rss = JSON.parse(readFileSync(join(runs[side], file.replace("idle-allocator-", "idle-")), "utf8"));
+    writeFileSync(join(directory, side, file), JSON.stringify({ ...rss, kind: "idle-allocator", ...observed, ...changes }));
+  };
+  const complete = () => {
+    const entries = diagnosticPlan.flatMap(({ file }) => sides.map((side) => {
+      const at = join(directory, side, file);
+      const digest = existsSync(at) ? createHash("sha256").update(readFileSync(at)).digest("hex") : "-";
+      return `${side} ${file} ${digest}`;
+    }));
+    writeFileSync(join(directory, "complete"), ["a".repeat(40), "b".repeat(40), ...entries, ""].join("\n"));
+  };
+  const seed = () => {
+    for (const side of sides) for (const { file } of diagnosticPlan) observer(side, file);
+  };
+  return { directory, observer, complete, seed };
+}
 
 /**
  * A build's figures: three counts a case, allocations and frees in the case's requests, three runs
@@ -109,6 +137,9 @@ test("the runs to take are every case's instructions, four at a depth of 16, eve
   assert.deepEqual(all.filter(({ options }) => options.includes("--allocations")).map(({ options }) => options.at(-1)), names);
   // An idle reading's three runs are not one after another: the other readings are between them.
   assert.deepEqual(all.filter(({ script }) => script === "idle.mjs").map(({ file, options }) => `${file} ${options.join(" ")}`), [1, 2, 3].flatMap((run) => [`idle-request-${run}.json --json`, `idle-browser-${run}.json --json --case get-browser --requests 3`, `idle-silent-${run}.json --json --silent`]));
+  assert.deepEqual(diagnosticPlan, all.filter(({ script }) => script === "idle.mjs").map(({ file, script, options, expect: of }) => ({
+    file: file.replace("idle-", "idle-allocator-"), script, options: ["--json", "--allocator", ...options.slice(1)], expect: { ...of, kind: "idle-allocator" },
+  })));
   assert.deepEqual(all.at(-1)?.expect, { kind: "idle", case: "pipeline", requests: 0, connections: 5000, addresses: 1 });
   // No two runs write one file, and none names the probe, its CPU or its port: the caller's.
   assert.equal(new Set(all.map(({ file }) => file)).size, all.length);
@@ -244,6 +275,127 @@ test("a change inside the budget passes as counted, and the table gives every ru
   assert.equal(record.length, 2 * 3 * 3, markdown);
   assert.ok(record.includes("base, after one request, run 2: 8422 bytes a connection (5000 that answered 1 pipeline, from 1 address; 7577600 before, 49688576 after, 42110976 grown, in 4096-byte pages)"), record.join("\n"));
   assert.doesNotMatch(markdown, /no figure|over the budget|rose|not decided/);
+  assert.match(markdown, /Allocator observer off/);
+});
+
+test("the explicit allocator report shows both builds' matching diagnostic runs; the gate never reads them", (t) => {
+  const { base, head } = builds(t);
+  const { directory, observer, complete, seed } = diagnostics({ base, head });
+  const required = compare(base, head, { description: counting });
+  assert.equal(required.status, 0);
+  seed();
+  for (let n = 1; n <= 3; n += 1) {
+    const file = `idle-allocator-request-${n}.json`;
+    observer("base", file, { allocator: { live: n, threadNet: -n, active: 0 } });
+    observer("head", file, { allocator: { live: 1_000_000 * n, threadNet: n, active: -4096 * n } });
+  }
+  complete();
+  assert.deepEqual(compare(base, head, { description: counting }), required);
+  const read = allocatorReport(directory);
+  assert.equal(read.status, 0);
+  assert.match(read.markdown, /^## Idle allocator diagnostics: `bbbbbbbbb` and `aaaaaaaaa`/);
+  assert.match(read.markdown, /Observer on/);
+  assert.match(read.markdown, /\| Resident \| Jemalloc live \| Serving-thread net \| Jemalloc active \|/);
+  assert.equal(read.markdown.split("\n").filter((line) => /^\| (?:base|head) \|/.test(line)).length, 18);
+  assert.match(read.markdown, /\| base \| after one request \| 1 \| 4,096 \| 42,102,784 \| 1 \| -1 \| 0 \|/);
+  assert.match(read.markdown, /\| head \| after one request \| 1 \| 4,096 \| 42,102,784 \| 1,000,000 \| 1 \| -4,096 \|/);
+  // The diagnostic report requires no answers or instruction/allocation figures.
+  unlinkSync(join(base, "count-get.json"));
+  unlinkSync(join(base, "idle-request-1.json"));
+  const cli = spawnSync(process.execPath, [join(kit, "compare.mjs"), directory, "--allocator"], { encoding: "utf8" });
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(cli.stdout, read.markdown);
+});
+
+test("allocator diagnostics refuse valid same-case receipts moved between the base and head slots", (t) => {
+  const { directory, observer, complete, seed } = diagnostics(builds(t));
+  const file = "idle-allocator-request-1.json";
+  seed();
+  observer("head", file, { allocator: { ...observed.allocator, live: 17 } });
+  complete();
+  assert.equal(allocatorReport(directory).status, 0);
+
+  const base = join(directory, "base", file);
+  const head = join(directory, "head", file);
+  const originalBase = readFileSync(base);
+  const originalHead = readFileSync(head);
+  writeFileSync(base, originalHead);
+  writeFileSync(head, originalBase);
+  const swapped = allocatorReport(directory);
+  assert.equal(swapped.status, 1);
+  for (const side of ["base", "head"]) {
+    assert.ok(swapped.markdown.includes(`${file}\` on ${side}: \`the receipt does not match`));
+  }
+
+  // Even a byte change that leaves the parsed figure identical fails readback.
+  writeFileSync(base, originalBase);
+  writeFileSync(head, Buffer.concat([originalHead, Buffer.from("\n")]));
+  assert.equal(allocatorReport(directory).status, 1);
+  writeFileSync(head, originalHead);
+  assert.equal(allocatorReport(directory).status, 0);
+});
+
+test("observer-on receipts never decide the observer-off gate, even if all are observer-on", (t) => {
+  const { base, head } = builds(t);
+  const write = (/** @type {string} */ run, /** @type {object} */ fields) => {
+    const original = JSON.parse(printed("idle-request-1.json", 10_280));
+    writeFileSync(run, JSON.stringify({ ...original, ...fields }));
+  };
+  const check = () => {
+    const { status, holds, markdown } = compare(base, head, { description: counting });
+    assert.deepEqual([status, holds], [1, false]);
+    assert.match(verdict(markdown), /idle memory after one request, run 1, has no figure/);
+  };
+  for (const fields of [{ kind: "idle-allocator", ...observed }, observed, { allocator: null }, { sweepNanos: null }]) {
+    write(join(head, "idle-request-1.json"), fields);
+    check();
+  }
+  for (const dir of [base, head]) for (const { file } of readings().filter(({ script }) => script === "idle.mjs")) {
+    const at = join(dir, file);
+    writeFileSync(at, JSON.stringify({ ...JSON.parse(readFileSync(at, "utf8")), ...observed }));
+  }
+  check();
+});
+
+test("requested diagnostics refuse missing, wrong-mode, mismatched or incomplete probe evidence", (t) => {
+  const { base, head } = builds(t);
+  const { directory, observer, complete, seed } = diagnostics({ base, head });
+  const check = (/** @type {RegExp} */ why) => {
+    const read = allocatorReport(directory);
+    assert.equal(read.status, 1, read.markdown);
+    assert.match(read.markdown, /Incomplete diagnostic match/);
+    assert.match(read.markdown, why);
+    assert.equal(compare(base, head, { description: counting }).status, 0);
+  };
+  check(/No valid completion record/);
+  complete();
+  check(/left no output/);
+  seed();
+  const file = "idle-allocator-request-1.json";
+  for (const fields of [
+    { kind: "idle" },
+    { requests: 3 },
+    { sweepNanos: undefined },
+    { allocator: undefined },
+    { allocator: null, sweepNanos: null },
+    { allocator: { ...observed.allocator, live: "9000" } },
+    { sweepNanos: [123] },
+    { sweepNanos: [123, -1] },
+  ]) {
+    observer("head", file, fields);
+    complete();
+    check(/whole observer-on reading/);
+  }
+  observer("head", file, { page: 2048 });
+  complete();
+  check(/different page sizes/);
+  unlinkSync(join(directory, "head", file));
+  writeFileSync(join(directory, "head", `${file}.refused`), "Error: no allocator sample\n");
+  complete();
+  check(/head: `no allocator sample`/);
+  const cli = spawnSync(process.execPath, [join(kit, "compare.mjs"), directory, "--allocator"], { encoding: "utf8" });
+  assert.equal(cli.status, 1, cli.stderr);
+  assert.match(cli.stdout, /Incomplete diagnostic match/);
 });
 
 test("one case over the budget does not pass as counted, and the verdict names it and the measured way", (t) => {
@@ -688,10 +840,11 @@ test("compare.mjs prints the table and exits by the verdict, and refuses argumen
   // With no description, the change declares nothing.
   assert.equal(run(base, head).status, 1);
   assert.equal(run(base, base).status, 0);
-  for (const args of [[], [base], [base, head, head], [base, head, "--readings"], [base, head, "--budget", "1"]]) {
+  for (const args of [[], [base], [base, head, head], [base, head, "--readings"], [base, head, "--budget", "1"],
+    [base, head, "--allocator"], [base, "--allocator", "--description", description], [base, "--allocator", "--head", "a different build"]]) {
     const refused = run(...args);
     assert.equal(refused.status, 2, args.join(" "));
-    assert.match(refused.stderr, /usage: node compare\.mjs --readings \| node compare\.mjs <base's directory> <head's directory>/);
+    assert.match(refused.stderr, /usage: node compare\.mjs --readings \[--allocator\] \| node compare\.mjs <base's directory> <head's directory>/);
     assert.equal(refused.stdout, "");
   }
 });
