@@ -865,7 +865,8 @@ mod tests {
             )
             .await;
             assert_eq!(kept.status, 304, "{}", kept.what);
-            let asset = send(&router, what("/assets/ (stylesheet)"), (Method::GET, &stylesheet), &style, None, (marks, coding)).await;
+            let asset =
+                send(&router, what("/assets/ (stylesheet)"), (Method::GET, &stylesheet), &style, None, (marks, coding)).await;
             assert_eq!(asset.status, 200, "{}", asset.what);
             seen.extend([data, kept, asset]);
         }
