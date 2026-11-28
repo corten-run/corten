@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
@@ -18,6 +18,7 @@ const fields = ["cgroup.procs", "cgroup.events", "cpu.stat", "cpu.max", "cpuset.
 const root = "/sys/fs/cgroup";
 const sampleIntervalMs = 100, maximumSampleGapMs = 1000;
 const browserStorageYieldMs = 50;
+const browserDockerCaptureReserveMs = 50;
 const observationOperations = new WeakMap();
 const executableRecheckReasons = new WeakMap();
 const executableSuccessors = new WeakMap();
@@ -610,6 +611,58 @@ function dockerGapDiagnostic(error) {
   return { stage, ...(stage === "kernel-census" && typeof operation === "string" ? { operation } : {}),
     code: dockerGapCodes.has(code) ? code : "unknown", ...(attempts ? { attempts } : {}) };
 }
+export const browserDockerGateEnv = "CORTEN_BROWSER_DOCKER_GATE";
+export const browserDockerGateChildFd = 4; // The isolated bootstrap's IPC occupies fd 3.
+
+export function browserDockerGateIdentity(fd) {
+  if (process.platform === "linux") try {
+    const info = fstatSync(fd, { bigint: true });
+    if (info.isFile() && info.uid === BigInt(process.getuid()) && info.nlink === 1n
+      && (info.mode & 0o7777n) === 0o600n) return `${info.dev}:${info.ino}`;
+  } catch { /* Report only the fixed refusal. */ }
+  throw new Error("Browser Docker gate anchor unavailable");
+}
+
+export function reopenBrowserDockerGate({ fd, identity }) {
+  let opened;
+  try {
+    // Reopen, not dup: independent open file descriptions must contend.
+    if (!Number.isSafeInteger(fd) || fd < 3 || browserDockerGateIdentity(fd) !== identity) throw new Error();
+    opened = openSync(`/proc/self/fd/${fd}`, constants.O_RDONLY | constants.O_NONBLOCK);
+    if (browserDockerGateIdentity(opened) !== identity) throw new Error();
+    return opened;
+  } catch {
+    if (opened !== undefined) closeSync(opened);
+    throw new Error("Browser Docker gate anchor unavailable");
+  }
+}
+
+export function lockBrowserDocker(gate, removal = false, deadline, reserveMs = 0) {
+  const fd = reopenBrowserDockerGate(gate);
+  const timedOut = "Browser Docker gate acquisition timed out";
+  let acquired = false;
+  try {
+    const remaining = removal ? 2250 : deadline - performance.now();
+    if (!Number.isFinite(remaining) || remaining < 1) throw new Error(timedOut);
+    const immediate = !removal && remaining - reserveMs < 1;
+    const waitMs = Math.floor(remaining - (immediate ? 0 : reserveMs));
+    const timing = immediate ? ["-n"] : ["-w", removal ? "2" : String(waitMs / 1000)];
+    // flock exits after acquiring. The caller alone holds the lock until close.
+    try {
+      execFileSync("/usr/bin/flock", [removal ? "-x" : "-s", "-E", "75", ...timing, "0"], {
+        stdio: [fd, "ignore", "ignore"], timeout: waitMs, killSignal: "SIGKILL",
+      });
+    } catch (error) {
+      throw new Error(error.status === 75 || error.code === "ETIMEDOUT" ? timedOut : "Browser Docker gate acquisition failed");
+    }
+    if (!removal && performance.now() >= deadline - (immediate ? 0 : reserveMs)) throw new Error(timedOut);
+    acquired = true;
+    return () => closeSync(fd);
+  } finally {
+    if (!acquired) closeSync(fd);
+  }
+}
+
 function browserDocker(excluded, executables, pending, noteGap, noteRecheck) {
   const inventory = docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean).sort();
   assert.equal(new Set(inventory).size, inventory.length); inventory.forEach((id) => assert.match(id, containerId));
@@ -626,7 +679,7 @@ function browserDocker(excluded, executables, pending, noteGap, noteRecheck) {
 }
 
 /** Own one fresh delegated child cgroup. Set only the bound command cpuset, never new quotas. */
-export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal, onFault }) {
+export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal, onFault, browserDockerGate }) {
   function checkStartup() {
     signal?.throwIfAborted(); startupSignal?.throwIfAborted();
   }
@@ -643,6 +696,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const controllers = readFileSync(join(root, parent, "cgroup.subtree_control"), "utf8").trim().split(/\s+/);
   assert.ok(["cpu", "cpuset", "memory"].every((key) => controllers.includes(key)), "required accounting controllers must be delegated and enabled");
   const browser = binding.request.group === "fullstack-browser";
+  assert.ok(!browserDockerGate || browser, "Browser Docker gate requires the Browser observer");
   const catalog = binding.request.group === "catalog-page";
   const executableCensus = catalog || terminalClockPolicy(binding, invocation, round, "prepare") === "preparation";
   const commandCpus = boundCommandCpuSet(binding);
@@ -653,15 +707,20 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   for (const id of excluded) assert.match(id, containerId);
   const path = `${parent}/native-${command}-${randomBytes(8).toString("hex")}`;
   mkdirSync(join(root, path)); // Exclusive creation. Never adopt a saved or existing cgroup.
-  let context, writer, pending = null, closed = false, timer;
+  let context, writer, pending = null, closed = false, timer, captureGate;
   const startupSignals = [...new Set([signal, startupSignal].filter(Boolean))];
   function releaseStartup() { for (const value of startupSignals) value.removeEventListener("abort", dispose); }
   function stopSampling() { if (browser) clearTimeout(timer); else clearInterval(timer); }
+  function closeCaptureGate() {
+    if (captureGate) { const { fd } = captureGate; captureGate = undefined; closeSync(fd); }
+  }
   function dispose() {
-    closed = true; stopSampling(); releaseStartup(); pending?.close(); writer?.abort();
+    closed = true; stopSampling(); releaseStartup(); closeCaptureGate(); pending?.close(); writer?.abort();
   }
   for (const value of startupSignals) value.addEventListener("abort", dispose, { once: true });
   try {
+    // The last sample runs after the supervisor closes its command log.
+    if (browserDockerGate) captureGate = { ...browserDockerGate, fd: reopenBrowserDockerGate(browserDockerGate) };
     if (commandCpus) {
       writeFileSync(join(root, path, "cpuset.cpus"), commandCpus);
       assert.equal(effectiveCpuSet(path), commandCpus, "native command effective cpuset differs");
@@ -703,7 +762,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     dockerStartupRechecks ??= { count: 0, first: diagnostic }; dockerStartupRechecks.count++;
   }
   const observerFailures = { count: 0, first: null, last: null };
-  let sampleOperation, lastSampleAt = null, previousCensusProcesses = executableCensus || inline ? [] : null;
+  let sampleOperation, lastSampleAt = null, lastSampleMono, previousCensusProcesses = executableCensus || inline ? [] : null;
   function notifyFault() {
     if (faultNotified) return;
     faultNotified = true;
@@ -723,19 +782,20 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       at: Date.now(), samples, lastSampleAt, ...(catalog && timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
-  function sample(timing) {
+  function sample(timing, terminalGateDeadline) {
     const previous = lastSampleAt;
-    const capture = timing ? () => collectSample(timing) : collectSample;
+    const capture = timing || terminalGateDeadline !== undefined ? () => collectSample(timing, terminalGateDeadline) : collectSample;
     const observed = pending ? pending.transaction(capture) : capture();
     // Admission and capture commit precede notification: startup cancellation
     // may dispose the observer, but must not close an active transaction.
     if ((previous !== null && (observed.at < previous || observed.at - previous > maximumSampleGapMs))
       || observed.docker?.gaps.length) notifyFault();
   }
-  function collectSample(timing) {
+  function collectSample(timing, terminalGateDeadline) {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
     const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses, inline), initial = [], keys = new Set();
+    const observedMono = captureGate ? performance.now() : undefined;
     if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
       && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
     const processes = observed.processes;
@@ -749,7 +809,19 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       return key;
     });
     sampleOperation = "docker-inventory";
-    if (captureDocker) observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck);
+    if (captureDocker) {
+      const unlock = captureGate && observing("docker-gate", () => {
+        if (terminalGateDeadline !== undefined) return lockBrowserDocker(captureGate, false, terminalGateDeadline);
+        // Preserve room for Docker capture and the storage yield before the next
+        // sample. A wall shift can shorten, but cannot renew, the monotonic budget.
+        const now = performance.now();
+        const wallElapsed = Math.max(0, Date.now() - (lastSampleAt ?? observed.at));
+        const deadline = Math.min(lastSampleMono ?? observedMono, now - wallElapsed) + maximumSampleGapMs;
+        return lockBrowserDocker(captureGate, false, deadline, browserDockerCaptureReserveMs + browserStorageYieldMs);
+      });
+      try { observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck); }
+      finally { unlock?.(); }
+    }
     if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
       const path = groupPath(kernel.cgroup);
       assert.ok(scopeCpuSetMatches(kernel.groups, path, liveCpus.application)
@@ -759,7 +831,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     writer.enqueue(initial, serial(observed));
     admitInlineLookups();
     if (executableCensus || inline) previousCensusProcesses = processes;
-    samples++; lastSampleAt = observed.at;
+    samples++; lastSampleAt = observed.at; lastSampleMono = observedMono;
     return observed;
   }
   // The fresh bootstrap still waits for IPC outside this empty command scope.
@@ -824,8 +896,16 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     async finish(result, retainTerminalClock = false, onSettled) {
       assert.equal(closed, false); closed = true; stopSampling(); releaseStartup();
       let empty = false;
-      try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
+      try {
+        // A faulted interval can't renew its deadline. After the command has
+        // settled, give drain accounting one fresh gate budget, not a clean bill of health.
+        const terminalGateDeadline = captureGate && observerError !== null ? performance.now() + maximumSampleGapMs : undefined;
+        sample(undefined, terminalGateDeadline);
+        sampleOperation = "terminal-empty";
+        empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0");
+      }
       catch (error) { observerError = "host-observation-gap"; failure("finish", error); }
+      finally { closeCaptureGate(); }
       let stored;
       try { stored = await writer.finish(); assert.equal(stored.samples, samples); }
       catch (error) { pending?.close(); throw error; }

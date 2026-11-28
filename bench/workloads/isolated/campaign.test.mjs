@@ -198,6 +198,9 @@ mock.module("./host-observation.mjs", { namedExports: {
 mock.module("./host-lifetime.mjs", { exports: {
   ...actualLifetime,
   beginLifetime(args) {
+    const gated = process.platform === "linux" && args.invocation.argv[0] === "bench/fullstack-browser/run.mjs";
+    assert.equal(!!args.browserDockerGate, gated);
+    if (gated) assert.equal(actualLifetime.browserDockerGateIdentity(args.browserDockerGate.fd), args.browserDockerGate.identity);
     if (liveRoundTrip) return isolatedLiveLifetime(liveRoundTrip.capture, args, liveRoundTrip.clock);
     if (lifetimeRun) {
       const run = lifetimeRun;
@@ -286,6 +289,10 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   assert.equal(options.env.PATH, "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
   assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1"); assert.equal(options.env.GIT_NO_LAZY_FETCH, "1");
   const invocation = args.slice(1); calls.push(invocation); currentInvocation = invocation;
+  const gated = process.platform === "linux" && invocation[0] === "bench/fullstack-browser/run.mjs";
+  assert.equal(options.stdio.length, gated ? 5 : 4);
+  assert.equal(options.env[actualLifetime.browserDockerGateEnv], gated
+    ? actualLifetime.browserDockerGateIdentity(options.stdio[actualLifetime.browserDockerGateChildFd]) : undefined);
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");
   if (liveRoundTrip) return liveFixtureChild((child) => {
     const { capture, output, workloadEnd } = liveRoundTrip;

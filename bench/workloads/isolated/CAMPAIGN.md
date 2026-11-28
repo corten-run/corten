@@ -272,7 +272,19 @@ budget. Parent live source/unit/host ownership remains the trust boundary of the
 Core targets a 100 ms interval for recursive cgroup and live PID/start/executable
 reads. Fullstack Browser leaves at least 50 ms between the end of each periodic
 Docker census and the start of the next; a gap over one second still fails.
-It retains raw initial process observations content-addressed under processes/, references
+
+In the bound Linux Browser invocation, the Docker census shares a `flock` gate
+with the runner's exact owned container removal. The observer reserves 50 ms for
+capture and 50 ms for storage yield when waiting; inside that reserve it only
+tries a nonblocking lock, and never renews an expired periodic deadline. After a
+recorded fault, finish gets one fresh gate budget of at most one second to record
+drain. The original sample times and fault remain; the fault still disqualifies the run.
+The runner holds its exclusive lock from before the terminal participant receipt
+through the Docker CLI's `close`, including after a client timeout. That is not
+daemon acknowledgement: a late daemon removal can still create an observation
+gap, which fails closed.
+
+The observer retains raw initial process observations content-addressed under processes/, references
 the independently re-read identities in each sample, and records raw CPU accounting,
 memory current/peak/events and effective controls. No environment or arbitrary command-line
 values are retained; only known Chromium process-type flags are extracted. A 256 MiB

@@ -20,7 +20,8 @@ import { EvidenceStore } from "./native-evidence.mjs";
 import { captureSource, captureBuildContext, captureTools } from "./native-source.mjs";
 import { ExecutionLedger, participantSnapshot, participantLimitsMatch, collectDockerInventory } from "./native-execution.mjs";
 import { readRegular } from "../workloads/isolated/evidence.mjs";
-import { requireBrowserCommandCpuSet, requireBrowserContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
+import { browserDockerGateChildFd, browserDockerGateEnv, browserDockerGateIdentity, lockBrowserDocker,
+  requireBrowserCommandCpuSet, requireBrowserContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -67,8 +68,9 @@ export function imageEvidence(info, commit) {
     buildContextSha256: labels["run.corten.browser.context-sha256"] ?? null };
 }
 export class OwnedDocker {
-  constructor(task, ledger = null, isolated = false) {
+  constructor(task, ledger = null, isolated = false, browserDockerGate) {
     this.task = task; this.ledger = ledger; this.isolated = isolated; this.containers = new Set(); this.images = new Set(); this.network = null;
+    this.browserDockerGate = browserDockerGate;
     this.participants = new Map(); this.volumes = new Map(); this.imageIds = new Map();
   }
   record(event) { return this.ledger?.append({ ...event, at: Date.now() }); }
@@ -144,11 +146,17 @@ export class OwnedDocker {
     try { info = await inspect(id); } catch (error) { observationError = error; }
     if (info) {
       assert.equal(info.Config.Labels["agent.task"], this.task); assert.equal(info.Config.Labels["agent.owner"], "codex");
-      try { if (this.ledger) await this.participant(id, "terminal"); } catch (error) { observationError = error; }
     }
     // An own create registered any returned original full ID before inspect.
     // Lost terminal evidence blocks replay, but must not strand that resource.
-    const removed = await commandResult("docker", ["rm", "-f", "-v", id]);
+    const unlock = this.browserDockerGate && lockBrowserDocker(this.browserDockerGate, true);
+    let removed;
+    try {
+      // A refused gate must not publish a terminal transition that a cleanup retry repeats.
+      try { if (info && this.ledger) await this.participant(id, "terminal"); } catch (error) { observationError = error; }
+      removed = await commandResult("docker", ["rm", "-f", "-v", id]);
+    }
+    finally { unlock?.(); }
     if (!removed.timedOut && !removed.spawnError && !removed.signal && Number.isInteger(removed.code)) this.record({ event: "remove", kind: "container", id, code: removed.code });
     assert.ok(!removed.timedOut && !removed.spawnError && !removed.signal && removed.code === 0, "Owned Docker removal not acknowledged");
     this.containers.delete(id); await this.inventories("all");
@@ -241,6 +249,10 @@ export function groupQualificationPassed(summary, reports, readCell = (cell) => 
 export async function run(args) {
   const options = Array.isArray(args) ? parseOptions(args) : args;
   assert.match(options.round ?? "", /^w[1-9]\d*$/);
+  const identity = process.env[browserDockerGateEnv];
+  const browserDockerGate = identity === undefined ? undefined : { fd: browserDockerGateChildFd, identity };
+  if (browserDockerGate) assert.ok(options.isolated && browserDockerGateIdentity(browserDockerGate.fd) === identity,
+    "Browser Docker gate anchor unavailable");
   if (options.isolated) requireBrowserCommandCpuSet(browserCpus.browser);
   const targets = options.targets ? validateTargets(JSON.parse(readFileSync(resolve(options.targets), "utf8")))
     : Object.fromEntries(candidates.map((app) => [app, { image: `cb-marketplace-${app}` }]));
@@ -269,7 +281,7 @@ export async function run(args) {
   save();
   const store = new EvidenceStore(folder), ledger = new ExecutionLedger(store, { task, commit, startedAt: Date.now() });
   const readCell = (cell) => cell.evidence === null ? cell : { ...cell, evidence: store.readJSON(cell.evidence) };
-  const owned = new OwnedDocker(task, ledger, options.isolated);
+  const owned = new OwnedDocker(task, ledger, options.isolated, browserDockerGate);
   const native = summary.native = { schema: "native-browser-run/v2", source: null, sourceBinding: null, inputsBefore: null, inputsAfter: null,
     toolsBefore: null, toolsAfter: null, execution: null, targets: store.record("targets", targets), contexts: [], browserTerminal: null, manifest: null };
   const observation = { store, contexts: native.contexts, byContext: new Map(), byRequest: new Map(), round: options.round };

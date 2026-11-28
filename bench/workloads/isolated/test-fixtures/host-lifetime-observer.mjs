@@ -15,7 +15,7 @@ export const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.se
 export const stat = (pid, name = "node", start = pid * 10, ppid = 1) => `${pid} (${name}) S ${[ppid, ...Array(17).fill(0), start, 0].join(" ")}`;
 export const missing = (code = "ENOENT") => Object.assign(new Error("PRIVATE_NOT_RETAINED"), { code });
 
-export async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0, catalog = false, json = null) {
+export async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0, catalog = false, json = null, browserDockerGate) {
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
     .map((key) => [key, fs[key]]));
   const exec = childProcess.execFileSync;
@@ -73,6 +73,10 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   }
   if (deferred) {
     t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
+      if (browserDockerGate && file === "/usr/bin/flock") {
+        const acquire = () => exec(file, argv, options);
+        return f.flock ? f.flock(argv, options, acquire) : acquire();
+      }
       if (argv[1] !== "--hash-open-executables") {
         assert.equal(browser, true, "catalog proof does not query the Docker daemon");
         assert.equal(file, "docker");
@@ -189,7 +193,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
       "cpuset.cpus.effective": "0-7\n", "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom_kill 0\n" }[key];
   });
   syncBuiltinESMExports();
-  observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault });
+  observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault, browserDockerGate });
   f.clock += attachGapMs; await observer.attach(pid);
   f.drain = () => observer.drain();
   f.tick = async () => { f.capture(); await f.drain(); };
