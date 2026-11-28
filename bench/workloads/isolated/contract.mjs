@@ -297,7 +297,7 @@ function validation(group, rootPath) {
     : ["live-delivery", "recoverable-live"].includes(group) ? ["plan.json", "coverage.json"] : ["summary.json"];
   const gates = {
     "catalog-page": ["both-source page and JSON/browser gates or replayed fail-fast record violation with no timing", "immutable-image/raw-artifact provenance; recomputed page aggregates required for comparisons"],
-    "json-api": ["all 36 functional attempts", "independent exact-image native-source/serialization audits", "cold/load/raw-runtime evidence and timing schedule after parity; no timing after a replayed functional violation"],
+    "json-api": [`all ${selectedApps("json-api").length * definition("json-api").cases.length} functional attempts`, "independent exact-image native-source/serialization audits", "cold/load/raw-runtime evidence and timing schedule after parity; no timing after a replayed functional violation"],
     "localized-marketplace": ["exact-image production qualification", "both-source complete browser/content profiles", "complete selected-candidate ledger, including unqualified/stopped outcomes"],
     "mixed-production": ["all native writes/readbacks/cancellation/deadline captures", "full-inventory production qualification", "calibration, headroom, complete equal-plan windows and raw metrics"],
     "fullstack-browser": ["all 240 native source/locale/device/JS cells", "native form/readback/architecture/lifecycle evidence", "owner fix for summary qualification aggregation; no destroyed-realm cleanup waiver"],

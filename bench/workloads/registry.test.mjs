@@ -11,8 +11,8 @@ test("approved membership is independent of current qualification and includes e
   assert.equal(validateInventory(), true);
   assert.equal(groupNames.length, 9);
   const expected = {
-    "catalog-page": ["corten", "aspnet", "express", "fastapi", "axum-maud", "drogon", "gin"],
-    "json-api": ["corten", "aspnet", "fastapi", "express", "spring", "axum-maud", "drogon", "gin", "aspnet-aot"],
+    "catalog-page": ["corten", "aspnet", "express", "fastapi", "axum-maud", "drogon", "gin", "proa"],
+    "json-api": ["corten", "aspnet", "fastapi", "express", "spring", "axum-maud", "drogon", "gin", "aspnet-aot", "ntex"],
     "localized-marketplace": ["corten", "nextjs", "aspnet", "django", "topcoat", "leptos", "gin", "drogon"],
     "mixed-production": ["corten", "aspnet", "spring", "django", "express", "fastapi", "topcoat", "gin", "drogon"],
     "fullstack-browser": ["corten", "nextjs", "nuxt", "react-router", "rails", "laravel", "sveltekit", "astro", "tanstack-start", "leptos"],

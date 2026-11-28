@@ -11,7 +11,8 @@ import { aggregate, phases } from "./contract.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity } from "./group.mjs";
 import { records } from "./fixtures.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
-import { expectedDocumentHeaderPaths, leanApps, leanProfile } from "./contract.mjs";
+import { expectedDocumentHeaderPaths, leanProfile } from "./contract.mjs";
+import { originalCatalogApps as leanApps } from "./group.mjs";
 
 function result() {
   const names = Object.keys(allApps).filter((name) => allApps[name].pages !== false);

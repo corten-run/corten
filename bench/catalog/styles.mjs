@@ -5,6 +5,7 @@ const here = new URL('./', import.meta.url);
 export const copies = [
   'corten/static/catalog.css',
   ...[
+    'proa/static',
     'nextjs/public', 'tanstack-start/public', 'sveltekit/static', 'react-router/public',
     'leptos/public', 'django/static', 'rails/app/assets/stylesheets', 'laravel/public',
     'aspnet/wwwroot', 'spring/src/main/resources/static', 'phoenix/priv/static/css',

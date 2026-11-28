@@ -519,16 +519,16 @@ fixture exercises actual collector lifetimes, not a complete campaign or provide
 ## JSON build, audit wait, then timing
 
 JSON first runs the actual full native --build --check-only round. Exit 1 is accepted for
-staging only if all 36 raw functional cells replay, image/CPU/source/commit configuration
+staging only if every selected app's four raw functional cells replay, image/CPU/source/commit configuration
 matches, cleanup is clean, no timing occurred and exactly the missing independent audits
 explain the failures. Anything else is a retained failed preparation, not an invented audit.
-Actual Docker image inspect records for all 18 built IDs and canonical bound source bytes
+Actual Docker image inspect records for every app/payload build and canonical bound source bytes
 are retained. Source names (including native `[id]` and `+page` route names) are mapped
 to regular content-addressed `audit-sources/blobs/<sha256>` files by the source manifest;
 they are not unsafe archive path names. Environment values are not forwarded from Docker image configuration.
-`json-audit-subject.json` binds those images, 36 identities, source/commit and both native
+`json-audit-subject.json` binds those images, every app/case identity, source/commit and both native
 and source manifests. It explicitly has qualified:false and a review-needed blocker.
-The retained image list includes the 18 app images and both actual Node/k6 tool images.
+The retained image list includes both payload images for each app and both actual Node/k6 tool images.
 If Docker omits `Config.WorkingDir`, the image evidence omits `config.workingDir` in both
 the live audit subject and saved JSON. If Docker reports it, the subject binds the exact
 value, including an empty string. Omission alone does not block review or authorize timing.
