@@ -792,7 +792,8 @@ test("a shuffled placement, linked by LLD: each definition by its own map's inpu
     const s = sections.map(([sec, fns, size, byte = 0xcc, local = false]) => [`\t.section .text.${sec},"axR",@progbits`, "\t.p2align 4",
       ...fns.flatMap(([n, off]) => [...(local ? [] : [`\t.globl ${n}`]), `\t.type ${n},@function`, `\t.set ${n}, .Lstart_${sec} + ${off}`]),
       `.Lstart_${sec}:`, `\t.skip ${size}, ${byte}`].join("\n"));
-    writeFileSync(join(dir, `${file}.s`), [`\t.file "${file}.c"`, ...s].join("\n") + "\n");
+    // The build fixture's linker is Debian LLD; add the unprefixed stamp build.sh expects.
+    writeFileSync(join(dir, `${file}.s`), [`\t.file "${file}.c"`, '\t.ident "Linker: LLD (fixture)"', ...s].join("\n") + "\n");
     run("clang", ["--target=x86_64-linux-gnu", "-c", `${file}.s`, "-o", `${file}.o`]);
     return `${file}.o`;
   };

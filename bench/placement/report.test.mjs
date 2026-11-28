@@ -476,8 +476,10 @@ test("a shuffled pilot's report describes the draw, not a check against head", (
   const r = report(shuffledRun({ part: "pilot" }));
   assert.equal(r.exit, 0, r.json.refused?.join(" | "));
   assert.deepEqual([r.json.head, r.json.alike], [null, []]);
-  assert.match(r.md, /each index gets its own draw, and different indices can draw the same order/);
-  assert.doesNotMatch(r.md, /compared only names|head-p<n>-alike\.txt/);
+  const inner = r.md.split("\n").find((l) => l.startsWith("Inner layout: shuffled."));
+  assert.ok(inner, r.md);
+  assert.doesNotMatch(inner, /compared only names|head-p<n>-alike\.txt/);
+  assert.match(inner, /each index gets its own draw, and different indices can draw the same order/);
 });
 
 test("build.sh and run.sh shuffle only when the plan says so, whatever SHUFFLE the caller's environment holds", { skip: process.platform !== "linux" && "runs the scripts' start under sh" }, () => {
