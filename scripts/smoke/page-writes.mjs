@@ -68,6 +68,8 @@ export async function pageWrites(page, browser) {
       answers: 0,
       /** @type {string[]} */ asked: [],
       /** @type {Record<string, string>} */ answered: {},
+      /** Optional stand-in for a navigation fragment. @type {((text: string, req: import("@playwright/test").Request, res: import("@playwright/test").APIResponse) => Promise<string>) | undefined} */
+      fragment: undefined,
       /** What a write's answer waits for, by the write's number. @type {(writes: number) => Promise<unknown> | undefined} */
       hold: (/** @type {number} */ _writes) => /** @type {Promise<unknown> | undefined} */ (undefined),
     };
@@ -85,14 +87,17 @@ export async function pageWrites(page, browser) {
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const sent = { ...req.headers(), "accept-encoding": "identity" };
         if (write && !seen.draws) delete sent.prefer;
-        const res = await route.fetch({ headers: sent });
+        const markedRead = seen.fragment && sent["x-smoke-written-read"] === "1";
+        if (markedRead) delete sent["x-smoke-written-read"];
+        const res = await route.fetch({ headers: sent, ...(markedRead && { maxRedirects: 0 }) });
         const headers = res.headers();
         if (write) seen.answered = { ...headers };
         delete headers["content-encoding"];
         delete headers["content-length"];
         const text = await res.text();
-        // A navigation's <main> is passed on as it is: it has no layout to change.
-        const body = mode === "nav" ? text : write || seen.written ? edit(text, writes, write ? headers : undefined) : before(text);
+        // A navigation's <main> has no layout to change; only the failed-write cases mark its draw.
+        const body = mode === "nav" ? (seen.fragment ? await seen.fragment(text, req, res) : text)
+          : write || seen.written ? edit(text, writes, write ? headers : undefined) : before(text);
         seen.written ||= write;
         if (write && seen.fail) return route.abort("failed");
         if (write) await seen.hold(writes);
@@ -334,55 +339,109 @@ export async function pageWrites(page, browser) {
   // (`ReadAgain`) reads <main> alone and keeps the failure shown, where a whole page, whose header
   // the write changed, would draw it away; the next navigation reads the whole page, which shows
   // what the write changed.
-  for (const legacy of [false, true]) {
-    const failedName = legacy
-      ? "a legacy write left undrawn does not make a poll replace the layout after a write failed"
+  for (const order of ["failed", "legacy", "late"]) {
+    const legacy = order !== "failed";
+    const failedName = order === "late"
+      ? "a poll already sent before the press cannot stand in for the poll after the legacy write drew"
+      : legacy ? "a legacy write left undrawn does not make a poll replace the layout after a write failed"
       : "a write that failed in view leaves its change to the layout for the next page, and the page reading itself again keeps the failure shown";
     if (!(await page.evaluate(() => "navigation" in window))) {
       skip(failedName, "without the Navigation API a link is a full load");
       continue;
     }
-    const { own, seen } = await writtenPage(brand, undefined, "/smoke/written/again");
-    seen.fail = true;
-    // The page says the write failed in its header, as a toaster in the layout shows it.
-    await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
-    await own.click("main form button");
-    const failed = await own
-      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-      .then(
-        () => true,
-        () => false,
-      );
-    let legacyDrew = true;
-    if (legacy) {
-      seen.fail = false;
-      seen.draws = false;
-      await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-      legacyDrew = (await writtenIn(own)) && "corten-page" in seen.answered;
+    const target = new URL("/smoke/written/again", base).href;
+    const { own, seen } = await writtenPage((body, writes, headers) =>
+      legacy && writes === 2 && headers && "corten-page" in headers
+        ? body + "<smoke-written></smoke-written>"
+        : brand(body), undefined, "/smoke/written/again");
+    const early = Promise.withResolvers(), release = Promise.withResolvers();
+    let held = false;
+    let failure = null, cleanup = null;
+    const message = (/** @type {unknown} */ error) => (error instanceof Error ? error.message : String(error)).split("\n")[0];
+    try {
+      seen.fragment = async (text, req, res) => {
+        if (req.method() !== "GET" || req.url() !== target || res.url() !== target || !res.ok() || !("corten-page" in res.headers())) return text;
+        if (order === "late" && !held && !seen.writes) {
+          held = true;
+          early.resolve(req);
+          await release.promise;
+        }
+        if (req.headers()["x-smoke-written-read"] !== "1") return text;
+        // Only this response changes the button. Stop the fixture's polls once it has drawn.
+        return text.replace(' data-corten-read-again="1"', "").replace(">Write</button>", ">Write (read again)</button>");
+      };
+      const delayed = order === "late" ? await within(5000, "no pre-press poll to delay", early.promise) : null;
+      seen.fail = true;
+      const lost = steps(5000, "the pressed form did not report its lost write");
+      await lost.step(() => own.locator("main form button").evaluate((el, legacy) => {
+        const button = /** @type {HTMLButtonElement} */ (el);
+        const form = button.form;
+        const header = document.querySelector("header");
+        const here = location.href;
+        // Latch the actual legacy draw. A GET sent before this POST may replace <main> again
+        // before Playwright samples it or the next poll starts.
+        customElements.define("smoke-written", class extends HTMLElement {
+          connectedCallback() {
+            if (document.querySelector("main > smoke-written") === this &&
+                document.querySelector("main form p")?.textContent === "Written by the form's own page.") header?.setAttribute("data-legacy", "");
+          }
+        });
+        const failed = (/** @type {Event} */ event) => {
+          if (here === location.href && (event.target === form || (event.target === document && !form?.isConnected)) && (/** @type {CustomEvent} */ (event)).detail?.status === 0) {
+            header?.setAttribute("data-failed", "");
+            removeEventListener("corten:error", failed);
+          }
+        };
+        addEventListener("corten:error", failed);
+        const fetch_ = window.fetch;
+        window.fetch = function (input, init) {
+          const headers = new Headers(init?.headers);
+          if ((init?.method ?? "GET") === "GET" && !headers.has("purpose") && header?.hasAttribute("data-failed") &&
+              (!legacy || header.hasAttribute("data-legacy"))) {
+            window.fetch = fetch_;
+            headers.set("x-smoke-written-read", "1");
+            return fetch_.call(this, input, { ...init, headers });
+          }
+          return fetch_.call(this, input, init);
+        };
+        button.click();
+      }, legacy));
+      await lost.poll(() => own.evaluate(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]")));
+      if (seen.writes !== 1 || !("corten-shell" in seen.answered) || "corten-page" in seen.answered)
+        throw new Error("the lost write did not reach the server for its whole action answer");
+      if (legacy) {
+        seen.fail = false;
+        seen.draws = false;
+        const write = steps(5000, "the second press did not draw the legacy fragment");
+        await write.step(() => own.locator("main form button").evaluate((el) => /** @type {HTMLButtonElement} */ (el).click()));
+        await write.poll(() => own.evaluate(() => !!document.querySelector("header[data-failed][data-legacy]") && !document.querySelector("[aria-busy]")));
+      }
+      const read = steps(5000, "the post-write poll did not draw");
+      release.resolve();
+      if (delayed) await read.step(async () => {
+        const response = await delayed.response();
+        if (!response?.ok() || await response.finished()) throw new Error("the browser did not receive the delayed pre-press poll");
+      });
+      await read.poll(() => own.evaluate((url) =>
+        location.href === url && /** @type {any} */ (window).__marker === 1 && document.title === "Write | Watchlist" && !!document.querySelector("header[data-failed]") &&
+        document.querySelector("main form button")?.textContent === "Write (read again)", target));
+      const writes = seen.asked.filter((ask) => ask.startsWith("POST "));
+      if (writes.length !== (legacy ? 2 : 1) || writes.some((ask) => ask !== "POST /smoke/written/again action"))
+        throw new Error("the presses did not send exactly the expected writes");
+      const after = seen.asked.length;
+      const leave = steps(5000, "the next page did not draw the changed layout");
+      await leave.step(() => own.locator('main a[href="/smoke/quoted"]').evaluate((el) => /** @type {HTMLAnchorElement} */ (el).click()));
+      await leave.poll(() => own.evaluate(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form, [aria-busy]") &&
+        document.querySelector("header span")?.textContent === "Watchlist, written" && /** @type {any} */ (window).__marker === 1));
+      if (!seen.asked.slice(after).includes("GET /smoke/quoted page")) throw new Error("the next page was not read whole");
+    } catch (error) {
+      failure = message(error);
+    } finally {
+      release.resolve();
+      try { await within(5000, "route cleanup timed out", own.unrouteAll({ behavior: "ignoreErrors" })); } catch (error) { cleanup = message(error); }
+      try { await within(5000, "context close timed out", own.context().close()); } catch (error) { cleanup ??= message(error); }
     }
-    const after = seen.asked.length;
-    // The page's next read of itself, and a moment for it to be drawn.
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
-    const again = seen.asked.slice(after).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
-    await own.waitForTimeout(500);
-    const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && location.pathname === "/smoke/written/again");
-    await own.click('main a[href="/smoke/quoted"]');
-    const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
-      );
-    const shown = await shownOf(own);
-    check(
-      failedName,
-      failed && legacyDrew && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ failed, legacyDrew, again, kept, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+    check(failedName, failure === null && cleanup === null, JSON.stringify({ failure, cleanup, asked: seen.asked }));
   }
   /** Follows the link to /smoke/quoted, and whether that page came in. @param {import("@playwright/test").Page} own */
   const toQuoted = async (own) => {
