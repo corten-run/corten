@@ -141,9 +141,9 @@ impl Builder {
     }
 
     /// Saves `deck` (the page's send `draft`) if the saved deck is still at `version` of
-    /// `generation` and the rules allow it. A submit key already applied answers as it did then,
-    /// whatever the deck: the page sent it again because the answer was lost, and the draft says
-    /// which deck was saved.
+    /// `generation` and the rules allow it. On replay, the original draft identifies which
+    /// scripted edit saved. A plain form has no draft to reconcile, so it only gets the original
+    /// success if it sends the same deck.
     pub fn save(&self, generation: &str, version: u64, deck: Deck, key: &SubmitKey, draft: u64) -> Outcome {
         let mut saves = self.lock();
         let at = Instant::now();
