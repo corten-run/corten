@@ -12408,43 +12408,51 @@ rules something out.
     25,841 to 25,877 (0.1% more) and the page, compressed, from 211,835 to 211,950 (0.05% more).
     Those figures are of the connection before it read bodies, when a request with a body was
     hyper's on both and cost the same to a tenth of a percent (22,838 and 22,815, 19
-    allocations). With bodies read here (A request's body, below; counted at `3bf27fe3c`
-    against `2f8984ddc`, the head before, each with the switch on and off) the kit's `post`,
-    a body of two bytes, costs 20,853 against hyper's 22,839, 8.7% fewer, and 17 allocations
-    against 19; with an absolute target 23,602 against 25,452; sixteen at a time 18,485 and
-    21,228 against 19,828 and 22,404. The same body sent as one chunk, a case added to a copy
-    of the kit's requests and not committed, costs 22,994 against 26,427, 13.0% fewer, and
-    20,407 against 23,181 sixteen at a time, with the same allocations (sixteen at a time
-    both bodies read 17.00 against 17.13); and a body of 2,000 chunks of a byte each
-    2,897,188 against 5,361,141, 46% fewer, 27 allocations on both. A connection that waits after a request with a body holds what one that waits
-    after any other does, 7,424 bytes against hyper's 8,470, where the connection handed to
-    hyper for it held 10,083. Reading bodies here is not free for the requests that have
-    none: with the switch on they cost 93 to 105 instructions more than they did before
-    (the shortest 9,436 against 9,335, the staged `GET` 17,195 against 17,096, the page
-    32,284 against 32,187; sixteen at a time 7,022 against 6,928), about 1% of the shortest
-    request, which leaves it 10.9% under hyper's where it was 11.8%; with a browser's lines
-    6 to 8 fewer (the `GET` 23,805 against 23,811). Read from a profile of the shortest
-    request, 63 of its 102 are in the function that serves a connection, which has a body's
-    paths in it now, 29 are one more copy of the request where it is made, and 13 are in the
-    making of a head, which tells three more header names apart (the function was read from
-    the profile; why it has them is from the code). Three other ways to make the request
-    were built and counted, and none took the 29 away: one made them 58, and one kept what a
-    head says of its body in the connection, which made every waiting connection hold 314
-    bytes more. Both were taken out. Allocations and the bytes a waiting connection holds
-    are what they were. One kind of request costs more here: one
+    allocations). With bodies read here (A request's body, below; counted at `a5496b2f8`
+    against `2f8984ddc`, the head before, each with the switch on and off; each count taken
+    once, the median of three requests) the kit's `post`, a body of two bytes, costs 20,821
+    against hyper's 22,839, 8.8% fewer, and 17 allocations against 19; with an absolute target
+    23,563 against 25,451; sixteen at a time 18,452 and 21,189 against 19,827 and 22,404. The
+    same body sent as one chunk, a case added to a copy of the kit's requests and not
+    committed, costs 22,973 against 26,427, 13.1% fewer, and 20,385 against 23,181 sixteen at
+    a time, with 17 allocations against 19 (sixteen at a time both bodies read 17.00 against
+    17.13); and a body of 2,000 chunks of a byte each 2,897,164 against 5,361,141, 46% fewer,
+    27 allocations on both. A connection that waits after a request with a body holds what one
+    that waits after any other does, 7,423 bytes against hyper's 8,471, where the connection
+    handed to hyper for it held 10,084. Reading bodies here is not free for the requests that
+    have none: with the switch on they cost 81 to 89 instructions more than they did before
+    (the shortest 9,424 against 9,335, the staged `GET` 17,184 against 17,095, the page
+    32,272 against 32,187; sixteen at a time 7,010 against 6,929), about 1% of the shortest
+    request, which leaves it 11.0% under hyper's where it was 11.8%; with a browser's lines
+    74 fewer (the `GET` 23,737 against 23,811), which a profile was not taken of. Read from a
+    profile of the shortest request with line tables, at `a5496b2f8` against `2f8984ddc`, 63
+    of its 89 are in the function that serves a connection, which has a body's paths in it
+    now, 29 are one more copy of the request's head where it is made, and the making of a
+    head costs 2 fewer (the functions and the copy's line, `Ok(Some(head))` behind the body's
+    beginning, were read from the profile; why the copy is made is from the code: a call
+    between the head's building and its return keeps the head from being built where it is
+    returned). Four other ways to make the request were built, and none took the 29 away
+    within the bounds the crate's tests hold: one made them 58; one kept what a head says of
+    its body in the connection, which made every waiting connection hold 314 bytes more; and
+    two at this head, one that kept it in a field of the connection and one that gave it back
+    beside the head for the caller to begin the body with, each made the future a connection
+    is served in 1,040 bytes, over the 1,024 that
+    `the_future_a_connection_is_served_in_is_small` holds it to. All were taken out, and the
+    bound was not raised. Allocations and the bytes a waiting connection holds are what they
+    were. One kind of request costs more here: one
     whose head is longer than this connection's first read of 2,560 bytes, where hyper's first
     read is of 8,192. A request whose `Host` is a name of 4,096 bytes costs 22,503 on hyper's
-    connection and 24,313 on this one, 8.0% more (the kit's `unstaged-any-long`, a case `main`
-    gained while this change was in review; `unstaged-any-encoded` reads the same 1,810
-    more). The read buffer grows for such a head, which by the code is a second read, a copy
-    of what the first brought and a second look through the head; which of those the 1,810
-    are was not read from a profile. A first read of hyper's size would take the difference
+    connection and 24,400 on this one, 8.4% more (the kit's `unstaged-any-long`, a case `main`
+    gained while this change was in review; `unstaged-any-encoded` reads 1,898 more, 24,545
+    against 22,647). The read buffer grows for such a head, which by the code is a second
+    read, a copy of what the first brought and a second look through the head; which of those
+    the 1,897 are was not read from a profile. A first read of hyper's size would take the difference
     away and would have a waiting connection keep a read buffer of 8,192 bytes where it keeps
     2,560, which is more than the idle memory this connection saves; it was not built or
-    counted. A connection that waits for a request holds 7,424 bytes against
-    8,471 after one short request, 7,558 against 12,562 after three with a browser's header
-    lines, and 2,279 against 2,698 before its client has sent a byte (the median of three
-    readings of each). When this Choice was first written, against an earlier `main`, the
+    counted. A connection that waits for a request holds 7,423 bytes against
+    8,471 after one short request, 7,559 against 12,562 after three with a browser's header
+    lines, and 2,281 against 2,698 before its client has sent a byte (each taken once at
+    `a5496b2f8`). When this Choice was first written, against an earlier `main`, the
     switch saved more: 15.0% on the shortest request (8,984 against 10,564), 8.6% on the `GET`,
     3.3% on the page, 1.6% on the `GET` with a browser's lines. A request sent alone has since
     gained 285 to 287 instructions for a look at the socket for its client's end, which hyper
@@ -13143,10 +13151,14 @@ rules something out.
     lines, and 30 chunked bodies that are wrong or odd in one place each), to a handler that
     reads all of the body, one that reads none, one that takes its first piece, one that
     takes it and holds the body for three milliseconds, and one that gives the body back as
-    its answer; and twelve more fixed streams, with bodies of both framings behind and before
+    its answer; and eleven more fixed streams, with bodies of both framings behind and before
     other requests (with extensions and trailers, expected, left unread, half read, held,
-    framed twice, framed wrong, on HTTP/1.0, given back), each cut in two writes at every
-    byte and ended at every byte. It fails on any stream where
+    framed wrong, on HTTP/1.0, given back), each cut in two writes at every byte and ended at
+    every byte. A twelfth, a head with a length and chunks, is cut the same way in a test of
+    its own, `a_head_with_a_length_and_chunks_differs_by_its_class_alone_wherever_it_is_cut`,
+    which holds each of its streams that ends before the head does to an answer alike and each
+    other to the third class alone: among the rest, its 188 listed streams would have been more
+    than the 1% of the suite's run that the list may let through. It fails on any stream where
     Corten's connection is laxer than hyper's (it answers more requests, or the app answers one
     hyper refused), on a difference in any byte that is not on the list, on a panic and
     on a hang, which the test's own thread tells by the clock when no stream has finished in two
@@ -13244,13 +13256,36 @@ rules something out.
     to its origin does not meet it. A second cost is smaller and by design: a connection handed
     to hyper holds 10,082 bytes while it waits where hyper's own holds 8,470, the task it began in
     and hyper's connection in an allocation of its own, which keeps a connection that is never
-    handed over at 7,424. The harness's attacks that send a body, whose connections are hyper's
-    from their first request, show it (these and the attacks below were run at `f02d8511f` and
-    not again): huge-chunk peaked at 977 to 997 MiB against 905 to 939 and
-    large-upload at 1,393 to 1,577 against 1,286 to 1,535 (nine runs each), and four more of the
-    nine such attacks were 21 to 58 MiB higher in the runs made (one each, chunk-extension-flood
-    five). The ten attacks that send no body and are not the flood all peaked lower with the
-    switch on, one run each (slow-headers 252 against 642, redos-headers 720 against 1,466,
+    handed over at 7,423 (measured at `568aa8d1a`, when a request with a body was handed over;
+    since bodies are read here it is the cost of a switch, a `CONNECT` and an HTTP/1.0 client
+    that keeps its connection alone). The harness's attacks that send a body, whose connections
+    were hyper's from their first request then, show what reading bodies here changed: at
+    `f02d8511f` huge-chunk peaked at 977 to 997 MiB against 905 to 939 and large-upload at 1,393
+    to 1,577 against 1,286 to 1,535 (nine runs each), and four more of the nine such attacks
+    were 21 to 58 MiB higher; at `a5496b2f8`, one run each way, eight of the nine peak lower
+    with the switch on: slow-body 175 against 264, huge-chunk 832 against 930,
+    chunk-extension-flood 843 against 1,301, chunk-size-overflow 359 against 443,
+    content-length-prealloc 172 against 368, large-upload 926 against 1,561,
+    expect-100-continue 108 against 377 and trailer-flood 386 against 587, with every liveness
+    probe answered in every run. The ninth, tiny-chunk-flood (32,768 connections each sending
+    a body of 500,000 chunks of a byte, again and again), peaked at 2,166 against 1,841, as it
+    did at earlier heads (2,245 against 1,899 at `3bf27fe3c`, three runs each), and is the one
+    attack that sends a body and reads higher. Why is not determined. It is not what a
+    connection holds for such a body: read in the middle of bodies of one-byte chunks once
+    every connection's body had come (three runs each way at `a5496b2f8`, each run a process
+    of the kit's probe on one CPU with the allocator's own figures read, 25 seconds in; every
+    connection's body was then ended and answered 200 with the two bytes it carried, so no
+    deadline had cut a body short), a connection holds less with the switch on, and its memory
+    grows with the body by about 0.75 bytes a chunk against hyper's 8.75: 23.4 against 26.6 KB
+    a connection at 2,000 chunks (19.5 against 41.4 KB allocated), 31.8 against 76 at 8,000,
+    61 against 265 at 32,000 (42.7 against 288 allocated). How much of each body had been read
+    at the reading was not shown, the process's count of bytes read being blind to the reads
+    the server makes. A flood of the attack's bodies from 2,000 connections for 15 seconds, two
+    runs each way, peaked lower with the switch on, 103 to 104 MiB against 160 to 161. What the
+    harness's run holds more of was not read; it is under the condition for the default that
+    no attack reads beyond what its runs vary by (below), and no condition is added for it.
+    The ten attacks that send no body and are not the flood all peaked lower with the
+    switch on, one run each at `f02d8511f` and not run again (slow-headers 252 against 642, redos-headers 720 against 1,466,
     range-bomb 472 against 942), and header-bomb varied too much to tell the two apart (1,015 to
     1,851 against 1,163 to 2,768, nine runs each). No server was killed for memory in any run; a
     liveness probe went unanswered in five runs, four of them with the switch off.
@@ -13321,9 +13356,13 @@ rules something out.
     holds, by `bench/request-cost` as it is on `main`, callgrind over a socket with jemalloc
     preloaded, three counts of each case that agree within 1 and three runs of each idle figure
     over 5,000 connections, for `main` at `0e1d764fb`, for this change at `568aa8d1a`, with the
-    switch off and on (on by one call added to the kit's probe); between `568aa8d1a` and the
-    commit that wrote this, no file under `crates/` differs but in its tests and in
-    documentation comments, so the counts were not taken again;
+    switch off and on (on by one call added to the kit's probe); the figures with bodies read
+    here at `a5496b2f8` against `2f8984ddc`, the switch off and on, each case counted once
+    (three requests, whose median is given, agreeing within 1) and each idle figure read once,
+    with a chunked `post` and a body of 2,000 one-byte chunks added to a copy of the kit's
+    requests and committed nowhere; and the shortest request's profile with line tables at
+    both, built for it and committed nowhere; between `a5496b2f8` and the commit that wrote
+    this, no file under `crates/` differs;
     the figures are in the
     text above, and the ones of earlier heads it names were taken the same way against the
     `main` of their time: `f02d8511f` against `8270df196`, `7076a0c95` and `8dbd3db5f` against
@@ -13334,7 +13373,11 @@ rules something out.
     count from `db425e336`, `c9b910952` and `ffb331816`, with the switch on, and are committed
     nowhere;
     no cycles or times taken);
-    measured (the gate's long run, seed 20261124, at `568aa8d1a`: 252,454 streams, 252,276
+    measured (the gate's long run, seed 20261124, at `a5496b2f8`, with bodies: 255,174
+    streams, 254,900 answered alike, the app answering in 181,504 of them, 274 listed, 9 of
+    them in the second class and 30 in the third, none failed, in 726 s on eight CPUs; before
+    the third class, at `3bf27fe3c`, 255,448 streams and 255,204 alike; at `568aa8d1a`,
+    before bodies: 252,454 streams, 252,276
     answered alike, the app answering in 177,925 of them, 178 in the one listed class, none
     failed; one run, which the same seed repeats; before its app had a route whose body
     waits, at `553b27040`, 252,282 were answered alike and 172 listed, none failed, the same
@@ -13349,7 +13392,12 @@ rules something out.
     `423722c21`, `2764ce975`, `553b27040`, `db425e336`, `c9b910952` and `ffb331816`, with the
     switch on first in five and off first in four, and before those at `f02d8511f`, where
     huge-chunk, large-upload and header-bomb were run nine times each, chunk-extension-flood
-    five and every other attack once, none of them again since; and what a connection holds
+    five and every other attack once; the nine attacks that send a body once each way at
+    `a5496b2f8`, with the switch on first, and at `3bf27fe3c` three times each way, the rest
+    not again since; what a connection holds in the middle of a body of one-byte chunks, by a
+    script made for the reading and committed nowhere that starts the kit's probe with
+    jemalloc's statistics printed, three runs each way at 2,000, 8,000 and 32,000 chunks, and
+    the small flood of such bodies, two runs each way, at `a5496b2f8`; and what a connection holds
     after a request with a body, by `bench/request-cost`'s idle reading over 5,000 connections,
     three runs each at `568aa8d1a`: 10,082 twice and 10,083 with the switch on, 8,470 twice
     and 8,472 with it off, 8,469 three times on `main`);
@@ -13422,11 +13470,21 @@ rules something out.
     hyper offers a constructor for `Upgraded`, either of which reopens the handoff; reading a
     body ahead of the app is proposed, which reopens what a connection holds for a body no
     handler reads; a count with the switch off moves away from `main` by more than
-    the 48 instructions it was at an earlier head; the look for a client's end is found to be more
+    the 48 instructions it was at an earlier head; what tiny-chunk-flood holds more of with the
+    switch on is found, or its peak comes within what its runs vary by; a way is found to begin
+    a body without the copy of the head that costs a request without one 29 instructions,
+    within the bound on the future a connection is served in; the look for a client's end is found to be more
     than hyper's own, or a way is found to know the client's end without it; or hyper is fixed
     where the gate met it, which lets the gate send bodies over pipes that hold little.
 
-    Last checked: 2026-11-26, the counts and idle figures with `bench/request-cost`, on
+    Last checked: 2026-11-27, with bodies read here: the counts, idle figures and the shortest
+    request's profile with `bench/request-cost` on `a5496b2f8` against `2f8984ddc`, the gate's
+    long run on `a5496b2f8`, the nine attacks that send a body with
+    `MDA2AV/HttpArena@3388e45` on `a5496b2f8`, and what a connection holds in the middle of a
+    body of one-byte chunks there; 2026-11-27, hyper 1.12.0's framing of a request's body
+    (`proto/h1/role.rs`, `decode.rs` and `headers.rs`) read against RFC 9112 sections 6 and 7
+    and `crates/corten/src/h1/head.rs` and `body.rs` at `a5496b2f8`; 2026-11-26, the counts
+    and idle figures with `bench/request-cost`, on
     `0e1d764fb` and on `568aa8d1a` with the switch off and on; 2026-11-26, the
     gate's long run and the suite on both connections at `568aa8d1a`; 2026-11-27, the handlers
     that run for a client that reads nothing, by the two fixed tests on `93247e58b`, with the

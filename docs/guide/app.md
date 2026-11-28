@@ -320,8 +320,10 @@ answers any other ([below](#host-names)). What differs:
    connection that takes nothing is kept. This is why the switch is off unless set; behind a
    proxy that does not pipeline to the app it does not arise. And a connection that has been
    handed to hyper holds about 1.6 KiB more while it waits than one hyper served from the start
-   (10,082 bytes against 8,470), so an app whose connections mostly carry bodies gains nothing
-   in memory.
+   (10,082 bytes against 8,470, measured at `568aa8d1a`, when requests with a body were handed
+   over). Bodies are now read by Corten's connection, so that is a cost only of the requests
+   hyper still serves: a switch of protocols, a `CONNECT` and an HTTP/1.0 client that keeps
+   its connection.
 7. A body type of the app's own that panics. A panic where a body is asked for its next piece
    ends its answer as a failure does (item 4), with either connection. A body that panics where
    it is asked how long it is or whether it has ended (`size_hint` and `is_end_stream` of
@@ -379,21 +381,23 @@ answers any other ([below](#host-names)). What differs:
     request; it does not keep the other way round. Where the length is shorter than the chunks,
     such a proxy sends the next client's request behind it, and hyper reads that request into
     this one's body, for this request's handler: another client's cookies, say, in a comment
-    the first one posts. No client that follows HTTP sends both.
+    the first one posts. No client that follows HTTP sends both. So with the switch on, a
+    client or proxy that does send both has its request refused with 400 before any handler is
+    called, where with the switch off the handler is given the body its chunks frame.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
-connection, at `3bf27fe3c`): the shortest request the counting kit sends, to a route that says
-`unstaged` and answers two bytes, goes from 10,587 to 9,436, a staged API route's `GET` from
-18,354 to 17,195, and a 12 KB page from 33,220 to 32,284, each with three allocations fewer. A
-request with the header lines a browser sends costs as many instructions as it did, to a
-third of a percent either way (the same `GET` 23,894 and 23,805, a compressed page 211,834
-and 211,941), with the three allocations fewer. A `POST` with a body of two bytes goes from
-22,839 to 20,853 and from 19 allocations to 17, and the same body sent as one chunk from
-26,427 to 22,994. A
+connection, at `a5496b2f8`): the shortest request the counting kit sends, to a route that says
+`unstaged` and answers two bytes, goes from 10,587 to 9,424, a staged API route's `GET` from
+18,354 to 17,184, and a 12 KB page from 33,220 to 32,272, each with three allocations fewer. A
+request with the header lines a browser sends costs as many instructions as it did, to within
+1% either way (the same `GET` 23,894 and 23,737, a compressed page 211,835
+and 211,873), with the three allocations fewer. A `POST` with a body of two bytes goes from
+22,839 to 20,821 and from 19 allocations to 17, the same body sent as one chunk from 26,427
+to 22,973, and a body of 2,000 chunks of a byte each from 5,361,141 to 2,897,164. A
 request whose head is longer than 2,560 bytes costs more than it did: one with a `Host` name
-of 4,096 bytes goes from 22,503 to 24,413, since Corten's connection reads less at first than
+of 4,096 bytes goes from 22,503 to 24,400, since Corten's connection reads less at first than
 hyper does and takes such a head in two reads. A
-connection waiting for a request holds 7,424 bytes where hyper's holds 8,471, after a request
+connection waiting for a request holds 7,423 bytes where hyper's holds 8,471, after a request
 with a body as after one without. No time has been
 measured yet, so this is less work for a short request and not yet a claim that it is faster.
 
