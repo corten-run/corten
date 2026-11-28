@@ -9,13 +9,15 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { beginLifetime, inspectLifetime } from "../host-lifetime.mjs";
+import { liveActorCpus, liveApplication, liveGroup } from "../native-roles.mjs";
 import { jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation } from "../../registry.mjs";
 
 export const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
 export const stat = (pid, name = "node", start = pid * 10, ppid = 1) => `${pid} (${name}) S ${[ppid, ...Array(17).fill(0), start, 0].join(" ")}`;
 export const missing = (code = "ENOENT") => Object.assign(new Error("PRIVATE_NOT_RETAINED"), { code });
 
-export async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0, catalog = false, json = null, browserDockerGate) {
+export async function fixture(t, nativePids = [], dockerGroup = false, onFault, attachGapMs = 0, catalog = false, json = null, browserDockerGate) {
+  const browser = dockerGroup === true, live = liveGroup(dockerGroup), captureDocker = browser || live;
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
     .map((key) => [key, fs[key]]));
   const exec = childProcess.execFileSync;
@@ -26,10 +28,10 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   const round = json === "timing" ? "j43" : json ? jsonPreparationRound(campaignRound) : "churn-control";
   const jsonInvocation = json === "timing" ? jsonTimingInvocation(round, "/bench/audits.json") : jsonPreparationInvocation(campaignRound);
   if (json === "check-only-no-build") jsonInvocation.argv = jsonInvocation.argv.filter((arg) => arg !== "--build");
-  const binding = { request: { group: json ? "json-api" : browser ? "fullstack-browser" : catalog ? "catalog-page" : "client-heavy",
+  const binding = { request: { group: json ? "json-api" : live ? dockerGroup : browser ? "fullstack-browser" : catalog ? "catalog-page" : "client-heavy",
     round, commit: "a".repeat(40) }, ...(json ? { execution: { invocation: jsonInvocation } } : {}) };
   const executable = join(temporary, "executable"), nextExecutable = join(temporary, "next-executable"), held = new Set();
-  const deferred = browser || catalog || json === "prepare" || json === "check-only-no-build";
+  const deferred = captureDocker || catalog || json === "prepare" || json === "check-only-no-build";
   const inline = json === "timing";
   const thirdExecutable = join(temporary, "third-executable");
   const executableFor = (path) => f.thirdExecutable ? thirdExecutable
@@ -38,6 +40,11 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   if (inline) fs.writeFileSync(thirdExecutable, "third executable");
   const invocation = json === "fixture" ? { executable: "node", argv: ["bench/catalog/fixtures.mjs", "c21"] }
     : json ? jsonInvocation : { executable: "node", argv: ["control"] };
+  if (live) {
+    binding.request.recipe = "native-feed-measure";
+    binding.execution = { invocation, effectiveOptions: { isolated: true, measure: true, profile: "native-feed" } };
+    binding.resources = { actorCpus: liveActorCpus, app: liveApplication };
+  }
   const result = { terminal: true, code: 0, signal: null, cancelled: false, forced: false, success: true, error: null };
   let observer, finished = false;
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
@@ -60,7 +67,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     t.mock.method(performance, "now", () => f.clock);
     t.mock.method(Atomics, "wait", (_array, _index, _value, ms) => { f.clock += ms + (f.retryOversleep ?? 0); return "timed-out"; });
   }
-  t.mock.method(globalThis, "setInterval", (callback) => { f.capture = callback; return 1; });
+  t.mock.method(globalThis, "setInterval", (callback, ms) => { f.capture = callback; f.intervalMs = ms; return 1; });
   t.mock.method(globalThis, "clearInterval", () => {});
   if (browser) {
     const set = globalThis.setTimeout, clear = globalThis.clearTimeout, captureHandle = {};
@@ -78,7 +85,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
         return f.flock ? f.flock(argv, options, acquire) : acquire();
       }
       if (argv[1] !== "--hash-open-executables") {
-        assert.equal(browser, true, "catalog proof does not query the Docker daemon");
+        assert.equal(captureDocker, true, "catalog proof does not query the Docker daemon");
         assert.equal(file, "docker");
         if (f.docker) return f.docker(argv);
         assert.deepEqual(argv, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]);
@@ -140,6 +147,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   });
   t.mock.method(fs, "writeFileSync", (path, value, ...args) => {
     if (String(path).replaceAll("\\", "/") === `/sys/fs/cgroup${f.scope}/cgroup.procs`) { f.members = [Number(value)]; return; }
+    if (live && String(path).replaceAll("\\", "/") === `/sys/fs/cgroup${f.scope}/cpuset.cpus`) { f.commandCpus = value; return; }
     return original.writeFileSync(path, value, ...args);
   });
   t.mock.method(fs, "lstatSync", (path, ...args) => {
@@ -190,7 +198,8 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     const members = scope === f.scope ? f.members : [];
     return { "cgroup.subtree_control": "cpu cpuset memory\n", "cgroup.procs": members.map((p) => `${p}\n`).join(""),
       "cgroup.events": `populated ${members.length ? 1 : 0}\n`, "cpu.stat": `usage_usec ${f.cpu}\n`, "cpu.max": "max 100000\n",
-      "cpuset.cpus.effective": "0-7\n", "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom_kill 0\n" }[key];
+      "cpuset.cpus.effective": scope === f.scope && f.commandCpus ? f.commandCpus + "\n" : "0-7\n",
+      "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom_kill 0\n" }[key];
   });
   syncBuiltinESMExports();
   observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault, browserDockerGate });

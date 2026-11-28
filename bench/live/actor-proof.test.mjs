@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { removeOwnedLiveContainer } from "./parity.mjs";
+import { browserDockerGateEnv } from "../workloads/isolated/host-lifetime.mjs";
+import { removeOwnedLiveContainer, runLiveAdapters } from "./parity.mjs";
 import { liveActorWindow } from "../workloads/isolated/adapters/live-delivery.mjs";
 
 test("cleanup checks the original full container ID and ownership before removing", () => {
@@ -16,6 +17,18 @@ test("cleanup checks the original full container ID and ownership before removin
     assert.deepEqual(calls, [["inspect", id], ...(remove ? [["rm", "-f", "-v", id]] : [])]);
   }
   assert.throws(() => removeOwnedLiveContainer(() => assert.fail("names must not reach Docker"), "parity-live-label"));
+});
+
+test("only an isolated native-feed measurement can consume an inherited Docker gate", async (t) => {
+  const old = process.env[browserDockerGateEnv];
+  process.env[browserDockerGateEnv] = "";
+  t.after(() => { if (old === undefined) delete process.env[browserDockerGateEnv]; else process.env[browserDockerGateEnv] = old; });
+  for (const group of ["live-delivery", "recoverable-live"]) {
+    for (const [isolated, measure, profile] of [[false, true, "native-feed"], [true, false, "native-feed"], [true, true, "bounded"]]) {
+      await assert.rejects(runLiveAdapters({ group, isolated, measure, profile }), /Docker gate requires an isolated native-feed measurement/);
+    }
+    await assert.rejects(runLiveAdapters({ group, isolated: true, measure: true, profile: "native-feed" }), /Docker gate anchor unavailable/);
+  }
 });
 
 test("functional actor proof requires a real scenario window and a matching browser clock", () => {

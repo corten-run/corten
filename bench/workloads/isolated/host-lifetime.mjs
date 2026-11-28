@@ -696,12 +696,12 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const controllers = readFileSync(join(root, parent, "cgroup.subtree_control"), "utf8").trim().split(/\s+/);
   assert.ok(["cpu", "cpuset", "memory"].every((key) => controllers.includes(key)), "required accounting controllers must be delegated and enabled");
   const browser = binding.request.group === "fullstack-browser";
-  assert.ok(!browserDockerGate || browser, "Browser Docker gate requires the Browser observer");
   const catalog = binding.request.group === "catalog-page";
   const executableCensus = catalog || terminalClockPolicy(binding, invocation, round, "prepare") === "preparation";
   const commandCpus = boundCommandCpuSet(binding);
   const liveCpus = commandCpus && liveGroup(binding.request.group) ? nativeControlPartition(binding).cpus : null;
   const captureDocker = browser || liveCpus !== null;
+  assert.ok(!browserDockerGate || captureDocker, "Docker gate requires a Docker observer");
   const excluded = new Set(captureDocker ? docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean) : []);
   if (liveCpus) assert.equal(excluded.size, 0, "live worker requires a clean Docker inventory");
   for (const id of excluded) assert.match(id, containerId);

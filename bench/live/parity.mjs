@@ -18,8 +18,9 @@ import { negativeRequests, verifyIdentity, verifyScenario } from "./admission.mj
 import { inspectFormat, kernelCommand } from "./measurement.mjs";
 import { verifyResources } from "./resources.mjs";
 import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout, waitForFanoutDrain } from "./fanout.mjs";
-import { liveActorCpus, liveApplication } from "../workloads/isolated/native-roles.mjs";
-import { containerState, requireNativeCommandCpuSet, requireNativeContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
+import { liveActorCpus, liveApplication, liveGroup } from "../workloads/isolated/native-roles.mjs";
+import { browserDockerGateChildFd, browserDockerGateEnv, browserDockerGateIdentity, containerState, lockBrowserDocker,
+  requireNativeCommandCpuSet, requireNativeContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
 import { liveWorkloadClock, liveWorkloadEndFile, liveWorkloadEndSchema } from "../workloads/isolated/host-observation.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), root = resolve(here, "../..");
@@ -61,9 +62,15 @@ export function inspectOwnedLiveContainer(docker, id) {
   assert.equal(info.Config.Labels["agent.task"], taskLabel);
   return info;
 }
-export function removeOwnedLiveContainer(docker, id) {
+export function removeOwnedLiveContainer(docker, id, dockerGate, spawn = spawnSync) {
   inspectOwnedLiveContainer(docker, id);
-  docker(["rm", "-f", "-v", id]);
+  const args = ["rm", "-f", "-v", id];
+  if (!dockerGate) { docker(args); return; }
+  const unlock = lockBrowserDocker(dockerGate, true);
+  // Keep the existing deadline, but do not wait indefinitely for a client
+  // that ignores spawnSync's default SIGTERM. Keep the gate until it settles.
+  try { command("docker", args, { killSignal: "SIGKILL" }, spawn, true); }
+  finally { unlock(); }
 }
 function beginActorWindow(isolated) {
   if (!isolated) return { finish() {} };
@@ -76,9 +83,10 @@ function beginActorWindow(isolated) {
   } };
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function command(program, args, options = {}, spawn = spawnSync) {
+function command(program, args, options = {}, spawn = spawnSync, requireSettled = false) {
   const result = spawn(program, args, { cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 16 * 1024 * 1024, ...options });
-  if (result.status !== 0) {
+  // A sync timeout may still report exit zero if a descendant held a pipe.
+  if (result.status !== 0 || requireSettled && (result.error || result.signal !== null)) {
     const error = new Error(`${program} ${args.join(" ")}: ${result.error?.message ?? `exit ${result.status}`}\n${result.stderr?.slice(-12000) ?? ""}`);
     error.receipt = { program, args, status: result.status, signal: result.signal, error: result.error?.message,
       stdout: result.stdout, stderr: result.stderr };
@@ -294,6 +302,13 @@ export async function run({ group, out, apps: requested, build = false, round, p
 // always uses the real browser, Docker and capture code.
 export async function runLiveAdapters({ group, out, requested, build, round, profile, measure, isolated },
   { spawn = spawnSync, chromium, signal: testSignal, journey = browserJourney, fanout = fanoutJourney } = {}) {
+  const identity = process.env[browserDockerGateEnv];
+  const dockerGate = identity === undefined ? undefined : { fd: browserDockerGateChildFd, identity };
+  if (dockerGate) {
+    assert.ok(liveGroup(group) && isolated && measure && profile === "native-feed",
+      "Docker gate requires an isolated native-feed measurement");
+    assert.equal(browserDockerGateIdentity(dockerGate.fd), identity, "Docker gate anchor unavailable");
+  }
   if (isolated) requireNativeCommandCpuSet(liveActorCpus.browser);
   const apps = select(group, requested);
   const workload = workloadFor(profile);
@@ -504,7 +519,7 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
                 const actor = appActor(info, app, { startedAt: actorStart, endedAt });
                 await writeFile(join(out, `${app}-host-actor.json`), JSON.stringify(actor), { flag: "wx" });
               }
-            } finally { if (ownedId) removeOwnedLiveContainer(docker, ownedId); }
+            } finally { if (ownedId) removeOwnedLiveContainer(docker, ownedId, dockerGate, spawn); }
           }
         }
       }

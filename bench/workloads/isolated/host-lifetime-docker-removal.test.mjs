@@ -12,6 +12,7 @@ import { EvidenceStore, openEvidence } from "../../fullstack-browser/native-evid
 import { ExecutionLedger, replayExecution } from "../../fullstack-browser/native-execution.mjs";
 import { groupQualificationPassed, OwnedDocker, run } from "../../fullstack-browser/run.mjs";
 import { nativeAttemptCells, replayPrerequisite } from "../../fullstack-browser/verify.mjs";
+import { removeOwnedLiveContainer } from "../../live/parity.mjs";
 import { definition } from "../registry.mjs";
 import { browserDockerGateChildFd, browserDockerGateEnv, browserDockerGateIdentity, inspectBrowserParticipants,
   lockBrowserDocker, reopenBrowserDockerGate } from "./host-lifetime.mjs";
@@ -20,9 +21,9 @@ import { fixture, stat } from "./test-fixtures/host-lifetime-observer.mjs";
 
 const linux = { skip: process.platform !== "linux" };
 
-async function externalRemoval(t, gate) {
+async function externalRemoval(t, gate, group = true) {
   let faults = 0;
-  const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate);
+  const f = await fixture(t, [], group, () => { faults++; }, 0, false, null, gate);
   const id = "a".repeat(64), other = "b".repeat(64), image = "sha256:" + "c".repeat(64);
   const pid = 5000, scope = `/system.slice/docker-${id}.scope`, zero = "0001-01-01T00:00:00Z";
   const state = { Status: "created", Pid: 0, Running: false, Paused: false, Restarting: false,
@@ -53,6 +54,7 @@ async function externalRemoval(t, gate) {
     if (path === `/proc/${pid}/stat`) return stat(pid);
     if (path === `/sys/fs/cgroup${scope}/cgroup.procs`) return `${pid}\n`;
     if (path === `/sys/fs/cgroup${scope}/cgroup.events`) return "populated 1\n";
+    if (group !== true && path === `/sys/fs/cgroup${scope}/cpuset.cpus.effective`) return "1\n";
   };
   const tick = async () => { f.clock += 100; await f.tick(); };
 
@@ -89,7 +91,7 @@ async function externalRemoval(t, gate) {
   assert.equal(f.terminal.observerFailures.count, 0);
   assert.doesNotMatch(JSON.stringify(f.terminal), /PRIVATE_DOCKER_DIAGNOSTIC/);
   assert.equal(proof.status, "verified", "command scope evidence is sound independently of the Docker gap");
-  assert.equal(inspectBrowserParticipants({ schema: "native-browser-host-subject/v2",
+  if (group === true) assert.equal(inspectBrowserParticipants({ schema: "native-browser-host-subject/v2",
     participants: [{ id }, { id: other }] }, proof), false);
 }
 
@@ -118,6 +120,79 @@ function probe(gate, mode = "-x") {
     return result.status;
   } finally { closeSync(fd); }
 }
+
+for (const group of ["live-delivery", "recoverable-live"]) {
+  test(`${group}: the 100 ms census fences an exact owned removal and keeps its terminal anchor`, linux, async (t) => {
+    const { gate, close } = anchor(t), peer = reopenBrowserDockerGate(gate);
+    t.after(() => closeSync(peer));
+    const runnerGate = { ...gate, fd: peer };
+    let faults = 0, present = true;
+    const f = await fixture(t, [], group, () => { faults++; }, 0, false, null, gate);
+    assert.equal(f.intervalMs, 100, "Live keeps the interval timer");
+    const zero = "0001-01-01T00:00:00Z";
+    const info = { Id: id, Image: "sha256:" + "b".repeat(64), RestartCount: 0,
+      Config: { Labels: { "agent.owner": "codex", "agent.task": "bench-parity-live" } },
+      State: { Status: "created", Pid: 0, Running: false, Paused: false, Restarting: false,
+        Dead: false, OOMKilled: false, ExitCode: 0, StartedAt: zero, FinishedAt: zero } };
+    const json = JSON.stringify([info]);
+    f.docker = (argv) => {
+      const [operation, target] = argv.slice(3);
+      if (operation === "ls") {
+        const listed = present ? id : "";
+        // Attempt the competing exclusive operation after the list took its view.
+        if (listed && probe(runnerGate) === 0) present = false;
+        return listed;
+      }
+      assert.equal(target, id);
+      assert.equal(probe(runnerGate), 75, "inspect still owns the census lock");
+      assert.ok(present);
+      return json;
+    };
+    f.clock += 100; await f.tick();
+    assert.deepEqual(f.samples().at(-1).docker.inventory, [id]);
+    assert.deepEqual(f.samples().at(-1).docker.gaps, []);
+    const calls = [], docker = (args) => {
+      calls.push(args);
+      assert.deepEqual(args, ["inspect", id]);
+      assert.equal(probe(gate), 0, "ownership inspection is outside the gate");
+      return json;
+    };
+    removeOwnedLiveContainer(docker, id, runnerGate, (binary, args, options) => {
+      calls.push(args);
+      assert.equal(binary, "docker");
+      assert.equal(probe(gate, "-s"), 75, "exclusive lock held through the synchronous call");
+      assert.equal(options.killSignal, "SIGKILL");
+      assert.equal(options.timeout, 180000);
+      present = false;
+      return { status: 0, signal: null, stdout: "" };
+    });
+    assert.deepEqual(calls, [["inspect", id], ["rm", "-f", "-v", id]]);
+    assert.equal(probe(gate), 0, "lock released after command settlement");
+    close();
+    assert.equal((await f.finish()).status, "verified");
+    assert.deepEqual(f.samples().at(-1).docker.inventory, []);
+    assert.equal(faults, 0);
+  });
+
+  test(`${group}: removal outside the gate leaves a gap after a clean census`, linux, (t) =>
+    externalRemoval(t, anchor(t).gate, group));
+}
+
+test("a gated Live removal refuses a synchronous timeout even with exit status zero", linux, (t) => {
+  const { gate } = anchor(t);
+  const inspect = () => JSON.stringify([{ Id: id, Config: { Labels: {
+    "agent.owner": "codex", "agent.task": "bench-parity-live",
+  } } }]);
+  const timeout = Object.assign(new Error("synchronous removal timed out"), { code: "ETIMEDOUT" });
+  assert.throws(() => removeOwnedLiveContainer(inspect, id, gate, (program, args, options) => {
+    assert.equal(program, "docker");
+    assert.deepEqual(args, ["rm", "-f", "-v", id]);
+    assert.equal(options.killSignal, "SIGKILL");
+    assert.equal(probe(gate, "-s"), 75);
+    return { status: 0, signal: null, error: timeout, stdout: "", stderr: "" };
+  }), (error) => error.receipt?.status === 0 && error.receipt.error === timeout.message);
+  assert.equal(probe(gate), 0, "failed removal released the lock after settlement");
+});
 
 function fakeDocker(t, reply) {
   t.mock.method(childProcess, "spawn", (binary, args) => {
@@ -228,10 +303,10 @@ test("a Browser sample waits past 200 ms within the continuity budget without mo
   assert.equal(faults, 0);
 });
 
-test("contention exhausts the remaining 250 ms; a fresh terminal capture proves drain but keeps the gap", linux, async (t) => {
+for (const group of [true, "live-delivery", "recoverable-live"]) test(`${group === true ? "Browser" : group}: contention exhausts the remaining 250 ms; a fresh terminal capture proves drain but keeps the gap`, linux, async (t) => {
   const { gate } = anchor(t);
   let faults = 0, lists = 0;
-  const f = await fixture(t, [], true, () => { faults++; }, 0, false, null, gate);
+  const f = await fixture(t, [], group, () => { faults++; }, 0, false, null, gate);
   const previous = f.samples().at(-1).at;
   f.docker = () => { lists++; return ""; };
   const unlock = lockBrowserDocker(gate, true);
