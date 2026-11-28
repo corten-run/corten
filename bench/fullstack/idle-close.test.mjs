@@ -279,7 +279,7 @@ test("an answer that breaks off after its head settles as a response error, not 
   assert.match(String(await statusOf({ port: server.address().port, path: "/", agent: false })), /^response:/);
 });
 
-test("the upstream records each request's idle, answers before the close and resets a connection idle past its keep-alive", async (t) => {
+test("the upstream records each request's idle, answers before the close and refuses, without an answer, a request on a connection idle past its keep-alive", async (t) => {
   // Advance the upstream's clock between real requests, not by waiting on the scheduler.
   let now = 1000;
   t.mock.method(performance, "now", () => now);
