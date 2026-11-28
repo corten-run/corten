@@ -52,7 +52,7 @@
 // which does the same.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,7 +129,7 @@ const run = (cmd, cmdArgs, { quiet, allowFail, timeout = 2 * minute, ...options 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 // Windows' antivirus can hold a file it just saw written for a moment: a temporary file that cannot
 // be removed is left behind rather than failing the round.
-const remove = (/** @type {string} */ file) => { try { rmSync(file, { force: true, maxRetries: 10, retryDelay: 500 }); } catch (e) { console.log(`could not remove ${file}: ${/** @type {any} */ (e).code}`); } };
+const remove = (/** @type {string} */ file, recursive = false) => { try { rmSync(file, { force: true, recursive, maxRetries: 10, retryDelay: 500 }); } catch (e) { console.log(`could not remove ${file}: ${/** @type {any} */ (e).code}`); } };
 // Only for work that can run again safely: up to `times` attempts, a minute apart; an error
 // `final` accepts is not tried again.
 const retry = async (/** @type {number} */ times, /** @type {() => unknown} */ work, /** @type {(e: any) => boolean} */ final = () => false) => {
@@ -269,39 +269,50 @@ const progressFile = `/bench/bench/fullstack/results-${round}.progress`;
 const localCountFence = join(here, "results", round, COUNT_FAILED_FILE);
 // host.txt: the CPU model and the rest, since droplets of one size are not all the same machine.
 const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --version; npx playwright --version)";
-const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, /** @type {string | null} */ countPublication = null) => {
+const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, /** @type {string | null} */ countPublication = null, /** @type {string | null} */ snapshot = null) => {
   const local = join(here, "..", localName, "results");
   mkdirSync(local, { recursive: true });
   await retry(3, () => remote(`cd ${remoteDir} && mkdir -p results/${round} && (cp ${log} results/${round}/run.log 2>/dev/null || true) && ${hostInfo} > results/${round}/host.txt 2>&1; tar -czf /tmp/results.tgz -C results ${round}`, 5));
-  // Listing and extraction must read the same download. Only a proved publication with a local
-  // fence needs the extra pass; share the original five-minute extraction budget.
-  const inspecting = countPublication !== null && existsSync(localCountFence);
-  const archive = join(local, inspecting ? `.results-${randomUUID()}.tgz` : ".results.tgz");
+  // Extract a proof-bearing download away from the retained round. Neither previous local
+  // files nor an incomplete extraction can supply a member of the proved pair.
+  const stage = countPublication === null ? null : mkdtempSync(join(local, ".count-"));
+  const archive = join(stage ?? local, ".results.tgz");
+  const result = join(local, round);
   let extracted = false;
   try {
     await retry(3, () => scp(`root@${host}:/tmp/results.tgz`, archive));
-    const deadline = performance.now() + 5 * minute;
-    let hasCountFiles = false;
-    if (inspecting) {
-      const listed = run("tar", ["-tzf", archive], { quiet: true, timeout: 5 * minute });
-      const members = new Set(listed.stdout.split(/\r?\n/));
-      hasCountFiles = !members.has(`${round}/${COUNT_FAILED_FILE}`)
-        && members.has(`${round}/instructions.json`) && members.has(`${round}/summary.json`);
-    }
-    const remaining = inspecting ? Math.floor(deadline - performance.now()) : 5 * minute;
-    if (remaining <= 0) throw new Error("results archive inspection exhausted the extraction deadline");
-    run("tar", ["-xzf", archive, "-C", local], { timeout: remaining });
+    run("tar", ["-xzf", archive, "-C", stage ?? local], { timeout: 5 * minute });
     extracted = true;
-    console.log(`${label} in ${join(local, round)}`);
-    return hasCountFiles && countPublicationOf(join(local, round)) === countPublication;
+    if (stage) {
+      const stagedRound = join(stage, round);
+      if (!lstatSync(stagedRound, { throwIfNoEntry: false })?.isDirectory()
+        || lstatSync(join(stagedRound, COUNT_FAILED_FILE), { throwIfNoEntry: false })
+        || countPublicationOf(stagedRound) !== countPublication) {
+        throw new Error("downloaded count files contradict the finished count record");
+      }
+      if (!stillEnded(snapshot, "the download")) return false;
+      const retained = lstatSync(result, { throwIfNoEntry: false });
+      if (!retained) renameSync(stagedRound, result);
+      else {
+        if (!retained.isDirectory()) throw new Error("the retained count result is not a directory");
+        // Recollection overlays prior files, as legacy tar does. Keep the pair fenced if that
+        // copy is interrupted, even if there was no marker before the download.
+        if (!existsSync(localCountFence)) writeFileSync(localCountFence, "count collection incomplete\n", { flag: "wx", flush: true });
+        cpSync(stagedRound, result, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
+        rmSync(localCountFence);
+      }
+    }
+    console.log(`${label} in ${result}`);
+    return true;
   } finally {
-    if (inspecting || extracted) remove(archive);
+    if (stage) remove(stage, true);
+    else if (extracted) remove(archive);
   }
 };
-const downloadAll = async (/** @type {string} */ label, /** @type {string | null} */ countPublication = null) => {
-  const replacesCount = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, countPublication);
+const downloadAll = async (/** @type {string} */ label, /** @type {string | null} */ countPublication = null, /** @type {string | null} */ snapshot = null) => {
+  const confirmed = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, countPublication, snapshot);
   if (suite === "browser") await download("/bench/bench/browser", "browser", label);
-  return replacesCount;
+  return confirmed;
 };
 // The round's unit as it reads now when two snapshots of it agree and show it ended (round.mjs,
 // snapshotsEnded), or null: not ended, changing, or not read (no answer, or a query that failed).
@@ -629,6 +640,7 @@ const watch = async (/** @type {boolean} */ once) => {
   }
 };
 
+let countProofDownload = false;
 try {
   if (collect || attach) {
     mayDestroy = false;
@@ -653,13 +665,8 @@ try {
     let confirmed = true;
     if (state === "finished") {
       console.log("downloading the results");
-      const replacesCount = await downloadAll("results", countPublication);
-      if (replacesCount) {
-        // The incoming files alone cannot retire the fence if a different invocation could have
-        // supplied them. Keep the existing final custody check after packing and trend as well.
-        confirmed = stillEnded(snapshot, "the download");
-        if (confirmed) rmSync(localCountFence, { force: true });
-      }
+      countProofDownload = countPublication !== null;
+      confirmed = await downloadAll("results", countPublication, snapshot);
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
       // harden.mjs prints the marker only when every phase ran and its file was written; a download
@@ -722,7 +729,8 @@ try {
   // Only a round whose unit reads ended (inactive or failed with no job queued, in two snapshots
   // that agree) before the download and the same after it is downloaded from and destroyed: a
   // watch that lost the droplet for a while says nothing of whether the round is still running.
-  if (!collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
+  // A failed proof-bearing download must not fall back to unverified partial collection.
+  if (!countProofDownload && !collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
     const why = String(/** @type {any} */ (e).message).split("\n")[0];
     const seen = endedNow();
     if (seen === null) console.log(`the round could not go on (${why}), and ${unitName} on the droplet at ${host} could not be confirmed ended (inactive or failed with no job queued, in two snapshots that agree): it is not ended, or could not be read, so nothing is downloaded and the droplet is left as it is${deleteHint()}`);

@@ -1402,10 +1402,12 @@ three runs:
    before publication does not adopt the staging files. On an ordinary count error, including
    incomplete output, later steps and the summary still run, but the round exits non-zero.
    With the marker present, `summarize.mjs` omits instructions and reports `countFailed: true`,
-   and `trend.mjs` ignores instructions even in an older summary. A failed count leaves the
-   earlier `instructions.json` intact. Standalone `count.mjs` still merges individual app
-   counts; it does not certify an incomplete round. Do not run a separate count or summary
-   writer in the same round directory while `run-all.mjs` is running.
+   and `trend.mjs` ignores instructions even in an older summary. A count command that fails
+   leaves the earlier `instructions.json` intact. An interruption between the two publication
+   renames can leave new instructions beside the old summary; the marker keeps both readers from
+   using the count. Standalone `count.mjs` still merges individual app counts; it does not certify
+   an incomplete round. Do not run a separate count or summary writer in the same round directory
+   while `run-all.mjs` is running.
    The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
    seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
    does not reach the probe's process group of its own) ends the round there, with the reason in
@@ -1483,13 +1485,14 @@ three runs:
    cut-short last record cannot prove success. A launch clears that file even when `--from`
    keeps the earlier log, so an old `all done` cannot turn a failed recount into a finished
    round. The other suites still use their log's completion line. None of these records
-   substitutes for the unit snapshots. If a prior partial download left a local `count-failed.txt`,
-   the collector removes it only when the `finished count` record names the ended systemd
-   invocation and gives the SHA-256 of both published files. The archive must supply those exact
-   `instructions.json` and `summary.json` files without the marker, and the same ended unit must
-   still be confirmed after extraction. A legacy finish, a continuation without a new count, an
-   unidentifiable or changed invocation, or missing or mismatched files leaves the fence in place.
-   Listing and extraction share the same local five-minute bound. The upload leaves out the working tree's own
+   substitutes for the unit snapshots. When a `finished count` record names the ended systemd
+   invocation, the collector extracts the archive into a private directory (with a five-minute
+   extraction bound). The archive must supply both `instructions.json` and `summary.json` with the
+   recorded SHA-256 hashes and no `count-failed.txt`. Missing or mismatched files or an archive
+   with the marker fail collection without replacing local files or deleting the droplet. The
+   same ended unit must still be confirmed before publishing the verified files and removing any
+   local marker. A legacy finish, a continuation without a new count, or a record without a matching
+   observed invocation uses the legacy download and does not clear a local marker. The upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.
    A droplet

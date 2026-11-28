@@ -754,11 +754,10 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       "",
     ].join("\n"), { mode: 0o755 });
     writeFileSync(join(bin, "systemctl"), fakeSystemctl, { mode: 0o755 });
-    // Fail one local archive pass without changing the other pass or remote tar.
+    // Fail only the collector's private extraction, not remote tar or legacy extraction.
     writeFileSync(join(bin, "tar"), [
       "#!/bin/bash",
-      'if [ -n "$FAKE_LIST_FAIL" ] && [ "$1" = -tzf ] && [[ "$2" = */.results-*.tgz ]]; then exit 95; fi',
-      'if [ -n "$FAKE_EXTRACT_FAIL" ] && [ "$1" = -xzf ] && [[ "$2" = */.results-*.tgz ]]; then exit 96; fi',
+      'if [ -n "$FAKE_EXTRACT_FAIL" ] && [ "$1" = -xzf ] && [[ "$2" = */.count-*/*.tgz ]]; then exit 96; fi',
       `exec ${quote(spawnSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).stdout.trim())} "$@"`,
       "",
     ].join("\n"), { mode: 0o755 });
@@ -1167,13 +1166,18 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
     const proof = readFileSync(join(counted.here, "results-r1.progress"), "utf8");
     const instructions = readFileSync(counted.instructions, "utf8");
     const summary = readFileSync(counted.summary, "utf8");
-    const collectCount = (/** @type {{ progress?: string, oldFence?: boolean, incomingFence?: boolean, both?: boolean, changedFile?: string, fake?: Record<string, string> }} */
-      { progress = proof, oldFence = true, incomingFence = false, both = true, changedFile, fake = {} } = {}) => {
-      const { argv, options } = prepare({ log: done, progress, collect: true, fast: true, fake: { FAKE_INVOCATION: countInvocation, ...fake } });
-      if (oldFence) {
+    const oldSummary = '{"countFailed":true,"instructions":{}}';
+    const collectCount = (/** @type {{ progress?: string, oldFence?: boolean, retained?: boolean, incomingFence?: boolean, both?: boolean, changedFile?: string, attach?: boolean, fake?: Record<string, string> }} */
+      { progress = proof, oldFence = true, retained = oldFence, incomingFence = false, both = true, changedFile, attach = false, fake = {} } = {}) => {
+      // Attach looks up the same fake droplet by name (no --host), so it too could delete it.
+      const { argv, options } = prepare({ log: done, progress, collect: !attach, fast: true,
+        ...(attach ? { create: true, detach: false, extra: ["--attach"] } : {}),
+        fake: { FAKE_INVOCATION: countInvocation, FAKE_DOCTL_LIST: "4242 corten-bench-r1 203.0.113.9", ...fake } });
+      if (retained) {
         mkdirSync(localResult, { recursive: true });
-        writeFileSync(localMarker, "old failure\n");
+        if (oldFence) writeFileSync(localMarker, "old failure\n");
         writeFileSync(join(localResult, "instructions.json"), instructions);
+        writeFileSync(join(localResult, "summary.json"), oldSummary);
       }
       mkdirSync(remoteResult, { recursive: true });
       writeFileSync(join(remoteResult, "summary.json"), summary);
@@ -1182,25 +1186,28 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       if (incomingFence) writeFileSync(join(remoteResult, COUNT_FAILED_FILE), "new failure\n");
       return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
     };
-    await t.test("collect replaces a partial count fence only with a complete finished download", () => {
-      const good = collectCount();
-      assert.equal(good.status, 0, good.stdout + good.stderr);
-      assert.ok(good.downloaded && good.deleted, good.stdout + good.stderr);
-      assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary);
-      assert.ok(!existsSync(localMarker), "the complete downloaded recount is still fenced by the local marker");
-      assert.match(good.stdout, /trend saw no count fence/);
+    await t.test("collect verifies the count files before publishing or deleting", () => {
+      for (const [oldFence, retained] of [[true, true], [false, true], [false, false]]) {
+        const good = collectCount({ oldFence, retained });
+        assert.equal(good.status, 0, good.stdout + good.stderr);
+        assert.ok(good.downloaded && good.deleted, good.stdout + good.stderr);
+        assert.equal(readFileSync(join(localResult, "instructions.json"), "utf8"), instructions);
+        assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary);
+        assert.ok(!existsSync(localMarker));
+        assert.match(good.stdout, /trend saw no count fence/);
+        assert.deepEqual(readdirSync(dirname(localResult)), ["r1"]);
+      }
 
       for (const [why, setup] of /** @type {const} */ ([
         ["legacy finish without proof", { progress: end("finished") }],
         ["unrelated invocation", { fake: { FAKE_INVOCATION: "b".repeat(32) } }],
         ["invocation not observable", { fake: { FAKE_INVOCATION: "" } }],
-        ["different instructions", { changedFile: "instructions.json" }],
-        ["different summary", { changedFile: "summary.json" }],
       ])) {
         const ambiguous = collectCount(setup);
         assert.equal(ambiguous.status, 0, ambiguous.stdout + ambiguous.stderr);
         assert.match(ambiguous.stdout, /trend saw the count fence/, why);
         assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", why);
+        assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary, why);
       }
       const continued = counted.run([], "conform");
       assert.equal(continued.status, 0, continued.said);
@@ -1214,34 +1221,46 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.match(failed.stdout, /the round stopped before it finished/);
       assert.equal(readFileSync(localMarker, "utf8"), "new failure\n");
 
-      const marked = collectCount({ incomingFence: true });
-      assert.match(marked.stdout, /trend saw the count fence/);
-      assert.equal(readFileSync(localMarker, "utf8"), "new failure\n");
-
-      const short = collectCount({ both: false });
-      assert.ok(short.downloaded && short.deleted, short.stdout + short.stderr);
-      assert.match(short.stdout, /trend saw the count fence/);
-      assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "a local stale instructions file is not archive membership");
+      for (const [why, setup] of /** @type {const} */ ([
+        ["different instructions without an old marker", { oldFence: false, changedFile: "instructions.json" }],
+        ["different summary", { changedFile: "summary.json" }],
+        ["old local instructions cannot fill an archive omission", { both: false }],
+        ["incoming failure marker", { incomingFence: true }],
+        ["attach cannot retry as partial after a contradiction", { attach: true, changedFile: "instructions.json" }],
+      ])) {
+        const bad = collectCount(setup);
+        assert.equal(bad.status, 1, `${why}: ${bad.stdout}${bad.stderr}`);
+        assert.match(bad.stderr, /downloaded count files contradict the finished count record/, why);
+        assert.equal(bad.calls.filter((c) => c.includes("tar -czf /tmp/results.tgz")).length, 1, why);
+        assert.ok(!bad.deleted, why);
+        assert.doesNotMatch(bad.stdout, /trend saw/, why);
+        if ("oldFence" in setup && !setup.oldFence) assert.ok(!existsSync(localResult), why);
+        else {
+          assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", why);
+          assert.equal(readFileSync(join(localResult, "instructions.json"), "utf8"), instructions, why);
+          assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary, why);
+        }
+        assert.ok(!readdirSync(dirname(localResult)).some((name) => name.startsWith(".count-")), why);
+      }
 
       const early = collectCount({ progress: end("failed") });
       assert.equal(early.status, 1, early.stdout + early.stderr);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "a markerless partial download does not clear the fence");
 
-      for (const [fault, message] of /** @type {const} */ ([
-        ["FAKE_LIST_FAIL", /tar -tzf .* failed:/], ["FAKE_EXTRACT_FAIL", /tar -xzf .* failed: exit 96/],
-      ])) {
-        const broken = collectCount({ fake: { [fault]: "1" } });
-        assert.notEqual(broken.status, 0, broken.stdout + broken.stderr);
-        assert.match(broken.stderr, message);
-        assert.ok(!broken.deleted, broken.stdout + broken.stderr);
-        assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
-      }
+      const broken = collectCount({ fake: { FAKE_EXTRACT_FAIL: "1" } });
+      assert.equal(broken.status, 1, broken.stdout + broken.stderr);
+      assert.match(broken.stderr, /tar -xzf .* failed: exit 96/);
+      assert.ok(!broken.deleted, broken.stdout + broken.stderr);
+      assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
+      assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
+      assert.deepEqual(readdirSync(dirname(localResult)), ["r1"]);
 
       const changed = collectCount({ fake: { FAKE_START_IN_DOWNLOAD: join(root, "download-start") } });
       assert.equal(changed.status, 3, changed.stdout + changed.stderr);
       assert.ok(!changed.deleted, changed.stdout + changed.stderr);
       assert.doesNotMatch(changed.stdout, /trend saw/);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
+      assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
     });
     // The first custody check finds a start queued for the unit (its job waiting): a refusal, as
     // the clear's is, so the droplet this launch created is not destroyed, nothing is cleared,
