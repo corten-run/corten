@@ -655,6 +655,16 @@ test("run.sh keeps and verifies every planned shuffled map before continuing", {
     assert.deepEqual(readFileSync(join(r.res, "maps", "base-p320.map.gz")), original);
     assert.equal(readFileSync(join(r.res, "maps", "placements.sha256"), "utf8"), list);
   });
+  await t.test("unshuffled with second pads", () => {
+    const pads = "base-p320: second pad 16\n";
+    writeFileSync(join(bin, "second-pads.txt"), pads);
+    const r = run("second-pads", 0);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /^CONTINUED$/m);
+    assert.equal(readFileSync(join(r.res, "second-pads.txt"), "utf8"), pads);
+    assert.equal(readFileSync(join(r.res, "maps", "placements.sha256"), "utf8"), list);
+    rmSync(join(bin, "second-pads.txt"));
+  });
   await t.test("legacy unshuffled", () => {
     rmSync(join(maps, "placements.sha256"));
     rmSync(target);

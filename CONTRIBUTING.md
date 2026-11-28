@@ -863,10 +863,13 @@ establish a general ranking.
          the pad and the neighbours. LLD gives an input section the earliest place the file
          gives any symbol of it, a function, a label or an object, local or global, and the run
          reads each section's place so, from the symbols each link's map lists. Outside `.text`
-         the input order must match the unpadded map, not its absolute addresses. A placement whose
-         file names a symbol the map also has outside `.text`, or whose first input section is not
-         the first pad at exactly the declared size, is refused. That order is partial, and the run asks no more
-         of it: input sections the file gives one place lie in any order among themselves, since
+         the output sections with inputs and their ordered input IDs must match the unpadded map.
+         Distinct IDs are compared by ID and position only; repeated IDs also compare size,
+         alignment and symbol names at relative offsets. Absolute addresses are not compared.
+         A placement whose file names a symbol the map also has outside `.text`, or whose first
+         input section is not the first pad at exactly the declared size, is refused. That order is
+         partial, and the run asks no more of it: input sections the file gives one place lie in
+         any order among themselves, since
          LLD sorts by the place alone. Between base and head at one index the run compares only
          the names (less a ThinLTO suffix, `.llvm.<n>`, a number a rebuild of the same code can
          change) each side defines exactly once, in its symbol table and its map alike; a name

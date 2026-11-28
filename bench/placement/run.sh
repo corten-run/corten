@@ -105,6 +105,8 @@ if [ "$SHUFFLE" = 1 ]; then
         case " $SIDES " in *" head "*) for n in $PADS_P; do set -- "$@" "head-p$n"; done ;; esac
         node "$KIT/map.mjs" keep-placements "$WORK/maps" "$RES/maps" "$@"
     ) || finish 1 "refused: the shuffled placement maps could not be kept and verified (results/maps/)"
+elif [ -f "$B/second-pads.txt" ]; then
+    cp "$WORK/maps/placements.sha256" "$RES/maps/"
 fi
 [ "$SHUFFLE" = 0 ] || for s in $SIDES; do { [ -s "$B/functions-$s.txt" ] && gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; } || finish 1 "refused: a shuffled run's list of $s's functions, bin/functions-$s.txt, from which report.mjs draws every ordering file again, could not be kept in the results"; done
 # The probe's source as build.sh built it, beside the request script and the expected answer in
