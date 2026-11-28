@@ -5,22 +5,22 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
   if (swaps) {
     // data-nav="section": current on its page and every page under it. Of the links of one
     // data-nav-group (Req::nav_of), only the deepest that holds the page is current, wherever
-    // they are: group "a" is split between a <nav> and an <aside>; group "b" is another nav. Group
-    // "c+" (the "+" says a link of it has other addresses) has a second link that goes to /latest and
+    // they are: group "AAAAAA" is split between a <nav> and an <aside>; group "BBBBBB" is another nav.
+    // Group "CCCCCC+" (the "+" says a link of it has other addresses) has a second link that goes to /latest and
     // holds the page at the other paths of its data-nav-also (NavTo::also) too, ranked by the same
     // rule: deeper than the section above it at /news.
     await page.evaluate(() => {
       document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a id="section-link" href="/" data-nav="section">All</a>'));
       document.querySelector("header")?.insertAdjacentHTML(
         "beforeend",
-        __html('<nav><a id="group-all" href="/" data-nav="section" data-nav-group="a">All</a></nav>' +
-          '<aside><a id="group-news" href="/news" data-nav data-nav-group="a">News</a></aside>' +
-          '<nav><a id="other-all" href="/" data-nav="section" data-nav-group="b">All</a></nav>' +
-          '<nav><a id="also-all" href="/" data-nav="section" data-nav-group="c+">All</a>' +
-          '<a id="also-latest" href="/latest" data-nav data-nav-group="c+" data-nav-also="/old-news /news">Latest</a></nav>'),
+        __html('<nav><a id="group-all" href="/" data-nav="section" data-nav-group="aaaaaaaa">All</a></nav>' +
+          '<aside><a id="group-news" href="/news" data-nav data-nav-group="aaaaaaaa">News</a></aside>' +
+          '<nav><a id="other-all" href="/" data-nav="section" data-nav-group="bbbbbbbb">All</a></nav>' +
+          '<nav><a id="also-all" href="/" data-nav="section" data-nav-group="cccccccc+">All</a>' +
+          '<a id="also-latest" href="/latest" data-nav data-nav-group="cccccccc+" data-nav-also="/old-news /news">Latest</a></nav>'),
       );
     });
-    /** The aria-current of group "c"'s two links. */
+    /** The aria-current of the group with an alias. */
     const alsoMarks = () => page.evaluate(() => ["also-all", "also-latest"].map((id) => document.getElementById(id)?.getAttribute("aria-current") ?? "-").join(" "));
     await page.click('header a[href="/"]:not(#section-link, #group-all, #other-all, #also-all)');
     await page.waitForFunction(() => document.title === "Stocks | Watchlist");
@@ -420,7 +420,7 @@ export async function navAlso(browser, swaps) {
   /** @type {string[]} */
   const notSeen = [];
   const drawn = await (await page.request.get(`${base}/smoke/nav/here`)).text();
-  const written = drawn.match(/<a href="\/smoke\/nav\/here" data-nav data-nav-group="[0-9a-f]{8}(\+?)" data-nav-also="([^"]*)"/);
+  const written = drawn.match(/<a href="\/smoke\/nav\/here" data-nav data-nav-group="[a-f0-9]{8}(\+?)" data-nav-also="([^"]*)" data-nav-order="0"/);
   if (written?.[1] !== "+" || written[2] !== also) seen.push(`server wrote group mark "${written?.[1]}" and paths "${written?.[2]}"`);
   for (const [href] of cases) {
     // Node asks for a raw `|` as Firefox and WebKit do; Chromium's `%7C` is a request of its own.
@@ -567,6 +567,118 @@ export async function navAlso(browser, swaps) {
   await context.close();
 }
 
+export async function navTies(browser, swaps) {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    const legacy = "/smoke/nav-tie/legacy";
+    const earlier = "/smoke/nav-tie/before";
+    const drawn = await page.request.get(new URL(legacy, base).href);
+    const labels = (await drawn.text()).match(/<a [^>]*aria-current="page"[^>]*>[^<]+<\/a>/g) ?? [];
+    const server = labels.map((tag) => tag.slice(tag.indexOf(">") + 1, -4)).join(", ");
+    const expected = "First own, First own, Separate, Independent";
+    check("the server breaks ranked nav ties by own URL then entry order", drawn.ok() && server === expected, server);
+
+    await page.goto(new URL(legacy, base).href);
+    const current = () => page.locator('main a[aria-current="page"]').allTextContents().then((text) => text.join(", "));
+    // Change only the marks, as if a patch was rendered at a different address.
+    const afterPatch = await page.evaluate(async () => {
+      const { patch } = await import("corten");
+      const copies = /** @type {Element} */ (document.getElementById("nav-tie-copies"));
+      const replacement = /** @type {Element} */ (copies.cloneNode(true));
+      for (const link of replacement.querySelectorAll("a")) {
+        if (link.textContent === "Second own") link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      }
+      await patch(__html(replacement.outerHTML));
+      return !copies.isConnected;
+    });
+    const patched = await current();
+    check("a patch picks one winner in each equivalent ranked nav without relying on DOM order", afterPatch && patched === expected, patched);
+
+    // Keep one old-markup member in the aliased group. Both copies fall back to the original
+    // depth-only rule for that tie, but the unrelated new-format group still picks one entry.
+    const mixed = await page.evaluate(async () => {
+      const { patch } = await import("corten");
+      const copies = /** @type {Element} */ (document.getElementById("nav-tie-copies"));
+      const replacement = /** @type {Element} */ (copies.cloneNode(true));
+      const old = Array.from(replacement.querySelectorAll("a")).find((link) => link.textContent === "Second own");
+      old?.removeAttribute("data-nav-order");
+      await patch(__html(replacement.outerHTML));
+      return !!old && !copies.isConnected;
+    });
+    const legacyMarks = await current();
+    check(
+      "a partly old nav group keeps its depth and alias semantics without changing other groups",
+      mixed && legacyMarks === "Second own, Alias, First own, Second own, Alias, First own, Separate, Independent",
+      legacyMarks,
+    );
+    await page.reload();
+
+    const boundary = await page.evaluate(async () => {
+      const { patch } = await import("corten");
+      const nav = document.getElementById("nav-tie-separate")?.parentElement;
+      if (!nav) throw new Error("the reversed nav pair is missing");
+      nav.id = "nav-tie-boundary";
+      const replacement = /** @type {Element} */ (nav.cloneNode(true));
+      const [later, earlier] = replacement.querySelectorAll("a");
+      // The last one-digit ordinal wins over the first two-digit one, not the first DOM link.
+      later.setAttribute("data-nav-order", "0-");
+      earlier.setAttribute("data-nav-order", "z");
+      later.setAttribute("aria-current", "page");
+      earlier.removeAttribute("aria-current");
+      await patch(__html(replacement.outerHTML));
+      const order = Array.from(
+        document.querySelectorAll("#nav-tie-boundary a"),
+        (link) => link.getAttribute("data-nav-order"),
+      ).join(", ");
+      const marks = Array.from(
+        document.querySelectorAll('#nav-tie-boundary a[aria-current="page"]'),
+        (link) => link.getAttribute("data-nav-order") + ": " + link.textContent,
+      ).join(", ");
+      return { replaced: !nav.isConnected, order, marks };
+    });
+    check(
+      "a ranked patch prefers z over 0- despite reversed DOM order",
+      boundary.replaced && boundary.order === "0-, z" && boundary.marks === "z: Separate",
+      boundary.order + " -> " + boundary.marks,
+    );
+
+    const removed = await page.evaluate(async () => {
+      const { patch } = await import("corten");
+      const target = document.getElementById("nav-tie-separate");
+      await patch(__html('<span id="nav-tie-separate">No links</span>'));
+      return !!target && !target.isConnected;
+    });
+    const remaining = await current();
+    check(
+      "replacing a winning subtree with no nav marks the surviving tied link",
+      removed && remaining === "First own, First own, Separate later, Independent",
+      remaining,
+    );
+
+    const name = "client navigation breaks both own and alias ties in split and repeated ranked navs";
+    if (!swaps) {
+      skip(name, "no Navigation API");
+      return;
+    }
+    await page.locator("body").evaluate((body) => body.setAttribute("data-nav-tie-smoke", ""));
+    const go = async (/** @type {import("@playwright/test").Locator} */ link, /** @type {string} */ path) => {
+      const before = await page.locator("#nav-tie-copies").elementHandle();
+      await link.click();
+      await page.waitForURL((url) => url.pathname === path);
+      await page.waitForFunction((old) => !old?.isConnected, before);
+      return current();
+    };
+    const old = await go(page.getByRole("link", { name: "Earlier page" }), earlier);
+    const back = await go(page.getByRole("link", { name: "Second own" }).first(), legacy);
+    const retained = await page.locator("body[data-nav-tie-smoke]").count();
+    check(name, old === "Alias, Alias" && back === expected && retained === 1, old + " -> " + back);
+  } finally {
+    await context.close();
+  }
+}
+
 /**
  * Nav links whose `href` leads off this site, `//corten.invalid/smoke/far/old` and the same with
  * `/\` or a tab after the first `/`, which the browser reads as that host's `/smoke/far/old`: in a
@@ -600,9 +712,9 @@ export async function navFar(browser, swaps) {
   /** @type {string[]} */
   const seen = [];
   const drawn = await (await page.request.get(`${base}/smoke/far/here`)).text();
-  if (!/<a href="\/\/corten\.invalid\/smoke\/far\/old" data-nav data-nav-group="[0-9a-f]{8}\+">Slashes<\/a>/.test(drawn)) seen.push("server wrote other addresses for the off-site entry, or not its group");
-  if (!/<a href="\/smoke\/far\/here" data-nav data-nav-group="[0-9a-f]{8}\+" data-nav-also="\/smoke\/far\/before" aria-current="page">Here<\/a>/.test(drawn)) seen.push("server did not write Here's kept address alone");
-  if (!/<a href="\/\/\[" data-nav data-nav-group="[0-9a-f]{8}">Plain malformed<\/a>/.test(drawn)) seen.push("server did not write the malformed link as it is, unmarked");
+  if (!/<a href="\/\/corten\.invalid\/smoke\/far\/old" data-nav data-nav-group="[a-f0-9]{8}\+" data-nav-order="0">Slashes<\/a>/.test(drawn)) seen.push("server wrote other addresses for the off-site entry, or not its group");
+  if (!/<a href="\/smoke\/far\/here" data-nav data-nav-group="[a-f0-9]{8}\+" data-nav-also="\/smoke\/far\/before" data-nav-order="3" aria-current="page">Here<\/a>/.test(drawn)) seen.push("server did not write Here's kept address alone");
+  if (!/<a href="\/\/\[" data-nav data-nav-group="[a-f0-9]{8}" data-nav-order="3">Plain malformed<\/a>/.test(drawn)) seen.push("server did not write the malformed link as it is, unmarked");
   for (const [visit, expected] of visits) {
     const outside = marks(await (await page.request.get(new URL(visit, base).href)).text());
     if (outside !== expected) seen.push(`server at ${visit}: ${outside}`);
@@ -671,7 +783,7 @@ export async function navAmp(browser, swaps) {
     const link = document.querySelector('main a[href="/smoke/amp/here"]');
     return { group: link?.getAttribute("data-nav-group"), also: link?.getAttribute("data-nav-also") };
   });
-  if (!/^[0-9a-f]{8}\+$/.test(parsed.group ?? "") || parsed.also !== older) seen.push(`parsed group "${parsed.group}" and paths ${JSON.stringify(parsed.also)}`);
+  if (!/^[a-f0-9]{8}\+$/.test(parsed.group ?? "") || parsed.also !== older) seen.push(`parsed group "${parsed.group}" and paths ${JSON.stringify(parsed.also)}`);
   const response = await page.goto(new URL(older, base).href);
   const at = await page.evaluate(() => location.pathname);
   if (at !== older) seen.push(`the browser shows ${older} as ${at}`);
@@ -767,7 +879,7 @@ export async function navNul(browser, swaps) {
   /** Where each engine's own request for each link went. @type {string[]} */
   const reached = [];
   const drawn = await (await page.request.get(`${base}/smoke/nul/here`)).text();
-  const written = drawn.match(/<a href="\/smoke\/nul\/here" data-nav data-nav-group="[0-9a-f]{8}(\+?)"(?: data-nav-also="([^"]*)")?/);
+  const written = drawn.match(/<a href="\/smoke\/nul\/here" data-nav data-nav-group="[a-f0-9]{8}(\+?)"(?: data-nav-also="([^"]*)")? data-nav-order="0"/);
   if (written?.[1] !== "+" || written[2] !== escaped) seen.push(`server wrote group mark "${written?.[1]}" and paths "${written?.[2]}"`);
   // Each request an engine sends for the raw address, and the escaped one, outside the browser.
   for (const [href, expected] of [["/smoke/nul/raw%00x", "page -"], ["/smoke/nul/raw", "page -"], [escaped, "- page"]]) {

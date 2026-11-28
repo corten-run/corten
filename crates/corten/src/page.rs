@@ -662,20 +662,20 @@ impl<'a> NavTo<'a> {
     }
 }
 
-/// A nav's links, from [`Req::nav_of`], each with its item, with the deepest entries that hold
-/// the page marked current. Each URL is written once, at the call.
+/// A nav's links, from [`Req::nav_of`], each with its item, with only the winning entry marked
+/// current. Each URL is written once, at the call.
 pub struct NavLinks<T> {
     /// The URLs one after another, not escaped.
     urls: String,
     /// Where each entry's URL ends, whether it is a section, how deep it is when it holds the
     /// page, its item, and whether the runtime may prefetch it.
     entries: Vec<(usize, bool, Option<usize>, T, bool)>,
-    /// The deepest of them: the entries that deep are current.
-    deepest: Option<usize>,
+    /// The index of the winner, if any.
+    winner: Option<usize>,
     /// The group the runtime ranks these links in (`data-nav-group`): 32 bits of a hash of the
     /// entries, so a patch's nav does not join another of the page's, and two equal navs agree
-    /// anyway. Navs made to collide only mark the wrong link after a navigation. A nav with other
-    /// addresses writes its group, followed by a `+`, from [`Also`] ([`Also::write_text`]).
+    /// anyway. Navs made to collide only mark the wrong link in the browser. A trailing `+` marks
+    /// a group with other addresses. Keep both parts stable across runtime and server rollouts.
     group: [u8; 8],
     /// The entries' other addresses ([`NavTo::also`]), when one has some; none, and the nav is drawn
     /// as it was before they existed.
@@ -696,12 +696,8 @@ struct Also {
 }
 
 impl Also {
-    /// Writes after the paths, escaped, what each link writes as its `data-nav-group` value: first
-    /// the group and its `+`, for a link without other addresses, then for each entry of `ends` the
-    /// group, its `+`, the quote that closes the attribute, and ` data-nav-also="` with the entry's
-    /// paths, which the link's own closing quote ends. So a link carries its other addresses in the
-    /// text it already writes, and is no larger than a link of a nav without them; and the text
-    /// shares the paths' allocation.
+    /// Writes the group and its `+`, then for each entry in `ends` the escaped `data-nav-also`
+    /// text after that same prefix.
     #[cold]
     #[inline(never)]
     fn write_text(&mut self, group: &[u8; 8]) {
@@ -751,7 +747,7 @@ impl<T> NavLinks<T> {
         let mut start = 0;
         let plain = std::str::from_utf8(&self.group).expect("hex digits");
         let also = self.also.as_deref();
-        self.entries.iter().map(move |(end, section, depth, item, prefetch)| {
+        self.entries.iter().enumerate().map(move |(index, (end, section, _, item, prefetch))| {
             let url = &self.urls[start..*end];
             start = *end;
             let group = match also {
@@ -761,10 +757,11 @@ impl<T> NavLinks<T> {
             (
                 NavLink {
                     url,
-                    section: *section,
-                    current: depth.is_some() && *depth == self.deepest,
                     group,
-                    prefetch: *prefetch,
+                    order_and_flags: (index << 3)
+                        | usize::from(*section)
+                        | (usize::from(self.winner == Some(index)) << 1)
+                        | (usize::from(*prefetch) << 2),
                 },
                 item,
             )
@@ -772,30 +769,30 @@ impl<T> NavLinks<T> {
     }
 }
 
-/// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, for an entry with other
+/// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, `data-nav-order`, for an entry with other
 /// addresses `data-nav-also` ([`NavTo::also`]), when current `aria-current="page"`, and
 /// `data-no-prefetch` for a URL its route says a hover may not fetch ([`crate::Route::may_prefetch`]).
 pub struct NavLink<'a> {
     url: &'a str,
-    section: bool,
-    current: bool,
     /// The group, and for a link with other addresses its `data-nav-also` after it
     /// ([`Also::write_text`]).
     group: &'a str,
-    prefetch: bool,
+    /// The entry index, with section, current and prefetch in the low three bits. The entries'
+    /// allocation bounds the index (each entry takes more than eight bytes).
+    order_and_flags: usize,
 }
 
 impl NavLink<'_> {
     /// Whether this link writes `aria-current="page"` for this request.
     pub fn is_current(&self) -> bool {
-        self.current
+        self.order_and_flags & 2 != 0
     }
 }
 
 impl crate::view::__private::Writes for NavLink<'_> {
     type Static = NavLink<'static>;
     const WRITES: &'static [&'static str] =
-        &["href", "data-nav", "data-nav-group", "data-nav-also", "aria-current", "data-no-prefetch"];
+        &["href", "data-nav", "data-nav-group", "data-nav-order", "data-nav-also", "aria-current", "data-no-prefetch"];
 }
 
 impl crate::view::Attrs for NavLink<'_> {
@@ -803,15 +800,34 @@ impl crate::view::Attrs for NavLink<'_> {
         out.push_str(r#" href=""#);
         crate::view::escape_into(self.url, out);
         out.push('"');
-        out.push_str(if self.section { r#" data-nav="section""# } else { " data-nav" });
+        out.push_str(if self.order_and_flags & 1 != 0 { r#" data-nav="section""# } else { " data-nav" });
         out.push_str(r#" data-nav-group=""#);
         out.push_str(self.group);
+        out.push_str(r#"" data-nav-order=""#);
+        let order = self.order_and_flags >> 3;
+        if order < NAV_DIGITS.len() {
+            out.push(NAV_DIGITS[order] as char);
+        } else {
+            write_nav_order(order, out);
+        }
         out.push('"');
-        if self.current {
+        if self.is_current() {
             out.push_str(r#" aria-current="page""#);
         }
-        crate::route::no_prefetch(" href", self.prefetch, out);
+        crate::route::no_prefetch(" href", self.order_and_flags & 4 != 0, out);
     }
+}
+
+// Attribute-safe digits in ASCII order, so entry numbers compare by length then by text.
+const NAV_DIGITS: &[u8; 64] = b"-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+
+#[cold]
+fn write_nav_order(order: usize, out: &mut String) {
+    let rest = order >> 6;
+    if rest != 0 {
+        write_nav_order(rest, out);
+    }
+    out.push(NAV_DIGITS[order & 63] as char);
 }
 
 /// How deep an entry is, by its path without the query, fragment or trailing `/`, when it holds
@@ -950,19 +966,20 @@ fn key(path: &str) -> std::borrow::Cow<'_, str> {
 /// site ([`is_path`]) holds no page and has no other addresses. An entry's own URL is keyed as the
 /// runtime reads it from the `href` the server wrote, where the HTML parser has made each NUL
 /// U+FFFD, so the link goes to `/a%EF%BF%BD` rather than `/a%00`. Out of line, so a nav without
-/// them is ranked as it was before they existed, by the request path as written.
+/// them is ranked by the request path as written.
 #[cold]
 #[inline(never)]
-fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<usize>, T, bool)], also: &Also) {
+fn rank_by_keys<T>(path: &str, urls: &str, entries: &[(usize, bool, Option<usize>, T, bool)], also: &Also) -> Option<usize> {
     let page = key(path);
     let as_written = matches!(page, std::borrow::Cow::Borrowed(_));
     let (mut start, mut from, mut own) = (0, 0, String::new());
     let mut ends = also.ends.iter();
     let mut next = ends.next();
-    for entry in entries {
+    let (mut best, mut winner) = (None, None);
+    for (index, entry) in entries.iter().enumerate() {
         let url = &urls[start..entry.0];
         start = entry.0;
-        let mut depth = match own_key(url) {
+        let depth = match own_key(url) {
             _ if !is_path(url) => None,
             Some(_) if as_written => entry.2,
             Some(end) => holds_path(&page, &url[..end], entry.1),
@@ -977,21 +994,27 @@ fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<u
                 holds_path(&page, &own, entry.1)
             }
         };
+        // At the same depth, the primary URL ranks above an alias.
+        let mut rank = depth.map(|depth| (depth, true));
         if let Some(&(_, end, _)) = next.filter(|&&(url_end, ..)| url_end == entry.0) {
             for other in also.paths[from..end].split(' ') {
-                depth = depth.max(holds_path(&page, other, entry.1));
+                rank = rank.max(holds_path(&page, other, entry.1).map(|depth| (depth, false)));
             }
             from = end;
             next = ends.next();
         }
-        entry.2 = depth;
+        if rank > best {
+            best = rank;
+            winner = Some(index);
+        }
     }
+    winner
 }
 
 /// [`Req::nav_of`] at `path`.
 pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (NavTo<'a>, T)>) -> NavLinks<T> {
     let (mut urls, mut also) = (String::new(), None);
-    let mut entries: Vec<_> = entries
+    let entries: Vec<_> = entries
         .into_iter()
         .map(|(entry, item)| {
             let start = urls.len();
@@ -1003,21 +1026,26 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
             (urls.len(), entry.section, holds(path, &urls[start..], entry.section), item, entry.to.prefetch())
         })
         .collect();
-    if let Some(also) = &also {
-        rank_by_keys(path, &urls, &mut entries, also);
-    }
-    let deepest = entries.iter().filter_map(|entry| entry.2).max();
     // The URLs, which are sections and any other addresses name the group; its 32 low bits, as
-    // hex. A nav with no other addresses hashes as it did before they existed, with the low 16 bits
+    // hex. A nav with no other addresses still hashes the low 16 bits
     // of where each URL ends. One with them hashes where each URL ends in full, which entry each
     // other address belongs to (where its URL ends) and where its paths end, so no two layouts of
     // the same text share a group: the runtime would clear the mark of one of them.
     let text = crate::fnv::extend(crate::fnv::OFFSET, urls.as_bytes());
+    let mut winner = None;
     let hash = match &also {
-        None => entries
-            .iter()
-            .fold(text, |hash, entry| crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])),
+        None => {
+            let mut best = None;
+            entries.iter().enumerate().fold(text, |hash, (index, entry)| {
+                if entry.2 > best {
+                    best = entry.2;
+                    winner = Some(index);
+                }
+                crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])
+            })
+        }
         Some(also) => {
+            winner = rank_by_keys(path, &urls, &entries, also);
             let hash = entries.iter().fold(text, |hash, entry| {
                 crate::fnv::extend(crate::fnv::extend(hash, &[entry.1 as u8]), &(entry.0 as u64).to_le_bytes())
             });
@@ -1033,7 +1061,7 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
     if let Some(also) = &mut also {
         also.write_text(&group);
     }
-    NavLinks { urls, entries, deepest, group, also }
+    NavLinks { urls, entries, winner, group, also }
 }
 
 #[cfg(test)]
@@ -2508,7 +2536,8 @@ impl Req {
     }
 
     /// A whole nav's links, for a nav whose entries nest (a section and a page under it) or come
-    /// from data: of the entries that hold this page, only the deepest is current. Seller Desk
+    /// from data: of the entries that hold this page, only the deepest is current. At equal depth
+    /// a match at the entry's own URL wins over an alias, then the first entry wins. Seller Desk
     /// (`/account/desk`, a section) is current on `/account/desk/repricing`, and only Money
     /// (`/account/desk/money`) on its own page. An entry is a typed route or a [`crate::Local`]
     /// read from data, each with its item (a label, or the row it came from), which
@@ -2550,12 +2579,18 @@ impl Req {
     /// let _ = corten::NavTo::page(&"/account/desk");
     /// ```
     ///
-    /// Nor can a link join a group by hand, which the server did not rank:
+    /// Nor can a link join a group or set its order by hand, which the server did not rank:
     ///
     /// ```compile_fail
     /// use corten::prelude::*;
     ///
     /// let link = html! { <a data-nav-group="a">"News"</a> };
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// let link = html! { <a data-nav-order="0">"News"</a> };
     /// ```
     pub fn nav_of<'a, T>(&self, entries: impl IntoIterator<Item = (NavTo<'a>, T)>) -> NavLinks<T> {
         nav_links(self.uri.path(), entries)

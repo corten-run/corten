@@ -11,7 +11,7 @@
 //! address of its page, one whose entry names an older address holding a raw NUL, and navs whose
 //! entries lead off the site.
 use corten::{
-    Error, LiveResponse,
+    Error, LiveResponse, NavTo,
     prelude::*,
     script::{Ref, script},
 };
@@ -102,6 +102,11 @@ pub mod url {
     /// (`NavTo::also`, #2119), each of which this route serves as well.
     #[route("/smoke/nav/{name}", get = nav_page)]
     pub struct NavPage<'a> {
+        pub name: &'a str,
+    }
+
+    #[route("/smoke/nav-tie/{name}", get = nav_tie_page)]
+    pub struct NavTiePage<'a> {
         pub name: &'a str,
     }
 
@@ -204,6 +209,53 @@ fn team_nav(req: Req) -> HtmlResult {
     req.page(html! {
         <Layout req={&req} title="Nav team" viewer={None} head="">
             <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+#[derive(Id)]
+struct NavTieCopiesId;
+
+#[derive(Id)]
+struct NavTieSeparateId;
+
+async fn nav_tie_page(req: Req, Params(_): Params<url::NavTiePage<'_>>) -> HtmlResult {
+    let settings = url::NavTiePage { name: "settings" };
+    let old = url::NavTiePage { name: "before" };
+    let legacy = url::NavTiePage { name: "legacy" };
+    let first = corten::Local::parse("/smoke/nav-tie/legacy?view=first").expect("a local path");
+    let ranked = || {
+        req.nav_of([
+            (NavTo::page(&settings).also(&legacy).also(&old), "Alias"),
+            (NavTo::page(&first), "First own"),
+            (NavTo::page(&legacy).also(&old), "Second own"),
+        ])
+    };
+    let copies = [ranked(), ranked()];
+    let other = req.nav_of([(NavTo::page(&legacy), "Separate"), (NavTo::page(&first), "Separate later")]);
+    let mut other = other.links();
+    let (separate, label) = other.next().expect("the separate nav's first entry");
+    let (later, later_label) = other.next().expect("the other entry");
+    let desktop: Vec<_> = copies[0].links().collect();
+    let mobile: Vec<_> = copies[1].links().collect();
+    let independent = req.nav(&legacy);
+    req.page(html! {
+        <Layout req={&req} title="Nav tie" viewer={None} head="">
+            <div id={NavTieCopiesId}>
+                for (links, label) in [(desktop, "Desktop"), (mobile, "Mobile")] {
+                    // Render the first two entries after the third, in a different container.
+                    <section aria-label={label}>
+                        <aside>for (link, item) in &links[2..] { <a {..link}>{**item}</a> }</aside>
+                        <nav>for (link, item) in &links[..2] { <a {..link}>{**item}</a> }</nav>
+                    </section>
+                }
+            </div>
+            <nav>
+                <a {..later}>{*later_label}</a>
+                <span id={NavTieSeparateId}><a {..separate}>{*label}</a></span>
+            </nav>
+            <a {..independent}>"Independent"</a>
+            <a href={old}>"Earlier page"</a>
         </Layout>
     })
 }
