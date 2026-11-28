@@ -12975,7 +12975,7 @@ rules something out.
     last a condition on 2026-11-27 ([Choice 76](#choice-counted-or-measured)). No such reading
     exists: the plan posted on
     [#2133 Answer an HTTP/1.1 connection's requests without a body on Corten's own connection when an app asks (App::own_http1, off unless set)](https://github.com/corten-run/corten/pull/2133)
-    for this change's cycles sends a `Host` line and nothing else, and says so, so until such a
+    for this change's cycles sends no browser header lines (as described above). Until such a
     reading is made a saving on a browser's request is claimed in instructions alone. What the gate does not
     send today, each named by a review: an answer whose body fails, has trailers, or is cut by
     its handler, a `1xx` and a head a handler makes that cannot be sent (fixed tests cover a

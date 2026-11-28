@@ -53,8 +53,8 @@ to any host. A `HOSTS` in the environment the kit is run in never reaches the pr
 | `unstaged-subdomain` | `api` | As `unstaged` to `Host: seller-desk.localhost` and the port, a name under `localhost` whose 11 bytes before it are read as a name | `3` |
 | `get-own`, `post-own`, `unstaged-own`, `pipeline-own`, `get-browser-own`, `page-browser-own`, `unstaged-any-long-own` | as the case without `-own`, with `App::own_http1(true)` | The same | The same |
 
-**The cases with the switch on.** Every case above runs with `App::own_http1` off, as an app has
-it unless it asks. The seven with `-own` in their name send the same request to the same
+**The cases with the switch on.** Every case without `-own` runs with `App::own_http1` off, as
+an app has it unless it asks. The seven with `-own` in their name send the same request to the same
 configuration with the switch on, so that a change to Corten's own HTTP/1.1 connection
 ([design Choice 78](../../docs/design.md#choice-own-http1)) is counted. They are the requests that
 connection changes most: the bare `get`, `unstaged` and `pipeline` (also 16 at a time), `get-browser` and
@@ -408,6 +408,10 @@ On one runner it does what [Running it](#running-it) says, the first three by
    growth and page size (which stands in for the line `idle.mjs` printed), each attempt that gave
    no figure, and one
    line of verdict. Its exit status is the job's.
+
+The hosted job starts with a fresh directory. When reusing one locally, each `job.sh read`
+appends its `answers` and `readings` times to `seconds`, so that file also holds the times from
+prior invocations. `compare.mjs` does not read it.
 
 `compare.mjs` holds the figures to the rule of
 [CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests) (Pull requests, item 2.1, Counted): no

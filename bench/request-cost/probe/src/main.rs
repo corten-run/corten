@@ -121,6 +121,7 @@ fn own_http1() -> Result<bool, Box<dyn std::error::Error>> {
     }
 }
 
+// build-output.mjs matches the guard, signature and call as written; update it if any changes.
 #[cfg(feature = "own-http1")]
 fn switched(app: App) -> Result<App, Box<dyn std::error::Error>> {
     Ok(app.own_http1(true))
