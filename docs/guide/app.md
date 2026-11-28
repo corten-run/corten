@@ -3447,6 +3447,11 @@ middleware made of the failure's header, and on a page Corten never lets be shar
 CDN caching headers is kept. On the page for a handler's own failure, a `no-store` written by hand
 goes out bare unless the page is personal.
 
+If Corten observes the error page draw a new submit key in one of its polls, the response follows
+the same [cache policy as other answers that draw a key](#caching): `private, no-cache` (or
+`private, no-store`), with no CDN caching headers or `ETag`. This applies even if the error page
+discards the key or refuses and Corten sends plain text instead.
+
 That page for a handler's own failure (its 404, its `Error`) keeps what a middleware wrote,
 `CDN-Cache-Control` and `Surrogate-Control` included, as the handler's answer would: whether it
 may be shared is the app's policy. So a middleware that tells a CDN to keep every answer must not

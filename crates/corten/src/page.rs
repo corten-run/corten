@@ -1372,7 +1372,11 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
     if let Some(here) = parts.extensions.get::<crate::layout::StartHere>().cloned() {
         here.at_error_page(&mut parts, waits);
     }
-    let mut res = (shared.error_page)(failure, parts).await;
+    // The replacement page runs outside the route handler's submit-key watch.
+    let mut render = (shared.error_page)(failure, parts);
+    let mut watch = crate::form::KeyWatch::default();
+    let (mut res, drew_key) =
+        std::future::poll_fn(move |cx| watch.poll(Pin::new(&mut render), cx).map(|res| (res, watch.drew()))).await;
     if res.status().is_success() {
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {
@@ -1385,6 +1389,10 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
             None => (status, "The page could not be shown.").into_response(),
         };
         res = crate::cache::unshared_in_place_of(res.extensions(), plain);
+    }
+    // Keep the observation even on the plain fallback when the render refused or failed.
+    if drew_key {
+        crate::cache::unrepeatable(&mut res);
     }
     // Search engines skip it, whatever the layout says: the offline page is a 200.
     res.headers_mut().insert(HeaderName::from_static("x-robots-tag"), HeaderValue::from_static("noindex"));
