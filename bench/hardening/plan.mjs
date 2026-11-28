@@ -12,6 +12,11 @@ export const phases = ["request-timeout", "request-limit", "dependency-recovery"
 export const cases = ["direct", "deployed-edge"];
 export const sources = ["fixture", "api"];
 export const apps = selectedApps("hardening");
+export const appSourcePath = (app, path) => app === "corten"
+  ? path === "Cargo.toml" || path === "Cargo.lock" || path.startsWith("crates/") || path.startsWith("bench/marketplace/corten/")
+  : path.startsWith(`bench/fullstack/apps/${app}/`);
+export const appSourceRows = (app, files) => files.filter(({ path }) => appSourcePath(app, path))
+  .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(({ path, sha256 }) => [path, sha256]);
 export const matrix = () => apps.flatMap((app) => sources.flatMap((source) => cases.flatMap((mode) => phases.map((phase) =>
   ({ key: `${app}/${source}/${mode}/${phase}`, app, source, mode, phase, status: "not-run" })))));
 export function budgets(profile = "bounded") {

@@ -20,6 +20,12 @@ its own baseline; historical evidence remains under its original workload and co
 Corten formatted values per request while some others used stored strings or non-localized formatting. Those
 tables describe historical implementations, not valid general framework speed rankings.
 
+For a lean server-rendered page, the [catalog-page group](../bench/catalog/README.md) includes
+Proa. For typed record serialization, the [JSON API group](../bench/json-api/README.md)
+includes ntex alongside axum/Maud. Neither addition changes a historical ranking. The
+[optional transport comparison](../bench/json-api/README.md#optional-transport-comparison)
+isolates gzip and connection reuse without adding cases to the default group.
+
 | Question | Evidence to read |
 |---|---|
 | How fast does it feel? | Phone interactivity, navigation and form-update latency, transferred bytes |

@@ -128,7 +128,8 @@ inspected image and retain `PROFILE=matched` at runtime. A source audit must
 name this deployment and build profile, not the WSGI deployment. The saved
 execution replay checks the image identity, startup command and settings.
 
-Dedicated Mixed campaigns bind the deployment in `mixed-production-django-asgi`.
+Dedicated Mixed campaigns bind the deployment in `mixed-production-asgi-webflux`;
+the prior `mixed-production-django-asgi` recipe selected only Django ASGI.
 The legacy full-campaign recipe, the other groups' WSGI selection and the live
 Uvicorn option are unchanged. `bench/workloads/deployments.mjs` lists the exact
 Mixed-only build and launch configuration without marking it qualified.

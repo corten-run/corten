@@ -60,7 +60,7 @@ const HELD: [(&str, &str, &str, &str); 27] = [
         "round browser-2 measured 29.5 ms for Corten, and three reruns of that step on one CPU model gave 4.9, 20.7 and 6.3 ms",
     ),
     (CERT, "corten-run 0.3", MANIFEST, "version = \"0.3."),
-    (SURFACE, "16.3 KB gzipped", README, "A 16.3 KB (gzip) runtime."),
+    (SURFACE, "16.5 KB gzipped", README, "A 16.5 KB (gzip) runtime."),
     (AFTER, "there Corten rendered 29,160 a second", R24, "| corten | 29,160 [28,051, 29,803] (3/3) |"),
     (AFTER, "29,160 a second against 25,709", R24, "| axum-maud | 25,709 [25,201, 25,920] (3/3) |"),
     (AFTER, "from memory at 64 users", R24, "At 64 users, Corten had the highest successful page throughput"),

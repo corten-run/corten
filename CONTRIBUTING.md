@@ -244,8 +244,10 @@ builds on the oldest supported Rust, `rust-version` in the root `Cargo.toml`. Th
 (`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`,
 side by side on runners of their own: the release tests apart from the other Rust checks, and the
 browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
-`rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
-supported Rust floor. A new smoke step names
+`rust` and `browser` pass only when every job under them ran and passed, `msrv` checks the
+supported Rust floor. `request-cost`, the one job of the `Request Cost` workflow
+(`.github/workflows/request-cost.yml`), is required too (Pull requests, item 2.1, Counted).
+A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
 The three example groups use the pinned Playwright image directly. Two more groups run the
 benchmark checks beside them: `benchmark-checks` runs the `npm-check` part, and
@@ -439,6 +441,27 @@ there, and the committed provenance records a locator it can be fetched from and
 digest alone is not a locator: it checks a copy but does not say where one is (a group result's
 `provenance.json` records the digest as `archiveSha256`).
 
+For a result collected by the grouped workload controller, an original with private control
+material may stay at its controlled location. Do not copy it to a publication store, even a
+private one. In Git, record only a stable, opaque custody reference. Keep the access instructions
+in the controlled location, where a maintainer can arrange read-only access for authorized
+reviewers. Before publication, an independent reviewer rehashes the original, verifies that the
+replay inputs came from those exact archive bytes, and runs the unchanged native checks at the
+measured commit. If the reviewer cannot reach or verify the original, do not publish.
+
+For this route, keep the original's SHA-256 in provenance, but do not give an export as its
+locator. Record a separate, maintainer-approved export locator and SHA-256 in provenance.
+Document how the export selects the inputs needed to recompute each headline result and
+comparison, retaining the measured group and profile, pass counts, failures and eligibility.
+Do not copy raw records. The independent results review regenerates the export from the verified
+evidence, fetches and hashes it at the final locator, and recomputes the reported results and
+comparisons. Bind the measured commit, original archive, published report and export digests in
+the review. Check every published file, including the export and provenance, for private data;
+publish no credentials, custody instructions or local control metadata. The export is for
+checking reported numbers, not for native replay or qualifying a group. The original stays
+available in custody for later authorized reviews. This exception changes only grouped results
+publication, not collection, validation, or any other benchmark's publishing procedure.
+
 A benchmark's `.gitignore` keeps part of its default raw output out of `git add`, not all of it.
 `bench/fullstack` ignores a round's packed `raw.tar.xz`, but not the loose raw files of a round
 not yet packed; `node bench/fullstack/pack.mjs <round>` packs them and prints the archive's
@@ -554,13 +577,17 @@ establish a general ranking.
       7. A change whose reason is a win in cycles, time or requests a second.
 
       **Counted.** The hosted `Request Cost` job takes these counts for a pull request that
-      changes what a request is built from, base and head on one runner, and writes every
-      figure and its verdict to its summary, to copy into the description, so the author
-      prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
+      changes what the probe is built from or counted with, base and head on one runner, and
+      writes every figure and its verdict to its summary, to copy into the description, so the
+      author prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
       green check is evidence for a reviewer to read, not an attestation: the counts are of
       the pull request's own tree, by its own workflow, scope, kit and comparison, so a pull
       request that changes any of those has that change reviewed for what it does to the
-      verdict. On a host of one's own, build base and head with
+      verdict. The check is required on `main` (Checks), and being required makes it no more
+      than that evidence: the way, its line and what the measured way then gives are still the
+      review's to accept. [The hosted job](bench/request-cost/README.md#the-hosted-job) says what
+      the job passes and fails, which run reads a line added later and decides, and when a run
+      may be run again. On a host of one's own, build base and head with
       [`bench/request-cost`](bench/request-cost/README.md) and take each count under
       [Running it](bench/request-cost/README.md#running-it) on both, as that page says: one
       directory, one checkout of the kit, the answers compared first. The change passes when no
@@ -570,11 +597,17 @@ establish a general ranking.
       connections, case, requests and page size (each run prints them) and the same `--addresses`
       (which it does not print, so the description names it), over at least as many connections as
       the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
-      pages, over `--addresses 3`), so one page is at most a byte a connection, since a reading over
+      pages, over `--addresses 3`), so four pages are at most four bytes a connection, since a reading over
       fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
       resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
-      than the larger of base's three span and one page (the size it prints, the step resident
-      memory is reported in); the figures a connection are rounded and do not decide it. The
+      than the larger of base's three span and four pages (of the size it prints, the step
+      resident memory is reported in: 16,384 bytes with 4,096-byte pages, under 3.3 bytes a
+      connection over the default 5,000); the figures a connection are rounded and do not decide
+      it. The floor was one page until 2026-11-27, when the maintainer raised it to four:
+      [design Choice 76](docs/design.md#choice-counted-or-measured) gives the readings it rests
+      on, whose cause was not established, and what it gives up, a cost under about 3.3 bytes a
+      connection at the default, where 8 bytes more a connection is 40,000 bytes by arithmetic,
+      which no run has read. The
       hosted job decides each idle reading so, from each run's growth and page size, and at its
       fixed 5,000 connections a runner whose page has more bytes than that leaves the reading
       not decided, a case that cannot be counted. The description gives every figure of every run for both builds, each idle run's whole line as
@@ -599,7 +632,9 @@ establish a general ranking.
       One command of [`bench/placement`](bench/placement/README.md#the-trend) makes the run on
       a quiet host and adds a row to [the trend's page](bench/placement/trend/README.md). A row
       gates no pull request and no release. A run is past the threshold when the lower bound of
-      a workload's change, `main` against the release, is at or above +2% (a proposal); the
+      a workload's change, `main` against the release, is at or above +2%, the figure the
+      maintainer settled on 2026-11-27, to be read again once four weekly rows are in the table
+      ([design Choice 76](docs/design.md#choice-counted-or-measured) says what it rests on); the
       command then drafts an issue for whoever made the run, naming the pull requests merged
       since the row before when the run's head descends from that row's commit, and since the
       release otherwise, and opens nothing. A run that is not past it has not shown the cost

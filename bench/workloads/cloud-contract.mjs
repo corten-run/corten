@@ -126,10 +126,11 @@ function fleetHost(region, regions = fleetRegions) {
 function fleetSelection(single) {
   const current = selection();
   if (!single) return current;
-  exact(single, ["group", "indexSha256", "checkout", ...["offlineHandoff", "loadLayout"].filter((key) => single[key] !== undefined)]);
+  exact(single, ["group", "indexSha256", "checkout", ...["offlineHandoff", "loadLayout", "replacesQuarantineSha256"].filter((key) => single[key] !== undefined)]);
   if (single.offlineHandoff !== undefined) assert.equal(single.offlineHandoff, true, "offline handoff marker");
   assert.ok(groupNames.includes(single.group), "unknown independent group");
   if (single.loadLayout !== undefined) assert.ok(jsonFleetPlacementFor(single.group, single.loadLayout), "unknown independent group load layout");
+  if (single.replacesQuarantineSha256 !== undefined) full(single.replacesQuarantineSha256, /[a-f0-9]{64}/, "create quarantine replacement digest");
   full(single.indexSha256, /[a-f0-9]{64}/, "continuation index digest");
   full(single.checkout, /[^\r\n\0]{1,4096}/, "measured checkout");
   return { ...current, groups: current.groups.filter(({ group }) => group === single.group) };

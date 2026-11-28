@@ -41,12 +41,19 @@ hexadecimal digits of each SHA-256, which `turns.sh` keeps for each placement. A
 fails any of them makes its workload "not read". The run's directory keeps the difference
 (`expect-<workload>.txt`) and the digests (`bodies-<workload>.txt`) for whoever reads the row.
 
-The threshold is the plan's, +2% on the lower bound, a proposal until the maintainer settles it.
-In the first run, of 2026-11-26, both A/As resolved: each A/A's bound, as recorded and with its
-labels swapped, was +0.62% and +0.31% on `plain` at K = 60 and +0.47% and +0.61% on `unstaged`
-at K = 28, under the +1% the kit asks of an A/A. Those are one run's bounds, not a limit on what
-a run of this plan can show, and one run does not show what rise a release can carry, so it does
-not settle the threshold. The threshold is not the +1% a measured change is held to: that is
+The threshold is the plan's, +2% on the lower bound. It was a proposal until 2026-11-27, when
+the maintainer settled it at that figure, given the first row below
+([design Choice 76](../../../docs/design.md#choice-counted-or-measured) records the ruling). It
+rests on two things. In the first run, of 2026-11-26, both A/As resolved: each A/A's bound, as
+recorded and with its labels swapped, was +0.62% and +0.31% on `plain` at K = 60 and +0.47% and
++0.61% on `unstaged` at K = 28, under the +1% the kit asks of an A/A, so +2% is over three times
+what that run read between two builds that are the same. And 2% is the figure the maintainer
+accepted on 2026-11-25, as a proposal, for what a release may carry over the one before it,
+there of the request-cost kit's counts of instructions in a case and not of cycles. Those are
+one run's bounds, not a limit on what a run of this plan can show, and one run does not show
+what rise a release can carry: the threshold is a ruling, not a measured line, and it gates
+nothing. It is read again once four weekly rows are in the table below. The threshold is not
+the +1% a measured change is held to: that is
 read on the bound, and the kit's own page for a gated part still prints that reading (a pilot's
 reads nothing: it sizes K). For a run past the threshold the command drafts an issue with the
 pull requests merged since the row before it, or since the release when the draft says so, and

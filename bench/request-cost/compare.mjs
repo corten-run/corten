@@ -15,13 +15,21 @@
 // build said, when the probe did not build: a build with that file, empty or not, has no figure
 // and no answer, whatever else its directory holds. A figure is read only from a run's whole
 // output, of the case, depth, requests, connections and addresses asked for (`figure`): anything
-// else is no figure.
+// else is no figure. A build that was built may hold `sha256`, its probe's SHA-256 as job.sh
+// writes it, 64 lowercase hex digits and a line feed; anything else there is no checksum.
+// For local results this file is the caller's evidence, not checked against a binary.
+//
+// One binary: when both builds were built and their `sha256` are one checksum, base and head
+// are the same probe, byte for byte, so nothing is compared. The verdict says so, gives what the
+// rule would read of the figures as an A/A of the runner, and fails nothing, whatever the
+// description declares (the maintainer's ruling of 2026-11-27, README.md, The hosted job).
+// Without both checksums, or with two, the builds are compared as below.
 //
 // The rule: no case's instructions a request rise by more than +0.5% of base's, by the medians
 // the kit gives; no case's allocations rise, by the calls themselves; and no idle reading rises,
 // by `idleRise` (figures.mjs): the median of head's three growths of resident memory, in bytes
 // (each run's after less its before), is not above base's by more than the larger of base's
-// three span and one page, over at least as many connections as the page has bytes. The figures a
+// three span and four pages, over at least as many connections as the page has bytes. The figures a
 // connection are rounded and decide nothing. A reading with no figure on either build, an idle
 // reading `idleRise` cannot decide (its six runs not of one page size, or 5,000 connections
 // being fewer than a page has bytes), or a case either build gave no answer to, cannot be
@@ -33,13 +41,15 @@
 // (`declared`); with no such line, or more than one, it declares nothing. Exit status
 // 1 when the rule does not hold and the description does not say `measured`, and when the probe
 // did not build against head: a change declared measured is reported and never failed on its
-// figures, and one that declares nothing fails only when the rule does not hold. Exit status 2
-// for arguments that are not these.
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+// figures, and one that declares nothing fails only when the rule does not hold. If a build on
+// either side ends with status 124 or 137 (`STOPPED`), the job fails and reports that nothing
+// was compared, without attributing a cause. An ordinary head build failure takes precedence.
+// Exit status 0 for one binary. Exit status 2 for arguments that are not these.
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { COUNTED, idleRise, median, sent } from "./figures.mjs";
+import { COUNTED, FLOOR_WORD, idleRise, median, sent } from "./figures.mjs";
 import { Answers, cases, unexpected } from "./requests.mjs";
 
 /** Idle readings taken on each build, and the counts of a case `count.mjs` takes in a run. */
@@ -53,6 +63,24 @@ const IDLE = [
   { name: "silent", what: "before any byte", options: ["--silent"], of: { case: "pipeline", requests: 0 } },
 ];
 const SIDES = /** @type {const} */ (["base", "head"]);
+/** What job.sh leaves in `unbuilt` when timeout returns an ambiguous status. */
+export const STOPPED = /^the build ended with status (124|137) after \d+ s \(limit \d+ s\)$/;
+
+/**
+ * A built build's probe's SHA-256, as job.sh writes it, or undefined: anything other than a
+ * readable file of 64 lowercase hex digits and a line feed is no checksum.
+ * @param {string} directory
+ */
+function checksum(directory) {
+  const at = join(directory, "sha256");
+  try {
+    if (!statSync(at, { throwIfNoEntry: false })?.isFile()) return undefined;
+    const text = readFileSync(at, "utf8");
+    return /^[0-9a-f]{64}\n$/.test(text) ? text.slice(0, 64) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * The runs the rule reads, in the order to take them: every case's instructions, the four at a
@@ -261,7 +289,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
       return [what, whole(low), whole(high), signed(high - low), percent(low, high), "", shown(bases), shown(heads), "not decided"];
     }
     const { rise, allowed, rose } = decided;
-    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and a ${whole(/** @type {number} */ (pages[0]))}-byte page)`);
+    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and ${FLOOR_WORD} ${whole(/** @type {number} */ (pages[0]))}-byte pages)`);
     return [what, whole(low), whole(high), signed(rise), percent(low, high), whole(allowed), shown(bases), shown(heads), rose ? "rose" : ""];
   });
 
@@ -284,13 +312,19 @@ export function compare(base, head, { description = "", names = { base: "base", 
     lacks(`${code(name)} has no answer`, Object.fromEntries(none.map((side) => [side, /** @type {string} */ (found[side].why).split("\n")[0]])));
     return { name, state: none.length > 0 ? "none" : found.base.bytes.equals(found.head.bytes) ? "same" : "differ" };
   });
+  const sums = { base: unbuilt.base === undefined ? checksum(base) : undefined, head: unbuilt.head === undefined ? checksum(head) : undefined };
+  const oneBinary = sums.base === sums.head ? sums.base : undefined;
   const differ = answers.filter(({ state }) => state === "differ").map(({ name }) => code(name));
   const unread = answers.filter(({ state }) => state === "none").map(({ name }) => code(name));
-  const answered = [
+  const answered = (oneBinary === undefined ? [
     differ.length > 0 ? `The two builds answer differently in ${differ.join(", ")}: a count of two builds that answer differently compares two different jobs, which the review weighs.` : "",
     unread.length > 0 ? `No answer to compare in ${unread.join(", ")}.` : "",
     differ.length + unread.length === 0 ? `Both builds give the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${answers.length} cases.` : "",
-  ].filter(Boolean).join(" ");
+  ] : [
+    differ.length > 0 ? `Readings of the same binary recorded different answers in ${differ.join(", ")}.` : "",
+    unread.length > 0 ? `One or both readings recorded no answer in ${unread.join(", ")}.` : "",
+    differ.length + unread.length === 0 ? `Both readings recorded the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${answers.length} cases.` : "",
+  ]).filter(Boolean).join(" ");
 
   const { way, lines: declaring } = declared(description);
   // What was read of the description, so that an author sees why a line did or did not count.
@@ -320,21 +354,33 @@ export function compare(base, head, { description = "", names = { base: "base", 
     status = 1;
     verdict = `**Does not pass as counted:** ${why}. ${read} By ${rule} such a change is measured: say \`Request path: measured\` on ${line}, and give what the measured way asks.`;
   }
-  if (unbuilt.head !== undefined) {
+  const stopped = SIDES.flatMap((side) => {
+    const reason = unbuilt[side];
+    return reason !== undefined && STOPPED.test(reason) ? [`${side} (${code(reason)})`] : [];
+  });
+  if (unbuilt.head !== undefined && !STOPPED.test(unbuilt.head)) {
     status = 1;
     verdict += " The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.";
+  } else if (stopped.length > 0) {
+    status = 1;
+    verdict = `**Nothing compared:** no probe from ${stopped.join(" or ")}. GNU \`timeout\` returns 124 when it stops a command at its limit and 137 when it has to kill it. A command's own exit 124 or an unrelated KILL can give the same statuses. The elapsed seconds beside the limit give context, not proof of the cause; this verdict does not say the change broke the probe. ${read} The job fails whatever the description says and may be run again (README.md, The hosted job).`;
+  }
+  if (oneBinary !== undefined) {
+    status = 0;
+    verdict = `**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 ${code(oneBinary)}), so any figures below are the runner's readings of one binary and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ${holds ? "pass" : `not pass: ${why}`}. ${read}`;
   }
 
   const markdown = [
     `## What a request costs: ${code(short(names.head))} against ${code(short(names.base))}`,
     verdict,
+    ...(oneBinary === undefined ? [] : ["The tables below show the available readings from two runs of one binary, not a comparison of two binaries."]),
     answered,
     "### Instructions a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's counts", "Head's counts", "Rule"], instructions),
     "### Allocations a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
     "### Memory idle connections hold",
-    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and one page.`,
+    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
     "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
     ["```text", ...records, "```"].join("\n"),

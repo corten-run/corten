@@ -95,6 +95,49 @@ impl std::fmt::Display for InvalidFeedKey {
 
 impl std::error::Error for InvalidFeedKey {}
 
+/// An idempotency key that already belongs to a write to another feed, refused by [`begin`]: the
+/// write is not made and is not answered as a replay. A key's scope is the whole cluster store,
+/// so a key two scopes could both send (two tools, two callers) needs the app to make it unique,
+/// for example by prefixing it. Answer it as a refusal, a 422 or 409, not a replay or a 503. It
+/// does not say which feed holds the key. It arrives inside [`Error`]: test for it with
+/// `error.is::<IdempotencyKeyReused>()`.
+///
+/// ```
+/// use corten_cluster::{Begin, IdempotencyKeyReused, Write, Written};
+///
+/// /// How a write to seller 42 under the client's `key` starts.
+/// enum Started {
+///     /// Make the change on `write.conn()`, then `write.commit(..)`.
+///     New(Write),
+///     /// This key's write committed before: answer with what it wrote.
+///     Replayed(Written),
+///     /// Another feed's write already used this key; nothing was written. Answer a 422.
+///     Refused,
+/// }
+///
+/// async fn start(pool: &sqlx::PgPool, key: &str) -> Result<Started, corten_cluster::Error> {
+///     let begun = match corten_cluster::begin(pool, "sellers.42", Some(key)).await {
+///         Err(error) if error.is::<IdempotencyKeyReused>() => return Ok(Started::Refused),
+///         // Any other error (Postgres out of reach) is the app's failure, not the client's.
+///         begun => begun?,
+///     };
+///     Ok(match begun {
+///         Begin::New(write) => Started::New(write),
+///         Begin::Done(written) => Started::Replayed(written),
+///     })
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdempotencyKeyReused;
+
+impl std::fmt::Display for IdempotencyKeyReused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "corten-cluster: this idempotency key was already used for a write to another feed")
+    }
+}
+
+impl std::error::Error for IdempotencyKeyReused {}
+
 /// Corten's literal subject policy follows the documented token and wildcard rules, also
 /// excluding control characters (Postgres cannot store NUL) and bounding the byte length.
 fn literal(name: &str, max: usize) -> bool {

@@ -5,13 +5,13 @@
 // prints against the reader here.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
-import { RUNS, compare, declared, figure, over, readings } from "./compare.mjs";
+import { RUNS, STOPPED, compare, declared, figure, over, readings } from "./compare.mjs";
 import { median } from "./figures.mjs";
 import { cases } from "./requests.mjs";
 
@@ -235,7 +235,8 @@ test("a change inside the budget passes as counted, and the table gives every ru
   assert.ok(markdown.includes("| `get`, 16 at a time | 15,000 | 15,000 | 0 | 0.000% | 15000 15001 15000 "), markdown);
   assert.ok(markdown.includes("| `page-browser` | 16.00 | 16.00 | 0 in 1,000 | 0.00% | 16,000 and 16,000 frees | 16,000 and 16,000 frees |  |"), markdown);
   // Each run's growth in bytes, its rounded figure a connection after it, and what base allows.
-  assert.ok(markdown.includes("| after one request | 42,106,880 | 42,106,880 | 0 | 0.00% | 8,192 | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) |  |"), markdown);
+  assert.ok(markdown.includes("| after one request | 42,106,880 | 42,106,880 | 0 | 0.00% | 16,384 | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) |  |"), markdown);
+  assert.ok(markdown.split("\n").some((line) => line.endsWith("a rise is allowed up to the larger of base's three span and four pages.")), markdown);
   // A row a case and a row a reading, and no section for runs with no figure when all gave one.
   assert.equal(markdown.split("\n").filter((line) => line.startsWith("| `") || /^\| (after|before) /.test(line)).length, CASES + 4 + CASES + 3);
   // Each idle run is given whole, with its before, after, growth and page size, which decide.
@@ -280,42 +281,66 @@ test("an allocation more does not pass, however few they are among the requests 
   assert.equal(compare(other.base, other.head, { description: counting }).status, 0);
 });
 
-test("idle memory is decided by growths in bytes: one page over base's agreeing three passes, two pages fail, and more than base's span fails", (t) => {
+test("idle memory is decided by growths in bytes: four pages over base's agreeing three pass, five pages fail, and more than a span of base's over four pages fails", (t) => {
   // Base's three agree, 15,335 pages, 62,812,160 bytes over 5,000 connections (12,562 a
-  // connection), and head's are one page more (62,816,256, 12,563): the rounded figures rise
-  // by one, and a page is allowed.
+  // connection), and head's are four pages more (62,828,544, 12,566): 16,384 bytes, which are
+  // allowed.
   const agreeing = (/** @type {ReturnType<typeof figures>} */ build, /** @type {number} */ pages) => (build.idle.browser = [pages, pages, pages]);
-  const one = builds(t, (base, head) => [agreeing(base, 15_335), agreeing(head, 15_336)]);
-  const page = compare(one.base, one.head, { description: counting });
+  const four = builds(t, (base, head) => [agreeing(base, 15_335), agreeing(head, 15_339)]);
+  const page = compare(four.base, four.head, { description: counting });
   assert.deepEqual([page.status, page.holds], [0, true], page.markdown);
   assert.match(verdict(page.markdown), /^\*\*Passes as counted\.\*\*/);
-  assert.ok(page.markdown.includes("| after three of a browser's requests | 62,812,160 | 62,816,256 | +4,096 | +0.01% | 4,096 | 62,812,160 (12,562) 62,812,160 (12,562) 62,812,160 (12,562) | 62,816,256 (12,563) 62,816,256 (12,563) 62,816,256 (12,563) |  |"), page.markdown);
-  // Two pages more, whose figures also round to one byte a connection more (12,562 to 12,563),
-  // is a rise.
-  const two = builds(t, (base, head) => [agreeing(base, 15_334), agreeing(head, 15_336)]);
-  const pages = compare(two.base, two.head, { description: counting });
+  assert.ok(page.markdown.includes("| after three of a browser's requests | 62,812,160 | 62,828,544 | +16,384 | +0.03% | 16,384 | 62,812,160 (12,562) 62,812,160 (12,562) 62,812,160 (12,562) | 62,828,544 (12,566) 62,828,544 (12,566) 62,828,544 (12,566) |  |"), page.markdown);
+  // One, two and three pages more (4,096, 8,192 and 12,288 bytes) are under the four allowed.
+  for (const [pages, row] of /** @type {const} */ ([[1, "| 62,812,160 | 62,816,256 | +4,096 | +0.01% | 16,384 |"], [2, "| 62,812,160 | 62,820,352 | +8,192 | +0.01% | 16,384 |"], [3, "| 62,812,160 | 62,824,448 | +12,288 | +0.02% | 16,384 |"]])) {
+    const under = builds(t, (base, head) => [agreeing(base, 15_335), agreeing(head, 15_335 + pages)]);
+    const found = compare(under.base, under.head, { description: counting });
+    assert.deepEqual([found.status, found.holds], [0, true], found.markdown);
+    assert.ok(found.markdown.includes(`| after three of a browser's requests ${row}`), found.markdown);
+  }
+  // Five pages more, whose figures round as the four pages' did (12,562 to 12,566), are a rise:
+  // 20,480 bytes.
+  const five = builds(t, (base, head) => [agreeing(base, 15_334), agreeing(head, 15_339)]);
+  const pages = compare(five.base, five.head, { description: counting });
   assert.deepEqual([pages.status, pages.holds], [1, false]);
-  assert.match(verdict(pages.markdown), /^\*\*Does not pass as counted:\*\* idle memory after three of a browser's requests rises: the median of head's growths, 62,816,256 bytes over 5,000 connections, is above base's 62,808,064 by 8,192, more than the 4,096 allowed \(the larger of base's span and a 4,096-byte page\)\. /);
-  assert.ok(pages.markdown.includes("| after three of a browser's requests | 62,808,064 | 62,816,256 | +8,192 | +0.01% | 4,096 | 62,808,064 (12,562) 62,808,064 (12,562) 62,808,064 (12,562) | 62,816,256 (12,563) 62,816,256 (12,563) 62,816,256 (12,563) | rose |"), pages.markdown);
-  // Base's runs after one request span 2 pages (8,192 bytes) about a median of 10,280 pages:
-  // head's median 3 pages above is a rise, 2 above is not, whatever head's highest run.
-  const more = builds(t, (_, build) => {
-    build.idle.request = [10_283, 10_290, 10_270];
+  assert.match(verdict(pages.markdown), /^\*\*Does not pass as counted:\*\* idle memory after three of a browser's requests rises: the median of head's growths, 62,828,544 bytes over 5,000 connections, is above base's 62,808,064 by 20,480, more than the 16,384 allowed \(the larger of base's span and four 4,096-byte pages\)\. /);
+  assert.ok(pages.markdown.includes("| after three of a browser's requests | 62,808,064 | 62,828,544 | +20,480 | +0.03% | 16,384 | 62,808,064 (12,562) 62,808,064 (12,562) 62,808,064 (12,562) | 62,828,544 (12,566) 62,828,544 (12,566) 62,828,544 (12,566) | rose |"), pages.markdown);
+  // A span of base's over four pages still governs. Base's runs after one request span 6 pages
+  // (24,576 bytes) about a median of 10,280 pages: head's median 7 pages above is a rise, 6
+  // above is not, whatever head's highest run.
+  const wide = (/** @type {ReturnType<typeof figures>} */ build) => (build.idle.request = [10_277, 10_283, 10_280]);
+  const more = builds(t, (base, head) => {
+    wide(base);
+    head.idle.request = [10_287, 10_290, 10_270];
   });
   const rises = compare(more.base, more.head, { description: counting });
   assert.equal(rises.status, 1);
-  assert.match(verdict(rises.markdown), /^\*\*Does not pass as counted:\*\* idle memory after one request rises: the median of head's growths, 42,119,168 bytes over 5,000 connections, is above base's 42,106,880 by 12,288, more than the 8,192 allowed \(the larger of base's span and a 4,096-byte page\)\. /);
-  const less = builds(t, (_, build) => {
-    build.idle.request = [10_282, 10_400, 10_270];
-    build.idle.silent = [2_000, 2_000, 2_000];
+  assert.match(verdict(rises.markdown), /^\*\*Does not pass as counted:\*\* idle memory after one request rises: the median of head's growths, 42,135,552 bytes over 5,000 connections, is above base's 42,106,880 by 28,672, more than the 24,576 allowed \(the larger of base's span and four 4,096-byte pages\)\. /);
+  const less = builds(t, (base, head) => {
+    wide(base);
+    head.idle.request = [10_286, 10_400, 10_270];
+    head.idle.silent = [2_000, 2_000, 2_000];
   });
   const stays = compare(less.base, less.head, { description: counting });
   assert.equal(stays.status, 0, stays.markdown);
-  assert.ok(stays.markdown.includes("| after one request | 42,106,880 | 42,115,072 | +8,192 | +0.02% | 8,192 | "), stays.markdown);
+  assert.ok(stays.markdown.includes("| after one request | 42,106,880 | 42,131,456 | +24,576 | +0.06% | 24,576 | "), stays.markdown);
+  // Base's runs span 2 pages, under the four: the four are allowed, so 4 above passes and 5 does not.
+  const narrow = builds(t, (_, head) => {
+    head.idle.request = [10_284, 10_400, 10_270];
+  });
+  const under = compare(narrow.base, narrow.head, { description: counting });
+  assert.equal(under.status, 0, under.markdown);
+  assert.ok(under.markdown.includes("| after one request | 42,106,880 | 42,123,264 | +16,384 | +0.04% | 16,384 | "), under.markdown);
+  const over = builds(t, (_, head) => {
+    head.idle.request = [10_285, 10_400, 10_270];
+  });
+  const past = compare(over.base, over.head, { description: counting });
+  assert.equal(past.status, 1);
+  assert.match(verdict(past.markdown), /is above base's 42,106,880 by 20,480, more than the 16,384 allowed \(the larger of base's span and four 4,096-byte pages\)\. /);
 });
 
 test("an idle reading over fewer connections than its page has bytes, or of two page sizes, is not decided and never passes", (t) => {
-  // 65,536-byte pages over the hosted job's 5,000 connections: one page is 13 bytes a
+  // 65,536-byte pages over the hosted job's 5,000 connections: four pages are 52 bytes a
   // connection, a step the gate does not let pass unseen, so no reading is decided.
   const large = builds(t, (base, head) => {
     base.page = 65_536;
@@ -326,7 +351,7 @@ test("an idle reading over fewer connections than its page has bytes, or of two 
     assert.deepEqual([status, holds], [description === measuring ? 0 : 1, false], description);
     assert.doesNotMatch(verdict(markdown), /Passes|Would pass|would pass\./, description);
     for (const what of ["after one request", "after three of a browser's requests", "before any byte"]) {
-      assert.ok(verdict(markdown).includes(`idle memory ${what} is not decided (\`not a gate reading: one 65536-byte page over 5000 connections is more than a byte a connection; open at least 65536\`)`), `${what}\n${markdown}`);
+      assert.ok(verdict(markdown).includes(`idle memory ${what} is not decided (\`not a gate reading: four 65536-byte pages over 5000 connections are more than four bytes a connection; open at least 65536\`)`), `${what}\n${markdown}`);
     }
     assert.equal(markdown.match(/\| not decided \|$/gm)?.length, 3, markdown);
   }
@@ -364,16 +389,17 @@ test("a run with no figure on one build cannot be counted, and why each attempt 
     build.count.get = null;
     build.idle.browser = [11_108, null, 11_109];
   });
-  // Refused and, taken again, not ended in its time; and a run that stopped with no error of the kit's.
-  writeFileSync(join(head, "count-get.json.refused"), `${refusal}Error: did not end in 120 s\n`);
+  // Refused and, taken again, ended with an ambiguous status; and a run with no error of the kit's.
+  const ended = "the reading ended with status 124 after 120 s (limit 120 s)";
+  writeFileSync(join(head, "count-get.json.refused"), `${refusal}Error: ${ended}\n`);
   writeFileSync(join(head, "idle-browser-2.json.refused"), "Killed\nnot attempted, the job's time for readings was spent\n");
   const { markdown, status, holds } = compare(base, head, { description: counting });
   assert.deepEqual([status, holds], [1, false]);
-  assert.ok(verdict(markdown).startsWith(`**Does not pass as counted:** \`get\`'s instructions has no figure on head (\`did not end in 120 s\`); idle memory after three of a browser's requests, run 2, has no figure on head (\`not attempted, the job's time for readings was spent\`). ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured`), markdown);
+  assert.ok(verdict(markdown).startsWith(`**Does not pass as counted:** \`get\`'s instructions has no figure on head (\`${ended}\`); idle memory after three of a browser's requests, run 2, has no figure on head (\`not attempted, the job's time for readings was spent\`). ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured`), markdown);
   assert.ok(markdown.includes("| `get` | 20,000 | none |  |  | 20000 20000 20001 (0.9 s; others 243 in 1) | none | no figure |"), markdown);
   // No median of two runs: the rule's is of three.
   assert.ok(markdown.includes("| after three of a browser's requests | 45,498,368 | none |  |  |  | 45,498,368 (9,100) 45,498,368 (9,100) 45,502,464 (9,100) | 45,498,368 (9,100) none 45,502,464 (9,100) | no figure |"), markdown);
-  assert.ok(markdown.includes(`### Runs that gave no figure\n\n- \`count-get.json\` on head: \`${refusal.trim().slice(7)}\`\n- \`count-get.json\` on head: \`did not end in 120 s\`\n- \`idle-browser-2.json\` on head: \`Killed\`\n- \`idle-browser-2.json\` on head: \`not attempted, the job's time for readings was spent\`\n`), markdown);
+  assert.ok(markdown.includes(`### Runs that gave no figure\n\n- \`count-get.json\` on head: \`${refusal.trim().slice(7)}\`\n- \`count-get.json\` on head: \`${ended}\`\n- \`idle-browser-2.json\` on head: \`Killed\`\n- \`idle-browser-2.json\` on head: \`not attempted, the job's time for readings was spent\`\n`), markdown);
 });
 
 test("a run refused once and counted when taken again is counted, and the refusal is still given", (t) => {
@@ -459,7 +485,7 @@ test("a change declared measured is reported and never failed on its figures", (
   });
   const { markdown, status, holds } = compare(base, head, { description: measuring });
   assert.deepEqual([status, holds], [0, false]);
-  assert.equal(verdict(markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: \`page\` runs 9,994 more instructions a request than base's 20,006, over the budget of 100 (+0.5%); \`page\` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: the median of head's growths, 45,056,000 bytes over 5,000 connections, is above base's 13,209,600 by 31,846,400, more than the 12,288 allowed (the larger of base's span and a 4,096-byte page). ${readMeasured}`);
+  assert.equal(verdict(markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: \`page\` runs 9,994 more instructions a request than base's 20,006, over the budget of 100 (+0.5%); \`page\` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: the median of head's growths, 45,056,000 bytes over 5,000 connections, is above base's 13,209,600 by 31,846,400, more than the 16,384 allowed (the larger of base's span and four 4,096-byte pages). ${readMeasured}`);
   const inside = builds(t);
   assert.equal(verdict(compare(inside.base, inside.head, { description: measuring }).markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would pass. ${readMeasured}`);
   // The one line is the declaration where it stands, an example's fence as well: the verdict says where it was read.
@@ -517,6 +543,131 @@ test("builds that answer differently are said to and fail nothing; a case either
     for (const clause of ["`post` has no answer on head (`not the body of post: \"ok\"`)", "`text` has no answer on base and head (`no capture`)", "`page` has no answer on base (`no capture`)", `\`page-browser\` has no answer on head ${not}`, `\`get\` has no answer on base ${not}`, `\`pipeline\` has no answer on base ${not}`]) assert.ok(verdict(markdown).includes(clause), `${clause}\n${markdown}`);
     assert.match(markdown, /^No answer to compare in `get`, `post`, `pipeline`, `text`, `page`, `page-browser`\.$/m);
   }
+});
+
+const SUM = "e59d3e11".padEnd(64, "0");
+const OTHER = "0e1f2a3b".padEnd(64, "9");
+/** Writes each build's `sha256` as job.sh does, or leaves none where it is null. @param {{ base: string, head: string }} at @param {string | null} base @param {string | null} head */
+function sums(at, base, head) {
+  for (const [side, text] of /** @type {const} */ ([["base", base], ["head", head]])) {
+    if (text === null) rmSync(join(at[side], "sha256"), { force: true });
+    else writeFileSync(join(at[side], "sha256"), text);
+  }
+}
+
+test("base and head that are one binary pass under any declaration, whatever their figures, and say nothing was compared", (t) => {
+  const inside = builds(t);
+  const missing = builds(t, (_, build) => {
+    build.count.page = [30_000, 30_000, 30_000];
+    build.allocations.page = [20_000, 20_000];
+    build.idle.silent = [11_000, 11_000, 11_000];
+    build.count.text = null;
+  });
+  for (const at of [inside, missing]) sums(at, `${SUM}\n`, `${SUM}\n`);
+  writeFileSync(join(missing.head, "answers", "post.http"), Buffer.from(answer("post").latin1Slice().replace("date: -", "date: -\r\nvary: accept"), "latin1"));
+  rmSync(join(missing.head, "answers", "get.http"));
+  const one = "**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 `" + SUM + "`), so any figures below are the runner's readings of one binary and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ";
+  for (const [description, read] of /** @type {[string, string][]} */ ([[counting, readCounted], [measuring, readMeasured], ["", "Read from the description: no declaration line."]])) {
+    const passes = compare(inside.base, inside.head, { description });
+    assert.deepEqual([passes.status, passes.holds], [0, true], description);
+    assert.equal(verdict(passes.markdown), `${one}pass. ${read}`);
+    assert.match(passes.markdown, /^Both readings recorded the same answer,/m);
+    // What would miss as two builds is still read, as an A/A of the runner, and fails nothing.
+    const would = compare(missing.base, missing.head, { description });
+    assert.deepEqual([would.status, would.holds], [0, false], description);
+    assert.ok(verdict(would.markdown).startsWith(`${one}not pass: \`text\`'s instructions has no figure on head (\`the run left no output\`); \`page\` runs 9,994 more instructions a request than base's 20,006,`), would.markdown);
+    assert.ok(verdict(would.markdown).endsWith(`more than the 16,384 allowed (the larger of base's span and four 4,096-byte pages); \`get\` has no answer on head (\`no capture\`). ${read}`), would.markdown);
+    assert.match(would.markdown, /^The tables below show the available readings from two runs of one binary, not a comparison of two binaries\.$/m);
+    assert.match(would.markdown, /^Readings of the same binary recorded different answers in `post`\. One or both readings recorded no answer in `get`\.$/m);
+    assert.doesNotMatch(would.markdown, /compares two different jobs|No answer to compare/);
+    assert.match(would.markdown, /^\| `page` \| 20,006 \| 30,000 \| \+9,994 /m);
+  }
+});
+
+test("two checksums, or one missing or not a checksum on either build, are compared as two binaries, exactly as with none", (t) => {
+  const high = builds(t, (_, build) => {
+    build.count.get = [21_000, 21_000, 21_000];
+  });
+  const inside = builds(t);
+  /** The markdown with no checksum on either build. */
+  const plain = Object.fromEntries([counting, measuring, ""].flatMap((description) => [[`high ${description}`, compare(high.base, high.head, { description })], [`inside ${description}`, compare(inside.base, inside.head, { description })]]));
+  for (const [base, head] of /** @type {[string | null, string | null][]} */ ([
+    [`${SUM}\n`, `${OTHER}\n`],
+    [`${SUM}\n`, null],
+    [null, `${SUM}\n`],
+    [`${SUM.toUpperCase()}\n`, `${SUM.toUpperCase()}\n`],
+    [SUM, SUM],
+    [`${SUM.slice(1)}\n`, `${SUM.slice(1)}\n`],
+    [`${SUM}  /builds/bin/probe\n`, `${SUM}  /builds/bin/probe\n`],
+    [`${SUM}\n\n`, `${SUM}\n\n`],
+    ["\n", "\n"],
+    ["", ""],
+  ])) {
+    for (const [name, at] of /** @type {const} */ ([["high", high], ["inside", inside]])) {
+      sums(at, base, head);
+      for (const description of [counting, measuring, ""]) {
+        const found = compare(at.base, at.head, { description });
+        assert.deepEqual(found, plain[`${name} ${description}`], `${name} ${JSON.stringify([base, head, description])}`);
+      }
+    }
+  }
+  // A build that did not build has no checksum, whatever its directory holds beside `unbuilt`.
+  sums(high, `${SUM}\n`, `${SUM}\n`);
+  writeFileSync(join(high.base, "unbuilt"), "the build failed, error: could not compile the probe\n");
+  assert.ok(verdict(compare(high.base, high.head, { description: counting }).markdown).startsWith("**Does not pass as counted:** the probe did not build against base"));
+  rmSync(join(high.base, "unbuilt"));
+  writeFileSync(join(high.head, "unbuilt"), "the build failed, error: could not compile the probe\n");
+  assert.equal(compare(high.base, high.head, { description: measuring }).status, 1);
+});
+
+for (const unusable of ["a directory", "unreadable"]) {
+  const skip = unusable === "unreadable" && (process.platform !== "linux" || process.getuid?.() === 0) && "needs unprivileged Linux";
+  test(`sha256 that is ${unusable} does not establish one binary or fail the comparison`, { skip }, (t) => {
+    const at = builds(t);
+    const expected = compare(at.base, at.head, { description: counting });
+    for (const [good, bad] of /** @type {const} */ ([["base", "head"], ["head", "base"]])) {
+      const file = join(at[bad], "sha256");
+      writeFileSync(join(at[good], "sha256"), `${SUM}\n`);
+      if (unusable === "a directory") mkdirSync(file);
+      else {
+        writeFileSync(file, `${SUM}\n`);
+        chmodSync(file, 0o000);
+      }
+      assert.deepEqual(compare(at.base, at.head, { description: counting }), expected);
+      rmSync(file, { recursive: true });
+      rmSync(join(at[good], "sha256"));
+    }
+  });
+}
+
+const stopped124 = "the build ended with status 124 after 0 s (limit 420 s)";
+const stopped137 = "the build ended with status 137 after 430 s (limit 420 s)";
+const compileError = "the build failed, error: could not compile the probe";
+
+test("a build on either side with an ambiguous timeout status compared nothing under any declaration", (t) => {
+  for (const record of [stopped124, stopped137]) assert.ok(STOPPED.test(record));
+  for (const record of [compileError, stopped124.replace("124", "125")]) assert.ok(!STOPPED.test(record));
+  const explanation = "GNU `timeout` returns 124 when it stops a command at its limit and 137 when it has to kill it. A command's own exit 124 or an unrelated KILL can give the same statuses. The elapsed seconds beside the limit give context, not proof of the cause; this verdict does not say the change broke the probe.";
+  for (const [base, head] of /** @type {const} */ ([[stopped124, null], [null, stopped137], [stopped124, stopped137]])) {
+    const at = builds(t);
+    if (base) writeFileSync(join(at.base, "unbuilt"), `${base}\n`);
+    if (head) writeFileSync(join(at.head, "unbuilt"), `${head}\n`);
+    const sides = [base && `base (\`${base}\`)`, head && `head (\`${head}\`)`].filter(Boolean).join(" or ");
+    for (const [description, read] of /** @type {[string, string][]} */ ([[counting, readCounted], [measuring, readMeasured], ["", "Read from the description: no declaration line."]])) {
+      const { markdown, status } = compare(at.base, at.head, { description });
+      assert.equal(status, 1, description);
+      assert.equal(verdict(markdown), `**Nothing compared:** no probe from ${sides}. ${explanation} ${read} The job fails whatever the description says and may be run again (README.md, The hosted job).`);
+    }
+  }
+});
+
+test("an ordinary head build failure still decides the verdict when base has an ambiguous timeout status", (t) => {
+  const at = builds(t);
+  writeFileSync(join(at.base, "unbuilt"), `${stopped124}\n`);
+  writeFileSync(join(at.head, "unbuilt"), `${compileError}\n`);
+  const { markdown, status } = compare(at.base, at.head, { description: measuring });
+  assert.equal(status, 1);
+  assert.match(verdict(markdown), /^\*\*Declared measured:.*the probe did not build against head \(`the build failed, error: could not compile the probe`\).*a change it no longer builds against/);
 });
 
 test("compare.mjs prints the table and exits by the verdict, and refuses arguments that are not two directories", (t) => {

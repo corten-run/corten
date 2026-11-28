@@ -173,8 +173,9 @@ function showFound(found, shown, total, filtering) {
 }
 
 /**
- * The filter form is sent only without JavaScript (the server filters the page); with it, the
- * rows filter as the seller types, and Enter keeps the page.
+ * The rows already filter as the seller types, so a submit (Enter, or the Filter button) keeps
+ * the page. Where this module does not run (no JavaScript, or it did not load) the form is sent
+ * and the server filters the page.
  * @param {SubmitEvent} event
  */
 export function stay(event) {

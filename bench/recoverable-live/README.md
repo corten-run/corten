@@ -40,3 +40,17 @@ timed. Default selection/profile behavior is unchanged. Historical v1 captures k
 original inventory and are not retroactively upgraded when new ports are registered.
 Verification reads retained failure/incomplete artifacts even if the current native
 profile is unavailable; coverage flags cannot hide or skip their raw files.
+
+To check Laravel's 2- and 4-client cells without reserving an official host, use a disposable
+local Linux setup with Docker and the pinned Playwright Chromium. Use a fresh round name:
+
+```sh
+node bench/recoverable-live/run.mjs laravel-fanout-local --apps laravel --profile native-feed --measure --build
+node bench/live/verify.mjs bench/recoverable-live/results/laravel-fanout-local
+```
+
+This runs all six Laravel correctness journeys before the unchanged 1/2/4-client sweep.
+Require both `laravel-fanout-2.json.gz` and `laravel-fanout-4.json.gz` to be measured and
+verified, not failure artifacts. On a publisher-lag refusal, read the optional
+[`publisherLag` diagnostic](../live/README.md#bounded-fan-out) from that cell. A Laravel-only
+round is partial; neither a pass nor a failure establishes what limited r108.

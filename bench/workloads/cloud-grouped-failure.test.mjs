@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs, { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
@@ -738,6 +738,42 @@ test("exit-one preflight expiry and positively unsent DELETE require a fresh app
     assert.deepEqual(readFileSync(join(h.local, "results.tgz")), f.wrapper);
     assert.equal(verifyFailedNativeRetirement(h.local, h.saved()).schema, "benchmark-failed-native-retirement/v3");
   });
+});
+
+test("a torn exit-one withdrawal of a positively unsent DELETE leaves its own stage, keeps the intent and the lock, and refuses", async (t) => {
+  const { f, preview, retire, knobs } = await handoffFixture(t, { exitOne: true });
+  const { h } = f, lock = join(h.local, "operation.lock");
+  knobs.unsent = true;
+  // The first exclusive state stage written after the intent's (the withdrawal's) is torn.
+  const fds = new Set(); let intentWritten = false, torn = false;
+  t.mock.method(fs, "openSync", ((original) => (file, flags, ...rest) => {
+    const fd = original(file, flags, ...rest);
+    if (!torn && flags === "wx" && /^state\.json\..*tmp$/.test(basename(String(file)))) fds.add(fd);
+    return fd;
+  })(fs.openSync));
+  t.mock.method(fs, "writeFileSync", ((original) => (target, data, ...rest) => {
+    if (!fds.has(target)) return original(target, data, ...rest);
+    fds.delete(target);
+    if (String(data).includes('"deletionIntentAt"')) intentWritten = true;
+    else if (intentWritten && !torn) { torn = true; fs.writeSync(target, Buffer.from(data).subarray(0, 80)); throw new Error("injected torn write"); }
+    return original(target, data, ...rest);
+  })(fs.writeFileSync));
+  syncBuiltinESMExports();
+  t.after(() => { fs.openSync.mock?.restore(); fs.writeFileSync.mock?.restore(); syncBuiltinESMExports(); });
+  await assert.rejects(retire(await preview()), /injected torn write/);
+  fs.openSync.mock.restore(); fs.writeFileSync.mock.restore(); syncBuiltinESMExports(); knobs.unsent = false;
+  assert.ok(torn); assert.equal(h.deletes, 0);
+  // The intent stays, and the withdrawal's custody (the lock) is preserved: fail closed.
+  const saved = h.saved();
+  assert.equal(saved.status, "retired"); assert.ok(saved.deletionIntentAt); assert.ok(existsSync(lock));
+  assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+  const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+  assert.equal(stages.length, 1); assert.match(stages[0], /^state\.json\.delete-unsent-[a-f0-9]{32}\.tmp$/);
+  const tornBytes = readFileSync(join(h.local, stages[0]));
+  assert.equal(tornBytes.length, 80);
+  await assert.rejects(preview(), /competing or retained custody/);
+  assert.equal(h.deletes, 0); assert.deepEqual(h.saved(), saved);
+  assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
 });
 
 test("the production child refuses changed exit-one custody after the successor fleet intent", async (t) => {

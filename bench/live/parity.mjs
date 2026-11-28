@@ -17,9 +17,10 @@ import { captureHttp, captureHtml } from "./native-http.mjs";
 import { negativeRequests, verifyIdentity, verifyScenario } from "./admission.mjs";
 import { inspectFormat, kernelCommand } from "./measurement.mjs";
 import { verifyResources } from "./resources.mjs";
-import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout } from "./fanout.mjs";
+import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout, waitForFanoutDrain } from "./fanout.mjs";
 import { liveActorCpus, liveApplication } from "../workloads/isolated/native-roles.mjs";
 import { containerState, requireNativeCommandCpuSet, requireNativeContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
+import { liveWorkloadClock, liveWorkloadEndFile, liveWorkloadEndSchema } from "../workloads/isolated/host-observation.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), root = resolve(here, "../..");
 const nativeInstanceFormat = '{"Id":{{json .Id}},"Image":{{json .Image}},"NetworkSettings":{"Ports":{{json .NetworkSettings.Ports}}}}';
@@ -321,6 +322,7 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
   await writeFile(join(out, "plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(join(out, "source.diff.gz"), gzipSync(diff));
   const cells = [];
+  const retainWorkloadEnd = group === "live-delivery" && isolated && measure;
   const stop = new AbortController(), signal = testSignal ? AbortSignal.any([stop.signal, testSignal]) : stop.signal;
   const handlers = ["SIGINT", "SIGTERM", "SIGHUP"].map((name) => [name, () => stop.abort(new Error(`native live runner cancelled (${name})`))]);
   for (const [name, handler] of handlers) process.on(name, handler);
@@ -430,12 +432,14 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
             const receipt = { ...capture(["exec", provenance.containerId, "sh", "-c", kernelCommand(id, phase)]), instance };
             return { ...kernelObservation(receipt.stdout), receipt };
           };
-          for (const clients of fanoutProfile.clients) {
+          const settings = settingsFor(group, "normal", profile);
+          for (const [index, clients] of fanoutProfile.clients.entries()) {
             signal.throwIfAborted();
             let a;
             const actor = beginActorWindow(isolated);
+            const teardown = {};
             try {
-              const observed = await fanout(browser, base, settingsFor(group, "normal", profile), clients, port, kernelCounters, actor.recordRenderer);
+              const observed = await fanout(browser, base, settings, clients, port, kernelCounters, actor.recordRenderer, teardown);
               a = { schema: "native-live-fanout/v3", profile: fanoutProfile, app, group, provenance, qualification: files,
                 comparative: false, repeats: 1, ...observed };
               a.summary = verifyFanout(a, { app, group, provenance, qualification: files, settings: qualified[0].settings, wire: port.wire });
@@ -446,8 +450,19 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
               console.error(`${app}/fanout-${clients}: ${error.message}`);
             }
             actor.finish(a);
+            if (retainWorkloadEnd && a.schema === "native-live-fanout/v3") a.actorWindow.endedClock = liveWorkloadClock();
+            let teardownFailure = teardown.failure;
+            if (!teardownFailure && a.schema === "native-live-fanout-failure/v1"
+              && index + 1 < fanoutProfile.clients.length && !signal.aborted) {
+              teardownFailure = await waitForFanoutDrain(base, settings.maxCleanupMs, signal, teardown.deadline);
+            }
+            if (teardownFailure) a.teardownFailure = teardownFailure;
             const file = `${app}-fanout-${clients}.json.gz`, bytes = gzipSync(JSON.stringify(a));
             await writeFile(join(out, file), bytes); measurementFiles.push({ file, sha256: hash(bytes) });
+            if (teardownFailure) {
+              if (!signal.aborted) stop.abort(new Error("native fanout teardown refused"));
+              signal.throwIfAborted();
+            }
           }
         }
         signal.throwIfAborted();
@@ -471,6 +486,15 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
             ...(artifact ? { artifact } : {}), ...(measurementArtifact ? { measurementArtifact } : {}),
             reason: artifact ? `${qualified.length}/${scenarios(group).length} bounded native browser journeys passed; no load qualification`
               : adapterError?.message ?? "Cancelled before first scenario" });
+          if (retainWorkloadEnd && !signal.aborted && cells.length === plan.apps.length
+            && cells.every((c) => c.parity === "passed" && c.measurement === "complete")) {
+            // All actor windows and their manifests are complete. The last
+            // browser and application still belong to this invocation.
+            const clock = liveWorkloadClock();
+            if (clock) await writeFile(join(out, liveWorkloadEndFile), JSON.stringify({
+              schema: liveWorkloadEndSchema, round: plan.round, commit, pid: process.pid, clock,
+            }), { flag: "wx" });
+          }
         } finally {
           try { await launched?.close(); }
           finally {

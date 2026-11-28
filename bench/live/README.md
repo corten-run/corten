@@ -212,6 +212,28 @@ More than 500 ms publisher schedule lag fails the level; a snapshot concealing l
 Each level has a 90-second hard bound, and includes a duplicate native delivery plus final
 detach, post-detach publication and zero-resource observation. Native ports cap readers at 16.
 
+On a schedule-lag refusal, the `native-live-fanout-failure/v1` artifact can include
+`publisherLag`: the one-based attempted `sequence` (not sent), `lagMs` from its scheduled
+time to the refusal check, and `previousSendMs`, the preceding awaited browser publish
+duration, or `null` at sequence 1. The durations use the existing monotonic clock readings,
+are not rounded, and do not isolate server or transport time. An invalid or inconsistent
+reading omits the diagnostic, not the failure. Successful levels do not write these fields.
+The saved verifiers still classify the artifact as failed with or without this diagnostic;
+they do not validate the diagnostic or use it to qualify a level.
+
+Browser context closure and any follow-up reader probe share one 5-second cleanup bound.
+The runner confirms every context close; a rejection or unconfirmed close stops the run
+without probing and records `context-close` beside the original failure. After a failed
+level with confirmed closes, the runner reads `GET /parity/resources` in the time left
+before starting another level on that instance.
+Only a direct HTTP 200 with numeric `connections: 0` and `subscriptions: 0` within that
+bound permits the next level. Valid nonzero counts can settle; a fetch error, malformed or
+unavailable response, or timeout stops the run. The original failure is kept with a fixed
+`teardownFailure` code (`fetch`, `malformed`, `unavailable`, or `timeout`), not response
+text. Replay requires a teardown refusal to end the retained cells of a cancelled run.
+Later levels are unattempted, not replaced with failure artifacts or eligible for
+qualification. Successful levels make no extra requests; the rate and lag gate are unchanged.
+
 Raw browser frame observations retain the first animation frame seeing a version and the
 following frame (a paint opportunity, not a pixel-photometry claim). Visible latency uses
 that second frame against the publisher browser's actual publication start, with Chromium

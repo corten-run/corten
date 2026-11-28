@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { verify } from "../../../hardening/verify.mjs";
 import { phaseInputs, savedProofVersion } from "../../../hardening/evidence.mjs";
-import { boundedRequestsVersion, budgets, deploymentQualificationVersion, matrix, parseArgs, registryDigest } from "../../../hardening/plan.mjs";
+import { appSourceRows, boundedRequestsVersion, budgets, deploymentQualificationVersion, matrix, parseArgs, registryDigest } from "../../../hardening/plan.mjs";
 import { recoveryProfile } from "../../../hardening/dependency-recovery-contract.mjs";
 import { selectedApps } from "../../registry.mjs";
 import { nativeControlPartition } from "../native-roles.mjs";
@@ -90,11 +90,9 @@ function bindingOptions(binding) {
 }
 
 function sourceHash(binding, app) {
-  const roots = app === "corten" ? ["bench/marketplace/corten/", "crates/", "Cargo.toml", "Cargo.lock"] : [`bench/fullstack/apps/${app}/`];
-  const files = binding.sources.files.filter((f) => roots.some((p) => p.endsWith("/") ? f.path.startsWith(p) : f.path === p))
-    .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  if (!files.some((f) => f.path.endsWith("/Dockerfile"))) throw missing("native-build-inputs-missing");
-  return hash(JSON.stringify(files.map((f) => [f.path, f.sha256])));
+  const rows = appSourceRows(app, binding.sources.files);
+  if (!rows.some(([path]) => path.endsWith("/Dockerfile"))) throw missing("native-build-inputs-missing");
+  return hash(JSON.stringify(rows));
 }
 
 function replayedCells(observed, replayed) {

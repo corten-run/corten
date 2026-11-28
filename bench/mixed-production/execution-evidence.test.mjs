@@ -8,7 +8,7 @@ import { join, relative, isAbsolute } from "node:path";
 import { bindExecutionParticipant, createAttachedParticipant, createExecutionEvidence, participantSetupCause, replayExecution } from "./execution-evidence.mjs";
 import { immutableGit } from "./immutable-git.mjs";
 import { mountSourceHash } from "./execution-inputs.mjs";
-import { djangoAsgi } from "./source-audit.mjs";
+import { djangoAsgi, springWebflux } from "./source-audit.mjs";
 import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -52,6 +52,15 @@ async function vector(folder, change = () => {}, options = {}) {
     p.Config.Entrypoint = null;
     p.Config.Env = ["PROFILE=matched", `MARKETPLACE_SOURCE=${source}`, `DJANGO_SETTINGS_MODULE=${djangoAsgi.settings}`];
     inspectedImage = { ...imageInfo, Config: { Cmd: [...djangoAsgi.command], Entrypoint: null } };
+  }
+  if (options.springSource) {
+    const source = options.springSource;
+    s.options = { ...s.options, profile: "matched", build: true, springDeployment: springWebflux.deployment };
+    s.inventory = ["spring"]; s.apps = { spring: { image: { id: image } } };
+    p.Name = `/${s.runId}-spring-${source}`;
+    p.Config.Cmd = null; p.Config.Entrypoint = [...springWebflux.entrypoint];
+    p.Config.Env = ["PROFILE=matched", `MARKETPLACE_SOURCE=${source}`];
+    inspectedImage = { ...imageInfo, Config: { Cmd: null, Entrypoint: [...springWebflux.entrypoint] } };
   }
   change(p, inspectedImage); let present = false, network = true;
   const docker = async (args) => {
@@ -409,6 +418,21 @@ test("Django ASGI replay checks the shipped command and settings in both sources
       }, { djangoSource: source });
       for (const kind of ["participant-created", "participant-terminal"])
         mutate(folder, kind, (e) => { e.data.cmdSha256 = hash(JSON.stringify(djangoAsgi.command)); });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+  }
+});
+
+test("Spring WebFlux replay rejects MVC even when container and image command agree", async (t) => {
+  for (const source of ["fixture", "api"]) {
+    await t.test(`${source} native launch`, () => temporary(async (folder) => {
+      const s = await vector(folder, () => {}, { springSource: source });
+      assert.equal(replay(folder, s).resources, "verified");
+    }));
+    await t.test(`${source} wrong jar`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Entrypoint = image.Config.Entrypoint = ["java", "-jar", "app.jar"];
+      }, { springSource: source });
       assert.throws(() => replay(folder, s), /execution evidence differs/);
     }));
   }
