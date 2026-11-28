@@ -2043,6 +2043,57 @@ async fn a_no_store_answer_goes_out_private_no_store_whatever_a_middleware_made_
     assert!(wrong.is_empty(), "NoStore, but not private, no-store: {wrong:#?}");
 }
 
+/// A typed NoStore policy is independent of the header it replaces, but it still has to carry
+/// the marks an inline relay needs and remove an ETag from an answer with a fresh submit key.
+#[test]
+fn settling_typed_no_store_keeps_the_personal_and_submit_key_rules() {
+    use crate::cache::{Personal, Seen, Typed, Unrepeatable};
+
+    for (label, credentials, caller, nonce, cookie, marked, keyed, signal, personal) in [
+        ("no personal input", false, false, false, None, false, false, false, false),
+        ("credentials", true, false, false, None, false, false, false, true),
+        ("caller read", false, true, false, None, false, false, false, true),
+        ("nonce", false, false, true, None, false, false, false, true),
+        ("sets a cookie", false, false, false, Some("viewer=ann"), false, false, false, true),
+        ("clears a notice", false, false, false, Some("corten-notice=; Max-Age=0"), false, false, false, false),
+        ("already personal", false, false, false, None, true, false, false, true),
+        ("key on the answer", false, false, false, None, false, true, false, false),
+        ("key from the request", false, true, false, None, false, false, true, true),
+    ] {
+        let mut res = Response::new(Body::empty());
+        Cache::no_store().apply(&mut res);
+        if marked {
+            res.extensions_mut().insert(Personal);
+        }
+        if keyed {
+            res.extensions_mut().insert(Unrepeatable);
+        }
+        let headers = res.headers_mut();
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
+        headers.append(header::CACHE_CONTROL, HeaderValue::from_static("must-understand, no-store"));
+        headers.insert(header::ETAG, HeaderValue::from_static("\"from-middleware\""));
+        if let Some(cookie) = cookie {
+            headers.insert(header::SET_COOKIE, HeaderValue::from_static(cookie));
+        }
+        for name in CDN_OVERRIDES {
+            headers.append(name, HeaderValue::from_static("max-age=60"));
+            headers.append(name, HeaderValue::from_static("max-age=120"));
+        }
+
+        let seen = Seen { credentials, caller, nonce, partial: true, dev: false };
+        crate::cache::settle_drawn(&mut res, seen, "/statement", signal);
+        let headers = res.headers();
+        let mut policy = headers.get_all(header::CACHE_CONTROL).iter();
+        assert_eq!(policy.next(), Some(&crate::cache::PRIVATE_NO_STORE), "{label}");
+        assert!(policy.next().is_none(), "{label}: another cache policy survived");
+        assert!(CDN_OVERRIDES.iter().all(|name| !headers.contains_key(*name)), "{label}");
+        assert_eq!(headers.contains_key(header::ETAG), !(keyed || signal), "{label}");
+        assert_eq!(res.extensions().get::<Personal>().is_some(), personal, "{label}");
+        assert_eq!(res.extensions().get::<Unrepeatable>().is_some(), keyed, "{label}");
+        assert!(Typed::is_no_store(&res), "{label}");
+    }
+}
+
 /// A `Public` page asked for as anything but its full document is the browser's alone, and goes out
 /// with none of the caching headers a CDN reads first also when a staged middleware already made
 /// its `Cache-Control` `private` or `no-store`, or took it out. A `no-store` any reader could find
@@ -7399,8 +7450,9 @@ async fn settle_unstaged_private() -> String {
 /// `private`, the page with the key and no `Public`; `plain`, the page with neither (the default
 /// caching, the usual page); `caller`, the plain page to a request whose staged middleware read a
 /// caller; `cookie`, the page with neither, marked `public, max-age=60` and setting a cookie (sent
-/// `private, no-cache`); `data`, the plain page asked for as JSON; `missing`, an unknown URL in the
-/// plain page's app (the router's `404` and the error page in its place); `custom`, the same in an
+/// `private, no-cache`); `credentials`, the `Public` page requested with a cookie; `data`, the
+/// plain page asked for as JSON; `missing`, an unknown URL in the plain page's app (the router's
+/// `404` and the error page in its place); `custom`, the same in an
 /// app with an error page of its own ([`settle_error_page`]); `refused`, a staged middleware's
 /// typed refusal ([`crate::Refused`]) asked for as JSON; `rejected`, an extractor's refusal that
 /// answers `200` ([`GreetsInstead`]); `unnamed`, a same-origin post naming a post the page has
@@ -7412,7 +7464,9 @@ async fn settle_unstaged_private() -> String {
 /// `asset`, a stylesheet no version of the app's static files has (`RefusedStatic`, an old
 /// version's URL) asked for as HTML: the static files' `404` with the error page in its place;
 /// `fill`, a page with a layout read's place ([`SettleCount`]) whose body fails as it is read to be
-/// filled, asked for as HTML: Corten's `500` with the error page in its place. `json` is a `Public`
+/// filled, asked for as HTML: Corten's `500` with the error page in its place. `cut` is a `Public`
+/// page whose body fails when the app tries to keep it: a `500`, which needs keeping enabled
+/// even if `SETTLE_KEPT=0` is set for a comparison. `json` is a `Public`
 /// JSON body with no key, and `json-private` the same body as a plain `JsonResult<T>`, whose handler
 /// is watched since its `JsonError` may hold a `JsonResponse`; `unstaged-public` a `Public` text body from a route that says `unstaged`,
 /// with no key, which is watched for one; `unstaged-private` text from such a route, which says no
@@ -7503,6 +7557,8 @@ fn what_settling_a_page_costs() {
             Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
         } else if case == "fill" {
             Table::new().route("/", get(settle_fill_fails))
+        } else if case == "cut" {
+            Table::new().route("/", crate::route::get(kept_cut).0)
         } else if case == "rejected" {
             Table::new().route("/", get(|_: GreetsInstead| async { "never" }))
         } else if case == "nostore" {
@@ -7540,7 +7596,7 @@ fn what_settling_a_page_costs() {
         "unstaged-private" => App::new(settle_unstaged_private_url::router()),
         _ => App::new(Routes::from(routes)),
     };
-    let app = if std::env::var("SETTLE_KEPT").is_ok_and(|kept| kept == "0") { app.kept_answers(0) } else { app };
+    let app = if case != "cut" && std::env::var("SETTLE_KEPT").is_ok_and(|kept| kept == "0") { app.kept_answers(0) } else { app };
     let app = if case == "custom" { app.error_page(settle_error_page, ()) } else { app };
     let app = if case == "asset" { app.assets(super::RefusedStatic) } else { app };
     let app = if case == "fill" { app.layout_read(SettleCount) } else { app };
@@ -7569,13 +7625,15 @@ fn what_settling_a_page_costs() {
             });
             if case == "caller" {
                 req = req.header("viewer", "ann");
+            } else if case == "credentials" {
+                req = req.header(header::COOKIE, "viewer=ann");
             } else if case == "partial" {
                 req = req.header("corten", "nav");
             } else if case == "data" || case == "refused" {
                 req = req.header("accept", "application/json");
             } else if case == "unnamed" {
                 req = req.method("POST").uri("/?do=sell").header("sec-fetch-site", "same-origin");
-            } else if case == "asset" || case == "fill" {
+            } else if ["asset", "fill", "cut"].contains(&case.as_str()) {
                 req = req.header("accept", "text/html");
             }
             let (parts, body) = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
@@ -7583,7 +7641,7 @@ fn what_settling_a_page_costs() {
             match case.as_str() {
                 "missing" => assert_eq!(parts.status, StatusCode::NOT_FOUND, "{body}"),
                 "asset" => assert!(parts.status == StatusCode::NOT_FOUND && body.contains("<html"), "{}: {body}", parts.status),
-                "fill" => {
+                "fill" | "cut" => {
                     assert!(
                         parts.status == StatusCode::INTERNAL_SERVER_ERROR && body.contains("<html"),
                         "{}: {body}",
@@ -7811,6 +7869,17 @@ impl http_body::Body for CutOff {
     }
 }
 
+/// A page eligible for keeping, but whose exact-size body cannot be read when kept.
+async fn kept_cut(req: Req) -> Public<HtmlResult> {
+    Public::new(
+        Duration::from_secs(60),
+        req.test_page_for("Kept", html! { <p>"kept"</p> }).map(|mut page| {
+            *page.body_mut() = Body::new(CutOff);
+            page
+        }),
+    )
+}
+
 /// An exact-size answer whose body fails as Corten reads it after the cache rules ran, to tag it
 /// for an `If-None-Match` or to compress it, goes out empty in its place. That empty answer is
 /// Corten's, not the handler's, so no cache keeps it: `private, no-store`, with none of the caching
@@ -7914,16 +7983,6 @@ async fn read_marked(res: Response) -> (StatusCode, http::HeaderMap, String, boo
 /// inline. A handler's own failure is the handler's answer and keeps them (the control).
 #[tokio::test]
 async fn every_failure_corten_makes_is_never_shared() {
-    let minute = Duration::from_secs(60);
-    let cut = move |req: Req| async move {
-        Public::new(
-            minute,
-            req.test_page_for("Kept", html! { <p>"kept"</p> }).map(|mut page| {
-                *page.body_mut() = Body::new(CutOff);
-                page
-            }),
-        )
-    };
     let routes = Table::new()
         .route("/", get(|| async { "home" }).post(|| async { "saved" }).named("save"))
         .route("/form", crate::router::post(|| async { "saved" }))
@@ -7978,7 +8037,7 @@ async fn every_failure_corten_makes_is_never_shared() {
         .route("/no-head", get(|req: Req| async move { req.page::<ForOne>(NoCortenHead) }))
         .route("/resend", get(|req: Req| async move { req.resend_to::<ForOne>(&crate::Local::parse("/").unwrap()) }))
         // Made as an app's routes are (`corten::get`), which is where an answer is known to be `Public`.
-        .route("/kept-cut", crate::route::get(cut).0)
+        .route("/kept-cut", crate::route::get(kept_cut).0)
         .route(
             "/hint",
             get(|req: Req| async move { req.test_page("Hint", html! { <p id={crate::form::HintId(&QtyId)}>"Pick one."</p> }) }),
