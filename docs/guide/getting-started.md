@@ -170,8 +170,8 @@ warns about the setting.
 
 Every route is a struct in the routes module, and its attribute names the handler for each method
 (`get = home, post = greet`). Every page is a handler that returns `req.page(document)`, the app's
-layout with the page in it. A form with `data-patch` is submitted by the runtime, and its handler
-answers with the fragment to replace; without JavaScript the same handler returns the whole page.
+layout with the page in it. Start with a form that returns a page too: the `GET` shows the
+empty form and the `POST` shows the same form with a greeting.
 The form posts to its page's own route, so that page is at an address that answers a `GET` and
 can be bookmarked and shared; a write with a path of its own redirects once it is done
 ([the rule](requests-and-forms.md#where-a-form-posts)).
@@ -196,40 +196,30 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn home(req: Req) -> HtmlResult {
-    let name = GreetForm::FIELDS.name;
-    req.page(html! {
-        <Layout req={&req} title="Home">
-            <h1>"Welcome"</h1>
-            <form method="post" action={url::Home} data-patch>
-                <input name={name} required>
-                <button>"Greet me"</button>
-            </form>
-            <p aria-live="polite"><Greeting name="" /></p>
-        </Layout>
-    })
+    req.page(home_page(&req, ""))
 }
 
 #[derive(Fields)]
 struct GreetForm { name: String }
 
-/// With JavaScript the runtime swaps in the patch; without it the form posts and the whole page
-/// comes back, at the page's own address. One handler serves both.
 async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
-    let name = &form.name;
-    let page = || async {
-        req.page(html! {
-            <Layout req={&req} title="Home"><p aria-live="polite"><Greeting name={name} /></p></Layout>
-        })
-    };
-    req.patch_or(Greeting { name }, page).await
+    req.page(home_page(&req, &form.name))
 }
 
-#[derive(Id)]
-struct GreetingId;
-
-#[component]
-fn Greeting(name: &str) -> impl Patch {
-    html! { <span id={GreetingId}>if !name.is_empty() { "Hello, "{name}"!" }</span> }
+fn home_page(req: &Req, name: &str) -> impl Document {
+    let f = GreetForm::FIELDS;
+    html! {
+        <Layout req={req} title="Home">
+            <h1>"Welcome"</h1>
+            <form method="post" action={url::Home} data-patch>
+                <label>"Your name" <input name={f.name} value={name} required></label>
+                <button>"Greet me"</button>
+            </form>
+            if !name.is_empty() {
+                <p>"Hello, " {name} "!"</p>
+            }
+        </Layout>
+    }
 }
 
 /// The whole document. `<Corten />` is where Corten adds the runtime and the page's scripts and
@@ -270,6 +260,12 @@ async fn error_page(failure: Failure, req: Req) -> HtmlResult {
     req.page(html! { <Layout req={&req} title={title}><h1>{title}</h1><p>{text}</p></Layout> })
 }
 ```
+
+With JavaScript, `data-patch` lets the runtime submit the form. Here the handler returns a whole
+page: the runtime replaces the contents of `<main>` and updates the layout around it where it
+changed. Without JavaScript, the browser loads the returned document. In both cases the new
+input shows the submitted name because the page sets `value={name}`. To leave the form in place
+and send just the greeting, use [`req.patch_or`, as in the README](../../README.md#example).
 
 This app uses Corten's text for every failure. To customize a case, give it its own arm.
 Keep the match exhaustive, without a catch-all, so the compiler points here if Corten adds
