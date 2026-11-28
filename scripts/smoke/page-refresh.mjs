@@ -1,4 +1,5 @@
 import { base, shadowing, skip, check, within, steps, pollFor } from "./helpers.mjs";
+import { liveRegion } from "./live-region.mjs";
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
@@ -50,11 +51,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       );
       await page.goto(url);
       page.on("request", onPart);
+      const { stayed: regionStayed } = await liveRegion(page, "alert-status");
       const waiting = await saved();
       await page.fill("input[name=above]", "123.45");
       await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
       const entries = await page.evaluate(() => history.length);
       await savedSoon();
+      check("reading an alert's status again replaces only the live region's message", await regionStayed());
       check(
         "a page's part waiting for a write is read again after a full load, not the page",
         waiting === "Saving..." && (await saved()) === "Saved." && parts.length > 0 && whole.length === 0 && page.url() === url,
@@ -188,7 +191,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const doc = await fetch(from, { headers: { corten: "page" }, cache: "no-store" });
           return { from, status: doc.status, headers: [...doc.headers], body: await doc.text() };
         });
-      const statusLine = /<p id="alert-status" role="status">(?:Saving\.\.\.|Saved\.)<\/p>/;
+      const statusLine = /<p id="alert-status">(?:Saving\.\.\.|Saved\.)<\/p>/;
       /** The head's read-again tag the server draws (`ReadAgain`, one of the page's own head tags) while a write has not landed. */
       const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
       /**
@@ -201,7 +204,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const asSaving = (body) => {
         if (!statusLine.test(body) || !body.includes("</title>")) return null;
         const untagged = body.replace(/<noscript data-corten-read-again[^>]*>[\s\S]*?<\/noscript>/g, "");
-        return asWhole(untagged.replace(statusLine, '<p id="alert-status" role="status">Saving...</p>').replace("</title>", `</title>${readAgainTag}`));
+        return asWhole(untagged.replace(statusLine, '<p id="alert-status">Saving...</p>').replace("</title>", `</title>${readAgainTag}`));
       };
       /** The address without its fragment, which a request does not carry. @param {string} url */
       const bare = (url) => {

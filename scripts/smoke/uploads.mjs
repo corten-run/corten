@@ -1,4 +1,5 @@
 import { base, engine, skip, check, steps, within } from "./helpers.mjs";
+import { liveRegion } from "./live-region.mjs";
 
 export async function patchUploads(errors, page, part) {
   const errorsBeforeUpload = errors.length;
@@ -652,8 +653,10 @@ export async function uploads(page, live, errors, signsIn) {
   {
     const nameForm = page.locator("main form:has(input[name=name])");
     await nameForm.locator("input[name=name]").fill("Grace");
+    const { stayed: nameRegionStayed } = await liveRegion(page, "name-result");
     const [sent] = await Promise.all([page.waitForRequest((r) => r.method() === "POST"), nameForm.locator("button").click()]);
     await page.waitForFunction(() => document.querySelector("#name-result")?.textContent === "Your pages now say Grace.", null, { timeout: 5000 }).catch(() => {});
+    check("saving the name keeps the live region and replaces its message", await nameRegionStayed());
     const type = (await sent.headerValue("content-type")) ?? "";
     const badge = (await page.textContent("#viewer-badge")) ?? "";
     check(
@@ -672,8 +675,10 @@ export async function uploads(page, live, errors, signsIn) {
       JSON.stringify(named),
     );
     await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+    const { stayed: pictureRegionStayed } = await liveRegion(page, "avatar-result");
     const [upload] = await Promise.all([page.waitForRequest((r) => r.method() === "POST"), page.click("main form[enctype] button")]);
     await page.waitForFunction(() => document.querySelector("#avatar-result")?.textContent === "Saved card.png as your picture.", null, { timeout: 8000 }).catch(() => {});
+    check("saving the picture keeps the live region and replaces its message", await pictureRegionStayed());
     const uploadType = (await upload.headerValue("content-type")) ?? "";
     check(
       "the same page's multipart post goes to do=picture, and its handler reads the body",

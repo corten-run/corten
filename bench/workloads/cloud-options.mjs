@@ -109,7 +109,7 @@ export function full(value, pattern, label) {
 }
 export function validateOptions(o) {
   assert.ok(o && typeof o === "object" && !Array.isArray(o));
-  const allowed = ["round", "stateDir", "detach", "collect", "r21MeasuredCheckout", "absentMeasuredCheckout", "exitArchiveSha256", "unusedBootstrapKnownHosts", "cancelMixedWait", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
+  const allowed = ["round", "stateDir", "detach", "collect", "r21MeasuredCheckout", "absentMeasuredCheckout", "sealedMeasuredCheckout", "exitArchiveSha256", "unusedBootstrapKnownHosts", "cancelMixedWait", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
   assert.ok(Object.keys(o).every((k) => allowed.includes(k)), "unknown option/override");
   roundName(o.round); assert.ok(Number(o.round.slice(1)) >= 17, "official campaigns start at r17");
   assert.ok(typeof o.stateDir === "string" && isAbsolute(o.stateDir) && !/[\r\n\0]/.test(o.stateDir)
@@ -130,6 +130,12 @@ export function validateOptions(o) {
     assert.ok(o.collect && !o.r21MeasuredCheckout && o.unusedBootstrapKnownHosts === undefined, "absence-only collection cannot use another recovery mode");
     assert.ok(typeof o.absentMeasuredCheckout === "string" && isAbsolute(o.absentMeasuredCheckout)
       && !/^[\\/]{2}|["$%\r\n\0]/.test(o.absentMeasuredCheckout), "absolute local measured checkout required");
+  }
+  if (o.sealedMeasuredCheckout !== undefined) {
+    assert.ok(o.collect && o.r21MeasuredCheckout === undefined && o.absentMeasuredCheckout === undefined
+      && o.unusedBootstrapKnownHosts === undefined, "sealed replay cannot use another recovery mode");
+    assert.ok(typeof o.sealedMeasuredCheckout === "string" && isAbsolute(o.sealedMeasuredCheckout)
+      && !/^[\\/]{2}|["$%\r\n\0]/.test(o.sealedMeasuredCheckout), "absolute local measured checkout required");
   }
   if (o.detach) {
     full(o.commit, /[a-f0-9]{40}/, "full measured commit required"); full(o.sshKey, /[1-9]\d*/, "SSH key ID required");
@@ -153,7 +159,8 @@ export function validateOptions(o) {
 export function parseDropletArgs(args) {
   const o = { round: args[0] }, seen = new Set();
   const values = { "--state-dir": "stateDir", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--deliver-audit": "deliverAudit", "--audit-group": "auditGroup", "--campaign": "campaign", "--approve-subject": "approveSubject", "--group": "group", "--fleet": "fleet", "--unused-bootstrap-known-hosts": "unusedBootstrapKnownHosts",
-    "--r21-measured-checkout": "r21MeasuredCheckout", "--absent-measured-checkout": "absentMeasuredCheckout", "--exit-archive-sha256": "exitArchiveSha256" };
+    "--r21-measured-checkout": "r21MeasuredCheckout", "--absent-measured-checkout": "absentMeasuredCheckout",
+    "--sealed-measured-checkout": "sealedMeasuredCheckout", "--exit-archive-sha256": "exitArchiveSha256" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "duplicate option"); seen.add(flag);
     if (flag === "--retire-failed-native") o.retireFailedNative = true;
@@ -372,6 +379,16 @@ export function absentCollectionCandidate(options, s) {
     && s.evidenceOutcome === "validated" && s.id && s.archiveSha256 && s.evidenceSha256
     && s.control?.monitor?.phase === "closed" && !s.fleet?.single?.offlineHandoff
     && s.deletionIntentAt && !s.destroyedAt;
+}
+
+export const sealedCollectionPolicy = "collect-saved-sealed-archive-with-measured-replay";
+export function sealedCollectionCandidate(s) {
+  return s.id && s.ip && s.createIntentAt && s.archiveSha256 && s.evidence && s.evidenceSha256 && !s.destroyedAt
+    && !s.retirement && !s.preBootstrapTerminal && !s.fleet?.single?.offlineHandoff
+    && s.control?.monitor?.phase === "closed" && s.control.sealed.includes("bootstrap")
+    && (s.status === "running" && !s.collectedAt && !s.deletionIntentAt && !s.validation
+      || s.status === "collected" && s.collectedAt && s.validation?.status === "verified" && s.exitCode === 0
+        && s.evidenceOutcome === "validated");
 }
 
 export function campaignOutcome(report, s, exitCode) {

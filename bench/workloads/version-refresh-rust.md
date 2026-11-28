@@ -375,3 +375,10 @@ commit: OS packages move to their Debian 13.8 versions (glibc stays 2.41). Group
 from it record the new images; earlier rounds, saved reservations and their job bytes keep
 what they recorded, since no cloud job names these images. No speedup or slowdown is measured
 or implied.
+
+## Cookie 0.18.3
+
+The fullstack Leptos and Topcoat apps and the live Topcoat app now lock `cookie` 0.18.3
+instead of 0.18.2 for [RUSTSEC-2026-0594](https://rustsec.org/advisories/RUSTSEC-2026-0594.html).
+This changes a dependency input for new builds, not the inputs or results of earlier rounds.
+It does not establish that the apps used the affected feature or that their performance changed.

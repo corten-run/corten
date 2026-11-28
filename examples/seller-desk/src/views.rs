@@ -98,7 +98,7 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
 pub fn desk<'a>(lines: &'a [Line<'a>], view: &'a GridQuery, t: Msg) -> impl Render + 'a {
     html! {
         <h1>"Inventory"</h1>
-        <StatusLine text="" />
+        <div role="status"><StatusLine text="" /></div>
         <InventoryGrid lines={lines} view={view} t={t} />
     }
 }
@@ -110,7 +110,7 @@ pub struct DeskStatusId;
 /// What the last bulk action did; the server patches it by `id`.
 #[component]
 pub fn StatusLine<'a>(text: &'a str) -> impl Patch {
-    html! { <p id={DeskStatusId} role="status">{text}</p> }
+    html! { <p id={DeskStatusId}>{text}</p> }
 }
 
 /// `1234` as `12.34`, what a price input holds.

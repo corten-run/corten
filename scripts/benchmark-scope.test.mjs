@@ -4,12 +4,13 @@ import { globSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { parse } from "yaml";
 import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
-import { eventPaths, selectEvidence, selectKernel, selectRequestCost, selectScope } from "./benchmark-scope.mjs";
+import { eventPaths, mainPushBase, selectEvidence, selectKernel, selectRequestCost, selectScope } from "./benchmark-scope.mjs";
+import { LIMIT, LIST, run as checkBenchSize } from "./bench-size.mjs";
 import { fixtureGitEnv } from "./fixture-git.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -80,17 +81,172 @@ test("Catalog always starts its scope job and gates parity and JSON on the selec
   assert.deepEqual(workflow.on.push, { branches: ["main"] });
   const { scope, harness, parity, "json-harness": jsonHarness, "json-aot": jsonAot } = workflow.jobs;
   assert.equal(scope.if, undefined);
-  const step = scope.steps.find(step => step.run === "node scripts/benchmark-scope.mjs catalog");
-  assert.equal(step.env.PUSH_BEFORE, "${{ github.event.before }}");
-  assert.equal(scope.steps.find(step => step.uses?.startsWith("actions/checkout")).with["fetch-depth"], 0);
-  // Every main push keeps its own run: a replaced run would leave its push diff untested.
-  assert.equal(workflow.concurrency.group,
-    "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}");
-  assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}");
   assert.equal(harness.if, "needs.scope.outputs.apps != '[]' || needs.scope.outputs.json == 'true'");
   assert.equal(parity.if, "needs.scope.outputs.apps != '[]'");
   assert.equal(jsonHarness.if, "needs.scope.outputs.json == 'true'");
   assert.equal(jsonAot.if, jsonHarness.if);
+});
+
+test("the Actions lookup gets a read-only token in the benchmark scope jobs and the CI base step", () => {
+  for (const [name, mode] of [["catalog.yml", "catalog"], ["benchmark-evidence.yml", "evidence"]]) {
+    const { permissions, jobs } = parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8"));
+    assert.deepEqual(permissions, { contents: "read" });
+    assert.deepEqual(jobs.scope.permissions, { contents: "read", actions: "read" });
+    assert.equal(jobs.scope.if, undefined);
+    assert.equal(jobs.scope.steps.find(step => step.uses?.startsWith("actions/checkout")).with["fetch-depth"], 0);
+    const step = jobs.scope.steps.find(step => step.run === `node scripts/benchmark-scope.mjs ${mode}-cumulative-v1`);
+    assert.deepEqual(step.env, { GITHUB_TOKEN: "${{ github.event_name == 'push' && github.token || '' }}" });
+  }
+  const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
+  const release = parse(readFileSync(new URL(".github/workflows/release.yml", root), "utf8"));
+  const { smoke } = ci.jobs;
+  assert.deepEqual(ci.permissions, { contents: "read" });
+  assert.deepEqual(smoke.permissions, { contents: "read", actions: "read" });
+  assert.deepEqual(release.permissions, ci.permissions);
+  assert.deepEqual(release.jobs.checks.permissions, smoke.permissions);
+  assert.equal(ci.on.workflow_dispatch.inputs.base.required, true);
+  assert.equal(ci.on.workflow_dispatch.inputs.base.type, "string");
+  const step = smoke.steps.find(step => step.name === "The bench size check's base");
+  assert.deepEqual(step.env, { PUSH_BEFORE: "${{ github.event.before }}",
+    DISPATCH_BASE: "${{ inputs.base }}",
+    GITHUB_TOKEN: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.token || '' }}" });
+  assert.match(step.run, /base=\$\(git rev-parse 'HEAD\^1'\) ;;/);
+  assert.match(step.run, /if \[ "\$GITHUB_REF" = refs\/heads\/main \]; then\s+base=\$\(node scripts\/benchmark-scope.mjs ci-base-cumulative-v1\) \|\| exit 1\s+else\s+base=\$PUSH_BEFORE/);
+  assert.match(step.run, /workflow_dispatch\)[^]*git merge-base --is-ancestor "\$DISPATCH_BASE" "\$GITHUB_SHA"[^]*base=\$DISPATCH_BASE ;;/);
+});
+
+test("only direct PRs share a cancellable ref group; an older main run cannot cancel the tip", () => {
+  for (const [file, name, isolated] of [["ci.yml", "CI", "ci-run-"], ["catalog.yml", "Catalog Contract", ""],
+    ["benchmark-evidence.yml", "Benchmark Evidence", "benchmark-evidence-run-"]]) {
+    const { concurrency, on } = parse(readFileSync(new URL(`.github/workflows/${file}`, root), "utf8"));
+    const repo = "example/repo";
+    function group(event_name, ref, run_id, { caller = file, workflow = name, run_attempt = "1" } = {}) {
+      const github = { event_name, ref, run_id, run_attempt, workflow, repository: repo,
+        workflow_ref: `${repo}/.github/workflows/${caller}@${ref}` };
+      // Evaluate just the syntax these expressions use, like probeRuns below.
+      const evaluate = (_, expression) => {
+        const js = expression.replaceAll("==", "===").replace(/github\.(\w+)/g, (_, key) => {
+          assert.ok(Object.hasOwn(github, key), key);
+          return JSON.stringify(github[key]);
+        });
+        assert.match(js, /^(?:"[\w ./@-]+"|'[\w ./@{}-]+'|startsWith|format|===|&&|\|\||[(),\s])+$/);
+        const format = (template, value) => template.replace("{0}", value);
+        return Function("startsWith", "format", `return ${js}`)((text, prefix) => text.startsWith(prefix), format);
+      };
+      const key = concurrency.group.replace(/\$\{\{ (.*?) \}\}/g, evaluate);
+      const cancel = evaluate(.../^\$\{\{ (.*?) \}\}$/.exec(concurrency["cancel-in-progress"]));
+      return [key, cancel];
+    }
+    const main = "refs/heads/main";
+    const pr = "refs/pull/27/merge";
+    assert.deepEqual(on.push, { branches: ["main"] });
+    assert.deepEqual(group("push", main, "1"), [`${name}-${isolated}1`, false]);
+    assert.deepEqual(group("push", main, "2"), [`${name}-${isolated}2`, false]);
+    assert.deepEqual(group("push", main, "1", { run_attempt: "2" }), [`${name}-${isolated}1`, false]);
+    assert.deepEqual(group("pull_request", pr, "3"), [`${name}-${pr}`, true]);
+    assert.deepEqual(group("pull_request", pr, "3", { run_attempt: "2" }), group("pull_request", pr, "3"));
+    assert.ok(Object.hasOwn(on, "workflow_dispatch"));
+    assert.deepEqual(group("workflow_dispatch", main, "4"), [`${name}-${isolated}4`, false]);
+    assert.equal(Object.hasOwn(on, "workflow_call"), file !== "catalog.yml");
+    if (Object.hasOwn(on, "workflow_call")) {
+      // Calls report the caller's event and workflow file, even if it has the same display name.
+      const call = { caller: "caller.yml" };
+      assert.deepEqual(group("push", main, "5", call), [`${name}-${isolated}5`, false]);
+      assert.deepEqual(group("pull_request", pr, "6", call), [`${name}-${isolated}6`, false]);
+      assert.deepEqual(group("push", "refs/tags/v1.0.0", "7", { caller: "release.yml", workflow: "Release" }), [`Release-${isolated}7`, false]);
+    }
+  }
+});
+
+test("only a first direct main push reads the tip, before any heavy work can begin", () => {
+  const initial = "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1'";
+  const read = (file) => parse(readFileSync(new URL(`.github/workflows/${file}`, root), "utf8")).jobs;
+  const direct = (file) => ` && github.workflow_ref == format('{0}/.github/workflows/${file}@refs/heads/main', github.repository)`;
+  const ci = read("ci.yml");
+  assert.equal(ci["main-tip"].if, initial + direct("ci.yml"));
+  assert.deepEqual(ci["main-tip"].steps.map(step => step.name), ["Stop a superseded main push"]);
+  const admit = "(needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')";
+  for (const [name, job] of Object.entries(ci)) {
+    if (name === "main-tip") continue;
+    assert.ok([job.needs].flat().includes("main-tip"), name);
+    assert.equal(job.if, (name === "rust" || name === "browser" ? "always()" : "!cancelled()") + " && " + admit, name);
+  }
+  for (const [file, condition] of [["catalog.yml", initial], ["benchmark-evidence.yml", initial + direct("benchmark-evidence.yml")]]) {
+    const jobs = read(file);
+    const [first] = jobs.scope.steps;
+    assert.equal(first.name, "Stop a superseded main push");
+    assert.equal(first.if, condition);
+    assert.equal(first.run, ci["main-tip"].steps[0].run);
+    for (const [name, job] of Object.entries(jobs)) {
+      if (name === "scope") continue;
+      assert.ok([job.needs].flat().includes("scope"), name);
+      assert.doesNotMatch(job.if, /always\(|failure\(|cancelled\(|success\(/, name);
+    }
+  }
+});
+
+test("the main-tip Bash step checks the newer push and stops the older push even if it arrives last", {
+  skip: process.platform === "win32" && "requires Linux Bash and GNU timeout",
+}, t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write("older");
+  const older = commit();
+  write("newer");
+  const newer = commit();
+  const server = join(cwd, "server");
+  mkdirSync(join(server, "example"), { recursive: true });
+  git("clone", "--quiet", "--bare", cwd, join(server, "example", "repo.git"));
+  const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
+  const { run } = ci.jobs["main-tip"].steps[0];
+  for (const [GITHUB_SHA, GITHUB_REPOSITORY, status, message] of [
+    [newer, "example/repo", 0, /^$/],
+    [older, "example/repo", 1, /::notice::Main has moved/],
+    [newer, "example/unavailable", 0, /::warning::Could not read the live main tip/],
+  ]) {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", run], {
+      cwd, env: { ...env, GITHUB_SERVER_URL: pathToFileURL(server).href, GITHUB_REPOSITORY, GITHUB_SHA },
+      encoding: "utf8", timeout: 25_000,
+    });
+    assert.equal(result.status, status, result.error ?? result.stderr);
+    assert.match(result.stdout, message);
+  }
+});
+
+test("CI dispatch validates its explicit ancestor and Release keeps the original tag base", {
+  skip: process.platform === "win32" && "requires Linux Bash",
+}, t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  const ancestor = commit();
+  write("on-main");
+  const head = commit();
+  git("tag", "-a", "tip", "-m", "tip", head);
+  const tipTag = git("rev-parse", "refs/tags/tip");
+  git("switch", "--quiet", "--detach", ancestor);
+  write("off-main");
+  const unrelated = commit();
+  git("switch", "--quiet", "main");
+  const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
+  const { run } = ci.jobs.smoke.steps.find(step => step.name === "The bench size check's base");
+  const zero = "0".repeat(40);
+  for (const [event, ref, base, expected] of [
+    ["workflow_dispatch", "refs/heads/main", ancestor, ancestor],
+    ["workflow_dispatch", "refs/heads/main", unrelated],
+    ["workflow_dispatch", "refs/heads/main", head],
+    ["workflow_dispatch", "refs/heads/main", tipTag],
+    ["workflow_dispatch", "refs/heads/main", "not-a-sha"],
+    ["workflow_dispatch", "refs/tags/main", ancestor],
+    ["push", "refs/tags/v1.0.0", zero, zero],
+  ]) {
+    const output = join(cwd, "github-env");
+    write("github-env", "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", run], {
+      cwd, env: { ...env, GITHUB_ENV: output, GITHUB_EVENT_NAME: event, GITHUB_REF: ref,
+        GITHUB_SHA: head, DISPATCH_BASE: base, PUSH_BEFORE: base },
+      encoding: "utf8", timeout: 25_000,
+    });
+    assert.equal(result.status, expected ? 0 : 1, result.error ?? result.stderr);
+    assert.equal(readFileSync(output, "utf8"), expected ? `CORTEN_BENCH_SIZE_BASE=${expected}\n` : "");
+  }
 });
 
 async function localImports(entries) {
@@ -321,7 +477,12 @@ test("every local module used by native kernel controls selects the kernel job",
   assert.deepEqual(inputs.filter(input => !selectKernel([input])).sort(), [], "unselected native kernel inputs");
 });
 
-function fixture(t) {
+function writeWorkflow(write, file) {
+  const path = `.github/workflows/${file}`;
+  write(path, readFileSync(new URL(path, root), "utf8"));
+}
+
+function fixture(t, { cumulative = true } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "corten-benchmark-scope-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   // Git's environment for the fixture, in process and for the scope script: the caller's GIT_DIR and the like would
@@ -337,6 +498,7 @@ function fixture(t) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, text);
   };
+  if (cumulative) for (const file of ["ci.yml", "catalog.yml", "benchmark-evidence.yml"]) writeWorkflow(write, file);
   const commit = () => {
     git("add", ".");
     git("commit", "-qm", "fixture");
@@ -356,7 +518,7 @@ function fixture(t) {
 
 const prEvent = GITHUB_SHA => ({ GITHUB_EVENT_NAME: "pull_request", GITHUB_SHA });
 
-test("PR diff excludes base-only changes and includes both sides of an app rename", t => {
+test("PR diff excludes base-only changes and includes both sides of an app rename without an API lookup", async t => {
   const { cwd, env: gitEnv, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/rails/old file";
   const after = "bench/fullstack/apps/nextjs/new file";
@@ -367,17 +529,19 @@ test("PR diff excludes base-only changes and includes both sides of an app renam
   git("switch", "--quiet", "--detach", fork);
   rename(before, after);
   const event = prEvent(merge(commit()));
-  const paths = eventPaths(event, cwd, gitEnv);
+  const paths = await eventPaths(event, cwd, gitEnv, { workflow: "catalog", fetchRuns: assert.fail });
   assert.deepEqual(paths.sort(), [after, before]);
 
   const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
   const output = join(cwd, "output");
   const env = fixtureGitEnv({ ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
-  for (const job of ["catalog", "evidence"]) execFileSync(process.execPath, [script, job], { cwd, env });
+  for (const command of ["catalog-cumulative-v1", "evidence-cumulative-v1"]) {
+    execFileSync(process.execPath, [script, command], { cwd, env });
+  }
   assert.equal(readFileSync(output, "utf8"), 'apps=["nextjs","rails"]\njson=false\nrun=true\nkernel=true\n');
 });
 
-test("a base-side rename scopes the edited file where parity actually tests it", t => {
+test("a base-side rename scopes the edited file where parity actually tests it", async t => {
   const { cwd, env, git, write, commit, rename, merge } = fixture(t);
   const before = "bench/fullstack/apps/express/driver.mjs";
   const after = "bench/workloads/driver.mjs";
@@ -390,7 +554,7 @@ test("a base-side rename scopes the edited file where parity actually tests it",
   const head = commit();
   const merged = merge(head);
   assert.equal(git("diff", "--name-only", base + "..." + head), before);
-  const paths = eventPaths(prEvent(merged), cwd, env);
+  const paths = await eventPaths(prEvent(merged), cwd, env);
   assert.deepEqual(paths, [after]);
   assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
 });
@@ -469,36 +633,318 @@ test("Request Cost runs for pull requests alone, in one job that always scopes, 
   assert.ok(steps.at(-1).run.includes(`jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH"`));
 });
 
-test("a push to main scopes Catalog by its push diff, and an unknown base selects everything", t => {
-  const { cwd, env: gitEnv, write, commit } = fixture(t);
-  write("initial");
-  const base = commit();
-  write("docs/guide/views.md");
-  const docs = commit();
-  write("crates/corten/src/lib.rs");
-  const framework = commit();
-  const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
-  const output = join(cwd, "output");
-  const scope = (PUSH_BEFORE, GITHUB_SHA) => {
-    writeFileSync(output, "");
-    const env = fixtureGitEnv({ GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
-      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS });
-    execFileSync(process.execPath, [script, "catalog"], { cwd, env, stdio: ["ignore", "ignore", "ignore"] });
-    return readFileSync(output, "utf8");
-  };
-  assert.equal(scope(base, docs), "apps=[]\njson=false\n");
-  assert.equal(scope(docs, framework), 'apps=["corten"]\njson=false\n');
-  const all = `apps=${JSON.stringify(allApps)}\njson=true\n`;
-  assert.equal(scope("0".repeat(40), framework), all);
-  assert.equal(scope("a".repeat(40), framework), all);
-  // A rewound or rewritten push compares with a base that is not its ancestor.
-  assert.equal(scope(framework, docs), all);
-  for (const GITHUB_EVENT_NAME of ["workflow_dispatch", "schedule"]) {
-    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd, gitEnv)), { apps: allApps, json: true });
+function pushEvent(GITHUB_SHA, file, PUSH_BEFORE) {
+  const GITHUB_REF = "refs/heads/main";
+  const GITHUB_REPOSITORY = "example/repo";
+  return { GITHUB_EVENT_NAME: "push", GITHUB_SHA, GITHUB_REF, GITHUB_REPOSITORY, PUSH_BEFORE,
+    GITHUB_WORKFLOW_REF: `${GITHUB_REPOSITORY}/.github/workflows/${file}@${GITHUB_REF}`,
+    GITHUB_API_URL: "https://api.example.invalid", GITHUB_TOKEN: "fixture-token" };
+}
+
+const successfulPush = head_sha => ({ event: "push", head_branch: "main", status: "completed", conclusion: "success", head_sha });
+const successfulDispatch = head_sha => ({ ...successfulPush(head_sha), event: "workflow_dispatch" });
+const workflowRuns = (...runs) => Response.json({ workflow_runs: runs });
+
+test("the main-scope rollout selects every Catalog and Evidence job despite legacy green pushes", async t => {
+  const { cwd, env, write, commit } = fixture(t, { cumulative: false });
+  for (const [mode, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    write(`.github/workflows/${file}`, `# Legacy scope\n        run: node scripts/benchmark-scope.mjs ${mode}\n`);
+  }
+  const legacy = commit();
+  for (const file of ["catalog.yml", "benchmark-evidence.yml"]) writeWorkflow(write, file);
+  const head = commit();
+  for (const [workflow, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    const paths = await eventPaths(pushEvent(head, file, legacy), cwd, env, {
+      workflow, fetchRuns: () => workflowRuns(successfulPush(legacy)),
+    });
+    assert.equal(paths, undefined);
+    assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
+    assert.equal(selectEvidence(paths), true);
+    assert.equal(selectKernel(paths), true);
   }
 });
 
-test("PR and multi-commit push diffs see inputs beyond the hosted path-filter limit", t => {
+test("CI checks a deleted oversized blob since its last successful main push", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write(LIST, "# grandfathered\n");
+  const success = commit();
+  const path = "bench/r2/run.log";
+  write(path, Buffer.alloc(LIMIT + 1, 97));
+  const superseded = commit();
+  git("rm", path);
+  const head = commit();
+  git("update-ref", "refs/remotes/origin/main", head);
+  const event = pushEvent(head, "ci.yml", superseded);
+  const workflow = "ci-base";
+  const { base } = await mainPushBase(event, cwd, env, { workflow, fetchRuns: url => {
+    assert.equal(url.pathname, "/repos/example/repo/actions/workflows/ci.yml/runs");
+    return workflowRuns(successfulPush(success));
+  } });
+  assert.equal(base, success);
+  // Neither the previous tip nor the already-updated origin/main range reads the added blob.
+  assert.deepEqual(checkBenchSize(cwd, { head, base: superseded, env }).problems, []);
+  assert.deepEqual(checkBenchSize(cwd, { head, base: "0".repeat(40), env }).problems, []);
+  const wanted = new RegExp(`bench/r2/run\\.log: .* from commit ${superseded},`);
+  assert.match(checkBenchSize(cwd, { head, base, env }).problems[0], wanted);
+});
+
+test("CI base lookup failure emits one actionable error and no base, even with a usable previous tip", t => {
+  const { cwd, env, write, commit } = fixture(t);
+  write("initial");
+  const before = commit();
+  write("second");
+  const head = commit();
+  const event = pushEvent(head, "ci.yml", before);
+  const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
+  const mock = source => `--import=data:text/javascript,${encodeURIComponent("globalThis.fetch = " + source)}`;
+  const forbidden = '() => new Response("untrusted body", { status: 403 })';
+  for (const [extra, reason, response] of [
+    [{ GITHUB_TOKEN: "" }, "the GitHub Actions API token is missing", forbidden],
+    [{}, "the GitHub Actions API returned HTTP 403", forbidden],
+    [{}, "none of the most recent 100 successful main runs is an available earlier ancestor with cumulative coverage", '() => Response.json({ workflow_runs: [] })'],
+  ]) {
+    const result = spawnSync(process.execPath, [mock(response), script, "ci-base-cumulative-v1"], {
+      cwd, env: { ...env, ...event, ...extra }, encoding: "utf8",
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr.trim(),
+      `::error::Could not find a cumulative main CI base: ${reason}. Rerun after a transient lookup failure, or dispatch CI on main with an explicitly verified ancestor as base.`);
+  }
+});
+
+test("a legacy-green CI push cannot hide a deleted blob from an earlier unchecked push", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write(LIST, "# grandfathered\n");
+  const checked = commit();
+  const path = "bench/r2/run.log";
+  write(path, Buffer.alloc(LIMIT + 1, 97));
+  const added = commit();
+  git("rm", path);
+  const cancelled = commit();
+  write(".github/workflows/ci.yml", "          # base=$(node scripts/benchmark-scope.mjs ci-base-cumulative-v1) || exit 1\n          base=$PUSH_BEFORE\n");
+  const legacy = commit();
+  writeWorkflow(write, "ci.yml");
+  const head = commit();
+  const event = pushEvent(head, "ci.yml", legacy);
+  const lookup = (...runs) => mainPushBase(event, cwd, env, { workflow: "ci-base", fetchRuns: () => workflowRuns(...runs) });
+  const failed = { ...successfulPush(cancelled), conclusion: "cancelled" };
+  assert.match((await lookup(successfulPush(legacy), failed)).reason, /with cumulative coverage/);
+  assert.deepEqual(checkBenchSize(cwd, { head: legacy, base: cancelled, env }).problems, []);
+  const { base } = await lookup(successfulPush(legacy), failed, successfulPush(checked));
+  assert.equal(base, checked);
+  assert.match(checkBenchSize(cwd, { head, base, env }).problems[0], new RegExp(`bench/r2/run\\.log: .* from commit ${added},`));
+});
+
+test("a push to main scopes Catalog and Evidence from each last successful run, including superseded paths", async t => {
+  const { cwd, env, write, commit } = fixture(t);
+  write("initial");
+  const base = commit();
+  const app = "bench/fullstack/apps/rails/app.rb";
+  write(app);
+  const superseded = commit();
+  write("unrelated");
+  const head = commit();
+  for (const [workflow, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    const event = pushEvent(head, file, superseded); // The old base would miss app.
+    let calls = 0;
+    const paths = await eventPaths(event, cwd, env, { workflow, fetchRuns: async (url, options) => {
+      calls++;
+      assert.equal(url.origin, event.GITHUB_API_URL);
+      assert.equal(url.pathname, `/repos/${event.GITHUB_REPOSITORY}/actions/workflows/${file}/runs`);
+      assert.deepEqual(Object.fromEntries(url.searchParams), { branch: "main", event: "push", status: "success", per_page: "100" });
+      assert.equal(options.headers.Authorization, "Bearer fixture-token");
+      return workflowRuns(successfulPush(base));
+    } });
+    assert.equal(calls, 1);
+    assert.deepEqual(paths, [app, "unrelated"]);
+    assert.deepEqual(selectScope(allApps, paths), { apps: ["rails"], json: false });
+    assert.equal(selectEvidence(paths), true);
+    assert.equal(selectKernel(paths), true);
+  }
+});
+
+test("a missing, failed or non-ancestor main run lookup selects everything", async t => {
+  const { cwd, env, write, commit } = fixture(t);
+  write("initial");
+  const base = commit();
+  write("unrelated");
+  const head = commit();
+  write("later");
+  const later = commit();
+  for (const [label, fetchRuns] of [
+    ["no successful runs", () => workflowRuns()],
+    ["failed run", () => workflowRuns({ ...successfulPush(base), conclusion: "failure" })],
+    ["cancelled run", () => workflowRuns({ ...successfulPush(base), conclusion: "cancelled" })],
+    ["manual run", () => workflowRuns(successfulDispatch(base))],
+    ["HTTP error", () => new Response(null, { status: 403 })],
+    ["network error", () => { throw new Error("request refused"); }],
+    ["malformed response", () => new Response("not JSON")],
+    ["malformed SHA", () => workflowRuns(successfulPush([base]))],
+    ["missing commit", () => workflowRuns(successfulPush("a".repeat(40)))],
+    ["non-ancestor commit", () => workflowRuns(successfulPush(later))],
+    ["same commit", () => workflowRuns(successfulPush(head))],
+  ]) {
+    for (const [workflow, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+      const paths = await eventPaths(pushEvent(head, file, base), cwd, env, { workflow, fetchRuns });
+      assert.equal(paths, undefined, label);
+      assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true }, label);
+      assert.equal(selectEvidence(paths), true, label);
+      assert.equal(selectKernel(paths), true, label);
+    }
+  }
+});
+
+test("CI can use a successful dispatch on the rewritten main line as the next push base", async t => {
+  const { cwd, env, git, write, commit } = fixture(t, { cumulative: false });
+  write("initial");
+  const fork = commit();
+  write("old-tip");
+  const oldTip = commit();
+  git("switch", "--quiet", "--detach", fork);
+  write("new-line");
+  const legacy = commit();
+  writeWorkflow(write, "ci.yml");
+  const dispatched = commit();
+  write("after-dispatch");
+  const head = commit();
+  const event = pushEvent(head, "ci.yml", dispatched);
+  const workflow = "ci-base";
+  const unavailable = await mainPushBase(event, cwd, env, { workflow, fetchRuns: () => workflowRuns(
+    successfulPush(oldTip), successfulPush(legacy), { ...successfulDispatch(dispatched), head_branch: "topic" },
+    { ...successfulDispatch(dispatched), conclusion: "failure" },
+  ) });
+  assert.match(unavailable.reason, /none of the most recent 100/);
+  const recovered = await mainPushBase(event, cwd, env, { workflow, fetchRuns: url => {
+    assert.deepEqual(Object.fromEntries(url.searchParams), { branch: "main", status: "success", per_page: "100" });
+    return workflowRuns(successfulPush(oldTip), successfulDispatch(dispatched));
+  } });
+  assert.deepEqual(recovered, { base: dispatched });
+});
+
+test("an older run skips invalid, same-head and newer successes and picks the first strict ancestor within 100 rows", async t => {
+  const { cwd, env, write, commit } = fixture(t);
+  write("earliest");
+  const earliest = commit();
+  write("latest-ancestor");
+  const ancestor = commit();
+  write("rerun-head");
+  const head = commit();
+  write("newer-success");
+  const newer = commit();
+  const ignored = [successfulPush(newer), successfulPush(head), successfulPush("a".repeat(40))];
+  for (const [workflow, file] of [["ci-base", "ci.yml"], ["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    const event = pushEvent(head, file, ancestor);
+    const lookup = (...runs) => mainPushBase(event, cwd, env, { workflow, fetchRuns: () => workflowRuns(...runs) });
+    assert.deepEqual(await lookup(...ignored, successfulPush(ancestor), successfulPush(earliest)), { base: ancestor });
+    const late = Array.from({ length: 99 }, () => successfulPush(head));
+    assert.deepEqual(await lookup(...late, successfulPush(ancestor)), { base: ancestor });
+    assert.match((await lookup(...late, successfulPush(head), successfulPush(ancestor))).reason, /none of the most recent 100/);
+  }
+});
+
+test("a rewrite still scopes safely if a checked ancestor remains, without using the previous tip", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write("initial");
+  const base = commit();
+  write("old-tip");
+  const oldTip = commit();
+  git("switch", "--quiet", "--detach", base);
+  write("new-tip");
+  const head = commit();
+  const options = { workflow: "catalog", fetchRuns: () => workflowRuns(successfulPush(base)) };
+  for (const before of [oldTip, "0".repeat(40)]) {
+    const event = pushEvent(head, "catalog.yml", before);
+    assert.deepEqual(await eventPaths(event, cwd, env, options), ["new-tip"]);
+  }
+  assert.deepEqual(await eventPaths(pushEvent(head, "catalog.yml", base), cwd, env, options), ["new-tip"]);
+});
+
+test("the main-push union includes a restored app path and a path introduced only by a merge", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  const app = "bench/fullstack/apps/rails/app.rb";
+  write(app, "original");
+  const base = commit();
+  git("switch", "--quiet", "-c", "topic");
+  write("topic");
+  const topic = commit();
+  git("switch", "--quiet", "main");
+  write(app, "changed");
+  commit();
+  write(app, "original");
+  const before = commit();
+  git("merge", "--quiet", "--no-ff", "--no-commit", topic);
+  const resolution = "bench/fullstack/apps/express/file with spaces.mjs";
+  write(resolution);
+  const head = commit();
+  assert.deepEqual(git("diff", "--name-only", base, head).split(/\r?\n/), [resolution, "topic"]);
+  const paths = await eventPaths(pushEvent(head, "catalog.yml", before), cwd, env, {
+    workflow: "catalog", fetchRuns: () => workflowRuns(successfulPush(base)),
+  });
+  assert.deepEqual(paths, [resolution, app, "topic"]);
+  assert.deepEqual(selectScope(allApps, paths), { apps: ["rails", "express"], json: false });
+});
+
+test("scope runs all jobs if main fast-forwards through a merge's second parent", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  const path = "bench/fullstack/apps/rails/app.rb";
+  write(path, "old");
+  const fork = commit();
+  write(path, "checked");
+  const base = commit();
+  git("switch", "--quiet", "-c", "topic", fork);
+  write("notes.txt");
+  commit();
+  git("merge", "--quiet", "--no-ff", "-s", "ours", "--no-edit", base);
+  const head = git("rev-parse", "HEAD");
+  git("switch", "--quiet", "main");
+  git("merge", "--quiet", "--ff-only", head);
+  assert.equal(git("rev-parse", "HEAD^2"), base);
+  assert.match(git("diff", "--name-only", base, head), /rails\/app\.rb/);
+  for (const [workflow, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    assert.equal(await eventPaths(pushEvent(head, file, base), cwd, env, {
+      workflow, fetchRuns: () => workflowRuns(successfulPush(base)),
+    }), undefined);
+  }
+});
+
+test("stale topics and their merges do not rescope main paths already in the checked base", async t => {
+  const { cwd, env, git, write, commit, merge } = fixture(t);
+  write("initial");
+  const fork = commit();
+  const imported = "bench/catalog/already-checked.mjs";
+  write(imported);
+  const main = commit();
+  const notImported = "bench/json-api/also-already-checked.mjs";
+  write(notImported);
+  const base = commit();
+  git("switch", "--quiet", "-c", "topic", fork);
+  write("docs/topic.md");
+  commit();
+  git("merge", "--quiet", "--no-ff", "--no-commit", main);
+  const resolution = "bench/fullstack/apps/rails/merge-only.rb";
+  write(resolution);
+  const head = merge(commit());
+  const paths = await eventPaths(pushEvent(head, "catalog.yml", base), cwd, env, {
+    workflow: "catalog", fetchRuns: () => workflowRuns(successfulPush(base)),
+  });
+  assert.deepEqual(paths, [resolution, "docs/topic.md"]);
+  assert.deepEqual(selectScope(allApps, paths), { apps: ["rails"], json: false });
+});
+
+test("manual and called workflows do not look up a main push base", async t => {
+  const { cwd, env, write, commit } = fixture(t);
+  write("initial");
+  const head = commit();
+  const event = pushEvent(head, "benchmark-evidence.yml");
+  let calls = 0;
+  const options = { workflow: "evidence", fetchRuns: () => { calls++; return workflowRuns(); } };
+  assert.equal(await eventPaths({ ...event, GITHUB_EVENT_NAME: "workflow_dispatch" }, cwd, env, options), undefined);
+  assert.equal(await eventPaths(pushEvent(head, "caller.yml"), cwd, env, options), undefined);
+  assert.equal(calls, 0);
+});
+
+test("PR and multi-commit push diffs see inputs beyond the hosted path-filter limit", async t => {
   const { cwd, env, git, write, commit, merge } = fixture(t);
   write("initial");
   const base = commit();
@@ -506,20 +952,15 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
   for (let i = 0; i < 301; i++) write("aaa-unrelated/" + i);
   const input = "bench/fullstack/native-trace-cost.mjs";
   write(input);
-  commit();
+  const before = commit();
   write("zzz-unrelated");
   const head = commit();
-  const events = [prEvent(merge(head)), { GITHUB_EVENT_NAME: "push", GITHUB_SHA: head, PUSH_BEFORE: base }];
+  const events = [prEvent(merge(head)), pushEvent(head, "benchmark-evidence.yml", before)];
   for (const event of events) {
-    const paths = eventPaths(event, cwd, env);
+    const paths = await eventPaths(event, cwd, env, { workflow: "evidence", fetchRuns: () => workflowRuns(successfulPush(base)) });
     assert.equal(paths.length, 303);
     assert.equal(paths[301], input);
     assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
-    assert.equal(selectEvidence(paths), true);
-    assert.equal(selectKernel(paths), true);
-  }
-  for (const before of ["0".repeat(40), "a".repeat(40)]) {
-    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd, env);
     assert.equal(selectEvidence(paths), true);
     assert.equal(selectKernel(paths), true);
   }
