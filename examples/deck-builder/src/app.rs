@@ -169,7 +169,7 @@ impl Builder {
     /// Saves the edit if the deck is still at its base version and the rules allow it. A retry
     /// of the same edit returns the original receipt. Draft labels attempts in the script, not
     /// mutations: the receipt always names the original draft.
-    fn save(&self, generation: &str, base: u64, edit: DeckEdit, key: &SubmitKey, draft: u64) -> Outcome {
+    fn save(&self, generation: &str, base: u64, edit: Result<DeckEdit, Refusal>, key: &SubmitKey, draft: u64) -> Outcome {
         let mut saves = self.lock();
         let at = Instant::now();
         while saves.order.front().is_some_and(|(applied, _)| at.duration_since(*applied) >= self.kept_for) {
@@ -180,16 +180,25 @@ impl Builder {
             }
         }
         let now = self.deck.seq();
-        if generation != self.generation() {
-            // Every key and save of that generation went with the restart.
-            return Outcome::Stale { version: now, unsure: false };
-        }
-        if let Some(applied) = saves.by_key.get(key) {
-            return if applied.base == base && self.applied_cards(&edit).eq(applied.cards.iter().copied().map(Some)) {
+        let same_generation = generation == self.generation();
+        // Even an unreadable retry needs the old receipt; otherwise the client leaves its
+        // version behind when the 422 gives the form a new key.
+        if same_generation && let Some(applied) = saves.by_key.get(key) {
+            return if applied.base == base
+                && edit.as_ref().is_ok_and(|edit| self.applied_cards(edit).eq(applied.cards.iter().copied().map(Some)))
+            {
                 Outcome::Saved { version: applied.version, draft: applied.draft }
             } else {
                 Outcome::KeyConflict { version: applied.version, draft: applied.draft }
             };
+        }
+        let edit = match edit {
+            Ok(edit) => edit,
+            Err(refusal) => return Outcome::Refused(now, refusal),
+        };
+        if !same_generation {
+            // Every key and save of that generation went with the restart.
+            return Outcome::Stale { version: now, unsure: false };
         }
         if base != now {
             return Outcome::Stale { version: now, unsure: saves.forgotten_through > base };
@@ -348,10 +357,7 @@ fn deck_page(req: &Req, builder: &Builder, view: &DeckQuery, answer: &Answer, st
 /// Saves the deck. The script reads its note; the fallback form also needs its version and any
 /// server changes. Without the runtime a save redirects and a refusal draws the page.
 async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckInput>) -> HtmlResult {
-    let outcome = match Builder::posted(&input) {
-        Ok(deck) => builder.save(&input.generation, input.version, deck, &input.submit, input.draft),
-        Err(refusal) => Outcome::Refused(builder.saved().0, refusal),
-    };
+    let outcome = builder.save(&input.generation, input.version, Builder::posted(&input), &input.submit, input.draft);
     let (answer, status) = match &outcome {
         Outcome::Saved { version, draft } => (Answer::Saved { version: *version, draft: *draft }, StatusCode::OK),
         Outcome::KeyConflict { version, draft } => {
@@ -620,8 +626,45 @@ mod tests {
         assert_eq!((builder.deck.seq(), builder.saved().1.get("salt-oracle")), (1, Some(&1)));
     }
 
-    fn edit(deck: Deck) -> DeckEdit {
-        DeckEdit { deck, ..DeckEdit::default() }
+    #[tokio::test]
+    async fn a_malformed_retry_reconciles_the_saved_deck_but_a_fresh_key_gets_a_refusal() {
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let f = DeckInput::FIELDS;
+        let key = submit_key();
+        let mut deck = starter();
+        let lost = saving(&app, 0, &deck, &key).field(f.add, "salt-oracle").mode(Mode::Action).await;
+        assert_eq!(lost.status(), StatusCode::OK);
+
+        let invalid = |version, key: &SubmitKey| {
+            saving(&app, version, &deck[1..], key)
+                .field(f.card, "gravel-sprite")
+                .field(f.count, "0.5")
+                .field(f.add, "salt-oracle")
+        };
+        let retry = invalid(0, &key).mode(Mode::Action).await;
+        let (status, patch) = read(&retry);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(patch.contains(r#""KeyConflict",1,0,false"#), "{patch}");
+        assert!(patch.contains(r#"id="deck-version" type="hidden" name="version" value="1""#), "{patch}");
+        assert!(patch.contains(r#"name="card" value="salt-oracle""#), "{patch}");
+
+        let refused = invalid(1, &submit_key()).mode(Mode::Action).await;
+        let (status, note) = read(&refused);
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(note.contains("Enter a number of copies") && !note.contains("deck-version"), "{note}");
+        assert_eq!(builder.deck.seq(), 1);
+
+        deck[0].1 = 2;
+        deck.push(("salt-oracle", 1));
+        let corrected = saving(&app, 1, &deck, &submit_key()).mode(Mode::Action).await;
+        assert_eq!(corrected.status(), StatusCode::OK);
+        let (version, saved) = builder.saved();
+        assert_eq!((version, saved.get("gravel-sprite"), saved.get("salt-oracle")), (2, Some(&2), Some(&1)));
+    }
+
+    fn edit(deck: Deck) -> Result<DeckEdit, Refusal> {
+        Ok(DeckEdit { deck, ..DeckEdit::default() })
     }
 
     #[test]

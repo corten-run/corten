@@ -80,6 +80,25 @@ const isSave = (request) => request.method() === "POST" && new URL(request.url()
 /** @param {import("@playwright/test").Request} request */
 const saveFields = (request) => new URLSearchParams(request.postData() ?? "");
 
+/** Fetch the real POST's answer, leaving its delivery to the test. */
+async function interceptSave(page, button) {
+  const fetched = Promise.withResolvers();
+  await page.route("**/deck", async (route) => {
+    try {
+      fetched.resolve({ route, response: await route.fetch({ timeout: 15_000 }) });
+    } catch (error) {
+      fetched.reject(error);
+      await route.abort().catch(() => {});
+    }
+  }, { times: 1 });
+  const [, result] = await Promise.all([
+    page.waitForRequest(isSave, { timeout: 15_000 }),
+    fetched.promise,
+    button.click({ timeout: 15_000 }),
+  ]);
+  return result;
+}
+
 /** The keys of the elements drawn, including when an ancestor supplies the opacity. */
 const drawnKeys = (page, selector, attr) => page.locator(selector).evaluateAll((elements, attr) =>
   elements.filter((el) => {
@@ -722,31 +741,23 @@ try {
 
         // The first save has already deleted Gravel Sprite at the server. Put it back and
         // edit another row before that answer is drawn. Save again while the form is busy.
-        const held = Promise.withResolvers();
-        const release = Promise.withResolvers();
-        await blocked.route("**/deck", async (route) => {
-          const response = await route.fetch();
-          held.resolve(response.status());
-          await release.promise;
-          await route.fulfill({ response });
-        }, { times: 1 });
         const otherCount = countOf("moth-court-herald");
         const otherCopies = (await blocked.inputValue(otherCount)) === "1" ? "2" : "1";
+        await blocked.fill(count, "");
+        const held = await interceptSave(blocked, blocked.locator(saveButton));
         let queued;
         try {
-          await blocked.fill(count, "");
-          await blocked.click(saveButton);
-          if (await held.promise !== 200) throw new Error("the held removal did not succeed");
+          if (held.response.status() !== 200) throw new Error("the held removal did not succeed");
           await fresh.reload();
           if ((await deck(fresh))["gravel-sprite"] !== undefined) throw new Error("the server did not remove the held card");
           await blocked.fill(count, "1");
           await blocked.fill(otherCount, otherCopies);
-          const next = blocked.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("version") === String(Number(finalVersion) + 1), { timeout: 5_000 });
-          await blocked.click(saveButton);
-          release.resolve(undefined);
-          queued = await next;
+          [queued] = await Promise.all([
+            blocked.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("version") === String(Number(finalVersion) + 1), { timeout: 5_000 }),
+            blocked.click(saveButton).then(() => held.route.fulfill({ response: held.response })),
+          ]);
         } finally {
-          release.resolve(undefined);
+          if (!queued) await held.route.abort().catch(() => {});
         }
         await blocked.locator('form[aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
         const queuedFields = saveFields(queued.request());
@@ -766,30 +777,28 @@ try {
           cleared.status === 200 && afterClear.collection[addedCard] === "0" &&
           await blocked.inputValue(countOf(addedCard)) === "" && await selection.isChecked());
 
-        // Drop two committed Add answers. An identical retry must be safe; a changed one with
-        // the same key is a visible conflict and must not write over the already saved deck.
-        for (const changed of [false, true]) {
+        // Drop committed Add answers. An identical retry must be safe; a changed one (even
+        // with a malformed count) is a conflict and must not write over the already saved deck.
+        for (const kind of ["identical", "changed", "malformed"]) {
+          const changed = kind !== "identical";
           await blocked.reload();
           const before = await deck(blocked);
           const id = (await drawnKeys(blocked, "tbody tr", "data-key")).find((id) => id && before[id] === undefined);
           if (!id) throw new Error("no card to add before dropping an answer");
           const button = row(blocked, id).getByRole("button", { name: "Add", exact: true });
-          const committed = Promise.withResolvers();
-          await blocked.route("**/deck", async (route) => {
-            const response = await route.fetch();
-            committed.resolve({ status: response.status(), fields: saveFields(route.request()) });
-            await route.abort();
-          }, { times: 1 });
-          await button.click();
-          const first = await committed.promise;
+          const lost = await interceptSave(blocked, button);
+          const first = { status: lost.response.status(), fields: saveFields(lost.route.request()) };
+          await lost.route.abort();
           await blocked.locator('form[aria-busy="true"]').waitFor({ state: "hidden", timeout: 5_000 });
-          if (changed) await blocked.fill(otherCount, (await blocked.inputValue(otherCount)) === "1" ? "2" : "1");
+          const corrected = (await blocked.inputValue(otherCount)) === "1" ? "2" : "1";
+          if (changed) await blocked.fill(otherCount, kind === "malformed" ? "0.5" : corrected);
           const retry = await submit(button);
           const note = await blocked.locator("#save-note").textContent();
           await fresh.reload();
           const stored = await deck(fresh);
-          check(`${name} fallback ${changed ? "changed retry reports a conflict" : "identical retry saves only once"} after a dropped Add answer`,
+          check(`${name} fallback ${changed ? `${kind} retry reports a conflict` : "identical retry saves only once"} after a dropped Add answer`,
             first.status === 200 && first.fields.get("submit") === retry.fields.get("submit") &&
+            (kind !== "malformed" || posted(retry.fields, "moth-court-herald") === "0.5") &&
             retry.status === (changed ? 409 : 200) && retry.saved === !changed &&
             (changed ? note?.startsWith("Not saved:") : note === "Saved.") &&
             (await drawnKeys(blocked, "#save-note", "id")).length === 1 &&
@@ -797,6 +806,15 @@ try {
             await version(blocked) === await version(fresh) && stored[id] === 1 &&
             stored["moth-court-herald"] === before["moth-court-herald"] && sameDeck(await deck(blocked), stored),
             `same key: ${first.fields.get("submit") === retry.fields.get("submit")}; HTTP ${retry.status}; ${note}`);
+          if (kind === "malformed") {
+            await blocked.fill(otherCount, corrected);
+            const next = await submit(blocked.locator(saveButton));
+            await fresh.reload();
+            const saved = await deck(fresh);
+            check(`${name} fallback correction after a malformed retry saves at the reconciled version`,
+              next.status === 200 && next.saved && next.fields.get("submit") !== retry.fields.get("submit") &&
+              next.fields.get("version") === retry.shown && saved["moth-court-herald"] === Number(corrected) && saved[id] === 1);
+          }
         }
         await fresh.close();
       }
