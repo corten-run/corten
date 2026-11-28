@@ -263,6 +263,7 @@ jobs:
               fi ;;
             workflow_dispatch)
               if [[ "$GITHUB_REF" != refs/heads/main || ! "$DISPATCH_BASE" =~ ^[0-9a-f]{40}$ || "$DISPATCH_BASE" = "$GITHUB_SHA" ]] ||
+                  [[ "$(git cat-file -t "$DISPATCH_BASE" 2>/dev/null)" != commit ]] ||
                   ! git merge-base --is-ancestor "$DISPATCH_BASE" "$GITHUB_SHA" 2>/dev/null; then
                 echo "::error::Dispatch CI on main with a full commit SHA that is a verified earlier ancestor."
                 exit 1

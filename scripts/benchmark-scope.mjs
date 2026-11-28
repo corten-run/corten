@@ -85,6 +85,11 @@ function changedPaths(base, head, cwd, env, everyCommit = false) {
     cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env,
   }).split("\0").filter(Boolean);
   if (!everyCommit) return read(["diff", ...diffFlags, base, head, "--"]);
+  // Main can fast-forward to a merge that took the checked tree as its second parent.
+  // The first-parent changes then describe another branch. Don't narrow the jobs from them.
+  // Exclude the checked commit's parents so an ordinary push walks only the new interval.
+  const mainline = execFileSync("git", ["rev-list", "--first-parent", head, "--not", `${base}^@`], { cwd, env, encoding: "utf8" });
+  if (!mainline.trimEnd().split(/\r?\n/).includes(base)) return undefined;
   const range = [...diffFlags, `${base}..${head}`, "--"];
   // Topic commits count, but a topic merge importing an already checked parent does not
   // introduce that parent's paths. Count its own resolutions, plus all mainline merge changes

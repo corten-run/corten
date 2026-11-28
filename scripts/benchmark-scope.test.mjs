@@ -219,6 +219,8 @@ test("CI dispatch validates its explicit ancestor and Release keeps the original
   const ancestor = commit();
   write("on-main");
   const head = commit();
+  git("tag", "-a", "tip", "-m", "tip", head);
+  const tipTag = git("rev-parse", "refs/tags/tip");
   git("switch", "--quiet", "--detach", ancestor);
   write("off-main");
   const unrelated = commit();
@@ -230,6 +232,7 @@ test("CI dispatch validates its explicit ancestor and Release keeps the original
     ["workflow_dispatch", "refs/heads/main", ancestor, ancestor],
     ["workflow_dispatch", "refs/heads/main", unrelated],
     ["workflow_dispatch", "refs/heads/main", head],
+    ["workflow_dispatch", "refs/heads/main", tipTag],
     ["workflow_dispatch", "refs/heads/main", "not-a-sha"],
     ["workflow_dispatch", "refs/tags/main", ancestor],
     ["push", "refs/tags/v1.0.0", zero, zero],
@@ -880,6 +883,29 @@ test("the main-push union includes a restored app path and a path introduced onl
   });
   assert.deepEqual(paths, [resolution, app, "topic"]);
   assert.deepEqual(selectScope(allApps, paths), { apps: ["rails", "express"], json: false });
+});
+
+test("scope runs all jobs if main fast-forwards through a merge's second parent", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  const path = "bench/fullstack/apps/rails/app.rb";
+  write(path, "old");
+  const fork = commit();
+  write(path, "checked");
+  const base = commit();
+  git("switch", "--quiet", "-c", "topic", fork);
+  write("notes.txt");
+  commit();
+  git("merge", "--quiet", "--no-ff", "-s", "ours", "--no-edit", base);
+  const head = git("rev-parse", "HEAD");
+  git("switch", "--quiet", "main");
+  git("merge", "--quiet", "--ff-only", head);
+  assert.equal(git("rev-parse", "HEAD^2"), base);
+  assert.match(git("diff", "--name-only", base, head), /rails\/app\.rb/);
+  for (const [workflow, file] of [["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    assert.equal(await eventPaths(pushEvent(head, file, base), cwd, env, {
+      workflow, fetchRuns: () => workflowRuns(successfulPush(base)),
+    }), undefined);
+  }
 });
 
 test("stale topics and their merges do not rescope main paths already in the checked base", async t => {

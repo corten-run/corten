@@ -162,8 +162,9 @@ workflow. A base must be a strict ancestor of the push and use the cumulative wo
 at that commit. A legacy green run checked only its own push and is not a coverage base.
 Scope includes changed and restored paths, mainline merges against their first parent, and
 topic merge resolutions, without counting the older main paths a topic merely imported.
-Catalog and Evidence use push successes only. The first cumulative push, or any push without
-a usable base, runs every job in that workflow.
+Catalog and Evidence use push successes only. The first cumulative push, a push whose base
+is outside the new tip's first-parent history, or any push without a usable base runs every
+job in that workflow.
 
 CI instead fails the bench size base step without guessing. To bootstrap after rollout, or
 recover when a rewrite or the bounded lookup leaves no cumulative ancestor, first verify
