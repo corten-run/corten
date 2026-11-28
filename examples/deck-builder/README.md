@@ -35,15 +35,16 @@ go in one save. Each send takes the counts actually in the form, even if a previ
 still on its way when the player corrected a focused field. Add and Add selected also leave an
 incomplete number and any selection alone.
 An Add can save without touching the count fields. If autosave starts on that same form and reuses
-the native save's key, the server refuses the write and draws the saved deck with a fresh key
+the native save's key, even with a count too large to parse, the server draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
 started, that document keeps its fields, focus, and native Save. Selections made before startup
 stay checked and count toward Add selected; the checkbox for selecting every visible card is
 disabled until the module can apply it. With the module running, Filter keeps the page, and a
 subsequent native Save returns to that filter. A refusal page displays the reason without
 notifying autosave. Only a patch answers a save that the queue sent. It uses the same
-`save_note.answered` binding as before, so an already-open tab can keep saving after a deploy.
-New pages load the note's script with the builder, not on the first autosave or retry.
+`save_note.answered` binding as before. New pages load the note's script with the builder, not
+on the first autosave or retry. The smoke test blocks further script fetches and checks recovery
+of a lost reply without the live feed; it runs one build, not a deployment across two versions.
 
 ## Run it
 

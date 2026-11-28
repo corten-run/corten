@@ -82,24 +82,13 @@ const postedGravel = (request) => {
   return fields.getAll("count")[fields.getAll("card").indexOf("gravel-sprite")];
 };
 
-/** Two edits in one document, including a lost reply when only the old exports are available. */
-async function successiveAutosaves(oldModule = false) {
+/** Two edits without another script fetch. Optionally lose the second reply and retry without the live feed. */
+async function successiveAutosaves(loseReply = false) {
   const context = await browser.newContext();
   const live = Promise.withResolvers();
   try {
     context.setDefaultTimeout(10_000);
-    if (oldModule) {
-      // Model an already-open tab: keep the builder that handled startup, but expose only
-      // the old module's contract to the runtime. In particular there is no `acknowledge`.
-      await context.addInitScript(() => {
-        document.addEventListener("corten:module", (event) => {
-          const { detail } = /** @type {CustomEvent} */ (event);
-          if (detail.name !== "deck_builder") return;
-          const { acknowledge: _newExport, ...old } = detail.exports;
-          detail.exports = old;
-          document.documentElement.dataset.oldDeckModule = "ready";
-        }, { capture: true });
-      });
+    if (loseReply) {
       // Only the save receipt, not the feed, can tell this tab that its lost reply committed.
       await context.route("**/feed/deck/live**", async (route) => {
         await live.promise;
@@ -107,15 +96,13 @@ async function successiveAutosaves(oldModule = false) {
       });
     }
     const page = await open(context);
-    if (oldModule) check("the already-open builder has the old export surface",
-      await page.locator("html").getAttribute("data-old-deck-module") === "ready");
     // A save must be acknowledged even if the browser cannot fetch another app script.
     const scripts = "**/scripts/*.js";
     await page.route(scripts, (route) => route.abort());
     const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
     const start = await count.inputValue();
     const loaded = Number(await version(page));
-    const label = oldModule ? "old module autosave" : "autosave";
+    const label = loseReply ? "autosave without live feed" : "autosave";
     let previousKey;
     for (const [index, copies] of [start === "2" ? "3" : "2", start].entries()) {
       const edit = async () => {
@@ -123,7 +110,7 @@ async function successiveAutosaves(oldModule = false) {
         await page.locator(saveButton).click();
       };
       let lostFields;
-      if (oldModule && index === 1) {
+      if (loseReply && index === 1) {
         const response = Promise.withResolvers();
         await page.route("**/deck", async (route) => {
           try {
@@ -136,7 +123,7 @@ async function successiveAutosaves(oldModule = false) {
         }, { times: 1 });
         const [lost] = await Promise.all([page.waitForRequest(isSave), edit()]);
         lostFields = saveFields(lost);
-        check("the lost reply from the new server was a committed save", await response.promise === 200 &&
+        check("the server committed the save whose reply was lost", await response.promise === 200 &&
           lostFields.get("draft") === "2" && lostFields.get("version") === String(loaded + 1));
         await page.waitForFunction(() => document.querySelector("[role=status][data-state]")?.getAttribute("data-state") === "offline");
       }
@@ -778,7 +765,7 @@ async function nativeRefusal(code) {
 }
 
 /** Add can save before startup while all count controls still match the first draw. */
-async function nativeAddHandoff(selected) {
+async function nativeAddHandoff(selected, overflow = false) {
   const name = selected ? "Add selected" : "Add";
   const context = await browser.newContext();
   const resumeModule = Promise.withResolvers();
@@ -833,12 +820,18 @@ async function nativeAddHandoff(selected) {
         await selectAll(page).isEnabled() && await pick.isChecked() && await selectedCount(page) === "1" &&
         await selectAll(page).evaluate((box) => !box.checked && box.indeterminate));
     }
+    const gravel = countField(page, "gravel-sprite");
     const [reply] = await Promise.all([
       page.waitForResponse((r) => isSave(r.request())),
-      button.click(),
+      overflow ? gravel.fill("4294967296").then(() => gravel.press("Tab")) : button.click(),
     ]);
     const retry = saveFields(reply.request());
     resumeFeed.resolve(undefined);
+    if (overflow) {
+      check("an overflowing autosave after the lost native Add gets the saved page, not a refusal patch",
+        retry.getAll("count")[retry.getAll("card").indexOf("gravel-sprite")] === "4294967296" && reply.status() === 409);
+      if (reply.status() !== 409) return;
+    }
     const note = page.locator("#save-note").filter({ hasText: "This form already saved before autosave started." });
     const keep = page.getByRole("button", { name: "Keep both changes" });
     await note.or(keep).waitFor();
@@ -846,7 +839,8 @@ async function nativeAddHandoff(selected) {
     const headers = reply.headers();
     const preserved = reply.status() === 409 && "corten-shell" in headers && !("corten-patch" in headers) && !("corten-page" in headers) &&
       !reply.request().isNavigationRequest() && retry.get("draft") === "1" && retry.get("submit") === key &&
-      retry.get("version") === String(previous) && retry.getAll("count")[retry.getAll("card").indexOf(id)] === "1" &&
+      retry.get("version") === String(previous) &&
+      (overflow ? !retry.getAll("card").includes(id) : retry.getAll("count")[retry.getAll("card").indexOf(id)] === "1") &&
       await drawn(note) && !(await keep.isVisible()) &&
       (await deck(page))[id] === 1 && Number(await version(page)) === previous + 1 && nextKey !== key;
     check(`${name}: autosave cannot acknowledge or merge the native write; the new form shows one copy`, preserved);
@@ -1329,6 +1323,7 @@ try {
     }
     for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
     for (const selected of [false, true]) await nativeAddHandoff(selected);
+    await nativeAddHandoff(false, true);
     for (const code of [409, 422]) await nativeRefusal(code);
     for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);

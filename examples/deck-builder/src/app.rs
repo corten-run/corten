@@ -156,19 +156,18 @@ impl Builder {
                 saves.forgotten_through = saves.forgotten_through.max(forgotten.version);
             }
         }
-        let applied = saves.by_key.get(key);
+        // Only a receipt from this generation can reconcile an unparseable edit.
+        let applied = saves.by_key.get(key).filter(|_| deck.is_ok() || generation == self.generation());
+        if draft != 0 && applied.is_some_and(|save| save.draft == 0) {
+            return Outcome::NativeSubmit;
+        }
         let deck = match deck {
             Ok(deck) => deck,
             // A malformed native resend still needs to say that the earlier save was made.
-            Err(_) if draft == 0 && generation == self.generation() && applied.is_some() => {
-                return Outcome::ChangedSubmit(self.deck.seq());
-            }
+            Err(_) if draft == 0 && applied.is_some() => return Outcome::ChangedSubmit(self.deck.seq()),
             Err(refusal) => return Outcome::Refused(self.deck.seq(), refusal),
         };
         if let Some(applied) = applied {
-            if draft != 0 && applied.draft == 0 {
-                return Outcome::NativeSubmit;
-            }
             if draft == 0
                 && !applied.ordinary.as_ref().is_some_and(|original| {
                     deck.len() == original.len()
@@ -567,6 +566,48 @@ mod tests {
                 assert!(res.text().contains(r#"name="version" value="1""#), "{submitter}");
                 assert_eq!((builder.saved().0, builder.saved().1.get("pearl-diver")), (1, Some(&1)), "{submitter}");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_overflowing_autosave_recovers_only_a_known_native_submit() {
+        let f = DeckInput::FIELDS;
+        let builder = Builder::from(60, Some(GEN), KEPT_FOR);
+        let app = app(builder.clone()).test();
+        let native = submit_key();
+        let added = saving(&app, 0, &starter(), &native).field(f.add, "salt-oracle").await;
+        assert_eq!(added.status(), StatusCode::SEE_OTHER);
+
+        let overflow = |generation, key: &SubmitKey| {
+            app.post(&url::Save)
+                .field(f.generation, generation)
+                .field(f.version, 0)
+                .field(f.submit, key)
+                .field(f.draft, 1)
+                .field(f.card, "gravel-sprite")
+                .field(f.count, "4294967296")
+                .mode(Mode::Action)
+        };
+        let res = overflow(GEN, &native).await;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        assert!(res.headers().contains_key("corten-shell") && !res.headers().contains_key("corten-patch"));
+        assert!(res.text().contains("This form already saved before autosave started."));
+        assert!(res.text().contains(r#"name="card" value="salt-oracle""#));
+        assert!(res.text().contains(r#"name="version" value="1""#));
+        let (_, key_field) = res.text().split_once(r#"name="submit" data-submit value=""#).unwrap();
+        let (replacement, _) = key_field.split_once('"').unwrap();
+        assert!(!replacement.is_empty() && replacement != native.as_str());
+        assert_eq!((builder.saved().0, builder.saved().1.get("salt-oracle")), (1, Some(&1)));
+
+        let scripted = submit_key();
+        let saved = saving(&app, 1, &starter(), &scripted).field(f.draft, 1).mode(Mode::Action).await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        let before = builder.saved();
+        for (generation, key) in [(GEN, &submit_key()), ("other", &native), (GEN, &scripted)] {
+            let res = overflow(generation, key).await;
+            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert!(res.headers().contains_key("corten-patch") && res.text().contains("Enter a number of copies"));
+            assert_eq!(builder.saved(), before);
         }
     }
 
