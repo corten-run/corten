@@ -30,10 +30,14 @@ export async function failedPartLink(browser) {
     await setup.step(() => follow.route((url) => url.href === home || url.href === target, (route) =>
       route.request().headers().corten === "action" ? route.abort("internetdisconnected") : route.continue(),
     ));
-    await setup.step(() => follow.goto(home, { waitUntil: "domcontentloaded", timeout: 10_000 }));
+    // The runtime does not intercept links until load, even if the part has already failed.
+    await setup.step(() => follow.goto(home, { waitUntil: "load", timeout: 10_000 }));
     const link = follow.locator("#picks[data-corten-read-failed] a:visible");
     await setup.step(() => link.waitFor({ state: "visible", timeout: 10_000 }));
-    const href = await setup.step(() => link.evaluate((a) => /** @type {HTMLAnchorElement} */ (a).href));
+    const { href, enhanced } = await setup.step(() => link.evaluate((a) => ({
+      href: /** @type {HTMLAnchorElement} */ (a).href,
+      enhanced: !!window.navigation,
+    })));
     if (href !== target) throw new Error("link points to " + href + ", expected " + target);
 
     // Arm before pressing Enter, so even a fast answer is seen. This fresh page has never
@@ -51,6 +55,9 @@ export async function failedPartLink(browser) {
     const navigation = steps(10_000, "navigation timed out");
     const response = await navigation.step(() => answered);
     if (typeof response === "string") throw new Error(response);
+    const fullLoad = response.request().isNavigationRequest();
+    if (enhanced && fullLoad) throw new Error("expected a Corten navigation, got a document load");
+    if (!enhanced && !fullLoad) throw new Error("expected a document load without the Navigation API");
     if (!response.ok()) throw new Error("HTTP " + response.status());
     await navigation.step(() => follow.waitForURL((url) => url.href === target, { waitUntil: "commit", timeout: 10_000 }));
 
