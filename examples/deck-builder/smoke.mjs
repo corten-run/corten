@@ -416,9 +416,8 @@ async function delayedBuilder(scenario) {
       }
     }
     check("typing before the builder starts leaves the collection unfiltered", await visible.count() > 1);
-    const loaded = page.waitForEvent("load");
     resume.resolve(undefined);
-    await loaded;
+    await page.waitForSelector('thead input[type="checkbox"]:enabled');
 
     if (scenario === "lost answer" && await page.locator("form[data-patch]").count()) {
       const keep = page.getByRole("button", { name: "Keep both changes" });
@@ -583,6 +582,77 @@ async function nativeCountValidity() {
   }
 }
 
+/** Two count fields are one form, even when their input and change events are interleaved. */
+async function multiEditCounts(focused) {
+  const context = await browser.newContext();
+  let release;
+  try {
+    context.setDefaultTimeout(8_000);
+    const page = await open(context);
+    const [gravel, moth, lantern] = ["gravel-sprite", "moth-court-herald", "lantern-warden"].map((id) => countField(page, id));
+    const before = Number(await version(page));
+    const original = await gravel.inputValue();
+    const different = (n) => n === "1" ? "2" : "1";
+    const mothValue = different(await moth.inputValue());
+    const lanternValue = different(await lantern.inputValue());
+    const posts = [];
+    page.on("request", (r) => { if (isSave(r)) posts.push(saveFields(r)); });
+    if (focused) {
+      release = await holdSave(page);
+      await Promise.all([page.waitForRequest(isSave), gravel.fill(different(original)).then(() => gravel.press("Tab"))]);
+    } else {
+      await typeBadNumber(gravel);
+    }
+    await moth.fill(mothValue);
+    await moth.press("Tab");
+    if (!focused) {
+      const kept = (await numberInput(gravel)).bad && await moth.inputValue() === mothValue && posts.length === 0;
+      check("editing another count leaves the unfocused bad number intact and sends nothing", kept, JSON.stringify(await numberInput(gravel)));
+      if (!kept) return;
+      const [top] = await lineOrder(page);
+      await page.locator(`li[data-key="${top}"] button`).focus();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      check("reordering a line redraws without committing either unfinished edit",
+        (await lineOrder(page))[1] === top && (await numberInput(gravel)).bad && await moth.inputValue() === mothValue && posts.length === 0);
+    }
+    const id = focused ? "lantern-warden" : "gravel-sprite";
+    const value = focused ? lanternValue : original;
+    if (focused) {
+      await typeBadNumber(lantern);
+      await lantern.fill(value); // corrected, but no change/blur event before the queued POST.
+    }
+    const [reply] = await Promise.all([
+      page.waitForResponse((r) => isSave(r.request()) && saveFields(r.request()).get("draft") === (focused ? "2" : "1")),
+      focused ? release() : gravel.fill(value).then(() => gravel.press("Tab")),
+    ]);
+    await settled(page);
+    const field = (fields, id) => fields.getAll("count")[fields.getAll("card").indexOf(id)];
+    const sent = saveFields(reply.request());
+    check("the coherent POST carries both live counts", reply.status() === 200 && field(sent, id) === value &&
+      field(sent, "moth-court-herald") === mothValue && (!focused || await lantern.evaluate((el) => document.activeElement === el)));
+    const list = (await page.getByLabel("Deck list", { exact: true }).inputValue()).split("\n");
+    check("the acknowledged deck list matches those counts before another edit",
+      list.includes(`${value} ${focused ? "Lantern Warden" : "Gravel Sprite"}`) && list.includes(`${mothValue} Moth Court Herald`));
+    // An actual Add without a blur exposes a stale acknowledged snapshot.
+    const ids = Object.keys(await deck(page));
+    const spare = await page.locator("tbody tr[data-key]").evaluateAll(
+      (rows, ids) => rows.find((row) => !ids.includes(row.getAttribute("data-key")))?.getAttribute("data-key"), ids);
+    if (!spare) throw new Error("multi-edit control needs a card not already in the deck");
+    const add = row(page, spare).getByRole("button", { name: "Add", exact: true });
+    const [next] = await Promise.all([page.waitForResponse((r) => isSave(r.request())), add.evaluate((el) => el.click())]);
+    await settled(page);
+    await page.reload();
+    check("the next Add and the persisted deck keep both counts",
+      field(saveFields(next.request()), id) === value && await countField(page, id).inputValue() === value &&
+      await moth.inputValue() === mothValue && Number(await version(page)) === before + (focused ? 3 : 2));
+  } finally {
+    release?.();
+    await context.close();
+  }
+}
+
 /** A blocked draft has not gone out. Correcting the field without changing its count must resume it. */
 async function queuedCountValidity() {
   const context = await browser.newContext();
@@ -677,9 +747,9 @@ async function nativeRefusal(code) {
     const intended = code === 409 ? original : edited;
     if (code === 422) await count(page).fill(intended);
     const before = await deck(page);
-    const loaded = page.waitForEvent("load");
     resume.resolve();
-    await loaded;
+    // Startup enables select-all even when the player edited before the script arrived.
+    await page.waitForSelector('thead input[type="checkbox"]:enabled');
     const field = count(page);
     if (code === 422) {
       const kept = sameDeck(await deck(page), before) && await field.count() === 1 &&
@@ -1246,6 +1316,7 @@ try {
     await successiveAutosaves();
     await successiveAutosaves(true);
   } else if (process.argv.includes("--validity-only")) {
+    for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();
     await nativeCountValidity();
@@ -1259,6 +1330,7 @@ try {
     for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
     for (const selected of [false, true]) await nativeAddHandoff(selected);
     for (const code of [409, 422]) await nativeRefusal(code);
+    for (const focused of [false, true]) await multiEditCounts(focused);
     for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();
     await nativeCountValidity();

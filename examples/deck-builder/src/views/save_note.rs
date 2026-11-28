@@ -39,7 +39,7 @@ pub enum SaveOutcome {
 
 impl Answer {
     /// The same notice on a whole page and in a patch.
-    pub fn words(&self) -> impl Render + '_ {
+    fn words(&self) -> impl Render + '_ {
         html! {
             match self {
                 Answer::None => {}
@@ -61,7 +61,7 @@ impl Answer {
             Answer::Stale { version, unsure } => (SaveOutcome::Stale, version, 0, unsure),
             Answer::None | Answer::NativeSubmit => return None,
         };
-        Some(SaveNote { answer: self, outcome, version, draft, unsure })
+        Some(SaveNote { answer: self, receipt: Some((outcome, version, draft, unsure)) })
     }
 }
 
@@ -78,9 +78,12 @@ pub struct DeckAnswered {
 
 /// Only a patch notifies the queue. Keep the binding usable by tabs from before a deploy.
 #[component(js)]
-pub fn SaveNote<'a>(answer: &'a Answer, outcome: SaveOutcome, version: u64, draft: u64, unsure: bool) -> impl Patch {
+pub fn SaveNote<'a>(answer: &'a Answer, receipt: Option<(SaveOutcome, u64, u64, bool)>) -> impl Patch {
     html! {
-        <span id={SaveNoteId} on:connect={js::answered(target, outcome, version, draft, unsure)}>
+        <span
+            id={SaveNoteId}
+            on:connect={receipt.map(|(outcome, version, draft, unsure)| js::answered(target, outcome, version, draft, unsure))}
+        >
             {answer.words()}
         </span>
     }

@@ -250,27 +250,43 @@ function applied(deck, change) {
 }
 
 /**
- * A change the player made: drawn, kept for undo (as what it did, after the floor at no copies),
- * and saved.
- * @param {State} s @param {Parts} parts @param {Change} change
+ * Read one coherent edit, including focused and previously blurred counts. Until all fields
+ * are valid the DOM owns the unfinished edit; don't redraw it or make a send out of it.
+ * @param {State} s @param {Parts} parts @param {Change} [extra] a move to apply to those counts
  */
-function change(s, parts, change) {
-  const next = applied(s.drawn, change);
+function takeCounts(s, parts, extra) {
+  if (!parts.form.checkValidity()) {
+    s.blocked = true;
+    return false;
+  }
+  s.blocked = false;
+  /** @type {Deck} */ const live = new Map();
+  for (const line of rows(parts.lines, DeckLine)) {
+    const n = line.count;
+    if (n > 0) live.set(line.id, n);
+  }
+  const next = extra ? applied(live, extra) : live;
   const did = diff(s.drawn, next);
-  if (did.length === 0) return;
-  s.undo.push(did);
-  s.redo.length = 0;
-  draw(s, parts, next);
-  save(s, parts);
+  if (did.length) {
+    s.undo.push(did);
+    s.redo.length = 0;
+    draw(s, parts, next, true);
+  }
+  return true;
+}
+
+/** @param {DeckLine} line @param {Deck} drawn */
+function editing(line, drawn) {
+  return line.count !== (drawn.get(line.id) ?? 0) || !!line.el.querySelector(":invalid");
 }
 
 /**
  * Shows `deck`: the lines (made, filled or removed by key, in the page's presentation order), each
  * collection row's count in the deck, the count, the curve, the kinds, the deck list, and whether
  * undo and redo have anything.
- * @param {State} s @param {Parts} parts @param {Deck} deck
+ * @param {State} s @param {Parts} parts @param {Deck} deck @param {boolean} [acceptFields]
  */
-function draw(s, parts, deck) {
+function draw(s, parts, deck, acceptFields = false) {
   const cards = rows(parts.cards, CollectionRow);
   const changed = new Set(diff(s.drawn, deck).map(([id]) => id));
   s.motion += 1;
@@ -279,7 +295,6 @@ function draw(s, parts, deck) {
     const row = cards.get(id);
     if (row && row.in_deck !== n) row.in_deck = n;
   }
-  s.drawn = deck;
   const items = [];
   for (const [id, count] of deck) {
     const row = cards.get(id);
@@ -293,7 +308,24 @@ function draw(s, parts, deck) {
   s.order = order;
   const position = new Map(order.map((id, index) => [id, index]));
   items.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
-  rows(parts.lines, DeckLine, parts.template).replace(items);
+  const lines = rows(parts.lines, DeckLine, parts.template);
+  // A feed update, refusal or reorder can arrive mid-keystroke. Fill new rows from the
+  // template, but leave a retained input's native editor alone until we take its value.
+  for (const line of lines) {
+    if (!acceptFields && editing(line, s.drawn)) continue;
+    const n = deck.get(line.id);
+    if (n === undefined) lines.remove(line);
+    else if (acceptFields || line.count !== n) line.count = n;
+  }
+  const missing = items.filter((item) => !lines.get(item.id));
+  if (missing.length) lines.push(missing);
+  items.forEach((item, i) => {
+    if (lines.at(i)?.id !== item.id) {
+      const line = lines.get(item.id);
+      if (line) lines.swap(i, lines.indexOf(line));
+    }
+  });
+  s.drawn = deck;
   for (const id of changed) {
     const card = cards.get(id);
     if (card) motion(card.el, "card", s.motion, s.signal);
@@ -369,16 +401,11 @@ function say(parts, state) {
  * answer comes. The form holds the drawn deck; the version says what it was built on, and the
  * draft which send this is. Each send is kept with the history as it was, until an answer says
  * which one the server saved.
- * @param {State} s @param {Parts} parts
+ * @param {State} s @param {Parts} parts @param {Change} [extra] a change to the live counts
  */
-function save(s, parts) {
-  if (s.sending || s.conflict || s.waiting) return;
-  s.blocked = false;
+function save(s, parts, extra) {
+  if (!takeCounts(s, parts, extra) || s.sending || s.conflict || s.waiting) return;
   if (same(s.drawn, s.base) && s.unanswered.length === 0) return;
-  if (!parts.form.checkValidity()) {
-    s.blocked = true;
-    return;
-  }
   s.sending = true;
   s.drafts += 1;
   parts.draft.value = String(s.drafts);
@@ -447,7 +474,7 @@ function heard(s, parts) {
     if (parts.status.dataset.state === "offline") return;
     s.waiting = false;
     save(s, parts);
-  } else if (same(s.drawn, s.base)) {
+  } else if (same(s.drawn, s.base) && !Array.from(rows(parts.lines, DeckLine)).some((line) => editing(line, s.drawn))) {
     s.waiting = false;
     known(s, parts, new Map(s.theirs), s.theirGeneration, s.theirVersion);
     draw(s, parts, new Map(s.theirs));
@@ -470,6 +497,7 @@ function heard(s, parts) {
  */
 export function merge(parts) {
   const s = kept();
+  if (!takeCounts(s, parts)) return;
   const mine = diff(s.base, s.drawn);
   settle(s, parts);
   draw(s, parts, applied(s.theirs, mine));
@@ -487,7 +515,7 @@ export function reload(parts) {
   s.undo = [];
   s.redo = [];
   s.saved = { undo: [], redo: [] };
-  draw(s, parts, new Map(s.theirs));
+  draw(s, parts, new Map(s.theirs), true);
   say(parts, "updated");
 }
 
@@ -523,15 +551,12 @@ export function retry(parts) {
 
 /**
  * Save through the autosave queue when this handler runs; otherwise the button submits the form.
- * @param {MouseEvent} event @param {Parts} parts @param {HTMLInputElement[]} copies
+ * @param {MouseEvent} event @param {Parts} parts
  */
-export function saveNow(event, parts, copies) {
+export function saveNow(event, parts) {
   if (!enhanced(parts)) return;
   event.preventDefault();
   if (!parts.form.reportValidity()) return;
-  // Some browsers don't move focus to a clicked button.
-  const focused = copies.find((input) => input === document.activeElement);
-  if (focused) typed(focused, parts);
   if (parts.status.dataset.state === "offline") retry(parts);
   else save(kept(), parts);
 }
@@ -551,6 +576,7 @@ export function redo(parts) {
  * @param {State} s @param {Parts} parts @param {boolean} back
  */
 function step(s, parts, back) {
+  if (!takeCounts(s, parts)) return;
   const entry = (back ? s.undo : s.redo).pop();
   if (!entry) return;
   (back ? s.redo : s.undo).push(entry);
@@ -560,14 +586,10 @@ function step(s, parts, back) {
 
 /**
  * A count typed into a deck line (its `change`, once the player leaves it or presses Enter).
- * @param {HTMLInputElement} input @param {Parts} parts
+ * @param {Parts} parts
  */
-export function typed(input, parts) {
-  if (!enhanced(parts) || !input.validity.valid) return;
-  const s = kept();
-  const line = rows(parts.lines, DeckLine).of(input);
-  if (!line) return;
-  change(s, parts, [[line.id, copiesFrom(input) - (s.drawn.get(line.id) ?? 0)]]);
+export function typed(parts) {
+  if (enhanced(parts)) save(kept(), parts);
 }
 
 /** The count may have been corrected back to its original value, with no change to save.
@@ -577,11 +599,6 @@ export function resumeSave(parts) {
   if (!enhanced(parts)) return;
   const s = kept();
   if (s.blocked) queueMicrotask(() => save(s, parts));
-}
-
-/** @param {HTMLInputElement} input */
-function copiesFrom(input) {
-  return Math.max(0, Math.trunc(Number(input.value)) || 0);
 }
 
 /**
@@ -595,7 +612,7 @@ export function add(event, button, parts) {
   if (!row) return;
   event.preventDefault();
   if (!parts.form.reportValidity()) return;
-  change(kept(), parts, [[row.id, 1]]);
+  save(kept(), parts, [[row.id, 1]]);
 }
 
 /**
@@ -607,7 +624,7 @@ export function addPicked(event, parts, browse) {
   event.preventDefault();
   const ids = picks(browse.cards);
   if (ids.length === 0 || !parts.form.reportValidity()) return;
-  change(kept(), parts, ids.map((id) => [id, 1]));
+  save(kept(), parts, ids.map((id) => [id, 1]));
   clearPicks(browse);
 }
 
@@ -749,10 +766,12 @@ function drop(s, parts, carry, on) {
   end(s, carry);
   const what = whatMoves(parts, carry, moving.ids);
   if (moving.from === "cards" && on === "deck") {
-    change(s, parts, moving.ids.map((id) => [id, 1]));
+    if (!parts.form.reportValidity()) return;
+    save(s, parts, moving.ids.map((id) => [id, 1]));
     if (moving.back) carry.announce.textContent = carry.added({ what });
   } else if (moving.from === "deck" && on === "cards") {
-    change(s, parts, moving.ids.map((id) => [id, -(s.drawn.get(id) ?? 0)]));
+    if (!parts.form.reportValidity()) return;
+    save(s, parts, moving.ids.map((id) => [id, -(rows(parts.lines, DeckLine).get(id)?.count ?? 0)]));
     if (moving.back) carry.announce.textContent = carry.removed({ what });
   } else if (moving.from === "deck" && on === "deck" && moving.reordered) {
     // Keyboard reordering already drew the new order; Space only releases the grip.

@@ -9,7 +9,7 @@ saves it as the user works.
 | In the browser | How |
 |---|---|
 | Filter, sort and select the collection | a handler per column; `CollectionRow` reads selection from the live checkbox, which also styles the row |
-| Add a card, add the selected ones, type a count | a change: the next deck is drawn (`rows(lines, DeckLine, template).replace`) and saved |
+| Add a card, add the selected ones, type a count | the builder reads the live counts together, applies the change, and draws the deck by card ID before saving |
 | Drag a card onto the deck, or a line back out | HTML drag and drop on a grip; the same change |
 | Reorder deck lines | drag a deck grip onto another line; the presentation order stays in this page while the server continues to own counts |
 | The same moves by keyboard | Space picks up, Left/Right moves between the collection and deck, Up/Down reorders a deck line, Space drops, Escape puts back, each announced |
@@ -30,8 +30,10 @@ or malformed counts shows a conflict and asks the player to re-enter that edit o
 Malformed counts that reach the server under a fresh key are still a form error. In the browser,
 a partly typed number is invalid even when its form value is empty; native Save blocks it,
 whereas deliberately clearing a count still removes the line. Autosave also waits for a valid
-form, and a pending save can resume after the field is corrected. Add and Add selected leave an
-incomplete number (and any selection) alone instead of redrawing it and submitting the old count.
+form. Editing another count leaves the incomplete number alone; once corrected, both edits can
+go in one save. Each send takes the counts actually in the form, even if a previous save was
+still on its way when the player corrected a focused field. Add and Add selected also leave an
+incomplete number and any selection alone.
 An Add can save without touching the count fields. If autosave starts on that same form and reuses
 the native save's key, the server refuses the write and draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
@@ -106,6 +108,11 @@ Playwright, not transport framing. Startup excludes styles, images and feed traf
 exclude the page open before the save and its subresources. The validation follow-up adds
 387 bytes to the HTML and 335 bytes to the startup script; the first autosave exchange is
 unchanged, and the added bytes in the native Save exchange are in the redirected page.
+
+For the multi-field edit repair, a fresh Chromium context loaded the unfiltered deck from a
+fresh app process once per build. Against `152b7c9b7`, startup HTML went from 161,562 to
+161,546 bytes; the 11 startup script bodies went from 92,128 to 92,857 bytes, all of the
+increase in `deck_builder.js` (23,127 to 23,856). These are decoded body sizes, not timings.
 
 ### Native save receipt cost
 

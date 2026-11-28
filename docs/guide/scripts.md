@@ -217,8 +217,10 @@ and the next native Save uses the original key and version before opening a fres
 Add selected can save without changing any count input. If autosave starts on such a form and
 submits a key that already saved natively, the server draws a conflict page with the saved deck
 and a fresh key. It does not give the queue an acknowledgement for a draft it never saved.
-With autosave active, Add and Add selected check the form before redrawing any count field:
-redrawing an incomplete number would clear the browser's `badInput` state and let it submit.
+With autosave active, the count inputs stay editable even when another count is incomplete.
+The builder waits for the whole form to be valid, then reads all its counts before sending,
+including a focused field whose `change` event has not fired. The queue remembers that deck,
+not an earlier drawing of it.
 Filter applies the current query even if its input handler was not there when the player typed it.
 
 ### A value both sides compute
@@ -1140,8 +1142,9 @@ wrong one and `tsc` checks the field's name and type: read each row's key once (
 markup's call is checked against the handler's name, while no call to a handler whose parameter is
 a JSDoc union of strings compiles (a Rust enum the server declares, such as `SortBy`, is the other
 checked way, in the table at the top of this page). `examples/seller-desk` sorts and filters its
-grid this way, and `examples/deck-builder` makes its deck's lines with `replace(items)` after each
-change, each filled from the collection row of the same card. Rows a script only puts in another
+grid this way. In `examples/deck-builder` new lines are filled from their collection rows;
+retained lines keep their number inputs, so a refusal or reorder cannot erase an incomplete
+number by filling every row again. Rows a script only puts in another
 order, and never writes or makes, need no view: each gives its ref the value it sorts by
 (`ref={row.with(sort_cents(l))}`, the number the server's own sort uses, such as a price in cents,
 never a cell's text), and the handler compares the values of a `Map<HTMLTableRowElement, number>`

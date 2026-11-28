@@ -2,7 +2,7 @@ use corten::prelude::*;
 use corten_ui::CopyButton;
 
 use super::deck_preview::DeckPreviewChanged;
-use super::save_note::SaveNoteId;
+use super::save_note::SaveNote;
 use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, Shown, curve_cost, deck_list};
 use crate::{
     app::{DeckInput, DeckQuery, Slot, Sort, url},
@@ -262,7 +262,7 @@ pub fn DeckBuilder<'a>(
                 // note inside it, and the script shows one of the spans while it has something to
                 // say (`data-state`).
                 <div ref={status} class={Status} role="status" data-state="">
-                    <span id={SaveNoteId}>{answer.words()}</span>
+                    <SaveNote answer={answer} receipt={None} />
                     <span class={Saving}>"Saving…"</span>
                     <span class={Saved}>"Saved."</span>
                     <span class={Updated}>"Updated from another tab."</span>
@@ -314,7 +314,7 @@ pub fn DeckBuilder<'a>(
                     <ul
                         ref={lines_ref}
                         class={Lines}
-                        on:change={js::typed(copies.closest(), parts)}
+                        on:change={js::typed(parts)}
                         on:focusout={js::resumeSave(parts)}
                         on:dragstart={js::liftLine(event, lift.closest(), parts, carry)}
                         on:dragover={js::overLine(event, lines_ref)}
@@ -335,7 +335,7 @@ pub fn DeckBuilder<'a>(
                         }
                     </ul>
                     <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Use Add to put cards in the deck."</p>
-                    <button type="submit" on:click={js::saveNow(event, parts, copies)}>"Save"</button>
+                    <button type="submit" on:click={js::saveNow(event, parts)}>"Save"</button>
                 </form>
                 <template ref={template}>
                     <DeckLine id="" name="" kind="" cost={0} count={0} owned={0} lift={lift} copies={copies} />
