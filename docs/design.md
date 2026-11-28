@@ -7727,8 +7727,8 @@ rules something out.
     Any-step bounds and programmatic prefills share one formatter, using exponent notation
     past 18 digits written out. The digit budget governs notation, not logical ranges.
     Plain inputs use `Bounds::input_value`, which `NumberField` also uses; it preserves
-    submitted text on redisplay. Existing stepped fields and standalone `Entry` attributes
-    keep their formatting.
+    submitted text on redisplay. Any-step formatting does not apply to stepped fields
+    or standalone `Entry` attributes.
 
     Concrete `f32` and `f64` constructors reject non-finite or reversed ranges, or ranges with
     no representable member, using stable const comparisons and adjacent-float operations.

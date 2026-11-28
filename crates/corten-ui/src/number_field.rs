@@ -22,8 +22,8 @@ pub struct Number<'a, I, T, S = T> {
     pub name: FieldName,
     /// The input's value: a number, the text a refused form sent, or nothing (`Entry::default()`).
     pub value: Entry<T>,
-    /// Its `min`, `max` and `step`: the amount a button or arrow key adds, which also sets the
-    /// decimals shown (`0.1` shows `0.5` as `0.5`, `0.25` shows it as `0.50`). Page Up and Page
+    /// Its `min`, `max` and `step`: a button or arrow key adds one step from the minimum's grid.
+    /// The minimum and step set the decimals shown (min `0.25`, step `0.5` gives `0.75`). Page Up and Page
     /// Down add ten steps. `Bounds::<f64>::any_step` has no step for a button to add: a number is shown
     /// as it is, both buttons are drawn disabled, so the field keeps its layout, and the arrow
     /// keys are the browser's, which add 1 and never step past the ends the input says.
@@ -133,7 +133,7 @@ impl<'a, I: Id, T: Numeric, S: Spacing<T>> Number<'a, I, T, S> {
 /// The input is a native `<input type="number">`, so without the script it still steps with the
 /// arrow keys, and the browser checks `min`, `max`, `step` and `required` when the form is
 /// sent. The script (`number_field.js`) adds the buttons (press and hold repeats), Page Up and
-/// Page Down, keeps the step's decimals, disables a button at its bound, and sends `input` and
+/// Page Down, keeps the decimals of the minimum and step, disables a button at its bound, and sends `input` and
 /// `change` events like typing does.
 ///
 /// Parts: a `div` around `input` and `button[aria-controls]` twice, the first decreasing;
