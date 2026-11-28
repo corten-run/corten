@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { beginLifetime, inspectLifetime } from "../host-lifetime.mjs";
-import { jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation } from "../../registry.mjs";
+import { campaignRounds, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, runnerFor } from "../../registry.mjs";
 
 export const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
 export const stat = (pid, name = "node", start = pid * 10, ppid = 1) => `${pid} (${name}) S ${[ppid, ...Array(17).fill(0), start, 0].join(" ")}`;
@@ -23,11 +23,14 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   const temporary = fs.mkdtempSync(join(tmpdir(), "host-snapshot-churn-")), directory = join(temporary, "host");
   const f = { members: [], children: [], clock: 10000, wallOffset: 0, reads: [], cpu: 10, override() {}, scope: null };
   const campaign = "r21-0000000000000001", campaignRound = "r21", pid = nativePids[0] ?? 4242;
-  const round = json === "timing" ? "j43" : json ? jsonPreparationRound(campaignRound) : "churn-control";
+  const round = json === "timing" ? "j43" : json ? jsonPreparationRound(campaignRound)
+    : browser ? campaignRounds(campaignRound)["fullstack-browser"] : "churn-control";
   const jsonInvocation = json === "timing" ? jsonTimingInvocation(round, "/bench/audits.json") : jsonPreparationInvocation(campaignRound);
   if (json === "check-only-no-build") jsonInvocation.argv = jsonInvocation.argv.filter((arg) => arg !== "--build");
+  const { entry, selection } = runnerFor("fullstack-browser");
+  const browserInvocation = { executable: "node", argv: [entry, round, ...selection] };
   const binding = { request: { group: json ? "json-api" : browser ? "fullstack-browser" : catalog ? "catalog-page" : "client-heavy",
-    round, commit: "a".repeat(40) }, ...(json ? { execution: { invocation: jsonInvocation } } : {}) };
+    round, commit: "a".repeat(40) }, ...(json || browser ? { execution: { invocation: json ? jsonInvocation : browserInvocation } } : {}) };
   const executable = join(temporary, "executable"), nextExecutable = join(temporary, "next-executable"), held = new Set();
   const deferred = browser || catalog || json === "prepare" || json === "check-only-no-build";
   const inline = json === "timing";
@@ -37,7 +40,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   if (deferred || inline) { fs.writeFileSync(executable, "original executable"); fs.writeFileSync(nextExecutable, "next executable"); }
   if (inline) fs.writeFileSync(thirdExecutable, "third executable");
   const invocation = json === "fixture" ? { executable: "node", argv: ["bench/catalog/fixtures.mjs", "c21"] }
-    : json ? jsonInvocation : { executable: "node", argv: ["control"] };
+    : json ? jsonInvocation : browser ? browserInvocation : { executable: "node", argv: ["control"] };
   const result = { terminal: true, code: 0, signal: null, cancelled: false, forced: false, success: true, error: null };
   let observer, finished = false;
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
@@ -58,6 +61,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   if (!nativePids.length) {
     t.mock.method(Date, "now", () => f.clock + f.wallOffset);
     t.mock.method(performance, "now", () => f.clock);
+    if (browser) t.mock.method(process.hrtime, "bigint", () => BigInt(f.clock) * 1000000n);
     t.mock.method(Atomics, "wait", (_array, _index, _value, ms) => { f.clock += ms + (f.retryOversleep ?? 0); return "timed-out"; });
   }
   t.mock.method(globalThis, "setInterval", (callback) => { f.capture = callback; return 1; });
@@ -77,10 +81,14 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
         const acquire = () => exec(file, argv, options);
         return f.flock ? f.flock(argv, options, acquire) : acquire();
       }
+      if (browser && file === "/usr/bin/getconf") {
+        assert.deepEqual(argv, ["CLK_TCK"]);
+        return "100\n";
+      }
       if (argv[1] !== "--hash-open-executables") {
         assert.equal(browser, true, "catalog proof does not query the Docker daemon");
         assert.equal(file, "docker");
-        if (f.docker) return f.docker(argv);
+        if (f.docker) return f.docker(argv, options);
         assert.deepEqual(argv, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]);
         return "";
       }
@@ -176,6 +184,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     f.reads.push(text); const value = f.override(text); if (value !== undefined) return value;
     if (text === "/proc/self/cgroup") return `0::${parent}/supervisor\n`;
     if (text === "/proc/sys/kernel/random/boot_id") return "boot\n";
+    if (browser && text === "/proc/uptime") return `${(f.clock / 1000).toFixed(2)} 0.00\n`;
     if (["/proc/cpuinfo", "/proc/meminfo"].includes(text)) return "control\n";
     const proc = /^\/proc\/(\d+)\/(stat|exe|cgroup|cmdline)$/.exec(text);
     if (proc) {
@@ -202,7 +211,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   f.finish = async (retainTerminalClock = false, onSettled) => {
     f.override = () => {}; f.members = []; f.children = []; finished = true; await observer.finish(result, retainTerminalClock, onSettled);
     f.terminal = JSON.parse(original.readFileSync(join(directory, "terminal.json")));
-    return inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
+    return inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result, ...(browser ? { phase: "timing" } : {}) });
   };
   return f;
 }

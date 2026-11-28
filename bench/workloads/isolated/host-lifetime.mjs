@@ -302,6 +302,7 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
   const started = performance.now(), deadline = Math.min(gateDeadline, started + Math.max(0, Math.min(maximumSampleGapMs, remaining)));
   let race, successor, attempts = 0;
   for (;;) {
+    if (gateDeadline !== Infinity) checkBrowserSampleDeadline(gateDeadline);
     const inlineRetry = inline && successor;
     if (inlineRetry && performance.now() >= deadline) throw race;
     inline?.attempt.clear(); // Nothing from a refused census can seed its successor's lookup.
@@ -339,13 +340,21 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
   }
 }
 
-function docker(args) {
+function docker(args, deadline) {
   // A fixed local daemon endpoint, not DOCKER_HOST/config supplied by the archive.
-  return execFileSync("docker", ["--host", "unix:///var/run/docker.sock", ...args], {
-    encoding: "utf8", timeout: maximumSampleGapMs, maxBuffer: 16 * 2 ** 20,
-    env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: "/root", LANG: "C.UTF-8" },
-    stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
-  }).trim();
+  const timeout = deadline === undefined ? maximumSampleGapMs : Math.floor(deadline - performance.now());
+  if (timeout < 1) throw new BrowserSampleDeadline("Browser sample continuity deadline exceeded");
+  try {
+    return execFileSync("docker", ["--host", "unix:///var/run/docker.sock", ...args], {
+      encoding: "utf8", timeout, ...(deadline === undefined ? {} : { killSignal: "SIGKILL" }), maxBuffer: 16 * 2 ** 20,
+      env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: "/root", LANG: "C.UTF-8" },
+      stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+    }).trim();
+  } catch (error) {
+    if (deadline !== undefined && error.code === "ETIMEDOUT")
+      throw new BrowserSampleDeadline("Browser sample continuity deadline exceeded");
+    throw error;
+  }
 }
 const containerId = /^[a-f0-9]{64}$/;
 export function containerState(info) {
@@ -382,7 +391,7 @@ export function captureNativeCpuScope(info) {
 }
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
-export function captureBrowserParticipant(id, executables = new Map(), pending) {
+export function captureBrowserParticipant(id, executables = new Map(), pending, deadline) {
   // A container's first process renames itself or execs its entrypoint just
   // after Docker reports it running. Only that identity churn on a container
   // Docker started within the continuity window is rechecked: the whole capture
@@ -396,7 +405,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
     // Bind identity before the executable transaction commits: a rejected
     // capture must pin no executable.
     const capture = () => {
-      const record = readBrowserParticipant(id, executables, pending, bound ? undefined : began);
+      const record = readBrowserParticipant(id, executables, pending, bound ? undefined : began, deadline);
       if (bound) startupRecheck(record, bound, attempts);
       return record;
     };
@@ -413,6 +422,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
         kernel: { stat: churn.stat } }, bound, attempts);
       else if (!justStarted(churn.startedAt)) throw error;
       bound ??= churn; failed = error;
+      if (deadline !== undefined) checkBrowserSampleDeadline(deadline, performance.now() + 1);
       Atomics.wait(retryPause, 0, 0, 1);
     }
   }
@@ -461,11 +471,15 @@ function sameDockerExit(running, observed, startedAt, endedAt) {
   return observed.id === running.id && observed.imageId === running.imageId && observed.restartCount === running.restartCount
     && observed.state.StartedAt === running.state.StartedAt && stoppedDockerState(observed.state, endedAt, startedAt);
 }
-function confirmDockerExit(inspect, running, startedAt, began) {
+function confirmDockerExit(inspect, running, startedAt, began, deadline) {
   const { state } = running;
   for (let attempt = 0; attempt < 2; attempt++) {
     let observed;
-    try { observed = inspect(true); } catch { return; } // Keep the original proc gap.
+    try { observed = inspect(true); }
+    catch (error) {
+      if (error instanceof BrowserSampleDeadline) throw error;
+      return; // Keep the original proc gap.
+    }
     const endedAt = Date.now();
     if (sameDockerExit(running, observed, startedAt, endedAt))
       return { startedAt, endedAt, container: observed, kernel: null };
@@ -477,7 +491,10 @@ function confirmDockerExit(inspect, running, startedAt, began) {
     // inspects against it and never start the last inspect after an oversleep.
     const elapsed = performance.now() - began;
     if (elapsed >= exitRecheckDeadlineMs) return;
-    if (elapsed < exitRecheckTargetMs) Atomics.wait(retryPause, 0, 0, exitRecheckTargetMs - elapsed);
+    if (elapsed < exitRecheckTargetMs) {
+      if (deadline !== undefined) checkBrowserSampleDeadline(deadline, began + exitRecheckTargetMs);
+      Atomics.wait(retryPause, 0, 0, exitRecheckTargetMs - elapsed);
+    }
     const woke = performance.now() - began;
     if (woke < exitRecheckTargetMs || woke >= exitRecheckDeadlineMs) return;
   }
@@ -506,11 +523,11 @@ function startupRecheck(record, bound, attempts) {
     throw error;
   }
 }
-function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
+function readBrowserParticipant(id, executables, pending, exitRecheckBegan, deadline) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
   const startedAt = Date.now();
   const inspect = (confirmingExit = false) => {
-    const infos = JSON.parse(docker(["container", "inspect", id]));
+    const infos = JSON.parse(docker(["container", "inspect", id], deadline));
     if (confirmingExit) assert.ok(Array.isArray(infos));
     assert.equal(infos.length, 1);
     assert.equal(infos[0].Id, id); return containerState(infos[0]);
@@ -529,7 +546,7 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
       // An exiting PID can vanish before Docker updates its running state.
       // Only the opening stat read can take this path, before any kernel evidence.
       if (exitRecheckBegan !== undefined && error?.code === "ENOENT" && canConfirmDockerExit(container)) {
-        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan, deadline);
         if (stopped) return stopped;
       }
       throw error;
@@ -543,7 +560,7 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     const directories = exitRecheckBegan === undefined ? undefined : [];
     const ancestors = parents(posix.dirname(path), directories);
     let observed;
-    try { observed = snapshot(path, executables, pending); }
+    try { observed = snapshot(path, executables, pending, null, undefined, undefined, undefined, deadline); }
     catch (error) {
       const scope = join(root, path);
       // Only the first opening scope miss can be confirmed as a stop. A
@@ -551,7 +568,7 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
       if (openingScopeMisses.has(error)
         && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
         && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
-        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan, deadline);
         if (stopped && vanishedDockerScope(scope, directories, exitRecheckBegan))
           throw new ClosingDockerExit({ ...stopped, endedAt: Date.now() });
       }
@@ -564,7 +581,7 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
       && observed.groups.every(({ files }) => files["cgroup.events"]?.split("\n")
         .filter((line) => /^populated(?:[ \t]|$)/.test(line)).join("\n") === "populated 0")
       && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
-      const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+      const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan, deadline);
       if (stopped) throw new ClosingDockerExit(stopped);
     }
     assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
@@ -638,6 +655,9 @@ export function reopenBrowserDockerGate({ fd, identity }) {
 }
 
 class BrowserSampleDeadline extends Error {}
+function checkBrowserSampleDeadline(deadline, now = performance.now()) {
+  if (now >= deadline) throw new BrowserSampleDeadline("Browser sample continuity deadline exceeded");
+}
 
 export function lockBrowserDocker(gate, removal = false, deadline, reserveMs = 0) {
   const fd = reopenBrowserDockerGate(gate);
@@ -667,17 +687,20 @@ export function lockBrowserDocker(gate, removal = false, deadline, reserveMs = 0
   }
 }
 
-function browserDocker(excluded, executables, pending, noteGap, noteRecheck) {
-  const inventory = docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean).sort();
+function browserDocker(excluded, executables, pending, noteGap, noteRecheck, deadline) {
+  const inventory = docker(["container", "ls", "-aq", "--no-trunc"], deadline).split("\n").filter(Boolean).sort();
   assert.equal(new Set(inventory).size, inventory.length); inventory.forEach((id) => assert.match(id, containerId));
   const participants = [], gaps = [];
   for (const id of inventory.filter((id) => !excluded.has(id))) {
     try {
-      const record = captureBrowserParticipant(id, executables, pending);
+      const record = captureBrowserParticipant(id, executables, pending, deadline);
       if (startupRechecks.has(record)) noteRecheck(startupRechecks.get(record));
       participants.push(record);
     }
-    catch (error) { gaps.push(id); noteGap(error); }
+    catch (error) {
+      if (error instanceof BrowserSampleDeadline) throw error;
+      gaps.push(id); noteGap(error);
+    }
   }
   return { inventory, participants, gaps };
 }
@@ -827,8 +850,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     try {
       observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses, inline, gateDeadline);
       observedMono = captureGate ? performance.now() : undefined;
-      if (gateDeadline !== undefined && observedMono > gateDeadline)
-        throw new BrowserSampleDeadline("Browser sample continuity deadline exceeded");
+      if (gateDeadline !== undefined) checkBrowserSampleDeadline(gateDeadline, observedMono);
       if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
         && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
       processes = observed.processes;
@@ -842,7 +864,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         return key;
       });
       sampleOperation = "docker-inventory";
-      if (captureDocker) observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck);
+      if (captureDocker) observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck, gateDeadline);
     } finally { unlock?.(); }
     if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
       const path = groupPath(kernel.cgroup);
@@ -850,7 +872,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         && participantCpuSetsWithin(kernel, path, liveCpus.application), "native live application effective cpuset differs");
     }
     sampleOperation = "sample-write";
-    writer.enqueue(initial, serial(observed));
+    const bytes = serial(observed);
+    if (gateDeadline !== undefined) observing("docker-inventory", () => checkBrowserSampleDeadline(gateDeadline));
+    writer.enqueue(initial, bytes);
     admitInlineLookups();
     if (executableCensus || inline) previousCensusProcesses = processes;
     samples++; lastSampleAt = observed.at; lastSampleMono = observedMono;
