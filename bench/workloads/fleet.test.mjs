@@ -311,6 +311,28 @@ test("independent detach names the pre-intent stage and preserves placement diag
   });
 });
 
+test("independent detach names the attempt lock when a competing owner takes it after preview", async (t) => {
+  const f = await independentDetach(t), { plan } = f.p.deps;
+  const lock = join(f.root, ".fleet-operation.lock"), owner = "SYNTHETIC_PRIVATE_OWNER";
+  const manifest = join(f.root, "fleet-r21.json"), before = readFileSync(manifest);
+  let competing;
+  f.p.deps.plan = async (...args) => {
+    const result = await plan(...args);
+    // The controller yields before exclusive create; this owner wins that turn.
+    competing = turn().then(() => writeFileSync(lock, owner, { flag: "wx" })).catch((error) => error);
+    return result;
+  };
+  const code = await f.cli();
+  assert.equal(await competing, undefined);
+  assert.equal(code, 2);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: attempt-lock"]);
+  assert.equal(readFileSync(lock, "utf8"), owner);
+  assert.deepEqual(readFileSync(manifest), before);
+  assert.deepEqual(readdirSync(f.root).sort(), [".fleet-operation.lock", "fleet-r21.json"]);
+  assert.equal(existsSync(join(f.p.h.base, ".continuation-operation.lock")), false);
+  assert.deepEqual(f.p.children, []);
+});
+
 test("independent locked-plan error keeps identity, uncertainty and lock custody", async (t) => {
   const f = await independentDetach(t), { plan } = f.p.deps, stages = new Map();
   const error = Object.freeze(Object.assign(new Error("SYNTHETIC_PRIVATE_LOCKED_PLAN"), { controlUncertain: true }));

@@ -498,7 +498,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     assert.equal(options.approval, preview.approvalSha256, "fleet-exact-approval-required");
     assert.ok(preview.subject.jobs.every((j) => !j.missing?.length), "fleet-integration-missing");
     await controlCheckpoint(interrupted);
-    preIntentStage = undefined;
+    preIntentStage = continuation && options.detach ? "attempt-lock" : undefined;
     takeLock(lock, owner);
     ownsLock = true;
     if (continuation) preIntentStage = "locked-plan";
