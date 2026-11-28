@@ -2180,9 +2180,12 @@ Existing locks are never taken over or cleared by recovery.
 The saved measured commit and failure evidence remain unchanged; no validation,
 successful exit or collection result is invented. Fleet inspection reports
 `native-failed-retired` or `cleanup-pending`, never a qualified baseline.
-For the destroyed r27 and r41 marketplace hosts, replay uses the original
-per-locale roster to regenerate the three custody scripts and check their saved
-hashes. That roster cannot authorize a reservation, launch or live custody check.
+During [independent group continuation](#independent-group-continuation), the
+destroyed r27 and r41 marketplace hosts and the r67, r99 and r105 JSON API hosts
+retired after native failure replay against their exact original rosters. This
+regenerates the three custody scripts for comparison with their saved hashes;
+it does not make these historical rosters valid in standalone fleet inspection,
+reservation, launch or live custody checks.
 
 After independent review and merge, an operator previews the exact action with:
 

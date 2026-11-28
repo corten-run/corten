@@ -680,12 +680,17 @@ export function installBenchmarkUnit(s) {
 }
 
 // Fixed source-bound entry point. No caller-provided command or adapter filtering.
-// Only file reconstruction for destroyed native failures needs the r27/r41
-// single-group roster. Do not admit it to reservation, launch or live custody.
+// Only file reconstruction for destroyed native failures accepts these exact
+// former single-group rosters. Reservation, launch and live custody stay strict.
+const retiredRosterDigests = Object.freeze({
+  "localized-marketplace": "b374b8f7bb9600efb0f06abc30dd08bbbaf97ef8fafb7e3858e83fd5d32570a8", // r27/r41
+  "json-api": "18f956a01ac4e7fca9c50366d2f3117088b520804b408d553ba69e5298b957ce", // r67/r99/r105
+});
 export function validateRemoteFileState(s) {
+  const group = s.fleet?.single?.group;
   const priorSelection = s.status === "retired" && s.destroyedAt && s.retirement?.kind === "native-failed"
-    && s.schema === "benchmark-dedicated-group-host/v1" && s.fleet?.single?.group === "localized-marketplace"
-    && s.fleet.selection && digest(s.fleet.selection) === "b374b8f7bb9600efb0f06abc30dd08bbbaf97ef8fafb7e3858e83fd5d32570a8";
+    && s.schema === "benchmark-dedicated-group-host/v1" && Object.hasOwn(retiredRosterDigests, group)
+    && s.fleet.selection && digest(s.fleet.selection) === retiredRosterDigests[group];
   return validateState(s, s.round, { priorSelection });
 }
 
