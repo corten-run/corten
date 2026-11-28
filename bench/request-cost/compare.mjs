@@ -263,19 +263,32 @@ export function compare(base, head, { description = "", names = { base: "base", 
   /** Each idle run's record, as `idle.mjs` prints it on a host, with what decides: its before, after, growth and page size. */
   const records = /** @type {string[]} */ ([]);
   const memoryRuns = /** @type {string[][]} */ ([]);
-  const idle = IDLE.map(({ name, what }) => {
+  const modes = new Set();
+  const idleRuns = IDLE.map(({ name, what }) => {
     const runs = [];
     for (let run = 1; run <= RUNS; run += 1) runs.push(both(`idle-${name}-${run}.json`, `idle memory ${what}, run ${run},`));
     const [b, h] = [0, 1].map((side) => runs.map((found) => /** @type {any} */ (found[side] ?? null)));
     for (const [side, found] of /** @type {const} */ ([["base", b], ["head", h]]))
       found.forEach((run, at) => {
         if (run === null) return;
-        // Old records still decide by RSS. Missing or invalid diagnostics are not zeroes.
+        // The idle producer always writes both fields when observed, and neither in legacy runs.
         const growth = [run.allocator?.live, run.allocator?.threadNet, run.allocator?.active];
-        memoryRuns.push([side, what, String(at + 1), whole(run.grown), ...(growth.every(Number.isSafeInteger) ? growth.map(whole) : ["unavailable", "unavailable", "unavailable"])]);
+        const times = run.sweepNanos;
+        const legacy = !Object.hasOwn(run, "allocator") && !Object.hasOwn(run, "sweepNanos");
+        const observed = growth.every(Number.isSafeInteger) && Array.isArray(times) && times.length === 2 &&
+          times.every((n) => Number.isSafeInteger(n) && n >= 0);
+        const mode = legacy ? "off" : observed ? "on" : "unclear";
+        modes.add(mode);
+        memoryRuns.push([side, what, String(at + 1), whole(run.grown), ...(mode === "on" ? growth.map(whole) : ["unavailable", "unavailable", "unavailable"])]);
         const did = run.requests === 0 ? `sent nothing to the probe for ${run.case}` : `answered ${run.requests} ${run.case}`;
         records.push(`${side}, ${what}, run ${at + 1}: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
       });
+    return { what, b, h };
+  });
+  const modeProblem = modes.has("unclear") ? "the observer mode is unclear in partial or malformed allocator evidence"
+    : modes.size > 1 ? "the runs mix observer-on and observer-off RSS readings" : undefined;
+  if (modeProblem) against.push(`idle memory is not decided (${code(modeProblem)})`);
+  const idle = idleRuns.map(({ what, b, h }) => {
     /** A build's runs of the reading, when every run gave a figure: a median of fewer is not the rule's. */
     const all = (/** @type {any[]} */ found) => (found.every((run) => run !== null) ? found : null);
     const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
@@ -283,6 +296,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
     const grown = (/** @type {any[]} */ found) => found.map((run) => /** @type {number} */ (run.grown));
     if (!bases || !heads) return [what, bases ? whole(median(grown(bases))) : "none", heads ? whole(median(grown(heads))) : "none", "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "no figure"];
     const [low, high] = [median(grown(bases)), median(grown(heads))];
+    if (modeProblem) return [what, whole(low), whole(high), "", "", "", shown(bases), shown(heads), "not decided"];
     const pages = [...new Set([...bases, ...heads].map((run) => /** @type {number} */ (run.page)))];
     let decided;
     try {
@@ -384,9 +398,10 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Allocations a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
     "### Memory idle connections hold",
+    `Idle RSS observer: ${modeProblem ?? (modes.has("on") ? "on" : modes.has("off") ? "off (legacy receipts)" : "no readings")}.`,
     `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
-    "Per-run growth in bytes. Only resident growth decides the rule; the other columns are diagnostic.",
+    "Per-run growth in bytes. For runs with the same known observer mode, only resident growth decides the rule; the other columns are diagnostic.",
     table(["Build", "Reading", "Run", "Resident", "Jemalloc live", "Serving-thread net", "Jemalloc active"], memoryRuns),
     "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
     ["```text", ...records, "```"].join("\n"),

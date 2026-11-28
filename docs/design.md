@@ -11947,8 +11947,10 @@ rules something out.
     base's three span and four pages. The kit also prints each run's growth in jemalloc live
     bytes (allocated less thread-cache bytes), the serving thread's net allocated bytes and
     jemalloc active bytes, alongside resident growth. They explain a reading and do not decide
-    it. Resident memory is reported a page at a time, so base's
-    three can agree exactly and one page is the least step a run can show. One page was the
+    it. The compared runs must all have the same known observer mode: the observer itself
+    can move RSS ([How a number is read](../bench/request-cost/README.md#how-a-number-is-read)).
+    Resident memory is reported a page at a time, so base's three can agree exactly and one
+    page is the least step a run can show. One page was the
     least allowed, the step of the reading and not a measured bound on its accuracy, from
     [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
     until 2026-11-27, when the maintainer raised it to four (The idle floor, below): four pages

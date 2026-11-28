@@ -269,10 +269,11 @@ that thread's allocations and frees; active bytes describe allocator pages, not 
 resident footprint. A run reports each growth as after less before, in bytes, not per connection.
 These columns explain a resident reading and do not change the rule. The observer itself is not
 free for resident memory: in a control on one binary (three runs on, three off), resident growth
-was 1 to 3 pages lower with it on. Both builds a gate compares run with the observer on, so an
-equal shift cancels, but that control does not show the shift is equal across builds, so compare
-only readings taken the same way and never an observer-on reading with an observer-off one. If a
-probe cannot give the counters, the run refuses rather than report the missing counters as zero.
+was 1 to 3 pages lower with it on. The hosted job uses the same observer-on kit on both builds.
+An equal shift cancels, but that control does not show the shift is equal across builds, so
+compare only readings taken the same way and never an observer-on reading with an observer-off
+one. If a probe cannot give the counters, the run refuses rather than report the missing
+counters as zero.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
@@ -410,9 +411,12 @@ a connection apart (over base's three equal 62,808,064 they read 12,562 and 12,5
 for: its case, depth, requests and 5,000 connections from one address, three counts whose
 median is the one stated, and for an idle run its growth equal to its after less its before
 and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
-growth is not guessed from its figure. Older runs with a resident growth and page size still
-decide by that reading; the table shows their allocator columns as unavailable. The job's
-connections stay 5,000: on a runner whose page
+growth is not guessed from its figure. The summary names the observer mode. For saved JSON,
+valid `allocator` growths and both `sweepNanos` times together identify an observer-on reading.
+Absence of both fields means legacy observer-off: an all-legacy comparison with a resident
+growth and page size still decides by RSS, with allocator columns unavailable. Partial or malformed
+observer evidence, or mixed modes anywhere in either build's idle runs, leave the idle
+comparison undecided. The job's connections stay 5,000: on a runner whose page
 has more bytes than that (65,536-byte pages), four pages are more than four bytes a connection
 (52), and `idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
 asking `idleRise`. Either way the reading is not decided and cannot be counted. An answer is a capture that is one

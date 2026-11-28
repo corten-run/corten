@@ -5,7 +5,7 @@
 // prints against the reader here.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -21,6 +21,17 @@ const kit = dirname(fileURLToPath(import.meta.url));
 const names = Object.keys(cases);
 /** What each run's JSON must say it is of, by its file. */
 const expect = Object.fromEntries(readings().map((reading) => [reading.file, reading.expect]));
+const idleFiles = readings().filter(({ script }) => script === "idle.mjs").map(({ file }) => file);
+const observed = { allocator: { live: 0, threadNet: -1, active: 4096 }, sweepNanos: [123, 456] };
+
+/** Replace just the observer evidence, leaving the resident reading alone.
+ * @param {string} dir @param {string} file @param {{ allocator?: unknown, sweepNanos?: unknown }} fields
+ */
+function observer(dir, file, fields) {
+  const path = join(dir, file);
+  const { allocator, sweepNanos, ...rss } = JSON.parse(readFileSync(path, "utf8"));
+  writeFileSync(path, JSON.stringify({ ...rss, ...fields }));
+}
 
 /**
  * A build's figures: three counts a case, allocations and frees in the case's requests, three runs
@@ -244,14 +255,17 @@ test("a change inside the budget passes as counted, and the table gives every ru
   assert.equal(record.length, 2 * 3 * 3, markdown);
   assert.ok(record.includes("base, after one request, run 2: 8422 bytes a connection (5000 that answered 1 pipeline, from 1 address; 7577600 before, 49688576 after, 42110976 grown, in 4096-byte pages)"), record.join("\n"));
   assert.doesNotMatch(markdown, /no figure|over the budget|rose|not decided/);
+  assert.match(markdown, /Idle RSS observer: off \(legacy receipts\)/);
+  assert.match(markdown, /\| head \| before any byte \| 1 \| [\d,]+ \| unavailable \| unavailable \| unavailable \|/);
 });
 
 test("the idle table shows both builds' per-run diagnostics without deciding on them", (t) => {
   const { base, head } = builds(t);
+  for (const dir of [base, head]) for (const file of idleFiles) observer(dir, file, observed);
   const show = (/** @type {string} */ dir, /** @type {number} */ n, /** @type {object} */ allocator) => {
     const file = `idle-request-${n}.json`;
     const run = JSON.parse(printed(file, 10_280));
-    writeFileSync(join(dir, file), JSON.stringify({ ...run, allocator }));
+    writeFileSync(join(dir, file), JSON.stringify({ ...run, ...observed, allocator }));
   };
   for (let n = 1; n <= 3; n += 1) {
     show(base, n, { live: n, threadNet: -n, active: 0 });
@@ -259,16 +273,49 @@ test("the idle table shows both builds' per-run diagnostics without deciding on 
   }
   const read = compare(base, head, { description: counting });
   assert.equal(read.status, 0);
+  assert.match(read.markdown, /Idle RSS observer: on/);
   assert.match(read.markdown, /\| Resident \| Jemalloc live \| Serving-thread net \| Jemalloc active \|/);
   for (let n = 1; n <= 3; n += 1) {
     assert.ok(read.markdown.includes(`| base | after one request | ${n} | 42,106,880 | ${n} | -${n} | 0 |`));
     assert.ok(read.markdown.includes(`| head | after one request | ${n} | 42,106,880 | ${n},000,000 | ${n} | ${(-4096 * n).toLocaleString("en-US")} |`));
   }
-  assert.match(read.markdown, /\| head \| before any byte \| 1 \| [\d,]+ \| unavailable \| unavailable \| unavailable \|/);
-  show(head, 1, { live: "9000", threadNet: 0, active: 0 });
-  const malformed = compare(base, head, { description: counting });
-  assert.equal(malformed.status, 0);
-  assert.match(malformed.markdown, /\| head \| after one request \| 1 \| 42,106,880 \| unavailable \| unavailable \| unavailable \|/);
+});
+
+test("mixed observer modes never decide idle RSS, between builds or within the runs of either build", (t) => {
+  const { base, head } = builds(t);
+  const check = () => {
+    const { status, holds, markdown } = compare(base, head, { description: counting });
+    assert.deepEqual([status, holds], [1, false]);
+    assert.match(verdict(markdown), /idle memory is not decided.*mix observer-on and observer-off/);
+    assert.equal(markdown.split("\n").filter((line) => /^\| (after|before) .*\| not decided \|$/.test(line)).length, 3);
+  };
+  observer(head, "idle-request-1.json", observed);
+  check(); // One run in a triplet differs.
+  for (const file of idleFiles) observer(head, file, observed);
+  check(); // Each build on its own is consistent, but they differ.
+  for (const file of idleFiles) {
+    const fields = file.startsWith("idle-request-") ? observed : {};
+    for (const dir of [base, head]) observer(dir, file, fields);
+  }
+  check(); // Matching triplets aren't enough if the build switches mode between cases.
+});
+
+test("partial or malformed observer evidence is neither on nor legacy off", (t) => {
+  const { base, head } = builds(t);
+  for (const fields of [
+    { allocator: observed.allocator },
+    { sweepNanos: observed.sweepNanos },
+    { allocator: null, sweepNanos: null },
+    { ...observed, allocator: { ...observed.allocator, live: "9000" } },
+    { ...observed, sweepNanos: [123] },
+    { ...observed, sweepNanos: [123, -1] },
+  ]) {
+    observer(head, "idle-request-1.json", fields);
+    const { status, holds, markdown } = compare(base, head, { description: counting });
+    assert.deepEqual([status, holds], [1, false], JSON.stringify(fields));
+    assert.match(verdict(markdown), /idle memory is not decided.*observer mode is unclear/);
+    assert.match(markdown, /\| head \| after one request \| 1 \| [\d,]+ \| unavailable \| unavailable \| unavailable \|/);
+  }
 });
 
 test("one case over the budget does not pass as counted, and the verdict names it and the measured way", (t) => {
