@@ -19,10 +19,16 @@ use futures_util::{StreamExt, stream};
 
 use crate::layout::Layout;
 
-#[corten::routes(area = Smoke)]
+#[corten::routes(area = Smoke, state = crate::app::Shared)]
 pub mod url {
     #[route("/smoke")]
     pub struct Smoke;
+
+    /// The real alerts document or part, with a known receipt rendered as still saving.
+    #[route("/smoke/alerts/saving", get = crate::alerts::smoke_saving, patches)]
+    pub struct SavingAlerts {
+        pub saved: Option<u64>,
+    }
 
     /// One event of 640 rows (it decodes to 52,395 bytes), then a quiet stream until the keepalive.
     #[route("/smoke/live/large", get = large)]

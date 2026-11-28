@@ -1,6 +1,32 @@
 import { base, shadowing, skip, check, within, steps, pollFor, cleanUp } from "./helpers.mjs";
 import { liveRegion } from "./live-region.mjs";
 
+/** Capture the document's slot before allowing the read. A new message element means the
+ * patch drew even if its tag did not, so a misplaced or missing replacement gets reported. */
+export function captureAlertsDraw() {
+  const selector = "main template[data-corten-read-again][data-from]";
+  const tag = document.querySelector(selector);
+  const parent = tag?.parentNode;
+  if (!tag || !parent) throw new Error("missing original alerts ReadAgain tag");
+  const slot = Array.from(parent.childNodes).indexOf(tag);
+  const message = document.getElementById("alert-status");
+  return () => {
+    const drawn = document.getElementById("alert-status");
+    if (!drawn || drawn === message) return false;
+    const tags = Array.from(document.querySelectorAll(selector));
+    return {
+      status: drawn.textContent,
+      tags: tags.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
+      pageTagGone: !tag.isConnected,
+      sameSlot: tags.length === 1 && parent.childNodes[slot] === tags[0],
+    };
+  };
+}
+
+/** @param {ReturnType<ReturnType<typeof captureAlertsDraw>>} draw @param {string} url */
+export const askingInPlace = (draw, url) =>
+  !!draw && draw.status === "Saving..." && draw.tags.length === 1 && draw.tags[0] === url && draw.pageTagGone && draw.sameSlot;
+
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
   // however it was reached: a full load, or the runtime's navigation (a link, or a data-patch
@@ -67,7 +93,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           await first.promise;
         } else if (!documentRead && request.isNavigationRequest()) documentRead = true;
         else return route.fallback();
-        return route.fallback({ headers: { ...request.headers(), "watchlist-smoke-alert-saving": "1" } });
+        const fixture = new URL(url);
+        fixture.pathname = "/smoke/alerts/saving";
+        const response = await route.fetch({
+          url: fixture.href, headers: { ...request.headers(), "accept-encoding": "identity" }, timeout: 6000,
+        });
+        try {
+          await route.fulfill({ response });
+        } finally {
+          await response.dispose();
+        }
       };
       page.on("request", onPart);
       let before, regionStayed;
@@ -76,10 +111,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await step(() => page.goto(url));
         const region = await step(() => liveRegion(page, "alert-status"));
         regionStayed = region.stayed;
-        before = await step(() => page.evaluateHandle(() => ({
-          tag: document.querySelector("main template[data-corten-read-again][data-from]"),
-          message: document.getElementById("alert-status"),
-        })));
+        before = await step(() => page.evaluateHandle(captureAlertsDraw));
         await step(() => page.fill("input[name=above]", "123.45"));
         const entries = await step(() => page.evaluate(() => {
           (/** @type {any} */ (window)).__marker = 8;
@@ -87,18 +119,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         }));
         first.resolve(undefined);
         const tagged = await step(async () => {
-          // A change of message element (not text) shows the patch drew. Do not wait for the
-          // tag to change: if it did not, the assertion must see the old one, not the next reply.
-          const draw = await page.waitForFunction(({ tag, message }) => {
-            const drawn = document.getElementById("alert-status");
-            if (!drawn || drawn === message) return false;
-            const tags = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
-            return {
-              status: drawn.textContent,
-              tags: tags.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
-              pageTagGone: !!tag && !tag.isConnected,
-            };
-          }, before, { timeout: 6000 });
+          const draw = await page.waitForFunction((read) => read(), before, { timeout: 6000 });
           try {
             return await draw.jsonValue();
           } finally {
@@ -107,7 +128,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         });
         check(
           "a page part's answer that asks again takes the place of the tag that asked",
-          !!tagged && tagged.status === "Saving..." && tagged.tags.length === 1 && tagged.tags[0] === parts[0] && tagged.pageTagGone,
+          askingInPlace(tagged, parts[0]),
           `${JSON.stringify(tagged)} after ${parts[0]}`,
         );
         next.resolve(undefined);

@@ -73,19 +73,20 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         .assets(crate::layout::Static)
         .components(&[TOKENS, home::LivePrices, home::WatchForm, home::PicksLoading, account::PictureUpload])
         .area(|area| news::url::area(area, shared.clone()).components(news::COMPONENTS))
-        .area(|area| account::url::area(area, shared.clone()))
-        // The error page shows who is asking, with their picture, so it has the app's state too.
-        .error_page(error_page, shared)
+        .area(|area| account::url::area(area, shared.clone()));
+    let app =
+        if for_the_smoke() { app.area(|area| smoke::url::area(area, shared.clone()).components(smoke::COMPONENTS)) } else { app };
+    // The error page shows who is asking, with their picture, so it has the app's state too.
+    app.error_page(error_page, shared)
         // Started by `serve` once it listens, stopped at shutdown; a test's `app.test()` starts
         // none, so its prices stay put.
         .task("market", move |signal| market::simulate(trading, signal))
-        .client_zone();
-    if for_the_smoke() { app.area(|area| smoke::url::area(area).components(smoke::COMPONENTS)) } else { app }
+        .client_zone()
 }
 
 /// Whether the browser test runs the app (`SMOKE_TRUSTED_TYPES=1`): it then gets its own policy
 /// and routes (`smoke.rs`), among them a stream that never ends, so a deployment leaves it unset.
-pub(crate) fn for_the_smoke() -> bool {
+fn for_the_smoke() -> bool {
     std::env::var("SMOKE_TRUSTED_TYPES").is_ok_and(|on| on == "1")
 }
 

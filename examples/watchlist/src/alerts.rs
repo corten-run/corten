@@ -4,12 +4,11 @@
 //! saving and has its status line and list read again (the whole page, without JavaScript).
 use std::{
     collections::VecDeque,
-    convert::Infallible,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use corten::{extract::FromRequestParts, http::request::Parts, i18n::Minor, prelude::*};
+use corten::{i18n::Minor, prelude::*};
 
 use crate::{
     account::Viewer,
@@ -245,19 +244,6 @@ fn AlertList<'a>(t: Msg, alerts: &'a [Alert]) -> impl Patch {
     }
 }
 
-/// Only the smoke's first full load and first part read need to render a known receipt as still
-/// saving, however long the browser took to send the read. It does not change the store.
-pub(crate) struct SmokeSaving(bool);
-
-impl<S: Sync> FromRequestParts<S> for SmokeSaving {
-    type Rejection = Infallible;
-
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
-        let asked = parts.headers.get("watchlist-smoke-alert-saving").is_some_and(|value| value == "1");
-        Ok(Self(asked && crate::app::for_the_smoke()))
-    }
-}
-
 /// The alerts page, which reads a write that has not landed yet. Until reads have the address's
 /// receipt the page says so and asks for its status line and list to be read again, which the
 /// runtime does in place however the page was reached, leaving the form as the user has it
@@ -267,23 +253,37 @@ impl<S: Sync> FromRequestParts<S> for SmokeSaving {
 ///
 /// The runtime's read of it gets a patch, never the page (`HtmlResult<Patches>`): the route says
 /// `patches`, so `ReadAgain::from` takes it.
-pub(crate) async fn page(
+pub(crate) fn page(
     req: Req,
     viewer: Option<Caller<Viewer>>,
     State(store): State<AlertStore>,
     visitor: Visitor,
-    SmokeSaving(saving): SmokeSaving,
     Params(at): Params<url::Alerts>,
-) -> HtmlResult<Patches> {
+) -> impl Future<Output = HtmlResult<Patches>> {
+    let read = store.read(Instant::now(), visitor.known(), at.saved);
+    render_read(req, viewer, url::Alerts { saved: at.saved }, read)
+}
+
+/// The smoke-only route holds the status, not the store. Unknown receipts remain unknown.
+pub(crate) fn smoke_saving(
+    req: Req,
+    viewer: Option<Caller<Viewer>>,
+    State(store): State<AlertStore>,
+    visitor: Visitor,
+    Params(at): Params<crate::smoke::url::SavingAlerts>,
+) -> impl Future<Output = HtmlResult<Patches>> {
     let mut read = store.read(Instant::now(), visitor.known(), at.saved);
-    if saving && read.status == Status::Saved {
+    if read.status == Status::Saved {
         read.status = Status::Saving;
     }
+    render_read(req, viewer, url::Alerts { saved: at.saved }, read)
+}
+
+async fn render_read(req: Req, viewer: Option<Caller<Viewer>>, from: url::Alerts, read: Reading) -> HtmlResult<Patches> {
     let t: Msg = req.t();
     // A read again from a write's patch: the status line and the list, asking again from this
     // route while the write is landing. A view renders only when it is sent, so a page load does
     // not build the read-again.
-    let from = url::Alerts { saved: at.saved };
     let (status, alerts) = (read.status, &read.alerts);
     let again = (status == Status::Saving).then(|| ReadAgain { after: Duration::from_secs(1) }.from(&from));
     let parts = html! {
