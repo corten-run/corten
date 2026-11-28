@@ -11654,7 +11654,10 @@ rules something out.
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
     2,645 bytes a connection between runs: three runs a build, and a rise only when the median
     of head's growths of resident memory, in bytes, is above base's by more than the larger of
-    base's three span and four pages. Resident memory is reported a page at a time, so base's
+    base's three span and four pages. The kit also prints each run's growth in jemalloc live
+    bytes (allocated less thread-cache bytes), the serving thread's net allocated bytes and
+    jemalloc active bytes, alongside resident growth. They explain a reading and do not decide
+    it. Resident memory is reported a page at a time, so base's
     three can agree exactly and one page is the least step a run can show. One page was the
     least allowed, the step of the reading and not a measured bound on its accuracy, from
     [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)

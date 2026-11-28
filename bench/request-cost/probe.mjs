@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { instructions } from "./allocations.mjs";
 import { COUNTED, WARM, alone } from "./figures.mjs";
 import { Answers, cases, masked, unexpected } from "./requests.mjs";
@@ -21,18 +22,23 @@ const ALLOCATOR = { LD_PRELOAD: "libjemalloc.so.2", MALLOC_CONF: "background_thr
  * `hosts` or, without it, not set, whatever this process's environment holds. With `callgrind`,
  * under callgrind writing its profiles to `callgrind.out`, with `callgrind.options` more.
  * @param {string} binary @param {"api" | "pages"} configuration
- * @param {{ cpu: string, port: number, hosts?: string, callgrind?: { out: string, options?: string[] } }} how
+ * @param {{ cpu: string, port: number, hosts?: string, idleMemory?: boolean, callgrind?: { out: string, options?: string[] } }} how
  */
-export async function start(binary, configuration, { cpu, port, hosts, callgrind }) {
+export async function start(binary, configuration, { cpu, port, hosts, callgrind, idleMemory = false }) {
   const under = callgrind ? ["valgrind", "--tool=callgrind", `--callgrind-out-file=${callgrind.out}`, ...(callgrind.options ?? [])] : [];
   /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, ...ALLOCATOR };
   delete env.HOSTS;
+  delete env.PROBE_IDLE_MEMORY;
   if (hosts !== undefined) env.HOSTS = hosts;
+  if (idleMemory) env.PROBE_IDLE_MEMORY = "1";
   const child = spawn("taskset", ["-c", cpu, ...under, binary, String(port), configuration], {
     env,
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", idleMemory ? "pipe" : "ignore", "pipe"],
   });
+  const samples = child.stdout && createInterface({ input: child.stdout });
+  const closed = new AbortController();
+  samples?.once("close", () => closed.abort());
   let said = "";
   child.stderr.setEncoding("latin1");
   const ready = new Promise((resolve, reject) => {
@@ -52,9 +58,26 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
   }
   return {
     pid: /** @type {number} */ (child.pid),
+    /** One counter sweep from the serving thread, without opening an HTTP connection. */
+    async memory() {
+      if (!samples) throw new Error("the probe was not started for idle memory");
+      const signal = AbortSignal.any([closed.signal, AbortSignal.timeout(5000)]);
+      const next = once(samples, "line", { signal });
+      if (!signal.aborted && !child.kill("SIGUSR1")) closed.abort();
+      const [line] = await next.catch(() => { throw new Error(`the probe did not give an idle allocator sample:\n${said}`); });
+      let sample;
+      try { sample = JSON.parse(line); } catch { /* refused below */ }
+      if (!sample || !Number.isSafeInteger(sample.live) || sample.live < 0 || !Number.isSafeInteger(sample.threadNet) ||
+          !Number.isSafeInteger(sample.active) || sample.active < 0 || !Number.isSafeInteger(sample.nanos) || sample.nanos < 0) {
+        throw new Error(`the probe gave an invalid idle allocator sample:\n${said}`);
+      }
+      const { live, threadNet, active, nanos } = sample;
+      return { live, threadNet, active, nanos };
+    },
     /** Stops the probe and waits until it has. */
     async stop() {
-      const exited = child.exitCode === null ? once(child, "exit") : Promise.resolve();
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exited = once(child, "exit");
       const late = setTimeout(() => child.kill("SIGKILL"), 60_000);
       child.kill("SIGTERM");
       await exited;

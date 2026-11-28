@@ -10,7 +10,8 @@
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
 // the growth of the process's resident memory (VmRSS) by the connections. It prints that growth in
-// bytes and the page size (`getconf PAGESIZE`), which CONTRIBUTING's gate reads. The kernel's socket
+// bytes and the page size (`getconf PAGESIZE`), which CONTRIBUTING's gate reads. Jemalloc and
+// serving-thread growth are diagnostic only. The kernel's socket
 // buffers are not the process's and are not counted. A run prints no figure when an answer was
 // not the case's or did not come in 30 seconds, when the probe had closed a connection, or when
 // its open files did not grow by the number of connections.
@@ -60,12 +61,14 @@ const pageText = pageSize.stdout?.trim() ?? "";
 const page = Number(pageText);
 if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText) || !Number.isSafeInteger(page)) throw new Error("getconf PAGESIZE did not give the page size");
 
-const probe = await start(binary, configuration, { cpu: values.cpu, port, hosts });
+const probe = await start(binary, configuration, { cpu: values.cpu, port, hosts, idleMemory: true });
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
 const files = () => readdirSync(`/proc/${probe.pid}/fd`).length;
 /** The run as JSON, printed after the probe has stopped. @type {string | undefined} */
 let json;
 try {
+  // Warm the observer too, so its first use is not included in resident or allocator growth.
+  await probe.memory();
   // Warm: the first connections and requests allocate what the probe keeps for all of them.
   for (let warm = 0; warm < 50; warm += 1) {
     const connection = await Connection.open(port);
@@ -75,6 +78,7 @@ try {
   await sleep(500);
   const before = memory();
   const open = files();
+  const beforeAllocator = await probe.memory();
   const all = [];
   const began = performance.now();
   for (let at = 0; at < connections; at += 1) {
@@ -91,6 +95,7 @@ try {
   // A connection the probe has closed (Corten waits 30 seconds for a request unless the app says
   // otherwise) holds nothing there.
   const closed = all.filter((connection) => connection.closed).length;
+  const afterAllocator = await probe.memory();
   for (const connection of all) connection.socket.destroy();
   let bytes;
   try {
@@ -99,11 +104,17 @@ try {
     throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
   }
   const what = values.silent ? `sent nothing to the probe for ${name}` : `answered ${requests} ${name}`;
+  const allocator = {
+    live: afterAllocator.live - beforeAllocator.live,
+    threadNet: afterAllocator.threadNet - beforeAllocator.threadNet,
+    active: afterAllocator.active - beforeAllocator.active,
+  };
+  if (!Object.values(allocator).every(Number.isSafeInteger)) throw new Error("idle allocator growth exceeds safe integer range");
   // In JSON a connection that was sent nothing answered 0 requests. The growth and the page size
   // are what CONTRIBUTING's gate decides by; `bytes` is rounded and does not.
-  const measured = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, grown: after - before, page, seconds };
+  const measured = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, grown: after - before, page, seconds, allocator, sweepNanos: [beforeAllocator.nanos, afterAllocator.nanos] };
   if (values.json) json = JSON.stringify(measured);
-  else console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after, ${after - before} grown, in ${page}-byte pages)`);
+  else console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after, ${after - before} grown, in ${page}-byte pages); allocator growth in bytes: ${allocator.live} live, ${allocator.threadNet} serving-thread net, ${allocator.active} active`);
 } finally {
   await probe.stop();
 }

@@ -96,7 +96,7 @@ function sent(name, port) {
  * @param {string} stdout @param {string} what @param {{ page?: number, requests?: number }} [expected]
  */
 function printedWhole(stdout, what, { page = 4096, requests } = {}) {
-  const line = new RegExp(`^(-?\\d+) bytes a connection \\(40 that ${what}, opened in \\d+\\.\\d s; (\\d+) before, (\\d+) after, (-?\\d+) grown, in ${page}-byte pages\\)$`, "m").exec(stdout);
+  const line = new RegExp(`^(-?\\d+) bytes a connection \\(40 that ${what}, opened in \\d+\\.\\d s; (\\d+) before, (\\d+) after, (-?\\d+) grown, in ${page}-byte pages\\); allocator growth in bytes: 4920 live, -120 serving-thread net, 163840 active$`, "m").exec(stdout);
   assert.ok(line, stdout);
   const [, figure, before, after, grown] = line.map(Number);
   assert.equal(grown, after - before);
@@ -296,6 +296,13 @@ test("idle.mjs prints no figure when a connection's answer is not the case's", {
   assert.doesNotMatch(run.stdout, /bytes a connection/);
 });
 
+test("idle.mjs prints no figure when an allocator sample is invalid", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--json"], { STAND_IN_BAD_SWEEP: "3" });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /the probe gave an invalid idle allocator sample/);
+  assert.equal(run.stdout, "");
+});
+
 test("each kind of run compare.mjs asks for is one the kit takes, and its --json is what was measured, the whole figure compare.mjs reads", { skip }, async () => {
   const plan = Object.fromEntries(compare.readings().map((reading) => [reading.file, reading]));
   const take = async (/** @type {string} */ file, /** @type {string[]} */ more = [], asked = {}, /** @type {Record<string, string>} */ environment = {}) => {
@@ -321,6 +328,8 @@ test("each kind of run compare.mjs asks for is one the kit takes, and its --json
     // The growth and the page size the gate decides by, beside the rounded figure.
     const [before, after, grown, bytes] = standInReadings(requests);
     assert.deepEqual([found.requests, found.connections, found.before, found.after, found.grown, found.page, found.bytes], [requests, 40, before, after, grown, 4096, bytes], file);
+    assert.deepEqual(found.allocator, { live: 4920, threadNet: -120, active: 163840 }, file);
+    assert.deepEqual(found.sweepNanos, [246_002, 246_003], file);
     assert.equal(compare.figure(text, expect), null, file);
   }
   // The page size getconf gives is the one the JSON carries. Its resident memory is still the

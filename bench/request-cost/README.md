@@ -145,8 +145,9 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
    many they were (`243 in 1`). [How a number is read](#how-a-number-is-read) says what each
    is for.
 3. `--allocations` prints allocations and frees a request, and the calls they are made of.
-4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), and the growth
-   in bytes and the page size it is read from (Idle memory, below). One client
+4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), the resident
+   growth in bytes and the page size it is read from, and three allocator growths for diagnosis
+   (Idle memory, below). One client
    address has ports for about 28,000: for more, `--addresses` spreads them over that many
    loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
@@ -155,7 +156,8 @@ for two runs side by side on CPUs of their own. `--depth` takes at most 240. `--
 count, on `--allocations` or on `idle.mjs`, prints in place of the text a line of JSON a case
 with what was measured, unrounded: each window's instructions, seconds and other threads, the
 allocator's calls and the requests they are over, an idle run's bytes a connection, its
-connections, its before and after, its growth and its page size. It is what
+connections, its resident before and after, growth and page size, allocator growths, and the
+two counter sweeps' times in nanoseconds (before and after). It is what
 [`compare.mjs`](compare.mjs) reads; the text is for people. A count of several cases prints
 each case's line as it is counted, so one that fails at a later case has printed the earlier
 ones: the hosted job counts one case an invocation. `idle.mjs` prints its line once the probe
@@ -254,6 +256,19 @@ that comparison. It allows a rise of four pages whatever base's runs span
 refuses readings over fewer connections than a page has bytes, where four pages are more than
 four bytes a connection: over 40, four 4,096-byte pages are 410 bytes a connection, a step the
 gate would let pass unseen.
+
+At the two resident readings, a kit-only signal asks the probe's serving thread for an allocator
+snapshot, with no extra connection or HTTP request. The observer is warmed once before the warm
+connections and is off for instruction and allocation counts. Each snapshot advances jemalloc's
+`epoch` and reads process-wide live bytes (`stats.allocated` less
+`stats.arenas.4096.tcache_bytes`, the cache bytes across all arenas), the serving thread's net
+bytes (`thread.allocated` less `thread.deallocated`), and bytes in active pages (`stats.active`).
+Debian's jemalloc 5.3.0 includes cached regions in `stats.allocated`. Subtracting them distinguishes
+memory still held by the app from space held by the allocator. The thread reading covers only
+that thread's allocations and frees; active bytes describe allocator pages, not the process's
+resident footprint. A run reports each growth as after less before, in bytes, not per connection.
+These columns explain a resident reading and do not change the rule. If a probe cannot give the
+counters, the run refuses rather than report the missing counters as zero.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
@@ -366,9 +381,10 @@ On one runner it does what [Running it](#running-it) says, the first three by
 4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
    writes what it prints to the job's summary: for each case base, head, the difference and
    the percent, every count of every run with its longest window and the most that other
-   threads ran in one, the allocator's calls, every idle run's growth in bytes with its rounded
-   figure a connection and what base's runs allow, each idle run's line with its before, after,
-   growth and page size (which stands in for the line `idle.mjs` printed), each attempt that gave
+   threads ran in one, the allocator's calls, every idle run's resident growth in bytes with its
+   rounded figure a connection and what base's runs allow, a per-run table of resident and
+   allocator growths for both builds, each idle run's line with its resident before, after,
+   growth and page size, each attempt that gave
    no figure, and one
    line of verdict. Its exit status is the job's.
 
@@ -386,7 +402,9 @@ a connection apart (over base's three equal 62,808,064 they read 12,562 and 12,5
 for: its case, depth, requests and 5,000 connections from one address, three counts whose
 median is the one stated, and for an idle run its growth equal to its after less its before
 and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
-growth is not guessed from its figure. The job's connections stay 5,000: on a runner whose page
+growth is not guessed from its figure. Older runs with a resident growth and page size still
+decide by that reading; the table shows their allocator columns as unavailable. The job's
+connections stay 5,000: on a runner whose page
 has more bytes than that (65,536-byte pages), four pages are more than four bytes a connection
 (52), and `idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
 asking `idleRise`. Either way the reading is not decided and cannot be counted. An answer is a capture that is one
@@ -591,13 +609,13 @@ for them.
 | `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
-with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 49 of the 76 tests run.
+with `sh` or `bash` and `git`, and are skipped elsewhere.
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).
 
-The resident memory `idle.mjs` reads in `run.test.mjs` is the stand-in's. `idle.mjs` reads only
-the probe's `/proc/<pid>/status`; the tests start it with `node --import` of
+The resident memory `idle.mjs` reads in `run.test.mjs` is the stand-in's. For resident memory it
+reads the probe's `/proc/<pid>/status`; the tests start it with `node --import` of
 [`stand-in-status.mjs`](stand-in-status.mjs), which turns that read into one of the status
 `stand-in.mjs` writes, and nothing else loads that file. The stand-in's status is 10,240 kB and a
 page each connection it closed left behind, and two pages more for each open connection and one
@@ -607,4 +625,5 @@ ahead of the warm connections, fails. Two runs are checked less: one starts `idl
 the preload and reads the stand-in's own status in `/proc`, as a host does, and is checked only for
 a growth that is its after less its before, a figure that is that growth over the connections and
 a before that is not the stand-in's; the `--json` run with a 65,536-byte page is checked only for
-the page size it carries.
+the page size it carries. The stand-in replies to the idle-only signal with known counters;
+the test checks their growth, the two measured sweep times, and refusal of a malformed sample.

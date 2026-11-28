@@ -234,6 +234,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
   const connections = /** @type {number} */ (/** @type {ReturnType<typeof readings>[number]} */ (plan["idle-request-1.json"]).expect.connections);
   /** Each idle run's record, as `idle.mjs` prints it on a host, with what decides: its before, after, growth and page size. */
   const records = /** @type {string[]} */ ([]);
+  const memoryRuns = /** @type {string[][]} */ ([]);
   const idle = IDLE.map(({ name, what }) => {
     const runs = [];
     for (let run = 1; run <= RUNS; run += 1) runs.push(both(`idle-${name}-${run}.json`, `idle memory ${what}, run ${run},`));
@@ -241,6 +242,9 @@ export function compare(base, head, { description = "", names = { base: "base", 
     for (const [side, found] of /** @type {const} */ ([["base", b], ["head", h]]))
       found.forEach((run, at) => {
         if (run === null) return;
+        // Old records still decide by RSS. Missing or invalid diagnostics are not zeroes.
+        const growth = [run.allocator?.live, run.allocator?.threadNet, run.allocator?.active];
+        memoryRuns.push([side, what, String(at + 1), whole(run.grown), ...(growth.every(Number.isSafeInteger) ? growth.map(whole) : ["unavailable", "unavailable", "unavailable"])]);
         const did = run.requests === 0 ? `sent nothing to the probe for ${run.case}` : `answered ${run.requests} ${run.case}`;
         records.push(`${side}, ${what}, run ${at + 1}: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
       });
@@ -336,6 +340,8 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Memory idle connections hold",
     `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
+    "Per-run growth in bytes. Only resident growth decides the rule; the other columns are diagnostic.",
+    table(["Build", "Reading", "Run", "Resident", "Jemalloc live", "Serving-thread net", "Jemalloc active"], memoryRuns),
     "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
     ["```text", ...records, "```"].join("\n"),
     ...(refusals.length > 0 ? ["### Runs that gave no figure", refusals.join("\n")] : []),

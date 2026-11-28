@@ -12,6 +12,8 @@
 // that allocator.
 use corten::prelude::*;
 
+mod idle_memory;
+
 #[corten::routes(api = Root)]
 mod url {
     #[route("/")]
@@ -116,6 +118,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err(usage.into()),
     };
     check_allocator()?;
+    if std::env::var_os("PROBE_IDLE_MEMORY").is_some() {
+        idle_memory::start()?;
+    }
     // A queue as long as Linux allows by default: idle.mjs opens connections faster than one
     // runtime accepts them, and a connection the queue has no room for waits a second to retry.
     let socket = tokio::net::TcpSocket::new_v4()?;

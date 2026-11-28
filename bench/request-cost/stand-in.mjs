@@ -156,6 +156,18 @@ function serve() {
     });
     socket.on("error", () => {});
   });
+  if (process.env.PROBE_IDLE_MEMORY) {
+    let sweeps = 0;
+    process.on("SIGUSR1", () => {
+      sweeps += 1;
+      if (String(sweeps) === process.env.STAND_IN_BAD_SWEEP) {
+        process.stdout.write('{"live":5,"threadNet":0,"active":"123","nanos":246000}\n');
+      } else {
+        const open = part.opened - part.closed;
+        process.stdout.write(`${JSON.stringify({ live: 50_000 + 123 * open, threadNet: 60_000 - 3 * open, active: 65_536 + 4096 * open, nanos: 246_000 + sweeps })}\n`);
+      }
+    });
+  }
   process.on("SIGTERM", () => {
     writeFileSync(join(/** @type {string} */ (state), "connections.json"), JSON.stringify(connections));
     dump(true);

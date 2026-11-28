@@ -246,6 +246,31 @@ test("a change inside the budget passes as counted, and the table gives every ru
   assert.doesNotMatch(markdown, /no figure|over the budget|rose|not decided/);
 });
 
+test("the idle table shows both builds' per-run diagnostics without deciding on them", (t) => {
+  const { base, head } = builds(t);
+  const show = (/** @type {string} */ dir, /** @type {number} */ n, /** @type {object} */ allocator) => {
+    const file = `idle-request-${n}.json`;
+    const run = JSON.parse(printed(file, 10_280));
+    writeFileSync(join(dir, file), JSON.stringify({ ...run, allocator }));
+  };
+  for (let n = 1; n <= 3; n += 1) {
+    show(base, n, { live: n, threadNet: -n, active: 0 });
+    show(head, n, { live: 1_000_000 * n, threadNet: n, active: -4096 * n });
+  }
+  const read = compare(base, head, { description: counting });
+  assert.equal(read.status, 0);
+  assert.match(read.markdown, /\| Resident \| Jemalloc live \| Serving-thread net \| Jemalloc active \|/);
+  for (let n = 1; n <= 3; n += 1) {
+    assert.ok(read.markdown.includes(`| base | after one request | ${n} | 42,106,880 | ${n} | -${n} | 0 |`));
+    assert.ok(read.markdown.includes(`| head | after one request | ${n} | 42,106,880 | ${n},000,000 | ${n} | ${(-4096 * n).toLocaleString("en-US")} |`));
+  }
+  assert.match(read.markdown, /\| head \| before any byte \| 1 \| [\d,]+ \| unavailable \| unavailable \| unavailable \|/);
+  show(head, 1, { live: "9000", threadNet: 0, active: 0 });
+  const malformed = compare(base, head, { description: counting });
+  assert.equal(malformed.status, 0);
+  assert.match(malformed.markdown, /\| head \| after one request \| 1 \| 42,106,880 \| unavailable \| unavailable \| unavailable \|/);
+});
+
 test("one case over the budget does not pass as counted, and the verdict names it and the measured way", (t) => {
   const { base, head } = builds(t, (_, build) => {
     build.count.unstaged = [20_104, 20_104, 20_105];
