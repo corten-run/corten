@@ -1615,6 +1615,10 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       parts.push([old, part]);
     }
   }
+  // Commit the address the navigation drew (not location, which can change before the answer).
+  // All refusal checks have passed. Inserting head tags, a layout part or main can synchronously
+  // connect a component that submits: its waiting press and any failure belong to the new page.
+  if (drew !== undefined && drew !== shownAt) (shownAt = drew), (turns += 1);
   const title = content.querySelector("title");
   if (title) {
     document.title = textOf(title) ?? "";
@@ -1647,10 +1651,6 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     replaceKeeping(old, part, null, false, !!stay);
   }
   main.replaceChildren(content);
-  // A navigation's page at another address is a turn: a failed write sent from a form before it is
-  // not said on one of its forms ({@link sayFailed}). Read from the address the navigation drew,
-  // not the one shown, which a browser may have changed already for a navigation still on its way.
-  if (drew !== undefined && drew !== shownAt) (shownAt = drew), (turns += 1);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
   if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
   layout?.apply();
