@@ -56,6 +56,7 @@ test("each case is its request, byte for byte, to its configuration", () => {
     pipeline: ["api", `GET /pipeline HTTP/1.1\r\n${host}\r\n`],
     text: ["pages", `GET /text HTTP/1.1\r\n${host}\r\n`],
     page: ["pages", `GET /page HTTP/1.1\r\n${host}\r\n`],
+    "page-public": ["public-page", `GET /page HTTP/1.1\r\n${host}\r\n`],
     "get-browser": ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}${browser}\r\n`],
     "text-browser": ["pages", `GET /text HTTP/1.1\r\n${host}${browser}\r\n`],
     "page-browser": ["pages", `GET /page HTTP/1.1\r\n${host}${browser}\r\n`],
@@ -130,6 +131,11 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
     assert.match(String(unexpected(name, answer(`${body} `))), /^not the body of /, name);
   }
   // The compressed page is the page once decompressed: not another page, not what only begins as zstd does.
+  assert.equal(unexpected("page-public", answer(page, "Cache-Control: public, max-age=60\r\n")), null);
+  assert.equal(unexpected("page-public", answer(page, "Cache-Control: public, max-age=60\r\naGe: 0\r\n")), "a kept public page (Age header)");
+  for (const policy of ["", "Cache-Control: private, no-cache\r\n", "Cache-Control: public, max-age=60\r\nCache-Control: private\r\n"]) {
+    assert.match(String(unexpected("page-public", answer(page, policy))), /Cache-Control/);
+  }
   assert.equal(unexpected("page-browser", answer(zstd(page), "content-encoding: zstd\r\n")), null);
   assert.match(String(unexpected("page-browser", answer(zstd(page)))), /^Content-Encoding none, not zstd$/);
   assert.match(String(unexpected("page-browser", answer(zstd(page), "content-encoding: br\r\n"))), /^Content-Encoding br, not zstd$/);

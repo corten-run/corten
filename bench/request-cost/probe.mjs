@@ -47,7 +47,7 @@ function idleFrames(stdout) {
  * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`, with `HOSTS` set to
  * `hosts` or, without it, not set, whatever this process's environment holds. With `callgrind`,
  * under callgrind writing its profiles to `callgrind.out`, with `callgrind.options` more.
- * @param {string} binary @param {"api" | "pages"} configuration
+ * @param {string} binary @param {"api" | "pages" | "public-page"} configuration
  * @param {{ cpu: string, port: number, hosts?: string, idleMemory?: boolean, callgrind?: { out: string, options?: string[] } }} how
  */
 export async function start(binary, configuration, { cpu, port, hosts, callgrind, idleMemory = false }) {

@@ -33,8 +33,11 @@ item 2 asks for cycles under load as well, which this kit does not give.
 
 ## The cases
 
-Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
-API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
+Each case is one request. The `api` and `pages` configurations keep every `App` default:
+the former has an API and no pages; the latter has pages and no API. The `public-page`
+configuration serves the same document as `pages` at the same address, but the handler returns
+`Public<HtmlResult>` and `kept_answers(0)` disables the store. Each request therefore measures
+public-page handling, not a cache hit. All configurations answer
 to the names an app answers to by default (`localhost`, a name under it and IP addresses) but in
 the eight cases with `-any` in their name, where the probe is started with `HOSTS=*` and answers
 to any host. A `HOSTS` in the environment the kit is run in never reaches the probe.
@@ -48,6 +51,7 @@ to any host. A `HOSTS` in the environment the kit is run in never reaches the pr
 | `pipeline` | `api` | `GET /pipeline`: an `unstaged` route | `ok` |
 | `text` | `pages` | `GET /text` | `ok` |
 | `page` | `pages` | `GET /page` | A page of about 12 KB |
+| `page-public` | `public-page` | `GET /page` | The same page; requires a single `Cache-Control: public, max-age=60` and no `Age` (a kept hit has one even in its first second) |
 | `get-browser`, `text-browser`, `page-browser` | as above | The same with the seven header lines a browser sends with a navigation | The same; the page compressed with zstd |
 | `get-any`, `unstaged-any` | `api`, `HOSTS=*` | As `get` and `unstaged` | `3` |
 | `get-any-last`, `unstaged-any-last` | `api`, `HOSTS=*` | As `get` and `unstaged` with the browser's seven lines before `Host`, which is the last of eight | `3` |
@@ -115,7 +119,10 @@ builds it with the repository's release profile and leaves the binary at
 
 The probe's source is this checkout's, the same for every commit: only Corten and its locked
 crates differ. Use one checkout of the kit and one directory for every commit of a comparison
-(the first point under [What a count is not](#what-a-count-is-not)).
+(the first point under [What a count is not](#what-a-count-is-not)). This probe uses
+`kept_answers(0)` at build time even when you run only a private case. Corten v0.3.0
+has that API; v0.2.0 does not. To compare a commit without it, use the same compatible
+older kit for both builds and compare only the cases that kit supports.
 
 None of CI's own checks builds the probe: Corten is at `../work/crates/corten` only after
 `build.sh` has put a commit there. `corten fmt --check`, which CI runs over `bench`, reads its
