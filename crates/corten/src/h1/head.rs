@@ -2,12 +2,13 @@
 //!
 //! The head is read by `httparse`, the parser hyper reads requests with, with the settings hyper's
 //! server gives it (its defaults, at most 100 headers), and what it found is made into the same
-//! `http` types by the same constructors (`proto/h1/role.rs`, `Server::parse`, in hyper 1.12). So
-//! what is refused is what hyper refuses, at the same byte: a folded header line, whitespace
-//! before a header's colon, a bare CR, NUL and other control bytes, a method that is not a token,
-//! a version that is not `HTTP/1.0` or `HTTP/1.1`, more than 100 headers, a target or a header
-//! name longer than `http` has a type for; and what is accepted is what it accepts (empty lines
-//! before the request line, a bare LF for a line end).
+//! `http` types by the same constructors (`proto/h1/role.rs`, `Server::parse`, in hyper 1.12), or,
+//! for the names a browser usually sends, the same `HeaderName` taken by its bytes
+//! ([`field_name`]). So what is refused is what hyper refuses, at the same byte: a folded header
+//! line, whitespace before a header's colon, a bare CR, NUL and other control bytes, a method that
+//! is not a token, a version that is not `HTTP/1.0` or `HTTP/1.1`, more than 100 headers, a target
+//! or a header name longer than `http` has a type for; and what is accepted is what it accepts
+//! (empty lines before the request line, a bare LF for a line end).
 //!
 //! What a head says about a body is not read here at all. A head with a `Content-Length`, a
 //! `Transfer-Encoding`, an `Expect` or an `Upgrade` line, whatever the line says, and any
@@ -178,6 +179,42 @@ fn keeps(name: &[u8], value: &[u8]) -> bool {
     name.eq_ignore_ascii_case(b"connection") && value.windows(10).any(|part| part.eq_ignore_ascii_case(b"keep-alive"))
 }
 
+/// The `HeaderName` of a header line's name, as `HeaderName::from_bytes` makes it. The names a
+/// browser sends with a request that has no body are taken by their bytes in two spellings each:
+/// all in lower case, as a browser writes some and a front end that lowers every name passes on
+/// all, and with each word's first letter a capital, as a browser writes the others and a Go
+/// front end writes all. That spares `http` lowering each byte and, for the names it has no
+/// constant for, an allocation of their own; every other name and spelling is `http`'s to read,
+/// and to refuse (`docs/design.md#choice-own-http1` names who sends each spelling).
+fn field_name(name: &[u8]) -> Result<HeaderName, Refusal> {
+    let taken = match name {
+        b"host" | b"Host" => header::HOST,
+        b"user-agent" | b"User-Agent" => header::USER_AGENT,
+        b"accept" | b"Accept" => header::ACCEPT,
+        b"accept-language" | b"Accept-Language" => header::ACCEPT_LANGUAGE,
+        b"accept-encoding" | b"Accept-Encoding" => header::ACCEPT_ENCODING,
+        b"connection" | b"Connection" => header::CONNECTION,
+        b"cookie" | b"Cookie" => header::COOKIE,
+        b"referer" | b"Referer" => header::REFERER,
+        b"upgrade-insecure-requests" | b"Upgrade-Insecure-Requests" => header::UPGRADE_INSECURE_REQUESTS,
+        b"if-none-match" | b"If-None-Match" => header::IF_NONE_MATCH,
+        b"sec-fetch-site" | b"Sec-Fetch-Site" => const { HeaderName::from_static("sec-fetch-site") },
+        b"sec-fetch-mode" | b"Sec-Fetch-Mode" => const { HeaderName::from_static("sec-fetch-mode") },
+        b"sec-fetch-dest" | b"Sec-Fetch-Dest" => const { HeaderName::from_static("sec-fetch-dest") },
+        b"sec-fetch-user" | b"Sec-Fetch-User" => const { HeaderName::from_static("sec-fetch-user") },
+        b"sec-ch-ua" | b"Sec-Ch-Ua" => const { HeaderName::from_static("sec-ch-ua") },
+        b"sec-ch-ua-mobile" | b"Sec-Ch-Ua-Mobile" => const { HeaderName::from_static("sec-ch-ua-mobile") },
+        b"sec-ch-ua-platform" | b"Sec-Ch-Ua-Platform" => const { HeaderName::from_static("sec-ch-ua-platform") },
+        b"priority" | b"Priority" => const { HeaderName::from_static("priority") },
+        b"purpose" | b"Purpose" => const { HeaderName::from_static("purpose") },
+        b"corten" | b"Corten" => const { HeaderName::from_static("corten") },
+        _ => return HeaderName::from_bytes(name).map_err(|_| Refusal::Bad),
+    };
+    // Every arm is the name `http` makes of the same bytes, which each debug test holds.
+    debug_assert_eq!(HeaderName::from_bytes(name).ok().as_ref(), Some(&taken), "{name:?}");
+    Ok(taken)
+}
+
 /// The request whose head is `bytes` (all of it, and no more), scanned by [`scan`], which found
 /// no line that makes it hyper's. `cached` is a header map to fill, emptied by the answer before.
 pub(crate) fn build(
@@ -193,7 +230,7 @@ pub(crate) fn build(
     let mut keep_alive = http11;
     let mut closes = false;
     for &(name, name_end, value, value_end) in indices {
-        let name = HeaderName::from_bytes(&bytes[name..name_end]).map_err(|_| Refusal::Bad)?;
+        let name = field_name(&bytes[name..name_end])?;
         // `httparse` let the same bytes through as `HeaderValue` does, which checks them again:
         // skipping that needs `unsafe` (hyper's `from_maybe_shared_unchecked`).
         let value = HeaderValue::from_maybe_shared(bytes.slice(value..value_end)).map_err(|_| Refusal::Bad)?;
