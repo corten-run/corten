@@ -133,10 +133,29 @@ class PageTests(unittest.TestCase):
         self.assertEqual(reads, ["/marketplace/records/item_1"] * 4)
         asyncio.run(source.client.aclose())
 
-    def test_an_upstream_failure_is_a_502(self):
+    def test_liveness_does_not_read_the_marketplace_source(self):
         self.source.get.side_effect = httpx.ConnectError("refused")
-        for path in ["/marketplace/en-US/item_1", "/api/marketplace/item_1"]:
-            self.assertEqual(self.client.get(path).status_code, 502)
+        self.assertEqual(self.client.get("/health/live").status_code, 200)
+        self.source.get.assert_not_called()
+
+    def test_an_upstream_failure_is_html_for_the_page_only(self):
+        source = MarketplaceSource()
+        source.fixture = None
+        source.client = httpx.AsyncClient(base_url="http://upstream.test", transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, text="upstream diagnostic")))
+        try:
+            with patch.object(main, "marketplace_source", source):
+                page = self.client.get("/marketplace/en-US/item_1")
+                api = self.client.get("/api/marketplace/item_1")
+        finally:
+            asyncio.run(source.client.aclose())
+        self.assertEqual(page.status_code, 502)
+        self.assertTrue(page.headers["content-type"].startswith("text/html"))
+        self.assertEqual(page.headers["cache-control"], "private, no-store")
+        self.assertIn("Bad Gateway", page.text)
+        self.assertNotIn("upstream diagnostic", page.text)
+        self.assertEqual(api.status_code, 502)
+        self.assertFalse(api.headers["content-type"].startswith("text/html"))
 
     def test_a_record_that_is_not_one_is_a_502(self):
         bad = [{**RECORD, "extra": 1}, {k: v for k, v in RECORD.items() if k != "offers"}, {**RECORD, "summary": {**RECORD["summary"], "count": "1"}},
