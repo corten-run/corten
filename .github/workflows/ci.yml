@@ -62,7 +62,12 @@ jobs:
   # the rest.
   rust:
     needs: [main-tip, rust-checks, rust-release]
-    if: always() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')
+    # For a direct PR, only a non-success needs a runner: a skipped job satisfies the
+    # required status. Pushes, calls and manual runs retain explicit success evidence.
+    if: >-
+      always() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')
+      && (github.event_name != 'pull_request' || github.workflow_ref != format('{0}/.github/workflows/ci.yml@{1}', github.repository, github.ref)
+      || needs.rust-checks.result != 'success' || needs.rust-release.result != 'success')
     runs-on: ubuntu-26.04
     steps:
       - run: |
@@ -153,26 +158,12 @@ jobs:
   # leave a smoke running nowhere while this stays green.
   browser:
     needs: [main-tip, smoke]
-    if: always() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')
+    if: >-
+      always() && (needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')
+      && (github.event_name != 'pull_request' || github.workflow_ref != format('{0}/.github/workflows/ci.yml@{1}', github.repository, github.ref)
+      || needs.smoke.result != 'success')
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github/workflows/ci.yml
-          sparse-checkout-cone-mode: false
-      - name: Every part is in exactly one group, and every part has a step
-        # bash's pipefail, so a yq that fails does not leave both lists empty and equal.
-        shell: bash
-        run: |
-          f=.github/workflows/ci.yml
-          grouped=$(yq '.jobs.smoke.strategy.matrix.include[].parts' "$f" | tr ' ' '\n' | grep . | sort)
-          stepped=$(yq '.jobs.smoke.steps[].if // ""' "$f" | { grep -o "' [a-z-]* '" || true; } | tr -d "' " | sort -u)
-          unnamed=$(yq '.jobs.smoke.steps[] | select(.if != null and (.if | test("'"'"' [a-z-]+ '"'"'") | not)) | .name' "$f")
-          echo "parts in groups:"; echo "$grouped"
-          test -n "$grouped" || { echo "no group names a part"; exit 1; }
-          test -z "$unnamed" || { echo "steps with a condition that names no part: $unnamed"; exit 1; }
-          test -z "$(echo "$grouped" | uniq -d)" || { echo "in more than one group: $(echo "$grouped" | uniq -d)"; exit 1; }
-          test "$grouped" = "$stepped" || { echo "parts with a step: $stepped"; exit 1; }
       - name: Every group passed
         run: |
           echo "smoke: ${{ needs.smoke.result }}"
@@ -225,6 +216,19 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: ${{ contains(env.PARTS, ' npm-check ') && '0' || '1' }}
+      - name: Every part is in exactly one group, and every part has a step
+        # bash's pipefail, so a yq that fails does not leave both lists empty and equal.
+        shell: bash
+        run: |
+          f=.github/workflows/ci.yml
+          grouped=$(yq '.jobs.smoke.strategy.matrix.include[].parts' "$f" | tr ' ' '\n' | grep . | sort)
+          stepped=$(yq '.jobs.smoke.steps[].if // ""' "$f" | { grep -o "' [a-z-]* '" || true; } | tr -d "' " | sort -u)
+          unnamed=$(yq '.jobs.smoke.steps[] | select(.if != null and (.if | test("'"'"' [a-z-]+ '"'"'") | not)) | .name' "$f")
+          echo "parts in groups:"; echo "$grouped"
+          test -n "$grouped" || { echo "no group names a part"; exit 1; }
+          test -z "$unnamed" || { echo "steps with a condition that names no part: $unnamed"; exit 1; }
+          test -z "$(echo "$grouped" | uniq -d)" || { echo "in more than one group: $(echo "$grouped" | uniq -d)"; exit 1; }
+          test "$grouped" = "$stepped" || { echo "parts with a step: $stepped"; exit 1; }
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version

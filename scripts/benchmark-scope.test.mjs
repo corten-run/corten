@@ -169,8 +169,36 @@ test("only a first direct main push reads the tip, before any heavy work can beg
   for (const [name, job] of Object.entries(ci)) {
     if (name === "main-tip") continue;
     assert.ok([job.needs].flat().includes("main-tip"), name);
-    assert.equal(job.if, (name === "rust" || name === "browser" ? "always()" : "!cancelled()") + " && " + admit, name);
+    if (name !== "rust" && name !== "browser") assert.equal(job.if, "!cancelled() && " + admit, name);
+    else {
+      const workers = name === "rust" ? ["rust-checks", "rust-release"] : ["smoke"];
+      assert.deepEqual(job.needs, ["main-tip", ...workers]);
+      assert.ok(job.if.startsWith("always() && " + admit + " && "), name);
+      const ref = "example/repo/.github/workflows/ci.yml@refs/pull/27/merge";
+      const outcomes = ["success", "failure", "cancelled", "skipped", ""];
+      for (const first of outcomes) for (const last of workers.length === 1 ? [first] : outcomes) {
+        const results = [first, last].slice(0, workers.length);
+        for (const [event, file, direct] of [["pull_request", ref, true], ["pull_request", "caller", false], ["push", ref, false], ["workflow_dispatch", ref, false]]) {
+          // Substitute only the workflow's named operands and a known format call. Reject
+          // unknown syntax rather than evaluating anything else from the workflow.
+          let expression = job.if.replace("always()", "true")
+            .replace("format('{0}/.github/workflows/ci.yml@{1}', github.repository, github.ref)", JSON.stringify(ref))
+            .replace("github.workflow_ref", JSON.stringify(file)).replace("github.event_name", JSON.stringify(event))
+            .replaceAll("needs.main-tip.result", "'skipped'");
+          workers.forEach((w, i) => { expression = expression.replaceAll(`needs.${w}.result`, JSON.stringify(results[i])); });
+          assert.match(expression, /^(?:true|'[\w-]+'|"[\w./@-]*"|==|!=|&&|\|\||[()\s])+$/);
+          assert.equal(Function(`return ${expression}`)(), !direct || results.some(r => r !== "success"), `${name}: ${event} ${file} ${results}`);
+        }
+      }
+    }
   }
+  // If an entire group disappears, conditioning this inventory on one group could lose the
+  // very check that finds it. Every smoke worker checks it, after checkout and before npm.
+  const smokeSteps = ci.smoke.steps;
+  const inventory = smokeSteps.findIndex(s => s.name === "Every part is in exactly one group, and every part has a step");
+  const checkout = smokeSteps.findIndex(s => s.uses?.startsWith("actions/checkout@"));
+  assert.ok(checkout >= 0 && inventory > checkout && inventory < smokeSteps.findIndex(s => s.run === "npm ci"));
+  assert.equal(smokeSteps[inventory].if, undefined);
   for (const [file, condition] of [["catalog.yml", initial], ["benchmark-evidence.yml", initial + direct("benchmark-evidence.yml")]]) {
     const jobs = read(file);
     const [first] = jobs.scope.steps;

@@ -268,7 +268,11 @@ pass the tip check described above. Later runs cover outstanding changes, not th
 commit itself. To check that exact commit, rerun its workflow. Jobs run side by side on
 their own runners: the release tests apart from the other Rust checks, and the
 browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
-`rust` and `browser` pass only when every job under them ran and passed, `msrv` checks the
+`rust` and `browser` accept a direct pull request without starting another runner when their
+workers all succeed. The two checks then appear as **skipped**; the worker jobs show the actual
+results. A failed, cancelled or unexpectedly skipped worker still requires a failing verdict.
+Pushes, manual runs and calls such as the release workflow keep explicit verdict jobs.
+Each smoke worker checks the complete parts list before running its own parts. `msrv` checks the
 supported Rust floor. `request-cost`, the one job of the `Request Cost` workflow
 (`.github/workflows/request-cost.yml`), is required too (Pull requests, item 2.1, Counted).
 A new smoke step names
