@@ -102,6 +102,7 @@ export function unexpected(name, answer) {
   const head = answer.latin1Slice(0, end);
   if (!head.startsWith("HTTP/1.1 200 ")) return `not a 200: ${head.split("\r\n")[0]}`;
   if (name === "page-public") {
+    if (/^age:/im.test(head)) return "a kept public page (Age header)";
     const policy = head.split("\r\n").filter((line) => /^cache-control:/i.test(line));
     if (policy.length !== 1 || !/^cache-control:[ \t]*public, max-age=60[ \t]*$/i.test(policy[0] ?? "")) return "not the public page's Cache-Control";
   }

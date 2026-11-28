@@ -701,6 +701,15 @@ test("builds that answer differently are said to and fail nothing; a case either
   }
 });
 
+test("matching public pages with Age on both builds are not unkept readings", (t) => {
+  const { base, head } = builds(t);
+  const kept = answer("page-public").latin1Slice().replace("date: -", "Age: 0\r\ndate: -");
+  for (const side of [base, head]) writeFileSync(join(side, "answers", "page-public.http"), kept, "latin1");
+  const { markdown, status, holds } = compare(base, head, { description: counting });
+  assert.deepEqual([status, holds], [1, false]);
+  assert.ok(verdict(markdown).includes("`page-public` has no answer on base and head (`a kept public page (Age header)`)"));
+});
+
 const SUM = "e59d3e11".padEnd(64, "0");
 const OTHER = "0e1f2a3b".padEnd(64, "9");
 /** Writes each build's `sha256` as job.sh does, or leaves none where it is null. @param {{ base: string, head: string }} at @param {string | null} base @param {string | null} head */

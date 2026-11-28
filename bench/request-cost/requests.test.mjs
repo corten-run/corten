@@ -132,6 +132,7 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
   }
   // The compressed page is the page once decompressed: not another page, not what only begins as zstd does.
   assert.equal(unexpected("page-public", answer(page, "Cache-Control: public, max-age=60\r\n")), null);
+  assert.equal(unexpected("page-public", answer(page, "Cache-Control: public, max-age=60\r\naGe: 0\r\n")), "a kept public page (Age header)");
   for (const policy of ["", "Cache-Control: private, no-cache\r\n", "Cache-Control: public, max-age=60\r\nCache-Control: private\r\n"]) {
     assert.match(String(unexpected("page-public", answer(page, policy))), /Cache-Control/);
   }
