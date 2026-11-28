@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { beginCount } from "./count-admission.mjs";
 import { keepLoadTool } from "./load-tool.mjs";
 import { k6Image, k6Platform, k6Version } from "../load-tool.mjs";
 import { pack } from "./pack.mjs";
@@ -35,6 +36,7 @@ test("unidentified historical and partially completed loads cannot acquire today
 });
 
 test("non-load steps do not prevent a first load-tool record", () => scratch((dir) => {
+  beginCount(dir);
   for (const name of ["cold-start.json", "bytes.json", "build.json", "conformance.json", "browser.json"])
     writeFileSync(join(dir, name), "{}");
   mkdirSync(join(dir, "fixture")); writeFileSync(join(dir, "fixture/passes.json"), "{\"passes\":3}");

@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps, tier } from "./apps.mjs";
+import { countIdentity, COUNT_OUTPUT, readCount } from "./count-admission.mjs";
 import { rawOf } from "./pack.mjs";
 import { roundNameError } from "./round.mjs";
 import { classes, kinds, slowMs, slowShare } from "./mixed.mjs";
@@ -40,7 +41,16 @@ if (existsSync(skippedFile)) {
 summary.ssr = ssrOf(raw, Object.keys(apps));
 
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
-for (const [key, runs] of Object.entries(read(join(dir, "instructions.json")) ?? {})) {
+const count = readCount(dir);
+let rebuildManaged = false;
+if (!count) {
+  // A managed summary is not a legacy round just because its receipt went missing.
+  try { rebuildManaged = Object.hasOwn(read(join(dir, "summary.json")) ?? {}, "countAdmission"); }
+  catch { rebuildManaged = true; }
+}
+if (count || rebuildManaged) Object.assign(summary, { countAdmission: countIdentity(count) });
+const instructions = count || rebuildManaged ? count?.rows : read(join(dir, COUNT_OUTPUT));
+for (const [key, runs] of Object.entries(instructions ?? {})) {
   if (!Array.isArray(runs)) { summary.instructions[key] = { failed: runs.failed }; continue; }
   // Which load kernel instructions came from: a row with `kernelPass` counted them over a second
   // load of their own (#2151); one without, from before that, over the load user instructions are.

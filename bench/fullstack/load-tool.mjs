@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describeK6 } from "../load-tool.mjs";
+import { COUNT_RECEIPT } from "./count-admission.mjs";
 
 export { k6Image } from "../load-tool.mjs";
 
@@ -16,7 +17,7 @@ export function keepLoadTool(dir, k6) {
     return;
   }
   const measured = (folder) => existsSync(folder) && readdirSync(folder).some((name) => /\.json$/.test(name) && !["passes.json", "edge.json"].includes(name));
-  const nonLoad = new Set(["passes.json", "edge.json", "cold-start.json", "bytes.json", "build.json", "conformance.json", "browser.json"]);
+  const nonLoad = new Set(["passes.json", "edge.json", "cold-start.json", "bytes.json", "build.json", "conformance.json", "browser.json", COUNT_RECEIPT]);
   const rootLoad = readdirSync(dir).some((name) => name.endsWith(".json") && !nonLoad.has(name));
   assert.ok(!rootLoad && !["raw.tar.xz", "raw.txt"].some((name) => existsSync(join(dir, name)))
     && !["fixture", "api"].some((source) => measured(join(dir, source))), "earlier load tool is unknown; use a new result directory");
