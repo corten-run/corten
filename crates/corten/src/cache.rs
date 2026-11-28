@@ -1047,9 +1047,12 @@ pub(crate) fn says(line: &[u8]) -> Says {
         let d = d.trim_ascii();
         says.no_store |= d.eq_ignore_ascii_case(b"no-store");
         says.private |= d.eq_ignore_ascii_case(b"private");
-        // By name, whatever its value: a reader that ignores the value still sees it.
-        let name = d.split(|&b| b == b'=').next().unwrap_or(d).trim_ascii();
-        says.must_understand |= name.eq_ignore_ascii_case(b"must-understand");
+        // Only a directive long enough to name it needs its value split off.
+        const MUST: &[u8] = b"must-understand";
+        if d.len() >= MUST.len() {
+            let name = d.split(|&b| b == b'=').next().unwrap_or(d).trim_ascii();
+            says.must_understand |= name.eq_ignore_ascii_case(MUST);
+        }
     }
     says
 }
