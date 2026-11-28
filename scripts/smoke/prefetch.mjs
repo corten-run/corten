@@ -722,7 +722,7 @@ export async function navAmp(browser, swaps) {
     const link = document.querySelector('main a[href="/smoke/amp/here"]');
     return { group: link?.getAttribute("data-nav-group"), also: link?.getAttribute("data-nav-also") };
   });
-  if (!/^[0-9a-f]{8}\+$/.test(parsed.group ?? "") || parsed.also !== older) seen.push(`parsed group "${parsed.group}" and paths ${JSON.stringify(parsed.also)}`);
+  if (!/^[A-Za-z0-9_-]{6}\+0$/.test(parsed.group ?? "") || parsed.also !== older) seen.push(`parsed group "${parsed.group}" and paths ${JSON.stringify(parsed.also)}`);
   const response = await page.goto(new URL(older, base).href);
   const at = await page.evaluate(() => location.pathname);
   if (at !== older) seen.push(`the browser shows ${older} as ${at}`);
