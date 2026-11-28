@@ -862,10 +862,10 @@ establish a general ranking.
          binary's functions and the pad, the pad first, in that order, in place of the move by
          the pad and the neighbours. LLD gives an input section the earliest place the file
          gives any symbol of it, a function, a label or an object, local or global, and the run
-         reads each section's place so, from the symbols each link's map lists; a placement whose
-         file names a symbol the map also has outside `.text`, an order of another output
-         section the run does not read, or whose first input section is not the first pad at
-         exactly the declared size, is refused. That order is partial, and the run asks no more
+         reads each section's place so, from the symbols each link's map lists. Outside `.text`
+         the input order must match the unpadded map, not its absolute addresses. A placement whose
+         file names a symbol the map also has outside `.text`, or whose first input section is not
+         the first pad at exactly the declared size, is refused. That order is partial, and the run asks no more
          of it: input sections the file gives one place lie in any order among themselves, since
          LLD sorts by the place alone. Between base and head at one index the run compares only
          the names (less a ThinLTO suffix, `.llvm.<n>`, a number a rebuild of the same code can
@@ -873,7 +873,8 @@ establish a general ranking.
          defined more than once on either side is left out, never matched to a copy on the other
          by its object, its section or its source, and the run reports how many names it compared
          and how many it left out. A change whose base and head at one index lay the names it
-         compares in different orders or change which compared names share an ELF address, or
+         compares in different groups ordered by input-section slot and offset, or change which
+         compared names share an ELF address, or
          that leaves fewer than two to compare, has no reading across shuffled placements.
          The run also records, from the unpadded link's map, what the fifth point asks of every
          run, with code aligned beyond 16 bytes or without.

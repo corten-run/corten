@@ -10348,7 +10348,8 @@ rules something out.
     gives any symbol defined in it, whatever its type (a function, a label, an object) and
     binding, so the run reads a section's place from every symbol its link's map lists in it,
     and refuses a placement whose file names a symbol the map also has in another output
-    section, which LLD orders as well and the run does not read. The order is partial where
+    section, which LLD can order as well. Outside `.text` the input order must match the
+    unpadded map, not its absolute addresses. The order is partial where
     neither the draw nor LLD gives one: input sections the file gives one place (local copies
     of one function in several objects) lie in any order among themselves, since LLD sorts by
     the place alone, not stably. The run checks each placement holds the unpadded functions and
@@ -10377,9 +10378,9 @@ rules something out.
     compares those names in the order each link laid them. On the probe of the
     diagnosis above, relinked with six shuffled orders, 34 of 3,467 shared names were left out
     and 3,433 compared. That is not the pinned layout turned away below, which gates one layout;
-    it samples many. Its cost is that each placement is a link no app builds, which may cost every
-    placement cycles a default order does not, both sides alike, as the first version's shuffle
-    could; unlike that one it gives base and head one order, partial only within those ties.
+    it samples many. Each placement is a link no app builds. Its cost against the default order
+    has not been measured; the two sides use the same draw for shared names, with the order
+    partial within the ties.
     Whether shuffled placements spread
     wider or narrower than unshuffled ones has not been measured, so a shuffled plan is sized
     from a shuffled A/A alone.
@@ -11138,8 +11139,9 @@ rules something out.
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
     two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
     pads may understate a spread that comes from that (the diagnosis under Inner layout above is
-    a sign it can, and a shuffled plan reads across it); a shuffled placement's own cost beside a default
-    order's, which no run has measured, falls on both sides alike; whatever a pad itself takes from a
+    a sign it can, and a shuffled plan reads across it); both sides use the same draw for shared
+    names, but no run has measured a shuffled placement's cost against the default order;
+    whatever a pad itself takes from a
     build's cycles, it takes from both sides of a comparison alike (the first two runs read padded
     builds under their unpadded one in 15 of 16, against two unpadded builds, each one side alone;
     the fourth read one exact base and two near-base unpadded builds among their padded

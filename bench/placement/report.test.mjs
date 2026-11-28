@@ -366,23 +366,25 @@ test("code aligned beyond 16 bytes: each side's sections and list, and every pla
 });
 
 // A shuffled run's results: each side's list of functions, every placement map's SHA-256
-// (maps/placements.sha256, here a stand-in from the placement's name), and every layout check
+// (maps/placements.sha256, with stand-in map bytes), and every layout check
 // a shuffled one naming the SHA-256 of the ordering file and the placement map. With a second
 // pad the map check also names that map. Each head's check against base's at its index names
 // both ordering files and both maps.
 const FUNCTIONS = "_start\ncrc\n_ZN5probe4main17h0123456789abcdefE.llvm.123\n";
 const mapSha = (b) => createHash("sha256").update(`map of ${b}`).digest("hex");
-const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = {}, mapCheck = {}, alike = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; }, touch: (res, put, r) => {
+const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = {}, mapCheck = {}, alike = {}, functions = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; }, touch: (res, put, r) => {
   const second = align > 16;
-  for (const side of r.sides) put(`functions-${side}.txt.gz`, gzipSync(FUNCTIONS));
+  const names = (side) => functions[side] ?? FUNCTIONS;
+  for (const side of r.sides) put(`functions-${side}.txt.gz`, gzipSync(names(side)));
   const used = new Set();
   for (const c of r.comparisons) for (let i = 1; i <= r.K; i++) for (const b of sides(c, i, r.P, r.Q)) used.add(b);
   const orderOf = (b) => {
     const pad = Number(b.replace(/^.*-p/, "")), i = r.P.includes(pad) ? r.P.indexOf(pad) + 1 : r.Q.indexOf(pad) + 1;
-    return createHash("sha256").update(order(FUNCTIONS.trim().split("\n"), r.seed, index(i))).digest("hex");
+    return createHash("sha256").update(order(names(b.split("-p")[0]).trim().split("\n"), r.seed, index(i))).digest("hex");
   };
   put(join("maps", "placements.sha256"), [...used].map((b) => `${mapSha(b)}  ${b}.map\n`).join(""));
   for (const b of used) {
+    put(join("maps", `${b}.map.gz`), gzipSync(`map of ${b}`));
     const pad = Number(b.replace(/^.*-p/, "")), sha = orderOf(b);
     put(join("layout", `${b}.txt`), `functions in both: 3\nJSON ${JSON.stringify({ ok: true, pad, second, shuffled: true, order: sha, placedMap: mapSha(b), ...layout })}\n`);
     if (second) put(join("layout", `${b}-map.txt`), `.text: 3 input sections\nJSON ${JSON.stringify({ ok: true, pad, second: 48, shuffled: true, placedMap: mapSha(b), ...mapCheck })}\n`);
@@ -392,12 +394,14 @@ const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = 
 } });
 
 test("a shuffled run's report gives, at each index, how many names head's check compared and left out", () => {
-  const r = report(shuffledRun({ alike: { shared: 3467, compared: 3433, leftOut: 34 } }));
+  // The renumbered name is shared; its extra ThinLTO copy on head is ambiguous, not a fourth name.
+  const functions = { head: FUNCTIONS.replace(".llvm.123\n", ".llvm.456\n_ZN5probe4main17h0123456789abcdefE.llvm.789\nhead_only\n") };
+  const r = report(shuffledRun({ functions, alike: { shared: 3, compared: 2, leftOut: 1 } }));
   assert.equal(r.exit, 0, r.json.refused?.join(" | "));
   const run = read(shuffledRun());
   assert.ok(run.alike.length > 1);
-  assert.deepEqual(r.json.alike, run.P.map((pad, k) => ({ i: k + 1, head: `head-p${pad}`, base: `base-p${pad}`, shared: 3467, compared: 3433, leftOut: 34 })));
-  assert.ok(r.md.includes(`Of the names both sides have, compared and left out at each index: ${run.P.map((_, k) => `${k + 1}: 3433 and 34 of 3467`).join("; ")}. Each placement is a link no app builds.`), r.md);
+  assert.deepEqual(r.json.alike, run.P.map((pad, k) => ({ i: k + 1, head: `head-p${pad}`, base: `base-p${pad}`, shared: 3, compared: 2, leftOut: 1 })));
+  assert.ok(r.md.includes(`Of the names both sides have, compared and left out at each index: ${run.P.map((_, k) => `${k + 1}: 2 and 1 of 3`).join("; ")}. Each placement is a link no app builds.`), r.md);
   // Counts the check does not give, or that do not add up, are refused rather than reported.
   for (const alike of [{ compared: undefined }, { leftOut: -1, compared: 4 }, { shared: 4 }, { compared: "3" }]) {
     const x = report(shuffledRun({ alike }));
@@ -408,6 +412,16 @@ test("a shuffled run's report gives, at each index, how many names head's check 
   const plain = report(results());
   assert.equal(plain.json.alike, undefined);
   assert.ok(!plain.md.includes("compared and left out at each index"));
+});
+
+test("a shuffled report refuses a comparison count that the two saved name lists cannot give", async (t) => {
+  for (const alike of [{ shared: 3467, compared: 3433, leftOut: 34 }, { shared: 2, compared: 2, leftOut: 0 }]) {
+    await t.test(`${alike.shared} claimed shared names`, () => {
+      const r = report(shuffledRun({ alike }));
+      assert.equal(r.exit, 2);
+      has(r.json.refused, "not the 3 shared names in the saved function lists");
+    });
+  }
 });
 
 test("a shuffled run says so in its header and reads only placements linked in their drawn order", () => {
@@ -450,6 +464,29 @@ test("a shuffled run's checks are bound to the placement maps it kept and the or
   }
   // Two placements' maps swapped in the alike check: each a map this run kept, neither the one for its side.
   refused({ alike: { baseMap: mapSha("head-p320"), headMap: mapSha("base-p320") } }, "head-p320: no passing check that the names it compares with base-p320");
+});
+
+test("a shuffled report refuses absent or altered placement map bytes even with matching receipts", async (t) => {
+  const file = join("maps", "base-p320.map.gz");
+  await t.test("absent", () => {
+    const r = report(shuffledRun({ touch: (res) => rmSync(join(res, file)) }));
+    assert.equal(r.exit, 2);
+    has(r.json.refused, "base-p320: cannot read its gzipped placement map");
+  });
+  await t.test("altered", () => {
+    const r = report(shuffledRun({ touch: (_, put) => put(file, gzipSync("a different map")) }));
+    assert.equal(r.exit, 2);
+    has(r.json.refused, "base-p320: its placement map bytes do not match");
+  });
+  await t.test("not gzip", () => {
+    const r = report(shuffledRun({ touch: (_, put) => put(file, "map of base-p320") }));
+    assert.equal(r.exit, 2);
+    has(r.json.refused, "base-p320: cannot read its gzipped placement map");
+  });
+  await t.test("recompressed without changing the map", () => {
+    const r = report(shuffledRun({ touch: (_, put) => put(file, gzipSync("map of base-p320", { level: 0 })) }));
+    assert.equal(r.exit, 0, r.json.refused?.join(" | "));
+  });
 });
 
 test("a shuffled report refuses an empty placement-map digest list even when every receipt names null", () => {
@@ -568,6 +605,64 @@ test("run.sh stops before any turn when it cannot keep a shuffled run's list of 
   const plain = run(0);
   assert.equal(plain.status, 0, plain.stdout + plain.stderr);
   assert.equal(existsSync(join(res, "functions-head.txt.gz")), false);
+});
+
+test("run.sh keeps and verifies every planned shuffled map before continuing", { skip: process.platform !== "linux" && "runs run.sh's record step under sh" }, async (t) => {
+  const kit = readFileSync(join(here, "run.sh"), "utf8");
+  const step = kit.slice(kit.indexOf("# What build.sh checked,"), kit.indexOf("# The probe's source as build.sh built it,"));
+  assert.ok(step.includes("placements.sha256") || step.includes("keep-placements"));
+  const work = mkdtempSync(join(tmp, "shuffle-maps-")), bin = join(work, "bin"), maps = join(work, "maps");
+  t.after(() => rmSync(work, { recursive: true, force: true }));
+  for (const d of [maps, join(bin, "layout"), join(work, "capture", "base")]) mkdirSync(d, { recursive: true });
+  for (const f of ["bin/sha256.txt", "bin/built-for.txt", "bin/layout/base-p320.txt", "bin/record-base.json", "maps/base.map.gz", "capture/base/args.json", "build-base.env"]) writeFileSync(join(work, f), "");
+  writeFileSync(join(bin, "functions-base.txt"), "a\nb\n");
+  const names = ["base-p320", "base-p384"], list = names.map((n) => `${mapSha(n)}  ${n}.map\n`).join("");
+  const target = join(maps, "base-p320.map.gz"), original = gzipSync("map of base-p320");
+  writeFileSync(join(maps, "placements.sha256"), list);
+  writeFileSync(join(maps, "base-p384.map.gz"), gzipSync("map of base-p384"));
+  const run = (name, shuffle = 1) => {
+    const res = join(work, name);
+    mkdirSync(res);
+    const r = spawnSync("sh", ["-c", `set -u\nfinish() { echo "$2"; exit "$1"; }\nKIT='${here}'; WORK='${work}'; B='${bin}'; RES='${res}'; SHUFFLE=${shuffle}; SIDES=base; PADS_P=320; PADS_Q=384\n${step}\necho CONTINUED`], { encoding: "utf8", env: { PATH: process.env.PATH } });
+    return { ...r, res };
+  };
+  await t.test("absent map", () => {
+    const r = run("missing");
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /base-p320: cannot read its gzipped placement map/);
+    assert.doesNotMatch(r.stdout, /CONTINUED/);
+  });
+  await t.test("altered map", () => {
+    writeFileSync(target, gzipSync("replacement"));
+    const r = run("altered");
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /base-p320: its placement map bytes do not match/);
+    assert.doesNotMatch(r.stdout, /CONTINUED/);
+  });
+  await t.test("omitted digest", () => {
+    writeFileSync(target, original);
+    writeFileSync(join(maps, "placements.sha256"), list.split("\n").slice(1).join("\n"));
+    const r = run("omitted");
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /base-p320: no placement map digest/);
+    assert.doesNotMatch(r.stdout, /CONTINUED/);
+  });
+  await t.test("both valid", () => {
+    writeFileSync(join(maps, "placements.sha256"), list);
+    const r = run("valid");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /^CONTINUED$/m);
+    assert.deepEqual(readFileSync(join(r.res, "maps", "base-p320.map.gz")), original);
+    assert.equal(readFileSync(join(r.res, "maps", "placements.sha256"), "utf8"), list);
+  });
+  await t.test("legacy unshuffled", () => {
+    rmSync(join(maps, "placements.sha256"));
+    rmSync(target);
+    const r = run("legacy", 0);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /^CONTINUED$/m);
+    assert.equal(existsSync(join(r.res, "maps", "base-p320.map.gz")), false);
+  });
 });
 
 test("a run without the field reads as before and refuses a shuffled placement's check", () => {

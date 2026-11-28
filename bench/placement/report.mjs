@@ -17,14 +17,15 @@
 //     no passing layout check or, where either side has a section of .text aligned beyond 16
 //     bytes, no second pad's line and map check;
 //   - for a workload the plan shuffles (README.md, workloads[].shuffle), a side without its list
-//     of functions (functions-<side>.txt.gz) or without maps/placements.sha256, or a binary whose
+//     of functions (functions-<side>.txt.gz), a missing or altered placement map, or a binary whose
 //     layout check (and map check, with a second pad) is not a shuffled one for the ordering file
 //     order.mjs draws from that list, the seed and the binary's index, and for the placement map
 //     maps/placements.sha256 lists for it, or a head binary without a passing check that the
 //     names it compares with base's binary at its index lie in the same order
 //     (layout/head-p<n>-alike.txt) that names both ordering files so drawn and both placement maps
 //     so listed and gives how many names both sides have it compared and left out, whole numbers
-//     that add up and meet the live check's minimum; for one it does not, a layout or map check that is;
+//     that add up to the saved lists' shared name count and meet the live check's minimum; for one
+//     it does not, a layout or map check that is shuffled;
 //   - placements not started one after another in the order run.
 // A placement leaves its comparison without a bound when its directory, its counts, its
 // placement.txt (the comparison, A and B with the build's SHA-256s, the run, the plan, its place
@@ -50,8 +51,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FEWEST } from "./layout.mjs";
-import { mapText, readMap, record, refusals } from "./map.mjs";
+import { FEWEST, PADS, thinName } from "./layout.mjs";
+import { mapText, placementMaps, readMap, record, refusals } from "./map.mjs";
 import { names as functionNames, order } from "./order.mjs";
 import { DRAWS, eligibility, failing, LIMIT, SEED, sizeByRule } from "./pilot.mjs";
 import { EVENTS, inputs, K_MAX, K_MIN, problems, resolve, setup } from "./plan.mjs";
@@ -166,23 +167,22 @@ export function read(dir) {
     const i = P.includes(pad) ? P.indexOf(pad) + 1 : Q.indexOf(pad) + 1;
     try { return createHash("sha256").update(order(lists.get(side), r.seed, i)).digest("hex"); } catch { return null; }
   };
-  // A shuffled run's placement maps, by the SHA-256 of each one's text (maps/placements.sha256, as
-  // build.sh writes it before gzipping the map): what each layout check and each head's check
-  // against base's placement name as the maps they read.
-  const placedMaps = new Map();
-  if (r.shuffle) {
-    if (!existsSync(join(dir, "maps", "placements.sha256"))) refused.push("a shuffled run without maps/placements.sha256 does not show which placement maps its layout checks read");
-    else for (const l of text(join("maps", "placements.sha256")).trim().split("\n")) { const m = /^([0-9a-f]{64})  (\S+)\.map$/.exec(l); if (m) placedMaps.set(m[2], m[1]); }
-  }
   const used = new Set(), alike = [];
   for (const c of r.comparisons) for (let i = 1; i <= K; i++) for (const b of sides(c, i, P, Q)) used.add(b);
+  let placedMaps;
+  if (r.shuffle) {
+    const { digests, why } = placementMaps(join(dir, "maps"), used);
+    if (why.length) return { refused: [...refused, ...why] };
+    placedMaps = digests;
+  }
+  const namesOf = (side) => new Set(lists.get(side)?.map(thinName).filter((n) => !PADS.includes(n)));
+  const shared = r.shuffle && part === "gated" ? namesOf("base").intersection(namesOf("head")).size : 0;
   for (const b of used) {
     const side = b.replace(/-p\d+$/, ""), pad = Number(b.replace(/^.*-p/, ""));
     if (!shas.has(b)) { refused.push(`${b}: not in sha256.txt`); continue; }
     if (verified.get(b) !== side) refused.push(`${b}: not verified to answer as its unpadded binary (verify/verdicts.txt)`);
     if (r.shuffle && !lists.has(side)) continue;
-    const map = placedMaps.get(b);
-    if (r.shuffle && !map) { refused.push(`${b}: no placement map digest in maps/placements.sha256`); continue; }
+    const map = placedMaps?.get(b);
     const shuffled = r.shuffle ? { shuffled: true, placedMap: map } : { shuffled: undefined };
     const sha = r.shuffle ? orderSha(side, pad) : undefined;
     if (r.shuffle && sha === null) refused.push(`${b}: its side's list of functions makes no ordering file (functions-${side}.txt.gz)`);
@@ -197,6 +197,7 @@ export function read(dir) {
       const a = baseMap && baseOrder && sha && check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder, headOrder: sha, baseMap, headMap: map });
       if (!a) refused.push(`${b}: no passing check that the names it compares with base-p${pad} lie in the same order, using the ordering files drawn for both and the placement maps kept for both (layout/${b}-alike.txt, maps/placements.sha256)`);
       else if (![a.shared, a.compared, a.leftOut].every((n) => Number.isInteger(n) && n >= 0) || a.compared + a.leftOut !== a.shared) refused.push(`${b}: its check against base-p${pad} does not say how many of the names both have it compared and left out (layout/${b}-alike.txt)`);
+      else if (a.shared !== shared) refused.push(`${b}: its check against base-p${pad} counts ${a.shared} shared names, not the ${shared} shared names in the saved function lists (layout/${b}-alike.txt)`);
       else if (a.compared < FEWEST) refused.push(`${b}: its check against base-p${pad} compared fewer than ${FEWEST} names (layout/${b}-alike.txt)`);
       else alike.push({ i: P.indexOf(pad) + 1, head: b, base: `base-p${pad}`, shared: a.shared, compared: a.compared, leftOut: a.leftOut });
     }

@@ -727,7 +727,7 @@ test("a shuffled placement: every symbol of a listed name, a label or an object 
   // The order the functions alone would give (key, mid, late) is not a link of this file.
   has(own(sideOf(secs, file, { reorder: (laid) => [laid[0], laid[2], laid[1]] })).why, "definitions where the ordering file puts them: 1 of 3, in 1 of 3 input sections");
   // A listed name the placement's map also has in another output section is refused: LLD orders that section by it too.
-  has(own({ ...lld, elsewhere: [{ name: "mid", at: 0x300000, output: ".data" }] }).why, "1 names the ordering file lists are also defined outside .text, where LLD orders by them too and this check does not read: mid (.data)");
+  has(own({ ...lld, elsewhere: [{ name: "mid", at: 0x300000, output: ".data" }] }).why, "1 names the ordering file lists are also defined outside .text, where LLD orders by them too: mid (.data)");
   assert.deepEqual(own({ ...lld, elsewhere: [{ name: "unlisted", at: 0x300000, output: ".data" }] }).why, []);
   // A placement listing other symbols in a section than its unpadded link does is refused.
   const extra = { ...lld, placedSections: lld.placedSections.map((s) => (s.section === ".text.mid" ? { ...s, symbols: [...s.symbols, { name: "ghost", at: s.at + 8 }] } : s)) };
@@ -950,7 +950,7 @@ test("a shuffled placement, linked by LLD: a function of .text by its symbol's s
   // 2. A local dup of no size ends .text (zz's empty section), and another local dup begins the
   // next executable output section at that address: one address, two section indices; only the
   // first is of .text, and only it is drawn. LLD gives .other's section dup's place as well, an
-  // order of .other this check does not read: the placement is refused, not passed.
+  // order of .other: the placement is refused even if that input order is unchanged.
   const zz = obj("zz", [[".text.zz", [["dup", 0, true]], 0, 0xcc, 0]]), o = obj("o", [[".other", [["dup", 0, true]], 0x10, 0x90, 0]]);
   ld("bound", [m, a, zz, o]);
   const dups = syms("bound").filter((x) => x.name === "dup");
@@ -961,7 +961,7 @@ test("a shuffled placement, linked by LLD: a function of .text by its symbol's s
   ld("bound-p", [pad, m, a, zz, o], drawn("bound", 0, 1));
   const bound = shuffled("bound", "bound-p");
   assert.equal(bound.status, 1, bound.stdout);
-  assert.match(bound.stderr, /1 names the ordering file lists are also defined outside \.text, where LLD orders by them too and this check does not read: dup \(\.other\)/);
+  assert.match(bound.stderr, /1 names the ordering file lists are also defined outside \.text, where LLD orders by them too: dup \(\.other\)/);
   assert.match(bound.stdout, /"functions":3,/);
 
   // 3. A Rust-mangled function of no size ends r1's section where r2's begins. With the maps
@@ -1037,6 +1037,61 @@ const fifth = (t) => {
     alikeOf: (b, bp, h, hp) => kit("--alike", b, bp, `${bp}.order`, `${b}.map`, `${bp}.map`, h, hp, `${hp}.order`, `${h}.map`, `${hp}.map`, "320"),
   };
 };
+
+test("relink.mjs fails a real LLD missing-name warning only with --every-name", LLD, (t) => {
+  const { dir, pad, m } = fifth(t), output = join(dir, "placed"), file = join(dir, "placed.order");
+  writeFileSync(join(dir, "args.json"), JSON.stringify({ cwd: dir, recorded: [
+    "-fuse-ld=lld", "-nostdlib", "-Wl,-e,0,--gc-sections", "-o", output, join(dir, m),
+  ] }));
+  writeFileSync(file, named("middle", "missing_placement_symbol"));
+  const relink = (...flags) => spawnSync(process.execPath, [
+    fileURLToPath(new URL("./relink.mjs", import.meta.url)), dir, output,
+    "--pad", join(dir, pad), "--order", file, ...flags,
+  ], { cwd: dir, encoding: "utf8" });
+  const warn = relink();
+  assert.equal(warn.status, 0, warn.stderr);
+  assert.match(warn.stderr, /symbol ordering file: no such symbol: missing_placement_symbol/);
+  assert.doesNotMatch(warn.stderr, /relink\.mjs:/);
+  const refuse = relink("--every-name");
+  assert.equal(refuse.status, 1, refuse.stderr);
+  assert.match(refuse.stderr, /symbol ordering file: no such symbol: missing_placement_symbol/);
+  assert.match(refuse.stderr, /relink\.mjs: 1 names of the ordering file .* missing_placement_symbol/);
+});
+
+test("a real shuffled link must keep the unpadded relative input order outside .text", LLD, async (t) => {
+  const { dir, run, obj, ld, pad, m, shuffled, alikeOf } = fifth(t);
+  const a = obj("a", [".text.a", "a", 64, 0xcc], "a.c");
+  writeFileSync(join(dir, "other.s"), [".rodata", ".data"].flatMap((section) => ["one", "two"].flatMap((name, i) => [
+    `.section ${section}.${name},"${section === ".data" ? "awR" : "aR"}",@progbits`,
+    `${section.slice(1)}_${name}:`, `.quad ${i + 1}`,
+  ])).join("\n") + "\n");
+  run("clang", ["--target=x86_64-linux-gnu", "-c", "other.s", "-o", "other.o"]);
+  const objs = [m, a, "other.o"], file = named("a", "middle");
+  ld("plain", objs);
+  ld("good", [pad, ...objs], file);
+  ld("bad", [pad, ...objs], named("a", "middle", "rodata_two", "rodata_one"));
+  // Check the bad link using the genuine .text-only ordering file, not the one actually linked.
+  writeFileSync(join(dir, "bad.order"), file);
+  const section = (b, name) => readMap(readFileSync(join(dir, b + ".map"), "utf8")).find((s) => s.name === name);
+  const rodata = (b) => section(b, ".rodata").inputs.map((s) => s.section);
+  assert.deepEqual(rodata("plain"), [".rodata.one", ".rodata.two"]);
+  assert.deepEqual(rodata("good"), rodata("plain"));
+  assert.deepEqual(rodata("bad"), [...rodata("plain")].reverse());
+  assert.notEqual(section("plain", ".data").at, section("good", ".data").at);
+  const good = shuffled("plain", "good"), same = alikeOf("plain", "good", "plain", "good");
+  assert.equal(good.status, 0, good.stderr);
+  assert.equal(same.status, 0, same.stderr);
+  await t.test("--order", () => {
+    const bad = shuffled("plain", "bad");
+    assert.equal(bad.status, 1, bad.stdout + bad.stderr);
+    assert.match(bad.stderr, /input order in \.rodata differs from the unpadded map/);
+  });
+  await t.test("--alike", () => {
+    const bad = alikeOf("plain", "good", "plain", "bad");
+    assert.equal(bad.status, 2, bad.stdout + bad.stderr);
+    assert.match(bad.stderr, /head's placement does not pass its own shuffled check: .*input order in \.rodata differs from the unpadded map/);
+  });
+});
 
 // An object of one section [name, size, byte] with the file symbol source and its functions
 // [name, offset, global] (local unless global).

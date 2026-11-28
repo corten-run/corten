@@ -20,7 +20,8 @@
 // object, local or global, gives its input section that name's place, as LLD does, read from the
 // symbols each link's map lists (written with --no-demangle, as build.sh asks for in a shuffled
 // run, so they match the symbol table byte for byte); a listed name the map also has outside
-// .text is refused, since LLD orders that output section too. A function is of .text by its ELF
+// .text is refused, since LLD orders that output section too. Other output sections must keep
+// the unpadded map's input order, not its absolute addresses. A function is of .text by its ELF
 // symbol table entry's section index (readelf -sW's .symtab, type FUNC), and of the input section
 // its own link's map gives it (map.mjs owner()). It passes when the first input section of .text
 // is the first pad's, exactly the declared pad's size; the rest are the unpadded map's (map.mjs
@@ -49,6 +50,7 @@ import { fileURLToPath } from "node:url";
 import { mapBytes, owner, PAD, pair, readMap, SECOND_PAD } from "./map.mjs";
 
 export const PADS = ["corten_layout_pad", "corten_layout_pad2"];
+export const thinName = (name) => name.replace(/\.llvm\.\d+$/, "");
 
 /** nm's defined function symbols: name -> address, null for a name defined more than once. */
 export function symbols(nm) {
@@ -56,7 +58,7 @@ export function symbols(nm) {
   for (const l of nm.split("\n")) {
     const m = /^([0-9a-f]+) [tTwW] (.+)$/.exec(l);
     if (!m) continue;
-    const name = m[2].replace(/\.llvm\.\d+$/, "");
+    const name = thinName(m[2]);
     seen.set(name, seen.has(name) ? null : parseInt(m[1], 16));
   }
   return seen;
@@ -67,7 +69,7 @@ export function entries(nm) {
   const out = [];
   for (const l of nm.split("\n")) {
     const m = /^([0-9a-f]+) [tTwW] (.+)$/.exec(l);
-    if (m) out.push({ raw: m[2], name: m[2].replace(/\.llvm\.\d+$/, ""), at: parseInt(m[1], 16) });
+    if (m) out.push({ raw: m[2], name: thinName(m[2]), at: parseInt(m[1], 16) });
   }
   return out;
 }
@@ -105,7 +107,7 @@ export function elfSymbols(readelf) {
     if (table !== ".symtab") continue;
     const m = /^\s*\d+:\s+([0-9a-f]+)\s+(0x[0-9a-f]+|\d+)\s+(\S+)\s+(\S+)\s+\S+(?:\s+\[[^\]]*\])?\s+(\S+)\s+(\S.*?)\s*$/.exec(l.replace(/\r$/, ""));
     if (!m || m[3] === "FILE" || m[3] === "SECTION" || m[5] === "UND") continue;
-    out.push({ raw: m[6], name: m[6].replace(/\.llvm\.\d+$/, ""), type: m[3], local: m[4] === "LOCAL", at: parseInt(m[1], 16), size: Number(m[2]), shndx: /^\d+$/.test(m[5]) ? Number(m[5]) : null });
+    out.push({ raw: m[6], name: thinName(m[6]), type: m[3], local: m[4] === "LOCAL", at: parseInt(m[1], 16), size: Number(m[2]), shndx: /^\d+$/.test(m[5]) ? Number(m[5]) : null });
   }
   if (!symtab) throw new Error("no .symtab in readelf's symbols: a stripped binary has no function symbols to read");
   return out;
@@ -135,13 +137,29 @@ const unique = (es) => { const seen = new Map(); for (const e of es) seen.set(e.
 const some = (xs) => xs.slice(0, 3).join(", ");
 const sameSymbols = (a, b) => a.symbols.length === b.symbols.length && a.symbols.every((y, k) => y.name === b.symbols[k].name && y.at - a.at === b.symbols[k].at - b.at);
 
+// The ordering file is for .text alone. Outside it, compare the named input rows in map order.
+// Repeated IDs can come from different inputs; use their size, alignment and relative symbols
+// to tell them apart when the map can. Neither check uses the output's absolute addresses.
+function outsideOrder(unpadded, placed) {
+  const a = unpadded.filter((o) => o.inputs.length), b = placed.filter((o) => o.inputs.length);
+  if (a.length !== b.length || a.some((o, i) => o.name !== b[i].name)) return ["the output sections with inputs outside .text differ from the unpadded map"];
+  return a.flatMap(({ name, inputs }, i) => {
+    const seen = new Set(), repeated = new Set();
+    for (const s of inputs) { if (seen.has(s.id)) repeated.add(s.id); seen.add(s.id); }
+    const got = b[i].inputs;
+    const differs = (s, p) => s.id !== p.id || (repeated.has(s.id) && (s.size !== p.size || s.align !== p.align || !sameSymbols(s, p)));
+    return inputs.length !== got.length || inputs.some((s, j) => differs(s, got[j])) ? [`input order in ${name} differs from the unpadded map`] : [];
+  });
+}
+
 /**
  * A shuffled placement against its side's unpadded binary and the ordering file it was linked
  * with. ea, eb: elfSymbols() of the unpadded binary and of the placement; text: the unpadded
  * binary's textRange(); placed: the placement's textRange(); order: the ordering file's lines;
  * sections, placedSections: the input sections of .text ({ at, size, symbols, ... }) in the
  * unpadded link's map and in the placement's, each in its map's order; elsewhere: the placement
- * map's symbols in its other output sections ({ name, output }).
+ * map's symbols in its other output sections ({ name, output }); otherMaps: both maps' output
+ * sections other than .text.
  * Where a section lands is what LLD's --symbol-ordering-file does and no more: every defined
  * symbol of a name the file lists, of any type (FUNC, NOTYPE, OBJECT) and local or global, gives
  * the input section that holds it that name's place, and a section takes the earliest place any
@@ -150,9 +168,9 @@ const sameSymbols = (a, b) => a.symbols.length === b.symbols.length && a.symbols
  * --no-demangle. The sections the file places are sorted by key alone, with no order among
  * sections of one key (llvm::sort, not a stable sort), and the sections it places nowhere follow
  * in their own order (x86-64, where LLD inserts no thunks). A name the file lists that the
- * placement's map also has in another output section orders that section too, which this check
- * does not read, and is refused. So the unpadded sections are taken in groups, one a key (each
- * section the file places nowhere a group of its own), and the placement passes when it holds,
+ * placement's map also has in another output section can order that section too and is refused.
+ * Outside .text the input order must stay fixed. Within .text the unpadded sections are taken in
+ * groups, one a key (each section the file places nowhere a group of its own), and the placement passes when it holds,
  * besides the pads, the unpadded map's input sections (map.mjs pair()), each listing the same
  * symbols as far from its start, with each group's sections together, in any order among
  * themselves, and the groups in the order of their keys; every function of .text (by its symbol's
@@ -161,7 +179,7 @@ const sameSymbols = (a, b) => a.symbols.length === b.symbols.length && a.symbols
  * the start of .text and exactly the declared pad's size; the first function's section after it,
  * each after the end of the one before it, and the last inside .text, before any second pad.
  */
-export function ordered(ea, eb, text, placed, order, sections, placedSections, pad, second = false, elsewhere = []) {
+export function ordered(ea, eb, text, placed, order, sections, placedSections, pad, second = false, elsewhere = [], otherMaps = [[], []]) {
   const pads = second ? PADS : PADS.slice(0, 1), why = [], fa = unique(functionsOf(ea)), fb = unique(functionsOf(eb));
   const onlyA = [...fa.keys()].filter((n) => !fb.has(n)), onlyB = [...fb.keys()].filter((n) => !fa.has(n));
   if (onlyA.length) why.push(`${onlyA.length} functions only in the unpadded binary: ${some(onlyA)}`);
@@ -177,7 +195,8 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
   if (extra.length) why.push(`${extra.length} names in the ordering file that are no function of the unpadded .text: ${some(extra)}`);
   const orderedNames = new Set(order);
   const outside = [...new Set(elsewhere.filter((y) => orderedNames.has(y.name)).map((y) => `${y.name} (${y.output})`))];
-  if (outside.length) why.push(`${outside.length} names the ordering file lists are also defined outside .text, where LLD orders by them too and this check does not read: ${some(outside)}`);
+  if (outside.length) why.push(`${outside.length} names the ordering file lists are also defined outside .text, where LLD orders by them too: ${some(outside)}`);
+  why.push(...outsideOrder(...otherMaps));
   // Each function of .text, by its symbol's section index (inText()), and its input section by its
   // own link's map (owner(), whose names match the symbol table's when the map is written with
   // --no-demangle). Every one must have one: one the map gives none, or does not tell apart, is
@@ -279,7 +298,7 @@ export const FEWEST = 2;
 /**
  * Two placements at one index of a shuffled run, base's and head's, linked with ordering files
  * drawn alike: the functions whose identity is plain on both sides lie in one order in both. Each
- * side is { ea, eb, text, placed, order, sections, placedSections, elsewhere }, the arguments
+ * side is { ea, eb, text, placed, order, sections, placedSections, elsewhere, otherMaps }, the arguments
  * ordered() takes for it, and each must pass ordered().
  * A function is its name less a ThinLTO suffix (which a rebuild of the same code can renumber,
  * and which order.mjs keys without), and it is compared only where that name is defined exactly
@@ -295,15 +314,14 @@ export const FEWEST = 2;
  * order is not promised (sections of one key), a difference refuses too.
  */
 export function alike(base, head, pad, second = false) {
-  const check = (x) => ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, pad, second, x.elsewhere ?? []);
+  const check = (x) => ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, pad, second, x.elsewhere, x.otherMaps);
   const ra = check(base), rb = check(head);
   if (!ra.ok || !rb.ok) throw new Error(`alike: ${!ra.ok ? "base's" : "head's"} placement does not pass its own shuffled check: ${(!ra.ok ? ra : rb).why.join("; ")}`);
   const tally = (names) => { const m = new Map(); for (const n of names) m.set(n, (m.get(n) ?? 0) + 1); return m; };
-  const strip = (n) => n.replace(/\.llvm\.\d+$/, "");
   // Each side's plain names: one function, one symbol of the table, one of the map, which agree.
   const plain = (x, r) => {
     const fns = tally(r.defs.map((d) => d.name)), table = tally(x.eb.map((e) => e.name)), listed = new Map();
-    for (const y of [...x.placedSections.flatMap((s) => s.symbols ?? []), ...(x.elsewhere ?? [])]) { const n = strip(y.name); listed.set(n, [...(listed.get(n) ?? []), y]); }
+    for (const y of [...x.placedSections.flatMap((s) => s.symbols ?? []), ...(x.elsewhere ?? [])]) { const n = thinName(y.name); listed.set(n, [...(listed.get(n) ?? []), y]); }
     const out = new Map();
     for (const d of r.defs) {
       if (PADS.includes(d.name)) continue;
@@ -317,7 +335,7 @@ export function alike(base, head, pad, second = false) {
   const leftOut = shared.length - compared.length;
   if (compared.length < FEWEST) why.push(`only ${compared.length} of the ${shared.length} names both placements have are defined exactly once on each side, fewer than the ${FEWEST} an order needs`);
   // Each side's compared functions in the placement's order: by the place of their input section
-  // and their distance into it, those at one place together (ICF's folds, aliases), each by name.
+  // and their distance into it, those at one slot and offset together, each by name.
   const laid = (p) => {
     const at = new Map();
     for (const d of [...p.out.values()].filter((d) => keep.has(d.name))) { const k = `${d.slot}\0${d.off}`; at.set(k, { slot: d.slot, off: d.off, ns: [...(at.get(k)?.ns ?? []), d.name] }); }
@@ -382,19 +400,23 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const nmText = (bin) => execFileSync("nm", ["--defined-only", bin], { encoding: "utf8", maxBuffer: 1 << 28 });
   const readelf = (bin) => execFileSync("readelf", ["-SW", bin], { encoding: "utf8" });
   const elf = (bin) => elfSymbols(execFileSync("readelf", ["-sW", bin], { encoding: "utf8", maxBuffer: 1 << 28 }));
-  // A map's input sections of .text, the symbols it lists in its other output sections, and the
+  // A map's input sections of .text, the other output sections and their symbols, and the
   // SHA-256 of its bytes, gunzipped: what build.sh writes to maps/placements.sha256 before gzipping it.
   const mapOf = (file) => {
     const bytes = mapBytes(readFileSync(file)), outs = readMap(bytes.toString("utf8")), t = outs.find((o) => o.name === ".text");
     if (!t) { console.error(`layout.mjs: no .text output section in ${file}`); process.exit(2); }
-    const elsewhere = outs.filter((o) => o !== t).flatMap((o) => o.inputs.flatMap((s) => s.symbols.map((y) => ({ name: y.name, at: y.at, output: o.name }))));
-    return { inputs: t.inputs, elsewhere, sha: createHash("sha256").update(bytes).digest("hex") };
+    const other = outs.filter((o) => o !== t);
+    const elsewhere = other.flatMap((o) => o.inputs.flatMap((s) => s.symbols.map((y) => ({ name: y.name, at: y.at, output: o.name }))));
+    return { inputs: t.inputs, other, elsewhere, sha: createHash("sha256").update(bytes).digest("hex") };
   };
   const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
   const lines = (file) => readFileSync(file).toString("utf8").replace(/\n$/, "").split("\n");
   if (both) {
     const maps = [rest[4], rest[9]].map(mapOf);
-    const side = ([unpadded, placement, order, map], m) => ({ ea: elf(unpadded), eb: elf(placement), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: lines(order), sections: mapOf(map).inputs, placedSections: m.inputs, elsewhere: m.elsewhere });
+    const side = ([unpadded, placement, order, map], m) => {
+      const u = mapOf(map);
+      return { ea: elf(unpadded), eb: elf(placement), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: lines(order), sections: u.inputs, placedSections: m.inputs, elsewhere: m.elsewhere, otherMaps: [u.other, m.other] };
+    };
     let r;
     try { r = alike(side(rest.slice(0, 5), maps[0]), side(rest.slice(5, 10), maps[1]), pad, second); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
     console.log(`${r.compared} shared names compared, ${r.leftOut} left out as ambiguous (defined more than once, or read otherwise by the symbol table or the map, on a side); names one side alone has: ${r.onlyBase} in base, ${r.onlyHead} in head; places holding the compared names: ${r.places}, in one order: ${r.same}`);
@@ -403,9 +425,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(r.ok ? 0 : 1);
   }
   if (orderFile !== undefined) {
-    const bytes = readFileSync(orderFile), placedMap = mapOf(placedFile);
+    const bytes = readFileSync(orderFile), unpaddedMap = mapOf(mapFile), placedMap = mapOf(placedFile);
     let ra;
-    try { ra = ordered(elf(a), elf(b), textRange(readelf(a)), textRange(readelf(b)), bytes.toString("utf8").replace(/\n$/, "").split("\n"), mapOf(mapFile).inputs, placedMap.inputs, pad, second, placedMap.elsewhere); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
+    try { ra = ordered(elf(a), elf(b), textRange(readelf(a)), textRange(readelf(b)), bytes.toString("utf8").replace(/\n$/, "").split("\n"), unpaddedMap.inputs, placedMap.inputs, pad, second, placedMap.elsewhere, [unpaddedMap.other, placedMap.other]); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
     const { defs, ...r } = ra;
     console.log(`definitions of functions in the unpadded .text: ${r.functions}, in ${r.sections} input sections, ${r.groups} groups of one key, ${r.tied} sections in groups of more than one; names defined more than once there, checked by their sections: ${r.repeated}; names the ordering file lists after the pad: ${r.listed}; definitions where the ordering file puts them: ${r.matched} of ${r.functions}, in ${r.placedSections} of ${r.sections} input sections; functions in their unpadded section's pair, as far from its start: ${r.together}; sections after the pad and the one before: ${r.follow}; only in the placement: ${r.onlyB.join(", ")}`);
     console.log("JSON " + JSON.stringify({ ...r, order: createHash("sha256").update(bytes).digest("hex"), placedMap: placedMap.sha, onlyA: r.onlyA.length }));

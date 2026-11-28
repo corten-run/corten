@@ -19,11 +19,11 @@ import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { elfSymbols, PADS, textFunctions, textRange } from "./layout.mjs";
+import { elfSymbols, PADS, textFunctions, textRange, thinName } from "./layout.mjs";
 import { mapText } from "./map.mjs";
 
 /** A name's key at placement i of a workload with this seed. */
-export const key = (seed, i, name) => createHmac("sha256", `${seed}:${i}`).update(name.replace(/\.llvm\.\d+$/, "")).digest("hex");
+export const key = (seed, i, name) => createHmac("sha256", `${seed}:${i}`).update(thinName(name)).digest("hex");
 
 /** Why a functions file's names cannot make an ordering file, or null. */
 export function namesProblem(names) {

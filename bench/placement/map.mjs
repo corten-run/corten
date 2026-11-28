@@ -26,7 +26,8 @@
 // section in order, each at the first multiple of its own alignment at or after the end of the
 // one before it.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
@@ -45,6 +46,35 @@ export const RUST_NAME = /\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}
 /** A map file's bytes, gunzipped when it is gzipped. */
 export const mapBytes = (bytes) => bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
 export const mapText = (bytes) => mapBytes(bytes).toString("utf8");
+
+/** Verify exactly the planned shuffled maps against build.sh's hashes of the uncompressed bytes.
+ * When keeping them for run.sh, check the copied bytes and write the digest list only after all pass.
+ */
+export function placementMaps(dir, expected, keep) {
+  const file = "placements.sha256", wanted = new Set(expected), digests = new Map(), why = [];
+  let list;
+  try { list = readFileSync(join(dir, file), "utf8"); } catch {
+    return { why: ["a shuffled run without maps/placements.sha256 does not show which placement maps its layout checks read"] };
+  }
+  for (const line of list ? list.replace(/\n$/, "").split("\n") : []) {
+    const m = /^([0-9a-f]{64})  ((?:base|head)-p[1-9]\d*)\.map$/.exec(line);
+    if (!m || !wanted.has(m[2]) || digests.has(m[2])) return { why: ["maps/placements.sha256 has a malformed, unplanned or repeated placement map entry"] };
+    digests.set(m[2], m[1]);
+  }
+  for (const b of wanted) if (!digests.has(b)) why.push(`${b}: no placement map digest in maps/placements.sha256`);
+  if (why.length) return { why };
+  for (const [b, digest] of digests) {
+    const map = `${b}.map.gz`;
+    let bytes;
+    try {
+      if (keep) copyFileSync(join(dir, map), join(keep, map));
+      bytes = gunzipSync(readFileSync(join(keep ?? dir, map)));
+    } catch { why.push(`${b}: cannot read its gzipped placement map (maps/${map})`); continue; }
+    if (createHash("sha256").update(bytes).digest("hex") !== digest) why.push(`${b}: its placement map bytes do not match maps/placements.sha256`);
+  }
+  if (keep && !why.length) writeFileSync(join(keep, file), list);
+  return { digests, why };
+}
 
 /** The output sections of a map, each with its input sections, each with its symbols. */
 export function readMap(text) {
@@ -226,6 +256,15 @@ export function check(unpadded, placed, pad, second, shuffled = false) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  if (process.argv[2] === "keep-placements") {
+    const [dir, keep, ...expected] = process.argv.slice(3);
+    if (!dir || !keep || !expected.length) { console.error("usage: node map.mjs keep-placements <work maps> <results maps> <placement names...>"); process.exit(2); }
+    try {
+      const { why } = placementMaps(dir, expected, keep);
+      for (const problem of why) console.error(`map.mjs: ${problem}`);
+      process.exit(why.length ? 1 : 0);
+    } catch (e) { console.error(`map.mjs: ${e.message}`); process.exit(1); }
+  }
   const args = process.argv.slice(2), shuffled = args[0] === "check" && args.at(-1) === "--shuffled";
   const [mode, a, b, padArg, secondArg] = shuffled ? args.slice(0, -1) : args;
   const load = (file) => readMap(mapText(readFileSync(file)));
