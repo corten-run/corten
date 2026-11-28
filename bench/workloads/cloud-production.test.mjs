@@ -411,7 +411,22 @@ test("approved sealed collection uses the measured replay and does not create or
     assert.deepEqual(readFileSync(h.statePath), intentBytes);
     assert.equal(h.deletes, 0);
   }
+  const approvedWithoutProof = approved.at(-1);
   writeFileSync(proof, proofBytes);
+  assert.equal(await preview(), 3);
+  assert.notEqual(p.stdout.at(-1).approvalSha256, approvedWithoutProof);
+  await assert.rejects(run(), /explicit operator-approved exact action required/);
+  assert.deepEqual(readFileSync(h.statePath), intentBytes);
+  assert.equal(h.deletes, 0);
+  approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const providerRequest = p.deps.providerRequest;
+  p.deps.providerRequest = request => request.method === "GET" && /^\/v2\/droplets\/[1-9]\d*$/.test(request.path)
+    ? { status: 503, value: null } : providerRequest(request);
+  try { await assert.rejects(run(), /provider control failed; preserve state\/evidence\/host/); }
+  finally { p.deps.providerRequest = providerRequest; }
+  assert.deepEqual(readFileSync(h.statePath), intentBytes);
+  assert.deepEqual(readFileSync(proof), proofBytes);
+  assert.equal(h.deletes, 0);
   const beforeDeleteReplays = replayed;
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const live = h.host();

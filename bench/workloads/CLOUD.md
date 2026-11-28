@@ -2394,7 +2394,9 @@ repeat those local custody checks. A positive not-dispatched acknowledgement
 withdraws the saved intent only under the same operation lock and with the exact
 saved state still present. If the state save is interrupted, a fresh approved
 collect can finish the withdrawal from the complete proof for that exact intent
-while the host still exists, then obtain a new idle proof. A missing, partial,
+while the host still exists, then obtain a new idle proof. Approval includes
+the matching proof's digest (or its absence), checked again under the operation
+lock; a proof that appears after preview requires a new approval. A missing, partial,
 or mismatched proof, or a host that is already absent, keeps absence-only
 recovery. Uncertain dispatch never writes the withdrawal proof.
 This mode does not pack, download or start a job. Other replay budgets are unchanged.

@@ -27,6 +27,23 @@ import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardia
 import { controlCheckpoint, controlResultFailure, pinnedHostOptions } from "./cloud-transport.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const stateBytes = (value) => `${JSON.stringify(value, null, 2)}\n`;
+// Only a positive not-dispatched acknowledgement creates the proof. Bind the
+// exact intent in both the filename and contents, never just the restored state.
+const withdrawalProof = (local, intentBytes, restore) => {
+  const intentSha256 = digest(intentBytes);
+  return { path: join(local, `state.json.delete-unsent-${intentSha256}.tmp`), bytes: Buffer.from(stateBytes({ intentSha256, restore })) };
+};
+const matchesWithdrawal = ({ path, bytes }) => {
+  try { return regular(path, bytes.length).equals(bytes); } catch { return false; }
+};
+export function sealedWithdrawal(local, state, intentBytes) {
+  if (!state.deletionIntentAt) return { sha256: null };
+  const restore = { ...state };
+  delete restore.deletionIntentAt;
+  const proof = withdrawalProof(local, intentBytes, restore);
+  return { restore, proof, sha256: matchesWithdrawal(proof) ? digest(proof.bytes) : null };
+}
 export function command(binary, args, timeout = 60000, allowFail = false) {
   assert.equal(binary, "git", "provisional controller: real cloud transport disabled until full readiness/review");
   const r = spawnSync(binary, args, { cwd: checkout, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout, maxBuffer: 16 * 1024 ** 2,
@@ -123,8 +140,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assertHandoffState();
   };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
-  const stateStage = (kind, suffix) => kind ? `${statePath}.${kind}-${suffix ?? randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
-  const stateBytes = (value) => `${JSON.stringify(value, null, 2)}\n`;
+  const stateStage = (kind) => kind ? `${statePath}.${kind}-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
   const requireSealedState = () => {
     if (!sealedStateBytes) return;
     heldLock.own();
@@ -1000,16 +1016,6 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
     verifyRetirementRecord(bytes, state.retirement.kind, false, pins);
   };
-  // Only the positive not-dispatched acknowledgement creates this stage. The digest
-  // binds the exact deletion intent, both in the filename and in the stage: the same
-  // pre-intent state can yield a different intent, and copying the stage cannot rebind it.
-  const withdrawalProof = (intentBytes, restore) => {
-    const intentSha256 = digest(intentBytes);
-    return { path: stateStage("delete-unsent", intentSha256), bytes: Buffer.from(stateBytes({ intentSha256, restore })) };
-  };
-  const matchesWithdrawal = ({ path, bytes }) => {
-    try { return regular(path, bytes.length).equals(bytes); } catch { return false; }
-  };
   const publishWithdrawal = (proof, restore, fence) => {
     const restoredBytes = Buffer.from(stateBytes(restore));
     // The proof itself cannot be renamed over state.json. Save the canonical
@@ -1032,7 +1038,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // Reconstruct it, rather than loading any state from the stage.
     const restore = { ...state, status: "starting", pendingRetirement: state.retirement };
     delete restore.retirement; delete restore.deletionIntentAt;
-    const proof = withdrawalProof(intent, restore);
+    const proof = withdrawalProof(local, intent, restore);
     if (!matchesWithdrawal(proof)) return;
     const path = join(local, retirementFile("setup-failed")), limit = 8 * 1024 * 1024;
     const receipt = regular(path, limit);
@@ -1248,7 +1254,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const withdrawUnsentIntent = () => {
       assert.ok(intentSaved && beforeIntent && !dispatched, "no unsent deletion intent to withdraw; preserve host");
       const fence = () => { boundary(); requireCustody(); };
-      const proof = withdrawalProof(trusted, beforeIntent);
+      const proof = withdrawalProof(local, trusted, beforeIntent);
       fence(); durable(proof.path, proof.bytes);
       publishWithdrawal(proof, beforeIntent, fence);
       throw new Error("DELETE was not dispatched; the next collect retires on a fresh proof");
@@ -1992,16 +1998,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         // ownedR21 above already excludes retired and pre-bootstrap reservations; the r21
         // test stays so the resume never runs for a measured checkout if that changes.
         if (setupCandidate && !options.r21MeasuredCheckout) await resumeDrainWithdrawal();
-        const sealedWithdrawal = () => {
-          const restore = { ...state };
-          delete restore.deletionIntentAt;
-          return { restore, proof: withdrawalProof(sealedStateBytes, restore) };
-        };
-        if (sealedRecovery && state.deletionIntentAt) {
-          const { restore, proof } = sealedWithdrawal();
+        if (sealedRecovery) {
+          const { restore, proof, sha256 } = sealedWithdrawal(local, state, sealedStateBytes);
+          assert.equal(sha256, recoveryApproval.withdrawalSha256, "approved withdrawal proof changed; preserve intent");
           // An interrupted withdrawal may be finished only against the exact
           // saved intent. Preserve the intent if that host is already absent.
-          if (matchesWithdrawal(proof) && await exactHost() !== undefined) {
+          if (sha256 && await exactHost() !== undefined) {
             const fence = () => { check(); requireApprovedSeal(); requireSealedState(); };
             fence(); publishWithdrawal(proof, restore, fence);
           }
@@ -2100,7 +2102,7 @@ else ${pack}; fi` : pack, 11 * 60000);
               },
               onUnsent() {
                 const fence = () => { boundary(); requireSealedState(); };
-                const { restore, proof } = sealedWithdrawal();
+                const { restore, proof } = sealedWithdrawal(local, state, sealedStateBytes);
                 fence(); durable(proof.path, proof.bytes);
                 publishWithdrawal(proof, restore, fence);
               },

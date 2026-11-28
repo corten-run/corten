@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
+import { benchPackagePaths, controller, publicError, sealedWithdrawal } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
 import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages,
   sealedCollectionCandidate, sealedCollectionPolicy, unsentCreate, unsentDelete } from "./cloud-options.mjs";
@@ -213,7 +213,8 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
           const { sealedMonitor } = await import("./cloud-control-stream.mjs");
           const { terminal } = sealedMonitor(local, saved);
           assert.ok(regular(join(local, saved.evidence, "exit-code"), 16).equals(Buffer.from("0\n")), "sealed recovery requires a successful exit marker");
-          Object.assign(recovery, { campaign: terminal.campaign, sealSha256: terminal.sealSha256 });
+          Object.assign(recovery, { campaign: terminal.campaign, sealSha256: terminal.sealSha256,
+            withdrawalSha256: sealedWithdrawal(local, saved, bytes).sha256 });
         }
       } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
       if (options.collect && saved.launchHostKeySha256 !== undefined) {
