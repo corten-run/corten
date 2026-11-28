@@ -5,6 +5,19 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const probe = resolve("src/main.rs");
+const call = "    Ok(app.own_http1(true))";
+
+/** The primary span must mark the method in `switched`, not a call elsewhere in the probe. @param {any} span */
+function switchedCall(span) {
+  if (!span.is_primary || resolve(span.file_name) !== probe || span.line_start !== span.line_end || span.text.length !== 1) return false;
+  const [word] = span.text;
+  if (word.text !== call || word.text.slice(word.highlight_start - 1, word.highlight_end - 1) !== "own_http1") return false;
+  // Follow the call if it moves; if the guard, signature or call changes, update this match too.
+  const source = readFileSync(probe, "utf8").split(/\r?\n/);
+  const sites = source.flatMap((line, at) => line === call && source[at - 1] === "fn switched(app: App) -> Result<App, Box<dyn std::error::Error>> {" && source[at - 2] === '#[cfg(feature = "own-http1")]' ? [at + 1] : []);
+  return sites.length === 1 && span.line_start === sites[0];
+}
+
 let errors = 0;
 let onlyMissing = true;
 let finished;
@@ -24,7 +37,7 @@ try {
     onlyMissing &&=
       target.name === "probe" && resolve(target.src_path) === probe &&
       message.code?.code === "E0599" && /^no method named `own_http1` found for struct `(?:corten::)?App(?:<[^`]+>)?` in the current scope$/.test(message.message) &&
-      message.spans.some((/** @type {any} */ span) => span.is_primary && resolve(span.file_name) === probe && span.text.some((/** @type {any} */ line) => line.text.slice(line.highlight_start - 1, line.highlight_end - 1) === "own_http1"));
+      message.spans.some(switchedCall);
   }
 } catch (error) {
   console.error(`build.sh: invalid Cargo output: ${/** @type {Error} */ (error).message}`);

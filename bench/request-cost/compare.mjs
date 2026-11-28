@@ -43,7 +43,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { COUNTED, idleRise, median, sent } from "./figures.mjs";
+import { COUNTED, checkIdleSample, idleRise, median, sent } from "./figures.mjs";
 import { REFUSAL, builtWithoutOwnHttp1 } from "./own-http1.mjs";
 import { Answers, cases, unexpected } from "./requests.mjs";
 
@@ -266,50 +266,50 @@ export function compare(base, head, { description = "", names = { base: "base", 
     const none = SIDES.filter((side) => whys[side] !== undefined && unbuilt[side] === undefined);
     if (none.length > 0) against.push(`${what} on ${none.join(" and ")} (${code(/** @type {string} */ (whys[/** @type {"base" | "head"} */ (none[0])]))})`);
   };
-  // The missing capability excuses only base's side. Head still owes every figure and answer.
+  // A missing capability excuses base's evidence, never head's. Decide whether to waive the
+  // comparison only after the whole row's head evidence has been checked.
   const baseCannotRun = (/** @type {string | number} */ name) => builds.base.without && cases[name]?.own === true;
   const uncompared = new Set();
   let missingHead = false;
-  const skipBase = (/** @type {string} */ name, /** @type {boolean} */ headHasResult) => {
+  const waiveComparison = (/** @type {string} */ name, /** @type {boolean} */ headValid) => {
     if (!baseCannotRun(name)) return false;
-    if (headHasResult) uncompared.add(name);
+    if (headValid) uncompared.add(name);
     else missingHead = true;
-    return headHasResult;
+    return headValid;
   };
-  /**
-   * Both builds' figures of a reading, and whether it is compared.
-   * @param {string} file @param {string} what @returns {[any, any, boolean]}
-   */
-  const both = (file, what) => {
+  /** Both builds' figures of a run. @param {string} file @param {string} what @returns {[any, any]} */
+  const figuresFor = (file, what) => {
     const reading = /** @type {ReturnType<typeof readings>[number]} */ (plan[file]);
     const name = String(reading.expect.case);
     const found = { base: /** @type {ReturnType<typeof taken>} */ (builds.base.figures.get(file)), head: /** @type {ReturnType<typeof taken>} */ (builds.head.figures.get(file)) };
     for (const side of SIDES) for (const reason of found[side].refused) refusals.push(`- ${code(file)} on ${side}: ${code(reason)}${found[side].figure === null ? "" : " (taken again, and counted)"}`);
     const none = SIDES.filter((side) => found[side].figure === null && (side !== "base" || !baseCannotRun(name)));
     lacks(`${what} has no figure`, Object.fromEntries(none.map((side) => [side, found[side].why])));
-    return [found.base.figure, found.head.figure, !skipBase(name, found.head.figure !== null)];
+    return [found.base.figure, found.head.figure];
   };
 
-  const instructions = [...Object.keys(cases).map((name) => ({ file: `count-${name}.json`, label: code(name) })), ...DEEP.map((name) => ({ file: `count-16-${name}.json`, label: `${code(name)}, 16 at a time` }))].map(({ file, label }) => {
-    const [b, h, compared] = both(file, `${label}'s instructions`);
+  const instructions = [...namesOfCases.map((name) => ({ name, file: `count-${name}.json`, label: code(name) })), ...DEEP.map((name) => ({ name, file: `count-16-${name}.json`, label: `${code(name)}, 16 at a time` }))].map(({ name, file, label }) => {
+    const [b, h] = figuresFor(file, `${label}'s instructions`);
+    const waived = waiveComparison(name, h !== null);
     // The counts, the longest window, and the most that threads other than the serving one ran in a window.
     const runs = (/** @type {any} */ side) => {
       if (!side) return "none";
       const most = side.windows.reduce((/** @type {any} */ most, /** @type {any} */ window) => (window.others > most.others ? window : most));
       return `${side.counts.join(" ")} (${Math.max(...side.windows.map((/** @type {any} */ window) => window.seconds)).toFixed(1)} s; others ${most.others} in ${most.threads})`;
     };
-    if (!b || !h) return [label, b ? whole(b.median) : "none", h ? whole(h.median) : "none", "", "", runs(b), runs(h), compared ? "no figure" : "not compared"];
+    if (!b || !h) return [label, b ? whole(b.median) : "none", h ? whole(h.median) : "none", "", "", runs(b), runs(h), waived ? "not compared" : "no figure"];
     const high = over(b.median, h.median);
     // The budget in instructions is the most a case may rise by: 0.5% of base's, rounded down.
     if (high) against.push(`${label} runs ${whole(h.median - b.median)} more instructions a request than base's ${whole(b.median)}, over the budget of ${whole(Math.floor(b.median / 200))} (+0.5%)`);
     return [label, whole(b.median), whole(h.median), signed(h.median - b.median), percent(b.median, h.median, 3), runs(b), runs(h), high ? "over the budget" : ""];
   });
 
-  const allocations = Object.keys(cases).map((name) => {
-    const [b, h, compared] = both(`allocations-${name}.json`, `${code(name)}'s allocations`);
+  const allocations = namesOfCases.map((name) => {
+    const [b, h] = figuresFor(`allocations-${name}.json`, `${code(name)}'s allocations`);
+    const waived = waiveComparison(name, h !== null);
     const each = (/** @type {any} */ side) => (side ? (side.allocations / side.requests).toFixed(2) : "none");
     const calls = (/** @type {any} */ side) => (side ? `${whole(side.allocations)} and ${whole(side.frees)} frees` : "none");
-    if (!b || !h) return [code(name), each(b), each(h), "", "", calls(b), calls(h), compared ? "no figure" : "not compared"];
+    if (!b || !h) return [code(name), each(b), each(h), "", "", calls(b), calls(h), waived ? "not compared" : "no figure"];
     // By the calls themselves, over the same requests: a rise the two places of a rate hide is a rise.
     const more = h.allocations - b.allocations;
     if (more > 0) against.push(`${code(name)} makes ${whole(more)} more allocations in ${whole(h.requests)} requests (${whole(b.allocations)} to ${whole(h.allocations)})`);
@@ -321,43 +321,61 @@ export function compare(base, head, { description = "", names = { base: "base", 
   const connections = /** @type {number} */ (/** @type {ReturnType<typeof readings>[number]} */ (plan["idle-request-1.json"]).expect.connections);
   /** Each idle run's record, as `idle.mjs` prints it on a host, with what decides: its before, after, growth and page size. */
   const records = /** @type {string[]} */ ([]);
-  const idle = IDLE.map(({ name, what }) => {
-    const runs = [];
-    for (let run = 1; run <= RUNS; run += 1) runs.push(both(`idle-${name}-${run}.json`, `idle memory ${what}, run ${run},`));
-    const [b, h] = [0, 1].map((side) => runs.map((found) => /** @type {any} */ (found[side] ?? null)));
-    for (const [side, found] of /** @type {const} */ ([["base", b], ["head", h]]))
-      found.forEach((run, at) => {
-        if (run === null) return;
+  const mixedPages = (/** @type {number[]} */ pages) => `its runs read pages of ${pages.map(whole).join(" and ")} bytes, and the rule compares runs of one page size`;
+  const idle = IDLE.map(({ name, what, of }) => {
+    const runs = Array.from({ length: RUNS }, (_, at) => figuresFor(`idle-${name}-${at + 1}.json`, `idle memory ${what}, run ${at + 1},`));
+    const reading = (/** @type {"base" | "head"} */ side, /** @type {0 | 1} */ column) => {
+      const found = runs.map((run) => run[column]);
+      for (const [at, run] of found.entries()) {
+        if (run === null) continue;
         const did = run.requests === 0 ? `sent nothing to the probe for ${run.case}` : `answered ${run.requests} ${run.case}`;
         records.push(`${side}, ${what}, run ${at + 1}: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
-      });
-    /** A build's runs of the reading, when every run gave a figure: a median of fewer is not the rule's. */
-    const all = (/** @type {any[]} */ found) => (found.every((run) => run !== null) ? found : null);
-    const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
-    const [bases, heads] = [all(/** @type {any[]} */ (b)), all(/** @type {any[]} */ (h))];
-    const grown = (/** @type {any[]} */ found) => found.map((run) => /** @type {number} */ (run.grown));
-    if (heads && runs.every(([, , compared]) => !compared)) return [what, "none", whole(median(grown(heads))), "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "not compared"];
-    if (!bases || !heads) return [what, bases ? whole(median(grown(bases))) : "none", heads ? whole(median(grown(heads))) : "none", "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "no figure"];
-    const [low, high] = [median(grown(bases)), median(grown(heads))];
-    const pages = [...new Set([...bases, ...heads].map((run) => /** @type {number} */ (run.page)))];
-    let decided;
-    try {
-      if (pages.length !== 1) throw new Error(`its runs read pages of ${pages.map(whole).join(" and ")} bytes, and the rule compares runs of one page size`);
-      decided = idleRise({ base: grown(bases), head: grown(heads), page: /** @type {number} */ (pages[0]), connections });
-    } catch (error) {
-      against.push(`idle memory ${what} is not decided (${code(/** @type {Error} */ (error).message)})`);
-      return [what, whole(low), whole(high), signed(high - low), percent(low, high), "", shown(bases), shown(heads), "not decided"];
+      }
+      const shown = found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
+      // A median of fewer than three is not the rule's. Each figure is already of the case,
+      // connections and addresses asked for, with a growth in whole pages.
+      if (found.some((run) => run === null)) return { shown, sample: null };
+      const growths = found.map((run) => /** @type {number} */ (run.grown));
+      const pages = [...new Set(found.map((run) => /** @type {number} */ (run.page)))];
+      const page = /** @type {number} */ (pages[0]);
+      let why = pages.length !== 1 ? mixedPages(pages) : null;
+      if (why === null) {
+        try {
+          checkIdleSample(side, growths, page, connections);
+        } catch (error) {
+          why = /** @type {Error} */ (error).message;
+        }
+      }
+      return { shown, sample: { growths, pages, page, middle: median(growths), why } };
+    };
+    const b = reading("base", 0);
+    const h = reading("head", 1);
+    const waived = waiveComparison(of.case, h.sample?.why === null);
+    const show = (/** @type {number | undefined} */ n) => n === undefined ? "none" : whole(n);
+    const start = [what, show(b.sample?.middle), show(h.sample?.middle)];
+    if (waived) return [...start, "", "", "", b.shown, h.shown, "not compared"];
+    if (!h.sample || (!b.sample && !baseCannotRun(of.case))) return [...start, "", "", "", b.shown, h.shown, "no figure"];
+    const pages = [...new Set([...(b.sample?.pages ?? []), ...h.sample.pages])];
+    const why = pages.length !== 1 ? mixedPages(pages) : b.sample?.why ?? h.sample.why;
+    const difference = b.sample ? [signed(h.sample.middle - b.sample.middle), percent(b.sample.middle, h.sample.middle)] : ["", ""];
+    if (why !== null) {
+      against.push(`idle memory ${what} is not decided (${code(why)})`);
+      return [...start, ...difference, "", b.shown, h.shown, "not decided"];
     }
-    const { rise, allowed, rose } = decided;
-    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and a ${whole(/** @type {number} */ (pages[0]))}-byte page)`);
-    return [what, whole(low), whole(high), signed(rise), percent(low, high), whole(allowed), shown(bases), shown(heads), rose ? "rose" : ""];
+    // The only way for a row with sound head evidence and no base sample to reach here is
+    // ruled out above: it was either waived or had no figure.
+    const bases = /** @type {NonNullable<typeof b.sample>} */ (b.sample);
+    const { page, middle: high } = h.sample;
+    const { rise, allowed, rose } = idleRise({ base: bases.growths, head: h.sample.growths, page, connections });
+    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(bases.middle)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and a ${whole(page)}-byte page)`);
+    return [...start, ...difference, whole(allowed), b.shown, h.shown, rose ? "rose" : ""];
   });
 
   const answers = namesOfCases.map((name) => {
     const found = { base: /** @type {ReturnType<typeof captured>} */ (builds.base.answers.get(name)), head: /** @type {ReturnType<typeof captured>} */ (builds.head.answers.get(name)) };
-    if (skipBase(name, found.head.why === null)) return { name, state: "uncompared" };
     const none = SIDES.filter((side) => found[side].why !== null && (side !== "base" || !baseCannotRun(name)));
     lacks(`${code(name)} has no answer`, Object.fromEntries(none.map((side) => [side, /** @type {string} */ (found[side].why).split("\n")[0]])));
+    if (waiveComparison(name, found.head.why === null)) return { name, state: "uncompared" };
     return { name, state: none.length > 0 ? "none" : found.base.bytes.equals(found.head.bytes) ? "same" : "differ" };
   });
   const differ = answers.filter(({ state }) => state === "differ").map(({ name }) => code(name));

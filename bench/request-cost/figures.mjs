@@ -81,6 +81,23 @@ export function held({ connections, before, after, closed, accepted }) {
 }
 
 /**
+ * Refuses one build's idle sample if it cannot be used in a comparison.
+ * @param {string} side @param {number[]} growths @param {number} page @param {number} connections
+ */
+export function checkIdleSample(side, growths, page, connections) {
+  if (!Number.isSafeInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
+  if (!Number.isSafeInteger(connections) || connections <= 0) throw new Error(`${connections} connections are not a count of them`);
+  if (connections < page) throw new Error(`not a gate reading: one ${page}-byte page over ${connections} connections is more than a byte a connection; open at least ${page}`);
+  if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
+  for (const growth of growths) {
+    if (!Number.isSafeInteger(growth)) throw new Error(`${side}'s growth of ${growth} bytes is not a whole number`);
+    // Resident memory moves a page at a time, so a growth that is not whole pages is not one
+    // `idle.mjs` printed: a figure a connection, which is rounded, given in its place.
+    if (growth % page !== 0) throw new Error(`${side}'s growth of ${growth} bytes is not whole ${page}-byte pages: give each run's growth, not its figure a connection`);
+  }
+}
+
+/**
  * Whether head's idle memory rose past base's, read from each run's growth of resident memory in
  * bytes (its after less its before, which `idle.mjs` prints), never from the figures a connection,
  * which are rounded. Head rises when the median of its three growths is above base's by more than
@@ -94,18 +111,8 @@ export function held({ connections, before, after, closed, accepted }) {
  *   runs opened
  */
 export function idleRise({ base, head, page, connections }) {
-  if (!Number.isSafeInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
-  if (!Number.isSafeInteger(connections) || connections <= 0) throw new Error(`${connections} connections are not a count of them`);
-  if (connections < page) throw new Error(`not a gate reading: one ${page}-byte page over ${connections} connections is more than a byte a connection; open at least ${page}`);
-  for (const [side, growths] of /** @type {const} */ ([["base", base], ["head", head]])) {
-    if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
-    for (const growth of growths) {
-      if (!Number.isSafeInteger(growth)) throw new Error(`${side}'s growth of ${growth} bytes is not a whole number`);
-      // Resident memory moves a page at a time, so a growth that is not whole pages is not one
-      // `idle.mjs` printed: a figure a connection, which is rounded, given in its place.
-      if (growth % page !== 0) throw new Error(`${side}'s growth of ${growth} bytes is not whole ${page}-byte pages: give each run's growth, not its figure a connection`);
-    }
-  }
+  checkIdleSample("base", base, page, connections);
+  checkIdleSample("head", head, page, connections);
   const rise = median(head) - median(base);
   const allowed = Math.max(Math.max(...base) - Math.min(...base), page);
   return { rise, allowed, rose: rise > allowed };

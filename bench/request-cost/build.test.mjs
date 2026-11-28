@@ -37,7 +37,16 @@ function standIn() {
     '  if [ "${STAND_IN_RESULT:-}" = "" ]; then',
     `    echo '{"reason":"build-finished","success":true}'`,
     '  else',
-    `    echo '{"reason":"compiler-message","target":{"name":"probe","src_path":"src/main.rs"},"message":{"level":"error","code":{"code":"E0599"},"message":"no method named \`own_http1\` found for struct \`corten::App<M>\` in the current scope","spans":[{"is_primary":true,"file_name":"src/main.rs","text":[{"text":"    Ok(app.own_http1(true))","highlight_start":12,"highlight_end":21}]}]}}'`,
+    `    sites=$(awk '$0 == "    Ok(app.own_http1(true))" { print NR }' src/main.rs)`,
+    `    site=$(printf '%s\\n' "$sites" | head -n 1)`,
+    `    receiver='corten::App<M>'`,
+    `    wording='in the current scope'`,
+    `    case "$STAND_IN_RESULT" in`,
+    `      wrong-receiver) receiver='OtherApp' ;;`,
+    `      wrong-site) site=$(printf '%s\\n' "$sites" | tail -n 1) ;;`,
+    `      wrong-wording) wording='in this scope' ;;`,
+    `    esac`,
+    `    printf '{"reason":"compiler-message","target":{"name":"probe","src_path":"src/main.rs"},"message":{"level":"error","code":{"code":"E0599"},"message":"no method named \`own_http1\` found for struct \`%s\` %s","spans":[{"is_primary":true,"file_name":"src/main.rs","line_start":%s,"line_end":%s,"text":[{"text":"    Ok(app.own_http1(true))","highlight_start":12,"highlight_end":21}]}]}}\\n' "$receiver" "$wording" "$site" "$site"`,
     `    if [ "$STAND_IN_RESULT" = extra ]; then echo '{"reason":"compiler-message","target":{"name":"probe","src_path":"src/main.rs"},"message":{"level":"error","code":{"code":"E0308"},"message":"mismatched types","spans":[]}}'; fi`,
     `    if [ "$STAND_IN_RESULT" != incomplete ]; then echo '{"reason":"build-finished","success":false}'; fi`,
     '    if [ "$STAND_IN_RESULT" = other-status ]; then exit 2; fi',
@@ -147,10 +156,14 @@ test("build.sh builds the probe with its own-http1 feature for a commit whose Co
     const repository = join(stand.outside, "repository");
     const app = join(repository, "crates", "corten", "src", "app.rs");
     mkdirSync(dirname(app), { recursive: true });
-    mkdirSync(join(repository, "bench", "request-cost", "probe"), { recursive: true });
+    const probe = join(repository, "bench", "request-cost", "probe");
+    mkdirSync(join(probe, "src"), { recursive: true });
     mkdirSync(join(repository, "docs"));
     for (const file of ["build.sh", "build-output.mjs"]) copyFileSync(join(kit, file), join(repository, "bench", "request-cost", file));
-    copyFileSync(join(kit, "probe", "Cargo.toml"), join(repository, "bench", "request-cost", "probe", "Cargo.toml"));
+    copyFileSync(join(kit, "probe", "Cargo.toml"), join(probe, "Cargo.toml"));
+    // The guarded call can move; an identical call line elsewhere still cannot cause fallback.
+    const source = readFileSync(join(kit, "probe", "src", "main.rs"), "utf8");
+    writeFileSync(join(probe, "src", "main.rs"), `\n${source}\nfn other(app: App) -> Result<App, Box<dyn std::error::Error>> {\n    Ok(app.own_http1(true))\n}\n`);
     for (const file of ["Cargo.toml", "Cargo.lock", "README.md", "docs/design.md", "crates/corten/Cargo.toml"]) writeFileSync(join(repository, file), "");
     const inRepository = (/** @type {string[]} */ ...args) => spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: repository, encoding: "utf8" });
     assert.equal(inRepository("init", "-q").status, 0);
@@ -178,7 +191,7 @@ test("build.sh builds the probe with its own-http1 feature for a commit whose Co
       assert.equal(readFileSync(join(directory, "bin", `${at}.own-http1`), "utf8"), `${record}\n`);
       assert.ok(existsSync(join(directory, "bin", at)));
     }
-    for (const result of ["extra", "incomplete", "other-status", "missing-and-retry-fails"]) {
+    for (const result of ["extra", "incomplete", "other-status", "missing-and-retry-fails", "wrong-receiver", "wrong-site", "wrong-wording"]) {
       const built = build(lacks, result);
       assert.equal(built.status, result === "other-status" ? 2 : 101, result);
       assert.equal(readFileSync(attempts, "utf8"), result === "missing-and-retry-fails" ? `${enabled}build --release\n` : enabled, result);

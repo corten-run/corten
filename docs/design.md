@@ -11569,7 +11569,13 @@ rules something out.
     so the rule above, which allows one page, cannot decide that run (one page passes, two fail),
     and the hosted job's growths on its head decide it. No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
-    figure, so taking it again is not that. The maintainer accepted both figures, this budget
+    figure, so taking it again is not that. The [hosted run on `f3df7acb5`](https://github.com/corten-run/corten/actions/runs/46075454535/job/140762020599)
+    against `2f8984ddc`, with the same crates on both builds, read a rise before any byte with
+    the switch off (one run, three readings a build): head's median was 13,295,616 bytes over
+    5,000 connections against base's 13,275,136, 20,480 more, over that branch's 4,096-byte
+    allowance (one page). The rise also exceeds the 16,384 bytes of `main`'s later four-page
+    floor. This met the hosted idle revisit condition, below. The run establishes no cause
+    and changes no floor. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
     neither is measured: they are bets still, and the description of
     [#2116 Name three ways a change around the handler is decided: counted, measured and the trend](https://github.com/corten-run/corten/pull/2116)
@@ -11777,8 +11783,8 @@ rules something out.
     a quarter of the budget apart in a case, which fails no job and means its count no longer
     resolves the budget there (two binaries of the same crates that differ so are where the
     code was placed, which a count cannot tell from a change); the hosted job reads idle
-    memory to rise between two builds of the same crates, so it fails a change for what the
-    runner did (three runs a build drawn from one distribution read a rise in about one
+    memory to rise between two builds of the same crates, so the check can fail without a
+    change to those crates (three runs a build drawn from one distribution read a rise in about one
     comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
     growths in 4,096-byte pages and base's span alone, and in about one in nineteen by those
     growths with the one page allowed, on the same draws, at a spread of 1.5 bytes a
@@ -11818,7 +11824,10 @@ rules something out.
     none in any part; 2026-11-27, the kit's cases with `App::own_http1` on at `8c4957bea`,
     against `2f8984ddc`: the kit's existing rows with the kit before them, at `2f8984ddc`, and
     after, on one host, every answer the same byte for byte, every allocation the same and
-    every median of instructions within 1, which its three counts span.
+    every median of instructions within 1, which its three counts span; 2026-11-27 (UTC),
+    the hosted job's log on `f3df7acb5` against `2f8984ddc`: switch-off idle memory before any
+    byte, 13,295,616 against 13,275,136 bytes over 5,000 connections, 20,480 over, against
+    4,096 allowed on that branch and 16,384 at `main`'s later floor.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits
@@ -12460,7 +12469,8 @@ rules something out.
     a win in cycles. No cycles or times have been taken for it, so it claims no
     CPU-cost win. The plan to read cycles across placements ([Choice 72](#choice-placement-runs))
     was [declared on the pull request](https://github.com/corten-run/corten/pull/2133#issuecomment-7224166803)
-    on 2026-11-27; it sends a `Host` line and nothing else, not a browser's header lines.
+    on 2026-11-27. Its GETs send a `Host` line and no browser header lines; its POST also
+    sets `Content-Type` and sends a body.
 
     **What the connection is** (`crates/corten/src/h1.rs`). One loop for a connection: it reads a
     request's head, calls the connection's service with it, writes the answer into one buffer and

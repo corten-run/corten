@@ -617,6 +617,72 @@ test("a base without the switch cannot hide a missing or invalid head reading or
   }
 });
 
+test("every switch-on row validates head's evidence the same way with or without a capable base", (t) => {
+  const idle = ["after one request", "after three of a browser's requests", "before any byte"].map((what) => `${what}, own_http1 on`);
+  const figures = readings().filter(({ expect: of }) => cases[of.case]?.own);
+  const tableRows = (/** @type {string} */ markdown) => markdown.split("\n").filter((line) => /^\| (?:`[^`]+-own`|.*own_http1 on \|)/.test(line));
+  const rule = (/** @type {string} */ row) => row.split("|").at(-2)?.trim();
+  const { base } = builds(t);
+  const absent = builds(t).base;
+  without(absent);
+  for (const state of ["valid", "missing", "malformed", "wrong case", "refused", "mixed pages", "large pages", "two samples"]) {
+    const { head } = builds(t);
+    const samplesOnly = ["mixed pages", "large pages", "two samples"].includes(state);
+    for (const { file, expect: of } of figures) {
+      const at = join(head, file);
+      if (state === "missing" || (state === "two samples" && of.kind === "idle" && file.endsWith("-2.json"))) rmSync(at);
+      else if (state === "malformed") writeFileSync(at, "{");
+      else if (state === "wrong case") writeFileSync(at, printed(file, of.kind === "instructions" ? [20_000, 20_000, 20_000] : of.kind === "allocations" ? [16_000, 16_000] : 10, 4_096).replace(`"case":"${of.case}"`, '"case":"other"'));
+      else if (state === "refused") writeFileSync(at, `${JSON.stringify({ ...of, unsupported: WITHOUT })}\n`);
+      else if (state === "two samples" && of.kind === "instructions") writeFileSync(at, printed(file, [20_000, 20_000]));
+      else if (of.kind === "idle" && (state === "large pages" || (state === "mixed pages" && file.endsWith("-2.json")))) writeFileSync(at, printed(file, 10, 65_536));
+    }
+    for (const name of OWNED) {
+      const at = join(head, "answers", `${name}.http`);
+      if (state === "missing" || state === "refused") rmSync(at);
+      if (state === "malformed") writeFileSync(at, answer(name).subarray(0, -1));
+      if (state === "wrong case") writeFileSync(at, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+      if (state === "refused") writeFileSync(join(head, "answers", `${name}.unsupported`), `${WITHOUT}\n`);
+    }
+    for (const description of [counting, measuring, ""]) {
+      const waived = compare(absent, head, { description });
+      const ordinary = compare(base, head, { description });
+      const context = `${state}, ${description.trim() || "no declaration"}`;
+      const rows = tableRows(waived.markdown);
+      const usual = tableRows(ordinary.markdown);
+      assert.equal(rows.length, OWNED.length * 2 + 1 + idle.length, context);
+      for (const [at, row] of rows.entries()) {
+        const what = row.split("|")[1]?.trim();
+        const isIdle = idle.some((label) => label === what);
+        const isCount = at < OWNED.length + 1;
+        const expected = state === "valid" || (samplesOnly && !isIdle && !(state === "two samples" && isCount))
+          ? "not compared"
+          : isIdle && (state === "mixed pages" || state === "large pages") ? "not decided" : "no figure";
+        assert.equal(rule(row), expected, `${context}: ${row}`);
+        assert.equal(rule(/** @type {string} */ (usual[at])), expected === "not compared" ? "" : expected, context);
+        if (expected === "not decided") {
+          const why = state === "mixed pages" ? "its runs read pages of 4,096 and 65,536 bytes, and the rule compares runs of one page size" : "not a gate reading: one 65536-byte page over 5000 connections is more than a byte a connection; open at least 65536";
+          assert.ok(verdict(waived.markdown).includes(`idle memory ${what} is not decided (\`${why}\`)`), `${context}: ${verdict(waived.markdown)}`);
+        }
+      }
+      const quoted = OWNED.map((name) => `\`${name}\``);
+      if (state === "valid" || samplesOnly) {
+        assert.ok(waived.markdown.includes(`in ${CASES - OWNED.length} cases both ran.`), context);
+        assert.doesNotMatch(waived.markdown, /No answer to compare/);
+      } else {
+        for (const result of [waived, ordinary]) {
+          assert.ok(result.markdown.includes(`No answer to compare in ${quoted.join(", ")}.`), context);
+          for (const name of quoted) assert.ok(verdict(result.markdown).includes(`${name} has no answer on head`), context);
+        }
+      }
+      for (const result of [waived, ordinary]) {
+        if (state === "valid") assert.deepEqual([result.status, result.holds], [0, true], context);
+        else assertMiss(result, description);
+      }
+    }
+  }
+});
+
 test("a refusal among figures and answers is not a capability and cannot hide a head rise", (t) => {
   const { base, head } = builds(t, (_, build) => {
     build.count["get-own"] = [30_000, 30_000, 30_000];

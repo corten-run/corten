@@ -70,7 +70,9 @@ before the switch was a case.
 
 [`build.sh`](build.sh) first builds the probe with the `own-http1` feature that calls
 `App::own_http1`. It tries without the feature only when Cargo's only compiler error is
-that the probe's call has no such method. It records `with` or `without` beside the binary.
+that the probe's guarded call in `switched` has no such method. The diagnostic must point to
+that call in the copied source; moving it keeps the match, but changing the guard, signature
+or call requires updating the matcher. The build records `with` or `without` beside the binary.
 The launcher accepts the probe's exact `NO own_http1:` line only with exit status 1, the
 switch requested and a `without` build record. Any other stop before `READY` fails the run.
 For an accepted refusal, `count.mjs` and `idle.mjs` print the line in place of a figure, as
@@ -379,7 +381,8 @@ On one runner it does what [Running it](#running-it) says, the first three by
    base gained since is in neither build. A build that fails or does not end in 7 minutes
    leaves what it said; that build is then not run at all, whatever it left, and the table is
    written without its figures.
-2. Writes both builds' answers (`count.mjs --answers`).
+2. Clears prior answers, figures, refusals and capability records in both readings directories
+   before either build can be skipped, then writes both builds' answers (`count.mjs --answers`).
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
    `--json`, on base and then on head, a case a run: each case's instructions, three counts
    each, the five at a depth of 16, each case's allocations, and the six idle readings, three
@@ -434,8 +437,10 @@ probe cannot run the switch only when its build record says `without` and every 
 reading and answer is the probe's exact refusal in place of a figure or capture. An isolated
 refusal or contradictory evidence is a miss, not a waiver. With that fact established, a row
 with valid head evidence is `not compared`, neither passing nor failing; the verdict names
-what was not compared. Missing or invalid head evidence is still a miss, even when neither
-probe can turn the switch on. A change whose code only the skipped rows would run is still of
+what was not compared. The same checks apply to head whether or not base can run the switch:
+for idle memory, all three runs must give a figure in one page size with at least as many
+connections as the page has bytes. Missing or invalid head evidence is still a miss, even
+when neither probe can turn the switch on. A change whose code only the skipped rows would run is still of
 the fifth kind of item 2.1's list.
 
 The kit, and so the probe's source, is the checkout's for both builds: a pull request against
