@@ -151,11 +151,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked --workspace --all-features --all-targets
 
-  # The required check `browser`: it passes only when every smoke group below ran and passed, and
-  # fails on one that failed, was cancelled or was skipped. It also checks the groups themselves:
-  # every smoke step that has a condition names its part there, each part is in exactly one group,
-  # and every part a group names has a step, so a renamed group or a mistyped condition cannot
-  # leave a smoke running nowhere while this stays green.
+  # On a direct PR, a successful smoke matrix needs no verdict runner. A failed, cancelled
+  # or skipped matrix still reaches the verdict. Each smoke group checks the part-to-step
+  # mapping before it runs its tests.
   browser:
     needs: [main-tip, smoke]
     if: >-
@@ -191,7 +189,7 @@ jobs:
       fail-fast: false
       matrix:
         # `parts`: the steps the group runs, each named in its step's condition (`PARTS` below), in
-        # lowercase letters and hyphens, which is all the check in `browser` reads as a part.
+        # lowercase letters and hyphens, which is all the smoke group's mapping check reads as a part.
         include:
           - group: benchmark-checks
             parts: npm-check
