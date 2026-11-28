@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { engine, check } from "./helpers.mjs";
 import { liveRegion } from "./live-region.mjs";
 
@@ -81,6 +82,36 @@ export async function liveRegionControls(browser, report = check) {
       report(name, (await stayed()) === expected);
     }
 
+    for (const [name, change, expected] of [
+      ["a patch must expose the replacement message itself", "hidden", false],
+      ["revealing a hidden message later in the same task does not expose its insertion", "reveal", false],
+      ["removing a sibling's CSS hiding after replacement does not expose the insertion", "sibling", false],
+      ["reattaching a region in the same task does not expose a detached replacement", "detach", false],
+      ["a later color change does not invalidate an exposed replacement", "color", true],
+    ]) {
+      await page.setContent(`
+        <style>#shield.hides + [role=status] { display: none }</style>
+        <div id="shield"></div><div role="status"><p id="message">Before</p></div>
+      `);
+      const { stayed } = await liveRegion(page, "message");
+      await page.evaluate((change) => {
+        const message = document.getElementById("message");
+        const region = message.parentElement;
+        const shield = document.getElementById("shield");
+        const replacement = message.cloneNode();
+        replacement.textContent = "After";
+        replacement.hidden = change === "hidden" || change === "reveal";
+        if (change === "sibling") shield.classList.add("hides");
+        if (change === "detach") region.remove();
+        message.replaceWith(replacement);
+        if (change === "reveal") replacement.hidden = false;
+        if (change === "sibling") shield.classList.remove("hides");
+        if (change === "detach") shield.after(region);
+        if (change === "color") region.style.color = "red";
+      }, change);
+      report(name, (await stayed()) === expected);
+    }
+
     await page.setContent('<div role="status"><p id="message">Before</p></div>');
     const fleeting = await liveRegion(page, "message");
     await page.evaluate(async () => {
@@ -139,6 +170,31 @@ export async function liveRegionControls(browser, report = check) {
       return captured;
     };
     await liveFragments(page, (name, ok, detail) => report(`after a same-text replacement: ${name}`, ok, detail));
+    page.evaluateHandle = evaluateHandle;
+
+    // Exercise the shipped runtime, not a fixture that substitutes dialog.close() for data-remove.
+    const runtime = fileURLToPath(new URL("../../crates/corten/js/dist/corten.js", import.meta.url));
+    await page.route("http://live-region.test/**", (route) => new URL(route.request().url()).pathname === "/corten/corten.js"
+      ? route.fulfill({ path: runtime, contentType: "text/javascript" })
+      : route.fulfill({
+        contentType: "text/html",
+        body: '<script type="module" src="/corten/corten.js"></script><div role="status"><p id="message">Before</p></div><dialog id="modal"></dialog>',
+      }));
+    for (const removeFirst of [false, true]) {
+      await page.goto("http://live-region.test/");
+      const { stayed } = await liveRegion(page, "message");
+      const applied = await page.evaluate(async (removeFirst) => {
+        const { patch } = await import("/corten/corten.js");
+        const remove = '<template id="modal" data-remove></template>';
+        const update = '<p id="message">After</p>';
+        document.querySelector("dialog").showModal();
+        await patch(removeFirst ? remove + update : update + remove);
+        return !document.querySelector("dialog") && document.getElementById("message").textContent === "After";
+      }, removeFirst);
+      const observed = await stayed();
+      report(removeFirst ? "data-remove before a message patch leaves it exposed" : "data-remove after a message patch does not retroactively expose it",
+        applied && observed === removeFirst);
+    }
   } finally {
     await page.close();
   }
