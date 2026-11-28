@@ -2,28 +2,34 @@
 // job.sh, which the hosted job runs, run whole in a copy of the kit whose build.sh, count.mjs,
 // idle.mjs and compare.mjs are stand-ins, in a checkout made here: what it builds and runs, and
 // what it leaves when there is no merge base, a build fails, a run is refused or the time is
-// spent. Nothing is built or counted. It is a bash script that uses git and timeout, so these run
-// on Linux and are skipped elsewhere.
+// spent. The real compare.mjs reads the recorded failures. Nothing is built or counted. It is a
+// bash script that uses git and Linux process groups, so these run on Linux only.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { compare } from "./compare.mjs";
 
 const kit = dirname(fileURLToPath(import.meta.url));
-const linux = process.platform === "linux" && spawnSync("bash", ["-c", "git --version && timeout 1 true"]).status === 0;
-const skip = !linux && "needs Linux with bash, git and timeout";
+const linux = process.platform === "linux" && spawnSync("bash", ["-c", "git --version"]).status === 0;
+const skip = !linux && "needs Linux with bash and git";
 
 const standIns = {
   // sh build.sh <commit> <directory>: a probe that is a file, or a build that does not compile.
   "build.sh": [
     'echo "   Compiling probe v0.0.0"',
     'if [ "$1" = "${STAND_IN_FAILS:-}" ]; then echo "error: could not compile the probe" >&2; exit 101; fi',
+    'if [ "$1" = "${STAND_IN_HANGS:-}" ]; then trap \'\' TERM; echo "build waiting"; while :; do sleep 1; done; fi',
+    'if [ "$1" = "${STAND_IN_KILLS:-}" ]; then echo "build killed itself"; kill -KILL "$$"; fi',
+    'if [ "$1" = "${STAND_IN_EXITS_124:-}" ]; then echo deadline >&2; exit 124; fi',
+    'if [ "$1" = "${STAND_IN_CANCELS:-}" ]; then trap \'\' TERM; echo "build cancelled the wrapper"; kill -TERM "$PPID"; while :; do sleep 1; done; fi',
     'mkdir -p "$2/bin"',
     'echo "#!/bin/sh" > "$2/bin/$1"',
+    'if [ "$1" = "${STAND_IN_DIFFERS:-}" ]; then echo "# different probe" >> "$2/bin/$1"; fi',
     'chmod +x "$2/bin/$1"',
     'echo "built $2/bin/$1"',
   ],
@@ -31,7 +37,7 @@ const standIns = {
   "compare.mjs": ['console.log("count-get.json count.mjs --json --cases get\\nidle-silent-1.json idle.mjs --json --silent");'],
   // node count.mjs <probe> --cpu <cpu> <options>: notes the call, as `<commit> <options>`, and
   // does what STAND_IN_DOES says of that call's first time, second time and so on: "refuses" as
-  // the kit does, "hangs" with part of a line printed, and otherwise prints a line and ends.
+  // the kit does, waits for or ignores TERM with part of a line printed, and otherwise prints a line and ends.
   "count.mjs": [
     'import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
     'import { basename, join } from "node:path";',
@@ -47,7 +53,12 @@ const standIns = {
     '} else if (does === "refuses") {',
     '  console.error("valgrind: a line that is not the reason\\nError: not a count: the stand-in refuses\\n    at a line of a stack");',
     "  process.exit(1);",
-    '} else if (does === "hangs") {',
+    '} else if (does === "exits on TERM" || does === "ignores TERM") {',
+    '  if (does === "exits on TERM") process.on("SIGTERM", () => process.exit(0));',
+    '  if (does === "ignores TERM") {',
+    '    process.on("SIGTERM", () => {});',
+    '    console.error("Error: earlier output is not why this reading stopped");',
+    '  }',
     '  process.stdout.write(\'{"kind":"instructions","case":"get","counts":[1001,\');',
     "  setInterval(() => {}, 1000);",
     "} else {",
@@ -68,9 +79,21 @@ function fixture(t, { merged = true } = {}) {
   const [copy, checkout, builds, calls] = ["kit", "checkout", "builds", "calls"].map((name) => join(at, name));
   mkdirSync(copy);
   mkdirSync(checkout);
-  copyFileSync(join(kit, "job.sh"), join(copy, "job.sh"));
+  for (const file of ["job.sh", "deadline.mjs"]) copyFileSync(join(kit, file), join(copy, file));
   for (const [name, lines] of Object.entries(standIns)) writeFileSync(join(copy, name), `${name.endsWith(".sh") ? "#!/bin/sh\n" : ""}${lines.join("\n")}\n`);
   copyFileSync(join(copy, "count.mjs"), join(copy, "idle.mjs"));
+  // Shorten long waits but run the real wrapper, including both of its signals and its status.
+  writeFileSync(join(copy, "node"), `#!/bin/sh
+case "$1" in
+  */deadline.mjs)
+    script=$1 limit=$2
+    shift 3
+    if [ "$limit" = 420 ]; then limit=1; fi
+    set -- "$script" "$limit" 0.2 "$@"
+    ;;
+esac
+exec "$STAND_IN_REAL_NODE" "$@"
+`, { mode: 0o755 });
   // The caller's GIT_DIR and the like would choose another repository.
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
   const git = (/** @type {string[]} */ ...args) => {
@@ -91,10 +114,12 @@ function fixture(t, { merged = true } = {}) {
   }
   const job = (/** @type {Record<string, string>} */ asked, /** @type {string[]} */ ...args) =>
     spawnSync("bash", [join(copy, "job.sh"), ...args], { cwd: checkout, env: { ...env, STAND_IN_CALLS: calls, ...asked }, encoding: "utf8" });
+  const fast = { PATH: `${copy}${delimiter}${env.PATH}`, STAND_IN_REAL_NODE: process.execPath };
   /** The calls of the stand-in for count.mjs and idle.mjs, in order. */
   const called = () => (existsSync(calls) ? readFileSync(calls, "utf8").trimEnd().split("\n") : []);
   const left = (/** @type {string} */ file) => (existsSync(join(builds, file)) ? readFileSync(join(builds, file), "utf8") : null);
-  return { builds, base, head, job, called, left };
+  const compared = (description = "Request path: counted") => compare(join(builds, "base"), join(builds, "head"), { description });
+  return { builds, base, head, job, called, left, fast, compared };
 }
 
 /** An hour from now, and `seconds` from now, in seconds since the epoch. */
@@ -132,6 +157,48 @@ for (const failing of /** @type {const} */ (["base", "head"])) {
   });
 }
 
+test("both successful builds leave the checksum of their own probe", { skip }, (t) => {
+  const { builds, head, job, left } = fixture(t);
+  const built = job({ STAND_IN_DIFFERS: head }, "build", builds);
+  assert.equal(built.status, 0, built.stderr);
+  const sum = (/** @type {string} */ text) => `${createHash("sha256").update(text).digest("hex")}\n`;
+  assert.equal(left("base/sha256"), sum("#!/bin/sh\n"));
+  assert.equal(left("head/sha256"), sum("#!/bin/sh\n# different probe\n"));
+});
+
+test("a build killed by the wrapper after its deadline leaves the timeout for the real verdict", { skip }, (t) => {
+  for (const side of /** @type {const} */ (["base", "head"])) {
+    const made = fixture(t);
+    const { builds, job, left, fast, compared } = made;
+    const built = job({ ...fast, STAND_IN_HANGS: made[side] }, "build", builds);
+    assert.equal(built.status, 0, built.stderr);
+    assert.match(built.stdout, /^build waiting$/m);
+    const { markdown, status } = compared();
+    assert.equal(status, 1);
+    if (side === "head") {
+      assert.match(markdown, /^\*\*Nothing compared:\*\* the probe's build against head did not end in its time \(`the build did not end in 420 s`\), which says nothing of the change\..*may be run again:/m);
+      assert.doesNotMatch(markdown, /a change it no longer builds against/);
+    } else {
+      assert.match(markdown, /^\*\*Does not pass as counted:\*\* the probe did not build against base \(`the build did not end in 420 s`\)/m);
+    }
+    assert.equal(left(`${side}/unbuilt`), "the build did not end in 420 s\n");
+    assert.equal(left(`${side}/sha256`), null);
+  }
+});
+
+test("a build killed independently, returning 124 or cancelled externally is not a deadline", { skip }, (t) => {
+  for (const [end, reason] of [["STAND_IN_KILLS", "build killed itself"], ["STAND_IN_EXITS_124", "deadline"], ["STAND_IN_CANCELS", "build cancelled the wrapper"]]) {
+    const { builds, head, job, left, fast, compared } = fixture(t);
+    const built = job({ ...fast, [end]: head }, "build", builds);
+    assert.equal(built.status, 0, built.stderr);
+    assert.equal(left("head/unbuilt"), `the build failed, ${reason}\n`);
+    const { markdown, status } = compared("Request path: measured");
+    assert.equal(status, 1);
+    assert.match(markdown, /a change it no longer builds against/);
+    assert.doesNotMatch(markdown, /Nothing compared:|did not end in its time/);
+  }
+});
+
 test("a run the kit refuses is taken again, once, with why kept, and a run that gave its output is not taken again", { skip }, (t) => {
   const { builds, base, head, job, called, left } = fixture(t);
   const built = job({}, "build", builds);
@@ -159,17 +226,20 @@ test("a run the kit refuses is taken again, once, with why kept, and a run that 
   assert.deepEqual(readdirSync(join(builds, "base")).sort(), ["answers", "build.log", "commit", "count-get.json", "idle-silent-1.json", "sha256"]);
 });
 
-test("a run stopped when the time is spent leaves none of what it had printed, and no run starts after it", { skip }, (t) => {
-  const { builds, base, job, called, left } = fixture(t);
-  assert.equal(job({}, "build", builds).status, 0);
-  const hung = `${base} --json --cases get`;
-  const read = job({ STOP_AT: later(4), STAND_IN_DOES: JSON.stringify({ [hung]: ["hangs", "hangs"] }) }, "read", builds, "3");
-  assert.equal(read.status, 0, read.stderr);
-  // Stopped with part of a line printed: no file, so no figure, and it is not taken again.
-  assert.equal(left("base/count-get.json"), null);
-  assert.match(String(left("base/count-get.json.refused")), /^Error: did not end in [1-4] s\n$/);
-  assert.deepEqual(called().slice(2), [hung]);
-  for (const file of ["head/count-get.json", "base/idle-silent-1.json", "head/idle-silent-1.json"]) {
-    assert.deepEqual([left(file), left(`${file}.refused`)], [null, "not attempted, the job's time for readings was spent\n"], file);
-  }
-});
+for (const how of ["exits on TERM", "ignores TERM"]) {
+  test(`a run that ${how} when the time is spent leaves no figure, and no run starts after it`, { skip }, (t) => {
+    const { builds, base, head, job, called, left, fast, compared } = fixture(t);
+    assert.equal(job({ STAND_IN_DIFFERS: head }, "build", builds).status, 0);
+    const hung = `${base} --json --cases get`;
+    const read = job({ ...fast, STOP_AT: later(4), STAND_IN_DOES: JSON.stringify({ [hung]: [how, how] }) }, "read", builds, "3");
+    assert.equal(read.status, 0, read.stderr);
+    // Stopped with part of a line printed: no file, so no figure, and it is not taken again.
+    assert.equal(left("base/count-get.json"), null);
+    assert.match(String(left("base/count-get.json.refused")), /^Error: did not end in [1-4] s\n$/);
+    assert.match(compared().markdown, /^- `count-get\.json` on base: `did not end in [1-4] s`$/m);
+    assert.deepEqual(called().slice(2), [hung]);
+    for (const file of ["head/count-get.json", "base/idle-silent-1.json", "head/idle-silent-1.json"]) {
+      assert.deepEqual([left(file), left(`${file}.refused`)], [null, "not attempted, the job's time for readings was spent\n"], file);
+    }
+  });
+}

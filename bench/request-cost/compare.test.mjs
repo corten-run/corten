@@ -563,16 +563,22 @@ test("base and head that are one binary pass under any declaration, whatever the
     build.count.text = null;
   });
   for (const at of [inside, missing]) sums(at, `${SUM}\n`, `${SUM}\n`);
+  writeFileSync(join(missing.head, "answers", "post.http"), Buffer.from(answer("post").latin1Slice().replace("date: -", "date: -\r\nvary: accept"), "latin1"));
+  rmSync(join(missing.head, "answers", "get.http"));
   const one = "**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 `" + SUM + "`), so no figure below can be the change's: they are one binary read twice, the runner's, and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ";
   for (const [description, read] of /** @type {[string, string][]} */ ([[counting, readCounted], [measuring, readMeasured], ["", "Read from the description: no declaration line."]])) {
     const passes = compare(inside.base, inside.head, { description });
     assert.deepEqual([passes.status, passes.holds], [0, true], description);
     assert.equal(verdict(passes.markdown), `${one}pass. ${read}`);
+    assert.match(passes.markdown, /^Both readings recorded the same answer,/m);
     // What would miss as two builds is still read, as an A/A of the runner, and fails nothing.
     const would = compare(missing.base, missing.head, { description });
     assert.deepEqual([would.status, would.holds], [0, false], description);
     assert.ok(verdict(would.markdown).startsWith(`${one}not pass: \`text\`'s instructions has no figure on head (\`the run left no output\`); \`page\` runs 9,994 more instructions a request than base's 20,006,`), would.markdown);
-    assert.ok(verdict(would.markdown).endsWith(`more than the 16,384 allowed (the larger of base's span and four 4,096-byte pages). ${read}`), would.markdown);
+    assert.ok(verdict(would.markdown).endsWith(`more than the 16,384 allowed (the larger of base's span and four 4,096-byte pages); \`get\` has no answer on head (\`no capture\`). ${read}`), would.markdown);
+    assert.match(would.markdown, /^The tables below show readings of one binary taken twice, not a comparison of two binaries\.$/m);
+    assert.match(would.markdown, /^Readings of the same binary recorded different answers in `post`\. One or both readings recorded no answer in `get`\.$/m);
+    assert.doesNotMatch(would.markdown, /compares two different jobs|No answer to compare/);
     assert.match(would.markdown, /^\| `page` \| 20,006 \| 30,000 \| \+9,994 /m);
   }
 });

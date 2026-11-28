@@ -11782,31 +11782,26 @@ rules something out.
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
     one. The job
     [#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
-    asked for now reads it: the `Request Cost` workflow counts a pull request that changes what
-    a request is built from against its merge base, on one runner, and holds the figures to
-    the rule ([the kit's page](../bench/request-cost/README.md#the-hosted-job)). So the line now
-    decides what the job does with a miss, and it stays; the job does not require it, and does
-    not confirm what a change declared measured then gives. The job counts; it cannot tell
-    from a diff a lock, a wake or a structure's layout, the kinds a count cannot judge, so the way is still the author's to
-    say and the review's to accept, and the line is what tells the job whether a miss fails
-    the change or is only reported: with `counted` a miss fails, with `measured` the counts
-    are reported and decide nothing, and with neither the job fails only on a miss and names
-    the line. The job reads the description from the event it was started by, and its green
+    asked for now reads it: the `Request Cost` workflow counts a pull request against its merge
+    base when it changes what the probe is built from or counted with. The line tells the job
+    what to do with a miss ([The hosted job](../bench/request-cost/README.md#the-hosted-job)).
+    The job cannot tell from a diff a lock, a wake or a structure's layout, the kinds a count
+    cannot judge, so the way is still the author's to say and the review's to accept. Its green
     check is counts of the pull request's own tree by its own kit, for a reviewer to read, not
     an attestation by anything apart from the change. That check, `request-cost`, is required on
     `main` from the merge of
-    [#2245 Say that the hosted request-cost check is required on main, and what it attests](https://github.com/corten-run/corten/pull/2245),
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and do not blame the change when a build times out](https://github.com/corten-run/corten/pull/2245),
     by the maintainer's decision, which its description gives as it was asked and answered:
     asked when the hosted job becomes a required check, the maintainer answered "After the idle
     floor lands". The floor landed on 2026-11-27, in merge commit `456d8fd68`
     ([#2225 Record two rulings of the maintainer: the trend's threshold settled at +2%, and the counted lane's idle-memory floor raised to four pages](https://github.com/corten-run/corten/pull/2225)).
-    The answer gives an order and no reason. What the floor changed for a required check: by the
-    kit's model two builds that are the same fail a job on idle memory about once in fifty with
-    four pages, where one page failed about one in ten (The idle floor, above). Being required
-    makes the check no more an attestation than it was, so the way is still the author's to
-    say and the review's to accept. A change goes from
-    counted to measured when a count sends it there. A pull request that declares a plan does
-    not go from measured to counted, by item 2's rule that a declaration is never added or
+    The answer gives an order and no reason. By the kit's fitted model, two builds of one
+    binary would read as an idle-memory miss under the two-binary rule in about one job in
+    fifty with four pages and one in ten with one page (The idle floor, above). These are
+    modelled misses, not failures of the required check: the first ruling below makes one
+    binary pass uncompared. Being required makes the check no more an attestation than it was.
+    A change goes from counted to measured when a count sends it there. A pull request that
+    declares a plan does not go from measured to counted, by item 2's rule that a declaration is never added or
     changed after a run to clear its result. A reading published under the rule as it stood
     stays published, since a reading taken back is a result chosen after it was read. One that
     was not decided, inside the spread or the band or with an A/A not resolved, said nothing of
@@ -11819,7 +11814,7 @@ rules something out.
 
     The required check's rulings. On 2026-11-27 the maintainer answered four questions about
     the required check, each by choosing one of the answers offered; the description of
-    [#2245 Say that the hosted request-cost check is required on main, and what it attests](https://github.com/corten-run/corten/pull/2245)
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and do not blame the change when a build times out](https://github.com/corten-run/corten/pull/2245)
     gives each question as it was put, with its choices. How a pull request goes on that the
     job counts, that changes only documents and that fails on the runner between two builds of
     one binary: "Pass when one binary (Recommended)", so where base's and head's probes have
@@ -11830,8 +11825,7 @@ rules something out.
     required check: "Ruleset bypass (Recommended)". The kit's page says what each does in the
     job ([The hosted job](../bench/request-cost/README.md#the-hosted-job)). The first takes
     away nothing a count could see: one binary run twice by one kit has no difference that is
-    the change's. It leaves as it was a change that is not to the request path and changes the
-    binary, which a count misses as any change does, and which item 2.1 then sends to measured.
+    the change's. Its two sets of readings are kept as evidence for the idle floor.
 
     Not chosen: cycles asked of every change, the rule as it stood, at a pilot and a gated run
     across placements for an effect one build cannot show; a count for every change, which passes
@@ -11951,7 +11945,7 @@ rules something out.
     check's rulings fails no job where they are one binary, the verdict saying what the rule
     would have read, and so shows the runner reading more than the floor allows, which a change
     of two binaries is held to (the first run of
-    [#2245 Say that the hosted request-cost check is required on main, and what it attests](https://github.com/corten-run/corten/pull/2245),
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and do not blame the change when a build times out](https://github.com/corten-run/corten/pull/2245),
     of one binary, read before any byte 16,384 bytes over base's with 16,384 allowed, at the
     floor and not over it, so it did not meet this; three runs a build drawn from one
     distribution read a rise in about one comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by

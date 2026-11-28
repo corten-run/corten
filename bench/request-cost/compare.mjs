@@ -17,6 +17,7 @@
 // output, of the case, depth, requests, connections and addresses asked for (`figure`): anything
 // else is no figure. A build that was built may hold `sha256`, its probe's SHA-256 as job.sh
 // writes it, 64 lowercase hex digits and a line feed; anything else there is no checksum.
+// For local results this file is the caller's evidence, not checked against a binary.
 //
 // One binary: when both builds were built and their `sha256` are one checksum, base and head
 // are the same probe, byte for byte, so nothing is compared. The verdict says so, gives what the
@@ -307,13 +308,19 @@ export function compare(base, head, { description = "", names = { base: "base", 
     lacks(`${code(name)} has no answer`, Object.fromEntries(none.map((side) => [side, /** @type {string} */ (found[side].why).split("\n")[0]])));
     return { name, state: none.length > 0 ? "none" : found.base.bytes.equals(found.head.bytes) ? "same" : "differ" };
   });
+  const sums = { base: unbuilt.base === undefined ? checksum(base) : undefined, head: unbuilt.head === undefined ? checksum(head) : undefined };
+  const oneBinary = sums.base === sums.head ? sums.base : undefined;
   const differ = answers.filter(({ state }) => state === "differ").map(({ name }) => code(name));
   const unread = answers.filter(({ state }) => state === "none").map(({ name }) => code(name));
-  const answered = [
+  const answered = (oneBinary === undefined ? [
     differ.length > 0 ? `The two builds answer differently in ${differ.join(", ")}: a count of two builds that answer differently compares two different jobs, which the review weighs.` : "",
     unread.length > 0 ? `No answer to compare in ${unread.join(", ")}.` : "",
     differ.length + unread.length === 0 ? `Both builds give the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${answers.length} cases.` : "",
-  ].filter(Boolean).join(" ");
+  ] : [
+    differ.length > 0 ? `Readings of the same binary recorded different answers in ${differ.join(", ")}.` : "",
+    unread.length > 0 ? `One or both readings recorded no answer in ${unread.join(", ")}.` : "",
+    differ.length + unread.length === 0 ? `Both readings recorded the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${answers.length} cases.` : "",
+  ]).filter(Boolean).join(" ");
 
   const { way, lines: declaring } = declared(description);
   // What was read of the description, so that an author sees why a line did or did not count.
@@ -350,15 +357,15 @@ export function compare(base, head, { description = "", names = { base: "base", 
     status = 1;
     verdict += " The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.";
   }
-  const sums = { base: unbuilt.base === undefined ? checksum(base) : undefined, head: unbuilt.head === undefined ? checksum(head) : undefined };
-  if (sums.base !== undefined && sums.base === sums.head) {
+  if (oneBinary !== undefined) {
     status = 0;
-    verdict = `**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 ${code(sums.base)}), so no figure below can be the change's: they are one binary read twice, the runner's, and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ${holds ? "pass" : `not pass: ${why}`}. ${read}`;
+    verdict = `**One binary: nothing compared.** Base and head built the same probe, byte for byte (SHA-256 ${code(oneBinary)}), so no figure below can be the change's: they are one binary read twice, the runner's, and decide nothing, whatever the description declares (README.md, The hosted job). As two builds the rule would ${holds ? "pass" : `not pass: ${why}`}. ${read}`;
   }
 
   const markdown = [
     `## What a request costs: ${code(short(names.head))} against ${code(short(names.base))}`,
     verdict,
+    ...(oneBinary === undefined ? [] : ["The tables below show readings of one binary taken twice, not a comparison of two binaries."]),
     answered,
     "### Instructions a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's counts", "Head's counts", "Rule"], instructions),

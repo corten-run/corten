@@ -25,6 +25,18 @@ usage() { echo "usage: bash job.sh build <directory> | bash job.sh read <directo
 kit=$(cd "$(dirname "$0")" && pwd -P)
 builds=${2:-}
 
+run_timed() {
+  local limit=$1 notice status=0
+  shift
+  timed_out=
+  # Capture FD 3, not the command's stdout, stderr or exit status.
+  {
+    notice=$(node "$kit/deadline.mjs" "$limit" 10 "$@" 3>&1 >&4 4>&-) || status=$?
+  } 4>&1
+  if [ "$notice" = deadline ]; then timed_out=$limit; fi
+  return "$status"
+}
+
 case "${1:-}" in
 build)
   [ $# -eq 2 ] || usage
@@ -43,10 +55,10 @@ build)
     echo "$commit" > "$builds/$side/commit"
     began=$SECONDS
     status=0
-    timeout -k 10 420 sh "$kit/build.sh" "$commit" "$builds" > "$builds/$side/build.log" 2>&1 || status=$?
+    run_timed 420 sh "$kit/build.sh" "$commit" "$builds" > "$builds/$side/build.log" 2>&1 || status=$?
     cat "$builds/$side/build.log"
-    if [ "$status" = 124 ]; then
-      echo "the build did not end in 420 s" > "$builds/$side/unbuilt"
+    if [ -n "$timed_out" ]; then
+      echo "the build did not end in $timed_out s" > "$builds/$side/unbuilt"
     elif [ "$status" != 0 ]; then
       echo "the build failed, $(tail -n 1 "$builds/$side/build.log")" > "$builds/$side/unbuilt"
     fi
@@ -73,10 +85,14 @@ read)
   }
   within() {
     local left=$((STOP_AT - $(date +%s))) status=0
+    timeout_reason=
     if [ "$left" -le 0 ]; then echo "not attempted, the job's time for readings was spent" >&2; return 1; fi
     if [ "$left" -gt 120 ]; then left=120; fi
-    timeout -k 10 "$left" "$@" || status=$?
-    if [ "$status" = 124 ]; then echo "Error: did not end in $left s" >&2; fi
+    run_timed "$left" "$@" || status=$?
+    if [ -n "$timed_out" ]; then
+      timeout_reason="Error: did not end in $timed_out s"
+      echo "$timeout_reason" >&2
+    fi
     return "$status"
   }
   began=$SECONDS
@@ -105,8 +121,8 @@ read)
           break
         fi
         cat "$out.said"
-        # Why, a line an attempt: the kit's error, else the last thing said, else the status alone.
-        why=$(grep -m 1 '^Error: ' "$out.said" || tail -n 1 "$out.said")
+        # Why, a line an attempt: the deadline, else the kit's error, last line or status.
+        why=${timeout_reason:-$(grep -m 1 '^Error: ' "$out.said" || tail -n 1 "$out.said")}
         case "$why" in *[![:space:]]*) ;; *) why="exit status $status, with nothing said" ;; esac
         echo "$why" >> "$out.refused"
         rm -f "$out" "$out.said"
