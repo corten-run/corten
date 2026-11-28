@@ -369,14 +369,13 @@ pub(crate) async fn save_first(
     }
     let Some(receipt) = saved.filter(|_| errors.is_empty()) else {
         let read = store.read(Instant::now(), visitor.known(), None);
+        let (input, errors) = (&input, &errors);
         let form = html! {
-            <AlertForm input={&input} errors={&errors} />
+            <AlertForm input={input} errors={errors} />
             <AlertStatus status={Status::None} />
         };
         let here = url::Alerts { saved: None };
-        return req
-            .invalid(&errors, form, || async { alerts_page(&req, viewer.as_deref(), &here, &read, &input, &errors) })
-            .await;
+        return req.invalid(errors, form, || async { alerts_page(&req, viewer.as_deref(), &here, &read, input, errors) }).await;
     };
     // With JavaScript, the whole form, empty as the page that a save without JavaScript goes to,
     // so a field a refused submit marked is cleared; the reads that follow answer the status line
