@@ -424,7 +424,7 @@ mod tests {
         let (status, note) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(note.contains(r#"<span id="save-note""#) && note.contains("Saved."), "{note}");
-        assert!(note.contains(r#"deck_builder.acknowledge($t,"Saved",1,1,false)"#), "{note}");
+        assert!(note.contains(r#"save_note.answered($t,"Saved",1,1,false)"#), "{note}");
         assert_eq!(builder.saved().1.get("salt-oracle"), Some(&1));
         // Sent again (its answer lost): the same answer, no second write.
         let res = saving(&app, 0, &deck, &key).field(f.draft, 1).mode(Mode::Action).await;
@@ -563,7 +563,7 @@ mod tests {
                 assert!(!res.headers().contains_key("corten-patch") && !res.headers().contains_key("corten-page"), "{submitter}");
                 assert!(res.text().contains("<!DOCTYPE html>"), "{submitter}");
                 assert!(res.text().contains("This form already saved before autosave started."), "{submitter}");
-                assert!(!res.text().contains("deck_builder.acknowledge("), "{submitter}");
+                assert!(!res.text().contains("save_note.answered("), "{submitter}");
                 assert!(res.text().contains(r#"name="version" value="1""#), "{submitter}");
                 assert_eq!((builder.saved().0, builder.saved().1.get("pearl-diver")), (1, Some(&1)), "{submitter}");
             }
@@ -632,7 +632,7 @@ mod tests {
         let (status, note) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(note.contains("Not saved: You own 2 copies of Ashen Drake."), "{note}");
-        assert!(note.contains(r#""Refused",0,0,false)"#), "{note}");
+        assert!(note.contains(r#"save_note.answered($t,"Refused",0,0,false)"#), "{note}");
         assert_eq!(builder.deck.seq(), 0);
         let res = saving(&app, 0, &[], &submit_key())
             .field(f.card, "gravel-sprite")
@@ -700,6 +700,11 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(page.contains("changed in another tab") && page.contains(r#"name="version" value="1""#), "{page}");
         assert!(page.contains("Pearl Diver"), "the deck as it is now: {page}");
+
+        let patched = saving(&app, 0, &starter(), &submit_key()).field(DeckInput::FIELDS.draft, 1).mode(Mode::Action).await;
+        let (status, note) = read(&patched);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(note.contains(r#"save_note.answered($t,"Stale",1,0,false)"#), "{note}");
     }
 
     #[tokio::test]
@@ -715,8 +720,14 @@ mod tests {
             cards::STARTER.len() + 1,
             "every deck line is a DeckLine, and the template's"
         );
-        assert!(page.contains("/scripts/deck_builder.js\">") && !page.contains("/scripts/save_note.js\">"), "{page}");
-        assert!(!page.contains("deck_builder.acknowledge("), "a whole page does not acknowledge an autosave");
+        assert!(page.contains("/scripts/deck_builder.js\">"), "{page}");
+        assert!(
+            page.split("<link rel=\"modulepreload\" href=\"")
+                .skip(1)
+                .any(|link| link.split_once('"').is_some_and(|(href, _)| href.ends_with("/scripts/save_note.js"))),
+            "the acknowledgement module preloads with the builder"
+        );
+        assert!(!page.contains("save_note.answered("), "a whole page does not acknowledge an autosave");
         let view = DeckQuery { q: Some("drake".into()), sort: Some(Sort::Cost) };
         let res = app.get(&url::Home { view }).await;
         let page = res.text();

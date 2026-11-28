@@ -8,7 +8,10 @@
 // says what became of it. The saved deck's feed says when another tab saved.
 import { keep, subscribe } from "corten";
 import { CollectionRow, DeckLine, rows } from "corten/views";
-import { DeckAnswered, DeckPreviewChanged } from "corten/events";
+import { DeckPreviewChanged } from "corten/events";
+// A save must not need to fetch a script; older documents already load this module.
+import "./save_note.js";
+/** @import { DeckAnswered } from "corten/events" */
 /** @import { CortenError, FeedUrl, Message, NumberFormat } from "corten" */
 /** @import { Holds } from "corten/views" */
 
@@ -385,15 +388,6 @@ function save(s, parts) {
 }
 
 /**
- * The save patch calls this when its note joins the page. No other module needs to load.
- * @param {HTMLSpanElement} note @param {import("../../types/app").SaveOutcome} outcome
- * @param {number} version @param {number} draft @param {boolean} unsure
- */
-export function acknowledge(note, outcome, version, draft, unsure) {
-  note.dispatchEvent(new DeckAnswered({ outcome, version, draft, unsure }));
-}
-
-/**
  * The save's answer, from the note it put on the page. Saved: the send it names (this one, or,
  * when this one went with the key of a send whose answer was lost, that one) is the saved deck at
  * the new version, and what changed since goes next. Refused: the page goes back to the saved deck,
@@ -600,6 +594,7 @@ export function add(event, button, parts) {
   const row = rows(parts.cards, CollectionRow).of(button);
   if (!row) return;
   event.preventDefault();
+  if (!parts.form.reportValidity()) return;
   change(kept(), parts, [[row.id, 1]]);
 }
 
@@ -611,7 +606,7 @@ export function addPicked(event, parts, browse) {
   if (!enhanced(parts)) return;
   event.preventDefault();
   const ids = picks(browse.cards);
-  if (ids.length === 0) return;
+  if (ids.length === 0 || !parts.form.reportValidity()) return;
   change(kept(), parts, ids.map((id) => [id, 1]));
   clearPicks(browse);
 }

@@ -2,7 +2,7 @@ use corten::prelude::*;
 use corten_ui::CopyButton;
 
 use super::deck_preview::DeckPreviewChanged;
-use super::save_note::{SaveNoteId, SaveOutcome};
+use super::save_note::SaveNoteId;
 use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, Shown, curve_cost, deck_list};
 use crate::{
     app::{DeckInput, DeckQuery, Slot, Sort, url},

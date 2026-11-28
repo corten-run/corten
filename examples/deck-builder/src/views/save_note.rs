@@ -76,11 +76,11 @@ pub struct DeckAnswered {
     pub unsure: bool,
 }
 
-/// Only a patch calls the already-running builder to acknowledge its send.
-#[component(js = super::deck_builder::DeckBuilder)]
-fn SaveNote<'a>(answer: &'a Answer, outcome: SaveOutcome, version: u64, draft: u64, unsure: bool) -> impl Patch {
+/// Only a patch notifies the queue. Keep the binding usable by tabs from before a deploy.
+#[component(js)]
+pub fn SaveNote<'a>(answer: &'a Answer, outcome: SaveOutcome, version: u64, draft: u64, unsure: bool) -> impl Patch {
     html! {
-        <span id={SaveNoteId} on:connect={js::acknowledge(target, outcome, version, draft, unsure)}>
+        <span id={SaveNoteId} on:connect={js::answered(target, outcome, version, draft, unsure)}>
             {answer.words()}
         </span>
     }

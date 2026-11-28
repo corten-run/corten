@@ -82,51 +82,95 @@ const postedGravel = (request) => {
   return fields.getAll("count")[fields.getAll("card").indexOf("gravel-sprite")];
 };
 
-/** Two edits in one enhanced document, each acknowledged before the next. */
-async function successiveAutosaves() {
+/** Two edits in one document, including a lost reply when only the old exports are available. */
+async function successiveAutosaves(oldModule = false) {
   const context = await browser.newContext();
+  const live = Promise.withResolvers();
   try {
     context.setDefaultTimeout(10_000);
+    if (oldModule) {
+      // Model an already-open tab: keep the builder that handled startup, but expose only
+      // the old module's contract to the runtime. In particular there is no `acknowledge`.
+      await context.addInitScript(() => {
+        document.addEventListener("corten:module", (event) => {
+          const { detail } = /** @type {CustomEvent} */ (event);
+          if (detail.name !== "deck_builder") return;
+          const { acknowledge: _newExport, ...old } = detail.exports;
+          detail.exports = old;
+          document.documentElement.dataset.oldDeckModule = "ready";
+        }, { capture: true });
+      });
+      // Only the save receipt, not the feed, can tell this tab that its lost reply committed.
+      await context.route("**/feed/deck/live**", async (route) => {
+        await live.promise;
+        await route.continue().catch(() => {});
+      });
+    }
     const page = await open(context);
+    if (oldModule) check("the already-open builder has the old export surface",
+      await page.locator("html").getAttribute("data-old-deck-module") === "ready");
     // A save must be acknowledged even if the browser cannot fetch another app script.
     const scripts = "**/scripts/*.js";
     await page.route(scripts, (route) => route.abort());
     const count = page.locator('li[data-key="gravel-sprite"] input[type=number]');
     const start = await count.inputValue();
     const loaded = Number(await version(page));
+    const label = oldModule ? "old module autosave" : "autosave";
     let previousKey;
     for (const [index, copies] of [start === "2" ? "3" : "2", start].entries()) {
+      const edit = async () => {
+        await count.fill(copies);
+        await page.locator(saveButton).click();
+      };
+      let lostFields;
+      if (oldModule && index === 1) {
+        const response = Promise.withResolvers();
+        await page.route("**/deck", async (route) => {
+          try {
+            response.resolve((await route.fetch()).status());
+          } catch (error) {
+            response.reject(error);
+          } finally {
+            await route.abort();
+          }
+        }, { times: 1 });
+        const [lost] = await Promise.all([page.waitForRequest(isSave), edit()]);
+        lostFields = saveFields(lost);
+        check("the lost reply from the new server was a committed save", await response.promise === 200 &&
+          lostFields.get("draft") === "2" && lostFields.get("version") === String(loaded + 1));
+        await page.waitForFunction(() => document.querySelector("[role=status][data-state]")?.getAttribute("data-state") === "offline");
+      }
       const [reply] = await Promise.all([
         page.waitForResponse((r) => isSave(r.request()) && postedGravel(r.request()) === copies, { timeout: 5_000 }).catch((error) => {
           if (error.name !== "TimeoutError") throw error;
           return null;
         }),
-        (async () => {
-          await count.fill(copies);
-          await page.locator(saveButton).click();
-        })(),
+        lostFields ? page.getByRole("button", { name: "Try again" }).click() : edit(),
       ]);
       const fields = reply && saveFields(reply.request());
       const key = fields?.get("submit");
-      check(`autosave ${index + 1}: sends a new non-navigation POST and gets a 200 patch`,
+      check(`${label} ${index + 1}: sends a new non-navigation POST and gets a 200 patch`,
         reply?.status() === 200 && !reply.request().isNavigationRequest() && "corten-patch" in reply.headers() &&
-        !!key && key !== previousKey && fields?.get("version") === String(loaded + index) && fields?.get("draft") === String(index + 1),
+        !!key && key !== previousKey && fields?.get("version") === String(loaded + index) &&
+        (lostFields ? key === lostFields.get("submit") && fields.get("draft") === "3" : fields?.get("draft") === String(index + 1)),
         reply ? `HTTP ${reply.status()}` : "no matching POST response");
       const ack = reply && await settled(page, "Saved.", 5_000).then(() => true, (error) => {
         if (error.name !== "TimeoutError") throw error;
         return false;
       });
-      check(`autosave ${index + 1}: acknowledges the patch and advances the version without navigating`,
+      check(`${label} ${index + 1}: acknowledges the patch and advances the version without navigating`,
         !!ack && await version(page) === String(loaded + index + 1) && page.url() === home, JSON.stringify(await status(page)));
+      if (!ack) return;
       previousKey = key;
     }
     await page.unroute(scripts);
     await page.reload();
     const savedCount = await count.inputValue();
     const savedVersion = Number(await version(page));
-    check("the server kept both autosaves", savedCount === start && savedVersion === loaded + 2,
+    check(`${label}: the server kept both autosaves`, savedCount === start && savedVersion === loaded + 2,
       `count ${start} to ${savedCount}, version ${loaded} to ${savedVersion}`);
   } finally {
+    live.resolve(undefined);
     await context.close();
   }
 }
@@ -424,6 +468,47 @@ const typeBadNumber = async (field) => {
   await field.press("ControlOrMeta+a");
   await field.pressSequentially("1e");
 };
+
+/** An Add cannot turn an incomplete number into a valid draft by redrawing it first. */
+async function addCountValidity(selected) {
+  const context = await browser.newContext();
+  try {
+    context.setDefaultTimeout(8_000);
+    const page = await open(context);
+    const before = Number(await version(page));
+    const malformed = countField(page, "gravel-sprite");
+    const original = await malformed.inputValue();
+    const ids = Object.keys(await deck(page));
+    const id = await page.locator("tbody tr[data-key]").evaluateAll(
+      (rows, ids) => rows.find((row) => !ids.includes(row.getAttribute("data-key")))?.getAttribute("data-key"), ids);
+    if (!id) throw new Error("validity control needs a card not already in the deck");
+    const card = row(page, id);
+    const pick = card.getByRole("checkbox");
+    const button = selected ? page.getByRole("button", { name: "Add selected" }) : card.getByRole("button", { name: "Add", exact: true });
+    if (selected) await pick.check();
+    const posts = [];
+    page.on("request", (r) => { if (isSave(r)) posts.push(r); });
+    await typeBadNumber(malformed);
+    const typed = await numberInput(malformed);
+    await button.click();
+    const after = await numberInput(malformed);
+    const name = selected ? "Add selected" : "Add";
+    const held = typed.bad && typed.value === "" && after.bad && after.value === "" && posts.length === 0 &&
+      Number(await version(page)) === before && (await deck(page))[id] === undefined && (!selected || await pick.isChecked());
+    check(`${name} preserves the incomplete field and does not send a draft`, held, JSON.stringify({ typed, after, posts: posts.length }));
+    if (!held) return;
+    await malformed.fill(original);
+    await malformed.press("Tab");
+    const [saved] = await Promise.all([page.waitForResponse((r) => isSave(r.request())), button.click()]);
+    await settled(page);
+    check(`${name} works after correcting the count`, saved.status() === 200 && !saved.request().isNavigationRequest() &&
+      posts.length === 1 && Number(await version(page)) === before + 1 && (await deck(page))[id] === 1);
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await page.waitForFunction((v) => document.querySelector('input[name="version"]')?.value === v, String(before + 2));
+  } finally {
+    await context.close();
+  }
+}
 
 /** A malformed number and an intentional clear both serialize as empty unless the browser stops the former. */
 async function nativeCountValidity() {
@@ -1157,19 +1242,24 @@ async function smoke() {
 }
 
 try {
-  if (process.argv.includes("--autosave-only")) await successiveAutosaves();
-  else if (process.argv.includes("--validity-only")) {
+  if (process.argv.includes("--autosave-only")) {
+    await successiveAutosaves();
+    await successiveAutosaves(true);
+  } else if (process.argv.includes("--validity-only")) {
+    for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();
     await nativeCountValidity();
   }
   else {
     if (!process.argv.includes("--handoff-only")) {
       await successiveAutosaves();
+      await successiveAutosaves(true);
       await smoke();
     }
     for (const scenario of ["edited", "incomplete", "removed", "lost answer"]) await delayedBuilder(scenario);
     for (const selected of [false, true]) await nativeAddHandoff(selected);
     for (const code of [409, 422]) await nativeRefusal(code);
+    for (const selected of [false, true]) await addCountValidity(selected);
     await queuedCountValidity();
     await nativeCountValidity();
   }

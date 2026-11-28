@@ -30,16 +30,18 @@ or malformed counts shows a conflict and asks the player to re-enter that edit o
 Malformed counts that reach the server under a fresh key are still a form error. In the browser,
 a partly typed number is invalid even when its form value is empty; native Save blocks it,
 whereas deliberately clearing a count still removes the line. Autosave also waits for a valid
-form, and a pending save can resume after the field is corrected. An Add can save without
-touching the count fields. If autosave starts on that same form and reuses
+form, and a pending save can resume after the field is corrected. Add and Add selected leave an
+incomplete number (and any selection) alone instead of redrawing it and submitting the old count.
+An Add can save without touching the count fields. If autosave starts on that same form and reuses
 the native save's key, the server refuses the write and draws the saved deck with a fresh key
 instead of offering to merge the edit again. If a count was already edited when the module
 started, that document keeps its fields, focus, and native Save. Selections made before startup
 stay checked and count toward Add selected; the checkbox for selecting every visible card is
 disabled until the module can apply it. With the module running, Filter keeps the page, and a
 subsequent native Save returns to that filter. A refusal page displays the reason without
-notifying autosave. Only a patch answers a save that the queue sent. Its note calls the
-builder's already-loaded script, so the queue can advance without fetching another module.
+notifying autosave. Only a patch answers a save that the queue sent. It uses the same
+`save_note.answered` binding as before, so an already-open tab can keep saving after a deploy.
+New pages load the note's script with the builder, not on the first autosave or retry.
 
 ## Run it
 
@@ -73,7 +75,7 @@ The routes and what each does are in the table at the top of [`src/app.rs`](src/
 | The layout, and the screen in the order the address asks for | [`src/views.rs`](src/views.rs) |
 | The builder: its markup, its script (every change, autosave, moves, the collection) and its styles | [`src/views/deck_builder.rs`](src/views/deck_builder.rs), [`src/views/deck_builder.js`](src/views/deck_builder.js), [`src/views/deck_builder.css`](src/views/deck_builder.css) |
 | A collection row and a deck line | [`src/views/collection_row.rs`](src/views/collection_row.rs), [`src/views/deck_line.rs`](src/views/deck_line.rs) |
-| The save note, whose patch calls the builder to acknowledge a save | [`src/views/save_note.rs`](src/views/save_note.rs), [`src/views/deck_builder.js`](src/views/deck_builder.js) |
+| The save note, whose patch tells the builder what became of a save | [`src/views/save_note.rs`](src/views/save_note.rs), [`src/views/save_note.js`](src/views/save_note.js) |
 
 Its browser test, which also times the screen: [`smoke.mjs`](smoke.mjs).
 
@@ -104,8 +106,33 @@ Playwright, not transport framing. Startup excludes styles, images and feed traf
 exclude the page open before the save and its subresources. The validation follow-up adds
 387 bytes to the HTML and 335 bytes to the startup script; the first autosave exchange is
 unchanged, and the added bytes in the native Save exchange are in the redirected page.
-The counts do not measure server allocations or retained memory for the native submit key's deck
-snapshot, or time under the save mutex when recording or comparing it.
+
+### Native save receipt cost
+
+Measured on 2026-11-28 with optimized Rust 1.99.1 on Windows (Core i9-10885H). The comparison
+uses the merge base above (no snapshot) and the receipt logic at `ad5cf36d7`, unchanged by
+the deployment fix. Both run `Builder::save` with native drafts, prebuilt decks and submit keys,
+against the same 240-card collection. Each batch makes 4,096 distinct saves with alternating
+legal decks, then replays each key and its original deck. The in-process timings include the
+mutex, feed write and receipt work but not form decoding, HTTP, or page rendering.
+
+| Measured, before to after | Five distinct cards | Forty distinct cards |
+|---|---:|---:|
+| Allocations or reallocations, all new saves | 61,473 to 65,569 | 82,115 to 86,211 |
+| Allocations or reallocations, all exact replays | 0 to 0 | 0 to 0 |
+| Requested receipt-store heap bytes retained (4,096 keys) | 696,336 to 1,155,088 | 696,336 to 3,448,848 |
+| Median new save, ns per operation | 7,571 to 7,502 | 19,857 to 26,203 |
+| Median exact replay, ns per operation | 1,044 to 1,438 | 5,008 to 7,399 |
+
+The allocator counts are from a separate pass from the timing. Dropping the whole receipt store
+measures its requested heap bytes, not process RSS. The snapshot adds one allocation per new
+native key, and at this occupancy the store adds 112 bytes per key with five cards or 672 with
+forty. The inline receipt grows from 16 to 32 bytes, including for scripted keys, which do not
+allocate a snapshot. The times are medians of 12 batches per version with alternating order on a
+shared workstation, not latency guarantees: five-card new-save batches ranged from 4,912 to
+11,300 ns/op before and 5,674 to 13,612 after; the forty-card after-save range was 20,108 to
+81,302. The five-card save does not show a resolved speedup. The receipt buys an exact same-deck
+retry even after another tab changes the saved deck; a changed retry gets a conflict instead.
 
 ## Nested Preview
 

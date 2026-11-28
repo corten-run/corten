@@ -26,11 +26,22 @@ pub use deck_line::DeckLine;
 pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
 pub use draft_notes::DraftNotes;
 pub use preview_export::PreviewExport;
+use save_note::SaveNote;
 pub use save_note::{Answer, DeckAnswered};
 
 /// What the app lists in `App::components`: the scripts, the stylesheet and the rows' views.
-pub const COMPONENTS: &[Component] =
-    &[DeckBuilder, CollectionRow, DeckLine, DeckPreview, DeckEditor, DeckSummary, DraftNotes, PreviewExport, PreviewHelp];
+pub const COMPONENTS: &[Component] = &[
+    DeckBuilder,
+    CollectionRow,
+    DeckLine,
+    DeckPreview,
+    DeckEditor,
+    DeckSummary,
+    DraftNotes,
+    PreviewExport,
+    PreviewHelp,
+    SaveNote,
+];
 
 /// The document around the page.
 #[component]

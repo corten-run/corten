@@ -217,6 +217,8 @@ and the next native Save uses the original key and version before opening a fres
 Add selected can save without changing any count input. If autosave starts on such a form and
 submits a key that already saved natively, the server draws a conflict page with the saved deck
 and a fresh key. It does not give the queue an acknowledgement for a draft it never saved.
+With autosave active, Add and Add selected check the form before redrawing any count field:
+redrawing an incomplete number would clear the browser's `badInput` state and let it submit.
 Filter applies the current query even if its input handler was not there when the player typed it.
 
 ### A value both sides compute
@@ -432,12 +434,13 @@ decided learns it the same way: the patch the handler answers with carries an el
 `on:connect` dispatches a typed event with the values the handler read, and the screen listens
 for it. The outcome is then the handler's own data, typed by its Rust struct and checked at the
 call, which a status could not carry. `examples/deck-builder`'s `SaveNote` is this: a scripted
-save's patch draws a note whose `on:connect={js::acknowledge(target, outcome, version, draft, unsure)}`
-dispatches `DeckAnswered`. The note uses `#[component(js = super::deck_builder::DeckBuilder)]`
-so the handler is already loaded when the builder sends the save. A note on a full page only
-shows its text and dispatches nothing. The builder takes the saved version, a refusal or a stale
-save from `DeckAnswered`. Which of those it was is a `SaveOutcome`, an enum that derives `ToJson`,
-as the event's field and as `acknowledge`'s parameter (`@param {import("../../types/app").SaveOutcome} outcome`),
+save's patch draws a note whose `on:connect={js::answered(target, outcome, version, draft, unsure)}`
+dispatches `DeckAnswered` from `save_note.js`. Keep that binding the same across deploys: a tab
+left open still has its old exports, even when its next patch is drawn by a new server. The builder
+imports the note's module at startup so a save or retry needs no new script request. A note on a
+full page only shows its text and dispatches nothing. The builder takes the saved version, a refusal
+or a stale save from `DeckAnswered`. Which of those it was is a `SaveOutcome`, an enum that derives
+`ToJson`, as the event's field and as `answered`'s outcome parameter,
 so `tsc` checks the builder's `event.outcome === "Refused"` against the enum's names: a renamed
 variant fails the Rust build and then `tsc`, where a `String` field would let the branch quietly stop
 matching. A submit with no answer to draw (other than a bare `204` or
