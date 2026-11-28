@@ -22,6 +22,7 @@ import { controlRegistration, controlRequest, guardianSha256 } from "./cloud-con
 import { deploymentSha256 } from "./deployments.mjs";
 import { digest } from "./cloud-local.mjs";
 import { fleetOperationPlan } from "./fleet.mjs";
+import { fixtureGitEnv, withFixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
@@ -264,6 +265,29 @@ test("approved sealed collection uses the measured replay and does not create or
   h.change(s => { s.control.monitor.phase = "live"; });
   await assert.rejects(preview(), /sealed recovery requires a saved terminal archive/);
   writeFileSync(h.statePath, before);
+  const git = (...args) => {
+    const result = spawnSync("git", ["-C", measuredRoot, ...args], { encoding: "utf8", env: fixtureGitEnv(), timeout: 10000 });
+    assert.equal(result.status, 0);
+    return result.stdout.trim();
+  };
+  git("init", "-q");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=.git/no-hooks", "commit", "-qm", "Measured fixture without replay sources", "--allow-empty");
+  flags.measuredHead = git("rev-parse", "HEAD");
+  h.change(s => {
+    s.commit = flags.measuredHead;
+    for (const { request } of s.control.ledger) {
+      request.invocation.commit = s.commit;
+      for (const item of request.seal ?? []) {
+        const { invocation } = s.control.ledger.find(row => row.request.invocation.id === item.id).request;
+        item.sha256 = digest(JSON.stringify(invocation));
+      }
+    }
+  });
+  await withFixtureGitEnv(() => assert.rejects(preview(), /native campaign validation unavailable or invalid/));
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  writeFileSync(h.statePath, before); delete flags.measuredHead;
+  p.deps.captureReplay = (source, { root }) => { assert.equal(source, commit); assert.equal(root, measuredRoot); };
   assert.equal(await preview(), 3);
   const plan = p.stdout.at(-1);
   assert.equal(plan.controllerCommit, head);
@@ -295,9 +319,25 @@ test("approved sealed collection uses the measured replay and does not create or
   // A read-only terminal probe extends the monitor ledger, so print a new approval.
   flags.reportStatus = "verified";
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const live = h.host();
+  flags.deleteLost = true;
+  await assert.rejects(run(), /provider control failed/);
+  assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
+  assert.equal(h.deletes, 1); assert.equal(replayed, 3);
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  const retryStart = p.calls.length;
+  await assert.rejects(run(), { code: "EEXIST" });
+  assert.ok(p.calls.slice(retryStart).every(([bin]) => bin === "git"));
+  // The simulated owner has stopped; emulate the separate retained-lock custody step.
+  unlinkSync(join(h.local, "operation.lock"));
+  h.hosts([live]);
+  await assert.rejects(run(), /deletion not confirmed; outcome uncertain/);
+  assert.equal(h.deletes, 1); assert.equal(replayed, 3);
+  h.hosts([]);
   assert.equal(await run(), 0);
   assert.equal(h.saved().validation.status, "verified"); assert.ok(h.saved().destroyedAt);
   assert.equal(h.deletes, 1); assert.equal(h.creates, 1); assert.equal(replayed, 4);
+  assert.ok(p.calls.slice(retryStart).every(([bin]) => bin !== "ssh" && bin !== "sftp"));
 });
 
 test("contradictory saved verification does not get the extended replay budget", async (t) => {

@@ -15,7 +15,7 @@ import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, handoffCa
   failedExitOneCandidate, failedExitOnePolicy, failedExitOneScope, verifyFailedExitOneCustody, verifyFailedExitOneRetirement, interruptedFirstUpload,
   launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
-import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
+import { captureValidation, localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
@@ -48,9 +48,9 @@ async function launchRoles({ round, commit, group, mode }, interrupted) {
   return inspectCampaign({ action: "actor-role-preflight", round, commit, group: group ?? null, mode: mode ?? null }, { interrupted });
 }
 
-// compiler and roleCheck are synthetic TEST seams, never CLI options.
+// compiler, roleCheck and captureReplay are synthetic TEST seams, never CLI options.
 export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler, roleCheck = launchRoles,
-  interrupted, remainingPlacement, holdingOperationLock = false } = {}) {
+  captureReplay = captureValidation, interrupted, remainingPlacement, holdingOperationLock = false } = {}) {
   // All checks here are local/read-only. Missing integration stays visible, not imported.
   repo = realpathSync(repo);
   assert.ok(!/["$%\r\n\0]/.test(options.stateDir), "SSH config expansion in state path refused");
@@ -205,6 +205,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         assert.equal(await measuredGit("status", "--porcelain", "--untracked-files=all"), "", "clean measured checkout required");
         await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
         if (!compiler(measuredRoot)) missing.push(localCompilerMissing);
+        else if (sealed) captureReplay(saved.commit, { root: measuredRoot });
         recovery = { policy: sealed ? sealedCollectionPolicy : absentCollectionPolicy, measuredCommit: saved.commit, measuredRoot, hostId: saved.id,
           archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256 };
         if (sealed) {
@@ -289,7 +290,7 @@ export function productionDispatch({ processRun, provider, interrupted, historic
   };
 }
 
-export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler, roleCheck, remainingAdmission = false } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler, roleCheck, captureReplay, remainingAdmission = false } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
   // Construct the legacy/recovery transport at the original boundary. It
@@ -365,7 +366,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
   let historicalHostsAbsent = !historicalIds.size && !quarantined.length;
-  const deps = { repo, run, compiler, roleCheck, interrupted, remainingPlacement: admission?.placement };
+  const deps = { repo, run, compiler, roleCheck, captureReplay, interrupted, remainingPlacement: admission?.placement };
   const plan = await productionPlan(options, deps);
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,

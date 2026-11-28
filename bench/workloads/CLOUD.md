@@ -2361,14 +2361,16 @@ If a completed monitored child already has a saved archive and extraction but
 ordinary replay exceeded its deadline, run the
 `cloud-production.mjs ROUND --state-dir PATH --collect --sealed-measured-checkout CHECKOUT --print-approval`
 preview from the reviewed controller. Use the clean original measured checkout
-for `CHECKOUT`. A closed terminal seal and a successful saved exit marker are
+for `CHECKOUT`. The preview checks that it can capture the measured replay
+sources. A closed terminal seal and a successful saved exit marker are
 required. The approval names `collect-saved-sealed-archive-with-measured-replay`
 and binds the measured commit, reservation, host, archive, extraction and
 terminal seal. Each replay may take up to 45 minutes; the measured source
 snapshot and all archive and native checks are unchanged. The ordinary
 ownership, remote idle and archive checks still precede any DELETE. A timeout,
-interruption or unverified replay does not authorize a DELETE. A retry after a
-recorded deletion intent confirms absence without sending another DELETE.
+interruption or unverified replay does not authorize a DELETE. Once custody is
+clear, a retry after a recorded deletion intent confirms absence without
+sending another DELETE.
 This mode does not pack, download or start a job. Other replay budgets are unchanged.
 
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
