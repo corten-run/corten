@@ -222,8 +222,10 @@ try {
   check("a count of 0 takes the card out", (await deck(page))["pearl-diver"] === undefined);
   await settled(page);
 
-  // Drag and drop, both ways.
-  await row(page, "salt-oracle").locator("td:nth-child(2) button").dragTo(page.locator("section[class$=__deck]"));
+  // Drag and drop, both ways. With its Save button drawn, the deck's middle is over its lines, and a
+  // drag Playwright aims there reached the page with no drag events at all; the drop aims at the
+  // deck's heading.
+  await row(page, "salt-oracle").locator("td:nth-child(2) button").dragTo(page.locator("section[class$=__deck]"), { targetPosition: { x: 40, y: 24 } });
   check("dragging a card onto the deck adds it", (await deck(page))["salt-oracle"] === 1);
   await settled(page);
   await page.locator('li[data-key="salt-oracle"] button').dragTo(page.locator("section[class$=__collection] tbody"));
@@ -540,6 +542,7 @@ try {
         return document.querySelectorAll('script[type="module"][src$="/deck_builder.js"]').length;
       });
       const first = (await blocked.getAttribute("ul li[data-key]", "data-key")) ?? "";
+      const loadedAt = Number(await version(blocked));
       if (!(await blocked.isVisible(saveButton))) {
         check(saveCase, false, `aborted ${aborted}; the Save button is not drawn`);
       } else {
@@ -548,13 +551,24 @@ try {
           blocked.waitForResponse((r) => new URL(r.url()).pathname === "/deck" && r.request().method() === "POST", { timeout: 15_000 }),
           blocked.click(saveButton),
         ]);
-        // The deck the server now has, as a new page draws it.
+        // The server's own answer first, so no handler in the page can stand in for it: the save
+        // note says Saved, at the version after the one the page was built on.
+        const body = await response.text();
+        const savedAs = /"Saved",(\d+),\d+,false\)/.exec(body);
+        const answeredVersion = savedAs ? Number(savedAs[1]) : NaN;
+        // The deck the server now has, as a new page draws it: without the cleared card, at that
+        // version.
         const fresh = await (await blockedContext.request.get(base)).text();
         const inDeck = new RegExp(`<li[^>]*data-key="${first}"`).test(fresh);
+        const freshVersion = /<input[^>]*name="version"[^>]*value="(\d+)"|<input[^>]*value="(\d+)"[^>]*name="version"/.exec(fresh);
+        const serverVersion = freshVersion ? Number(freshVersion[1] ?? freshVersion[2]) : NaN;
+        // Then the page: the runtime put the server's note in it.
+        const note = await blocked.waitForFunction(() => document.getElementById("save-note")?.textContent === "Saved.", null, { timeout: 5_000 }).then(() => true, () => false);
         check(
           saveCase,
-          aborted > 0 && ran === 1 && first !== "" && response.status() === 200 && !inDeck,
-          `aborted ${aborted}; ${response.request().method()} ${response.status()}; ${first} still in the saved deck: ${inDeck}`,
+          aborted > 0 && ran === 1 && first !== "" && response.status() === 200 && body.includes("Saved.") &&
+            answeredVersion === loadedAt + 1 && !inDeck && serverVersion === answeredVersion && note,
+          `aborted ${aborted}; ${response.request().method()} ${response.status()}; answered version ${answeredVersion} after ${loadedAt}; ${first} in the saved deck: ${inDeck}; saved deck at ${serverVersion}; note shown: ${note}`,
         );
       }
       const button = "form[role=search] button";
@@ -569,13 +583,21 @@ try {
         // rather than a document load: either is the server's filter.
         const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "oracle", { timeout: 15_000 });
         const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=oracle/), blocked.click(button)]);
-        // A client navigation draws the answer after its response; give it a moment, then read it.
+        // The server's own answer first: of its collection rows, only those that match are shown.
+        const rowsAnswered = Array.from((await response.text()).matchAll(/<tr\b([^>]*)>/g), ([, attrs]) => ({
+          key: /data-key="([^"]+)"/.exec(attrs)?.[1] ?? "",
+          hidden: /\shidden(?=[\s=>]|$)/.test(attrs),
+        })).filter((r) => r.key !== "");
+        const shownAnswered = rowsAnswered.filter((r) => !r.hidden).map((r) => r.key);
+        const answerFiltered = rowsAnswered.length === all && shownAnswered.length === 1 && shownAnswered.every((key) => key.includes("oracle"));
+        // Then the page: a client navigation draws the answer after its response; give it a
+        // moment, then read it.
         await blocked.waitForFunction(() => document.querySelectorAll("tbody tr:not([hidden])").length === 1, null, { timeout: 5_000 }).catch(() => {});
         const shownRows = await blocked.locator("tbody tr:not([hidden])").count();
         check(
           filterCase,
-          aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 && shownRows === 1,
-          `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ${shownRows} rows; ${blocked.url()}`,
+          aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 && answerFiltered && shownRows === 1,
+          `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; answered ${shownAnswered.join()} of ${rowsAnswered.length} rows; ${shownRows} rows drawn; ${blocked.url()}`,
         );
       }
     } catch (error) {
