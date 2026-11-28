@@ -267,8 +267,12 @@ Debian's jemalloc 5.3.0 includes cached regions in `stats.allocated`. Subtractin
 memory still held by the app from space held by the allocator. The thread reading covers only
 that thread's allocations and frees; active bytes describe allocator pages, not the process's
 resident footprint. A run reports each growth as after less before, in bytes, not per connection.
-These columns explain a resident reading and do not change the rule. If a probe cannot give the
-counters, the run refuses rather than report the missing counters as zero.
+These columns explain a resident reading and do not change the rule. The observer itself is not
+free for resident memory: in a control on one binary (three runs on, three off), resident growth
+was 1 to 3 pages lower with it on. Both builds a gate compares run with the observer on, so an
+equal shift cancels, but that control does not show the shift is equal across builds, so compare
+only readings taken the same way and never an observer-on reading with an observer-off one. If a
+probe cannot give the counters, the run refuses rather than report the missing counters as zero.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
