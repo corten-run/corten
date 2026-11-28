@@ -27,6 +27,65 @@ export function captureAlertsDraw() {
 export const askingInPlace = (draw, url) =>
   !!draw && draw.status === "Saving..." && draw.tags.length === 1 && draw.tags[0] === url && draw.pageTagGone && draw.sameSlot;
 
+/** Only the document and first part get the still-saving fixture. Playwright calls route
+ * handlers outside the test body: settle them here, even when a gate opens during teardown. */
+export function alertsReadFixture(/** @type {string} */ url) {
+  const first = Promise.withResolvers();
+  const next = Promise.withResolvers();
+  const active = new Set();
+  let documentRead = false, partRead = false, closing = false;
+  const failures = [];
+  const serve = async (/** @type {import("@playwright/test").Route} */ route, abort) => {
+    if (closing) return abort();
+    const request = route.request();
+    if (request.method() !== "GET") return route.fallback();
+    if (request.headers()["corten"] === "action") {
+      if (partRead) {
+        await next.promise;
+        return closing ? abort() : route.fallback();
+      }
+      partRead = true;
+      await first.promise;
+      if (closing) return abort();
+    } else if (!documentRead && request.isNavigationRequest()) documentRead = true;
+    else return route.fallback();
+    const fixture = new URL(url);
+    fixture.pathname = "/smoke/alerts/saving";
+    const response = await route.fetch({
+      url: fixture.href, headers: { ...request.headers(), "accept-encoding": "identity" }, timeout: 6000,
+    });
+    await cleanUp(() => closing ? abort() : route.fulfill({ response }), () => response.dispose());
+  };
+  const saving = (route) => {
+    let aborting = false;
+    const abort = () => {
+      aborting = true;
+      return route.abort();
+    };
+    const work = serve(route, abort).catch(async (error) => {
+      failures.push(error);
+      // A failed fetch still owns an unanswered browser request. If already handled or closed,
+      // abort can reject too; the route's first error is the one this case must report.
+      if (!aborting) await route.abort().catch(() => {});
+    });
+    active.add(work);
+    return work.finally(() => active.delete(work));
+  };
+  return {
+    first, next, saving,
+    async close(page) {
+      closing = true;
+      first.resolve();
+      next.resolve();
+      await cleanUp(
+        () => within(3000, "unroute the first alerts part", page.unroute(url, saving)),
+        () => within(3000, "drain the alerts route callbacks", Promise.all(active)),
+        () => { if (failures.length) throw failures[0]; },
+      );
+    },
+  };
+}
+
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
   // however it was reached: a full load, or the runtime's navigation (a link, or a data-patch
@@ -77,38 +136,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // Use the real renderer, not the race between the browser's first poll and the store's
       // 1.5 s lag. Only the document and its first part read render as still saving. Hold the
       // first read until the original DOM is captured, the next until the asking patch is seen.
-      const first = Promise.withResolvers();
-      const next = Promise.withResolvers();
-      let documentRead = false;
-      let partRead = false;
-      const saving = async (/** @type {import("@playwright/test").Route} */ route) => {
-        const request = route.request();
-        if (request.method() !== "GET") return route.fallback();
-        if (request.headers()["corten"] === "action") {
-          if (partRead) {
-            await next.promise;
-            return route.fallback();
-          }
-          partRead = true;
-          await first.promise;
-        } else if (!documentRead && request.isNavigationRequest()) documentRead = true;
-        else return route.fallback();
-        const fixture = new URL(url);
-        fixture.pathname = "/smoke/alerts/saving";
-        const response = await route.fetch({
-          url: fixture.href, headers: { ...request.headers(), "accept-encoding": "identity" }, timeout: 6000,
-        });
-        try {
-          await route.fulfill({ response });
-        } finally {
-          await response.dispose();
-        }
-      };
+      const fixture = alertsReadFixture(url);
       page.on("request", onPart);
       let before, regionStayed;
       let failed = false;
       try {
-        await step(() => page.route(url, saving));
+        await step(() => page.route(url, fixture.saving));
         await step(() => page.goto(url));
         const region = await step(() => liveRegion(page, "alert-status"));
         regionStayed = region.stayed;
@@ -118,7 +151,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           (/** @type {any} */ (window)).__marker = 8;
           return history.length;
         }));
-        first.resolve(undefined);
+        fixture.first.resolve();
         const tagged = await step(async () => {
           const draw = await page.waitForFunction((read) => read(), before, { timeout: 6000 });
           try {
@@ -132,7 +165,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           askingInPlace(tagged, parts[0]),
           `${JSON.stringify(tagged)} after ${parts[0]}`,
         );
-        next.resolve(undefined);
+        fixture.next.resolve();
         await step(savedSoon);
         const regionKept = await step(() => {
           regionStayed = undefined;
@@ -156,10 +189,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         page.off("request", onPart);
         throw error;
       } finally {
-        first.resolve(undefined);
-        next.resolve(undefined);
         await cleanUp(
-          () => within(3000, "unroute the first alerts part", page.unroute(url, saving)),
+          () => fixture.close(page),
           () => regionStayed && within(3000, "release the alerts live-region check", regionStayed()),
           () => before && within(3000, "release the original alerts DOM handle", before.dispose()),
         ).catch((error) => {
