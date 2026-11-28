@@ -263,8 +263,10 @@ any checkout unpacked. It builds them in a target directory of its own for the s
 cargo treats a registry crate as unchanged as long as its version stays the same, so the
 checkout's target volume would hand the dry run an earlier run's build of `corten`. The third
 builds on the oldest supported Rust, `rust-version` in the root `Cargo.toml`. The `CI` workflow
-(`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`,
-side by side on runners of their own: the release tests apart from the other Rust checks, and the
+(`.github/workflows/ci.yml`) runs the checks on pull requests and on pushes to `main` that
+pass the tip check described above. Later runs cover outstanding changes, not the skipped
+commit itself. To check that exact commit, rerun its workflow. Jobs run side by side on
+their own runners: the release tests apart from the other Rust checks, and the
 browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
 `rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
 supported Rust floor. A new smoke step names
