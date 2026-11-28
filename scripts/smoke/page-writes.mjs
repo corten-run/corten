@@ -832,6 +832,7 @@ export async function pageWrites(page, browser) {
     let recording = false;
     let returned = false;
     let returnError = "";
+    let closeError = null;
     try {
       // Record before the fixture answers, so the draw cannot beat its request onto the list.
       await within(5000, "return route setup timed out", own.route((url) => url.href === target, (route) => {
@@ -853,13 +854,17 @@ export async function pageWrites(page, browser) {
       returnError = error instanceof Error ? error.message.split("\n")[0] : String(error);
     } finally {
       recording = false;
-      await within(5000, "return context close timed out", own.context().close());
+      try {
+        await within(5000, "return context close timed out", own.context().close());
+      } catch (error) {
+        closeError = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      }
     }
     const visits = returnReads.filter(({ mode, purpose }) => mode !== "nav" || purpose !== "prefetch");
     check(
       "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone",
-      returned && visits.length === 1 && visits[0].mode === "nav",
-      JSON.stringify({ returned, returnReads, returnError, asked: seen.asked }),
+      returned && visits.length === 1 && visits[0].mode === "nav" && closeError === null,
+      JSON.stringify({ returned, returnReads, returnError, closeError, asked: seen.asked }),
     );
   }
 }
