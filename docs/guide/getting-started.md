@@ -211,7 +211,7 @@ fn home_page(req: &Req, name: &str) -> impl Document {
     html! {
         <Layout req={req} title="Home">
             <h1>"Welcome"</h1>
-            <form method="post" action={url::Home} data-patch>
+            <form method="post" action={url::Home}>
                 <label>"Your name" <input name={f.name} value={name} required></label>
                 <button>"Greet me"</button>
             </form>
@@ -261,11 +261,12 @@ async fn error_page(failure: Failure, req: Req) -> HtmlResult {
 }
 ```
 
-With JavaScript, `data-patch` lets the runtime submit the form. Here the handler returns a whole
-page: the runtime replaces the contents of `<main>` and updates the layout around it where it
-changed. Without JavaScript, the browser loads the returned document. In both cases the new
-input shows the submitted name because the page sets `value={name}`. To leave the form in place
-and send just the greeting, use [`req.patch_or`, as in the README](../../README.md#example).
+The browser submits this form and loads the returned page, with or without JavaScript.
+The input shows the submitted name because the page sets `value={name}`.
+Adding `data-patch` lets the runtime submit the form instead. The same `req.page` still sends a
+whole page: the runtime replaces the contents of `<main>` and updates the layout around it where
+it changed. To leave the form in place and send just the greeting, pair `data-patch` with
+[`req.patch_or`, as in the README](../../README.md#example).
 
 This app uses Corten's text for every failure. To customize a case, give it its own arm.
 Keep the match exhaustive, without a catch-all, so the compiler points here if Corten adds
