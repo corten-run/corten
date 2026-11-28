@@ -10388,6 +10388,9 @@ rules something out.
     partial within the ties. A shuffled run retains each unpadded and placement map with the
     SHA-256 of its uncompressed bytes. Replay requires the same digests in the live layout
     receipts, including both maps in each second-pad check and all four in each cross-side check.
+    The shuffled order and cross-side receipts also name the executables they checked by SHA-256.
+    Before any turn the runner verifies the binaries against the saved timing manifest, and replay
+    requires the receipt hashes and timing records to agree with that manifest.
     Whether shuffled placements spread
     wider or narrower than unshuffled ones has not been measured, so a shuffled plan is sized
     from a shuffled A/A alone.

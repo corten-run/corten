@@ -93,6 +93,7 @@ done
 
 # What build.sh checked, in the results before any turn, so a report has it whatever happens later.
 cp "$B/sha256.txt" "$B/built-for.txt" "$RES/"
+bin_shas=$B/sha256.txt
 mkdir -p "$RES/layout" "$RES/maps" && cp "$B"/layout/*.txt "$RES/layout/"
 for s in $SIDES; do
     cp "$B/record-$s.json" "$RES/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
@@ -100,12 +101,26 @@ for s in $SIDES; do
 done
 [ ! -f "$B/second-pads.txt" ] || cp "$B/second-pads.txt" "$RES/"
 if [ "$SHUFFLE" = 1 ]; then
+    bin_shas=$RES/sha256.txt
     (
         set -- $SIDES
         for n in $PADS_P $PADS_Q; do set -- "$@" "base-p$n"; done
         case " $SIDES " in *" head "*) for n in $PADS_P; do set -- "$@" "head-p$n"; done ;; esac
-        node "$KIT/map.mjs" keep-placements "$WORK/maps" "$RES/maps" "$@"
-    ) || finish 1 "refused: the shuffled run's unpadded and placement maps could not be kept and verified (results/maps/)"
+        node "$KIT/map.mjs" keep-placements "$WORK/maps" "$RES/maps" "$@" || exit 1
+        # Check only planned binary names. Timing uses this same saved manifest, not a second copy.
+        hashes=$(awk -v names="$*" '
+            BEGIN { split(names, files, " "); for (i in files) want[files[i]] = 1 }
+            !($1 in want) || length($2) != 64 || $2 !~ /^[0-9a-f]+$/ { exit 1 }
+            { delete want[$1]; print $2 "  " $1 }
+            END { for (name in want) exit 1 }
+        ' "$bin_shas") || exit 2
+        printf '%s\n' "$hashes" | (cd "$B" && sha256sum --quiet -c -) || exit 2
+    )
+    case $? in
+        0) ;;
+        1) finish 1 "refused: the shuffled run's unpadded and placement maps could not be kept and verified (results/maps/)" ;;
+        *) finish 1 "refused: the shuffled run's executables do not match results/sha256.txt" ;;
+    esac
 elif [ -f "$B/second-pads.txt" ]; then
     cp "$WORK/maps/placements.sha256" "$RES/maps/"
 fi
@@ -157,7 +172,7 @@ one() {
         *) echo "no comparison $1" >&2; return 1 ;;
     esac
     mkdir -p "$3"
-    { echo "comparison $1 placement $2 workload $W"; echo "A $A $(grep "^$A " "$B/sha256.txt" | cut -d' ' -f2)"; echo "B $Bn $(grep "^$Bn " "$B/sha256.txt" | cut -d' ' -f2)"
+    { echo "comparison $1 placement $2 workload $W"; echo "A $A $(grep "^$A " "$bin_shas" | cut -d' ' -f2)"; echo "B $Bn $(grep "^$Bn " "$bin_shas" | cut -d' ' -f2)"
       echo "run $RUN_ID"; echo "plan $PLAN_SHA"; echo "seq $4"; echo "started $(date -u +%FT%TZ)"; } >"$3/placement.txt"
     EXPECT=$expect timeout -k 30 "$PLACEMENT_SECONDS" taskset -c "$CPU_DRIVER" sh "$KIT/turns.sh" "$3" "$W" "$R" "$B/$A" "$B/$Bn"
     rc=$?

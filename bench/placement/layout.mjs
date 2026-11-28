@@ -29,8 +29,8 @@
 // any order among themselves (LLD sorts by the key alone, not stably) and sections the file
 // places nowhere after them in theirs; every function in its unpadded section's pair, as far from
 // its start; each section after the end of the one before it and the last inside .text and before
-// the second pad. The JSON then carries the file's SHA-256 and the placement map's (its bytes,
-// gunzipped).
+// the second pad. The JSON carries SHA-256s of the ordering file, both maps (gunzipped) and both
+// executables checked.
 // With --alike, for a shuffled change: base's and head's placements at one index, each passing
 // --order, lay the functions whose identity is plain on both sides in one order (alike()). A
 // function is its name less a ThinLTO suffix, compared only where each side defines that name
@@ -41,8 +41,8 @@
 // then their distance into each), those at one place together, each by name. The lists and
 // which names share an ELF address must agree; fewer than FEWEST compared names also refuse.
 // Prints "<N> shared names compared, <M> left out as ambiguous" and a JSON line with the counts
-// and the SHA-256s of both ordering files and both
-// placement maps (their bytes, gunzipped) it read, which report.mjs checks.
+// and the SHA-256s of both ordering files, all four maps (gunzipped) and all four executables,
+// which report.mjs checks.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -402,6 +402,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const nmText = (bin) => execFileSync("nm", ["--defined-only", bin], { encoding: "utf8", maxBuffer: 1 << 28 });
   const readelf = (bin) => execFileSync("readelf", ["-SW", bin], { encoding: "utf8" });
   const elf = (bin) => elfSymbols(execFileSync("readelf", ["-sW", bin], { encoding: "utf8", maxBuffer: 1 << 28 }));
+  const shaFile = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
   // A map's input sections of .text, the other output sections and their symbols, and the
   // SHA-256 of its bytes, gunzipped: what build.sh writes to maps/placements.sha256 before gzipping it.
   const mapOf = (file) => {
@@ -414,12 +415,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (both) {
     const side = ([unpadded, placement, order, map, placedMap]) => {
       const u = mapOf(map), m = mapOf(placedMap), bytes = readFileSync(order);
-      return { ea: elf(unpadded), eb: elf(placement), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: bytes.toString("utf8").replace(/\n$/, "").split("\n"), sections: u.inputs, placedSections: m.inputs, elsewhere: m.elsewhere, otherMaps: [u.other, m.other], orderSha: createHash("sha256").update(bytes).digest("hex"), unpaddedSha: u.sha, placedSha: m.sha };
+      return { ea: elf(unpadded), eb: elf(placement), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: bytes.toString("utf8").replace(/\n$/, "").split("\n"), sections: u.inputs, placedSections: m.inputs, elsewhere: m.elsewhere, otherMaps: [u.other, m.other], orderSha: createHash("sha256").update(bytes).digest("hex"), unpaddedSha: u.sha, placedSha: m.sha, unpaddedBinary: shaFile(unpadded), placedBinary: shaFile(placement) };
     };
     let r, base, head;
     try { base = side(rest.slice(0, 5)); head = side(rest.slice(5, 10)); r = alike(base, head, pad, second); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
     console.log(`${r.compared} shared names compared, ${r.leftOut} left out as ambiguous (defined more than once, or read otherwise by the symbol table or the map, on a side); names one side alone has: ${r.onlyBase} in base, ${r.onlyHead} in head; places holding the compared names: ${r.places}, in one order: ${r.same}`);
-    console.log("JSON " + JSON.stringify({ ...r, baseOrder: base.orderSha, headOrder: head.orderSha, baseMap: base.placedSha, headMap: head.placedSha, baseUnpaddedMap: base.unpaddedSha, headUnpaddedMap: head.unpaddedSha }));
+    console.log("JSON " + JSON.stringify({ ...r, baseOrder: base.orderSha, headOrder: head.orderSha, baseMap: base.placedSha, headMap: head.placedSha, baseUnpaddedMap: base.unpaddedSha, headUnpaddedMap: head.unpaddedSha, baseUnpaddedBinary: base.unpaddedBinary, basePlacedBinary: base.placedBinary, headUnpaddedBinary: head.unpaddedBinary, headPlacedBinary: head.placedBinary }));
     for (const w of r.why) console.error(`layout.mjs: ${w}`);
     process.exit(r.ok ? 0 : 1);
   }
@@ -429,7 +430,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     try { ra = ordered(elf(a), elf(b), textRange(readelf(a)), textRange(readelf(b)), bytes.toString("utf8").replace(/\n$/, "").split("\n"), unpaddedMap.inputs, placedMap.inputs, pad, second, placedMap.elsewhere, [unpaddedMap.other, placedMap.other]); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
     const { defs, ...r } = ra;
     console.log(`definitions of functions in the unpadded .text: ${r.functions}, in ${r.sections} input sections, ${r.groups} groups of one key, ${r.tied} sections in groups of more than one; names defined more than once there, checked by their sections: ${r.repeated}; names the ordering file lists after the pad: ${r.listed}; definitions where the ordering file puts them: ${r.matched} of ${r.functions}, in ${r.placedSections} of ${r.sections} input sections; functions in their unpadded section's pair, as far from its start: ${r.together}; sections after the pad and the one before: ${r.follow}; only in the placement: ${r.onlyB.join(", ")}`);
-    console.log("JSON " + JSON.stringify({ ...r, order: createHash("sha256").update(bytes).digest("hex"), unpaddedMap: unpaddedMap.sha, placedMap: placedMap.sha, onlyA: r.onlyA.length }));
+    console.log("JSON " + JSON.stringify({ ...r, order: createHash("sha256").update(bytes).digest("hex"), unpaddedMap: unpaddedMap.sha, placedMap: placedMap.sha, unpaddedBinary: shaFile(a), placedBinary: shaFile(b), onlyA: r.onlyA.length }));
     for (const w of r.why) console.error(`layout.mjs: ${w}`);
     process.exit(r.ok ? 0 : 1);
   }

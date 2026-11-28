@@ -191,6 +191,7 @@ const MAP = (align, late = ".text.crc") => [row(0x1000, 0x400, 64, ".text"), row
   row(0x3000, 0x40, 8, ".data")].join("\n") + "\n";
 let made = 0;
 const PROBE = "fn main() {}\n";
+const binarySha = (name) => Buffer.from(name.padEnd(32, ".")).toString("hex");
 const numbered = (edit = () => {}) => (p) => { p.R = 2; p.workloads[0].K = 5; p.workloads[0].sizedFrom = "an A/A made up for a test"; p.pilot = { K: 30, why: "made up for a test" }; edit(p); };
 function results({ part = "gated", change = () => 0, edit = () => {}, align = 16, map = MAP(align), touch = () => {}, sizedFrom = null, dry = null, model = "Made-up CPU" } = {}) {
   const dir = join(tmp, `run-${++made}`), work = join(dir, "work"), res = join(work, "results");
@@ -209,7 +210,7 @@ function results({ part = "gated", change = () => 0, edit = () => {}, align = 16
   put("run-id", "0f8fad5b-d9cb-469f-a165-70867728950e\n");
   put("schedule.txt", readFileSync(join(work, "plan", "schedule.txt")));
   put("host-id.txt", `model ${model}\nmicrocode 0x1\nkernel 6.12.0\nos Debian GNU/Linux 13 (trixie)\n`);
-  const sha = (name) => Buffer.from(name.padEnd(32, ".")).toString("hex"), used = new Set();
+  const sha = binarySha, used = new Set();
   for (const c of r.comparisons) for (let i = 1; i <= r.K; i++) for (const b of sides(c, i, r.P, r.Q)) used.add(b);
   put("sha256.txt", [...r.sides, ...used].map((b) => `${b} ${sha(b)} 1000 bytes\n`).join(""));
   put(join("verify", "verdicts.txt"), [...used].map((b) => `${b} as ${b.replace(/-p\d+$/, "")}: answers: same; body 6077 bytes as received\n`).join(""));
@@ -386,10 +387,10 @@ const shuffledRun = ({ touch = () => {}, edit = () => {}, align = 16, index = (i
   put(join("maps", "placements.sha256"), [...unpadded, ...[...used].map((b) => [b, mapSha(b)])].map(([b, sha]) => `${sha}  ${b}.map\n`).join(""));
   for (const b of used) {
     put(join("maps", `${b}.map.gz`), gzipSync(`map of ${b}`));
-    const pad = Number(b.replace(/^.*-p/, "")), sha = orderOf(b), unpaddedMap = unpadded.get(b.split("-p")[0]);
-    put(join("layout", `${b}.txt`), `functions in both: 3\nJSON ${JSON.stringify({ ok: true, pad, second, shuffled: true, order: sha, unpaddedMap, placedMap: mapSha(b), ...layout })}\n`);
+    const side = b.split("-p")[0], pad = Number(b.replace(/^.*-p/, "")), sha = orderOf(b), unpaddedMap = unpadded.get(side);
+    put(join("layout", `${b}.txt`), `functions in both: 3\nJSON ${JSON.stringify({ ok: true, pad, second, shuffled: true, order: sha, unpaddedMap, placedMap: mapSha(b), unpaddedBinary: binarySha(side), placedBinary: binarySha(b), ...layout })}\n`);
     if (second) put(join("layout", `${b}-map.txt`), `.text: 3 input sections\nJSON ${JSON.stringify({ ok: true, pad, second: 48, shuffled: true, unpaddedMap, placedMap: mapSha(b), ...mapCheck })}\n`);
-    if (b.startsWith("head-")) put(join("layout", `${b}-alike.txt`), `3 shared names compared, 0 left out as ambiguous\nJSON ${JSON.stringify({ ok: true, pad, shuffled: true, shared: 3, compared: 3, leftOut: 0, baseOrder: orderOf(`base-p${pad}`), headOrder: sha, baseMap: mapSha(`base-p${pad}`), headMap: mapSha(b), baseUnpaddedMap: unpadded.get("base"), headUnpaddedMap: unpaddedMap, ...alike })}\n`);
+    if (side === "head") put(join("layout", `${b}-alike.txt`), `3 shared names compared, 0 left out as ambiguous\nJSON ${JSON.stringify({ ok: true, pad, shuffled: true, shared: 3, compared: 3, leftOut: 0, baseOrder: orderOf(`base-p${pad}`), headOrder: sha, baseMap: mapSha(`base-p${pad}`), headMap: mapSha(b), baseUnpaddedMap: unpadded.get("base"), headUnpaddedMap: unpaddedMap, baseUnpaddedBinary: binarySha("base"), basePlacedBinary: binarySha(`base-p${pad}`), headUnpaddedBinary: binarySha(side), headPlacedBinary: binarySha(b), ...alike })}\n`);
   }
   touch(res, put, r);
 } });
@@ -489,11 +490,38 @@ test("a shuffled run's checks are bound to the placement maps it kept and the or
   // A check against base at the same pad that read other maps or ordering files than this run's,
   // or names none: its pad matches, its maps contradict the run's.
   for (const k of ["baseMap", "headMap", "baseUnpaddedMap", "headUnpaddedMap", "baseOrder", "headOrder"]) {
-    refused({ alike: { [k]: mapSha("elsewhere") } }, "head-p320: no passing check that the names it compares with base-p320 lie in the same order, using the ordering files drawn for both and the unpadded and placement maps kept for both");
+    refused({ alike: { [k]: mapSha("elsewhere") } }, "head-p320: no passing check that the names it compares with base-p320 lie in the same order, using the ordering files, maps and executables for both");
     refused({ alike: { [k]: undefined } }, "head-p320: no passing check that the names it compares with base-p320");
   }
   // Two placements' maps swapped in the alike check: each a map this run kept, neither the one for its side.
   refused({ alike: { baseMap: mapSha("head-p320"), headMap: mapSha("base-p320") } }, "head-p320: no passing check that the names it compares with base-p320");
+});
+
+test("shuffled replay refuses a different executable in the timing records", () => {
+  const touch = (res, put, r) => {
+    const b = `head-p${r.P[0]}`, file = "sha256.txt", manifest = readFileSync(join(res, file), "utf8");
+    const sha = manifest.split("\n").find((l) => l.startsWith(`${b} `)).split(" ")[1];
+    const replacement = digest("substitute executable");
+    put(file, manifest.replace(sha, replacement));
+    const placement = join(`change-${r.workload}`, "p001", "placement.txt");
+    put(placement, readFileSync(join(res, placement), "utf8").replace(sha, replacement));
+  };
+  const r = report(shuffledRun({ touch }));
+  assert.equal(r.exit, 2);
+  has(r.json.refused, "head-p320: no passing shuffled layout check");
+  has(r.json.refused, "head-p320: no passing check that the names it compares with base-p320");
+  for (const b of ["base", "head"]) {
+    const r = report(shuffledRun({ touch: (res, put) => {
+      const file = "sha256.txt";
+      put(file, readFileSync(join(res, file), "utf8").replace(binarySha(b), digest(`substitute ${b}`)));
+    } }));
+    assert.equal(r.exit, 2);
+    has(r.json.refused, `${b}-p320: no passing shuffled layout check`);
+    has(r.json.refused, "head-p320: no passing check that the names it compares with base-p320");
+  }
+  const missing = report(shuffledRun({ alike: { basePlacedBinary: undefined } }));
+  assert.equal(missing.exit, 2);
+  has(missing.json.refused, "head-p320: no passing check that the names it compares with base-p320");
 });
 
 test("a shuffled report refuses absent or altered placement map bytes even with matching receipts", async (t) => {
@@ -691,9 +719,11 @@ test("run.sh keeps and verifies every planned shuffled map before continuing", {
   const work = mkdtempSync(join(tmp, "shuffle-maps-")), bin = join(work, "bin"), maps = join(work, "maps");
   t.after(() => rmSync(work, { recursive: true, force: true }));
   for (const d of [maps, join(bin, "layout"), join(work, "capture", "base")]) mkdirSync(d, { recursive: true });
-  for (const f of ["bin/sha256.txt", "bin/built-for.txt", "bin/layout/base-p320.txt", "bin/record-base.json", "capture/base/args.json", "build-base.env"]) writeFileSync(join(work, f), "");
+  for (const f of ["bin/built-for.txt", "bin/layout/base-p320.txt", "bin/record-base.json", "capture/base/args.json", "build-base.env"]) writeFileSync(join(work, f), "");
   writeFileSync(join(bin, "functions-base.txt"), "a\nb\n");
   const names = ["base", "base-p320", "base-p384"], list = names.map((n) => `${mapSha(n)}  ${n}.map\n`).join("");
+  for (const name of names) writeFileSync(join(bin, name), name);
+  writeFileSync(join(bin, "sha256.txt"), names.map((name) => `${name} ${digest(name)} ${name.length} bytes\n`).join(""));
   const target = join(maps, "base-p320.map.gz"), original = gzipSync("map of base-p320");
   writeFileSync(join(maps, "placements.sha256"), list);
   const base = join(maps, "base.map.gz");
@@ -743,6 +773,14 @@ test("run.sh keeps and verifies every planned shuffled map before continuing", {
     assert.deepEqual(readFileSync(join(r.res, "maps", "base-p320.map.gz")), original);
     assert.deepEqual(readFileSync(join(r.res, "maps", "base.map.gz")), readFileSync(base));
     assert.equal(readFileSync(join(r.res, "maps", "placements.sha256"), "utf8"), list);
+  });
+  await t.test("substituted executable", () => {
+    writeFileSync(join(bin, "base-p320"), "different executable");
+    const r = run("altered-executable");
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /the shuffled run's executables do not match results\/sha256.txt/);
+    assert.doesNotMatch(r.stdout, /CONTINUED/);
+    writeFileSync(join(bin, "base-p320"), "base-p320");
   });
   await t.test("unshuffled with second pads", () => {
     const pads = "base-p320: second pad 16\n";

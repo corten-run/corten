@@ -17,15 +17,13 @@
 //     no passing layout check or, where either side has a section of .text aligned beyond 16
 //     bytes, no second pad's line and map check;
 //   - for a workload the plan shuffles (README.md, workloads[].shuffle), a missing or unreadable
-//     list of functions (functions-<side>.txt.gz), a missing or altered unpadded or placement map, or a binary whose
-//     layout check (and map check, with a second pad) is not a shuffled one for the ordering file
-//     order.mjs draws from that list, the seed and the binary's index, and for both maps
-//     maps/placements.sha256 lists for it, or a head binary without a passing check that the
-//     names it compares with base's binary at its index lie in the same order
-//     (layout/head-p<n>-alike.txt) that names both ordering files so drawn and all four maps
-//     so listed and gives how many names both sides have it compared and left out, whole numbers
-//     that add up to the saved lists' shared name count and meet the live check's minimum; for one
-//     it does not, a layout or map check that is shuffled;
+//     list of functions (functions-<side>.txt.gz), a missing or altered unpadded or placement map,
+//     or a binary without a shuffled layout check for the ordering file drawn from that list,
+//     the seed and the index, both maps in maps/placements.sha256 and both executables in
+//     sha256.txt. A second-pad map check must name both maps. A head binary needs a passing
+//     cross-side check (layout/head-p<n>-alike.txt) naming both ordering files and all four maps
+//     and executables, with compared and left-out counts that sum to the saved lists' shared name
+//     count and meet the live check's minimum. An unshuffled plan refuses shuffled checks;
 //   - placements not started one after another in the order run.
 // A placement leaves its comparison without a bound when its directory, its counts, its
 // placement.txt (the comparison, A and B with the build's SHA-256s, the run, the plan, its place
@@ -72,6 +70,7 @@ const fmt = (x) => (x == null || !Number.isFinite(x) ? "-" : pct(x));
 const width = (x) => fmt(x).replace(/^\+/, ""); // a standard deviation has no sign
 const p3 = (x) => (x == null || !Number.isFinite(x) ? "-" : x < 0.001 ? x.toExponential(1) : x.toFixed(3));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const isSha = (s) => /^[0-9a-f]{64}$/.test(s);
 
 function readPairs(file) {
   const [header, ...rest] = readFileSync(file, "utf8").trim().split(/\r?\n/);
@@ -180,20 +179,23 @@ export function read(dir) {
     if (!shas.has(b)) { refused.push(`${b}: not in sha256.txt`); continue; }
     if (verified.get(b) !== side) refused.push(`${b}: not verified to answer as its unpadded binary (verify/verdicts.txt)`);
     if (r.shuffle && !lists.has(side)) continue;
+    const unpaddedBinary = shas.get(side), placedBinary = shas.get(b);
+    if (r.shuffle && !(isSha(unpaddedBinary) && isSha(placedBinary))) { refused.push(`${b}: no valid executable digest for it or its unpadded binary in sha256.txt`); continue; }
     const map = maps?.digests.get(b), unpaddedMap = maps?.digests.get(side);
     const shuffled = r.shuffle ? { shuffled: true, unpaddedMap, placedMap: map } : { shuffled: undefined };
     const sha = r.shuffle ? orderSha(side, pad) : undefined;
     if (r.shuffle && sha === null) refused.push(`${b}: its side's list of functions makes no ordering file (functions-${side}.txt.gz)`);
-    else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes, the ordering file drawn from its side's list of functions, seed ${r.seed} and its index, and the saved unpadded and placement maps (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
+    else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha, ...(r.shuffle ? { unpaddedBinary, placedBinary } : {}) })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes, its drawn ordering file, maps and executables (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
     if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second, ...shuffled }))) refused.push(`${b}: no second pad's line with a passing map check${r.shuffle ? " for the saved unpadded and placement maps" : ""} (second-pads.txt, layout/${b}-map.txt)`);
     // The check against base's placement at its index names the two ordering files and the two
-    // unpadded and two placement maps it read, each the one this run drew or kept.
+    // unpadded and two placement maps it read, each the one this run drew or kept, and the four
+    // executables in the timing manifest.
     // It also gives how many of the names both sides have it compared and how many it left out,
     // which the report states for each index.
     if (r.shuffle && side === "head") {
       const baseMap = maps.digests.get(`base-p${pad}`), baseOrder = orderSha("base", pad);
-      const a = baseMap && baseOrder && sha && check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder, headOrder: sha, baseMap, headMap: map, baseUnpaddedMap: maps.digests.get("base"), headUnpaddedMap: unpaddedMap });
-      if (!a) refused.push(`${b}: no passing check that the names it compares with base-p${pad} lie in the same order, using the ordering files drawn for both and the unpadded and placement maps kept for both (layout/${b}-alike.txt, maps/placements.sha256)`);
+      const a = baseMap && baseOrder && sha && check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder, headOrder: sha, baseMap, headMap: map, baseUnpaddedMap: maps.digests.get("base"), headUnpaddedMap: unpaddedMap, baseUnpaddedBinary: shas.get("base"), basePlacedBinary: shas.get(`base-p${pad}`), headUnpaddedBinary: unpaddedBinary, headPlacedBinary: placedBinary });
+      if (!a) refused.push(`${b}: no passing check that the names it compares with base-p${pad} lie in the same order, using the ordering files, maps and executables for both (layout/${b}-alike.txt, maps/placements.sha256, sha256.txt)`);
       else if (![a.shared, a.compared, a.leftOut].every((n) => Number.isInteger(n) && n >= 0) || a.compared + a.leftOut !== a.shared) refused.push(`${b}: its check against base-p${pad} does not say how many of the names both have it compared and left out (layout/${b}-alike.txt)`);
       else if (a.shared !== shared) refused.push(`${b}: its check against base-p${pad} counts ${a.shared} shared names, not the ${shared} shared names in the saved function lists (layout/${b}-alike.txt)`);
       else if (a.compared < FEWEST) refused.push(`${b}: its check against base-p${pad} compared fewer than ${FEWEST} names (layout/${b}-alike.txt)`);

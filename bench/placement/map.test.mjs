@@ -1085,8 +1085,14 @@ test("a real shuffled link must keep the unpadded relative input order outside .
   const receipt = (r) => JSON.parse(r.stdout.split("\n").find((l) => l.startsWith("JSON ")).slice(5));
   assert.equal(receipt(good).unpaddedMap, sha("plain.map"));
   assert.equal(receipt(good).placedMap, sha("good.map"));
+  assert.equal(receipt(good).unpaddedBinary, sha("plain"));
+  assert.equal(receipt(good).placedBinary, sha("good"));
   assert.equal(receipt(same).baseUnpaddedMap, sha("plain.map"));
   assert.equal(receipt(same).headUnpaddedMap, sha("plain.map"));
+  for (const side of ["base", "head"]) {
+    assert.equal(receipt(same)[`${side}UnpaddedBinary`], sha("plain"));
+    assert.equal(receipt(same)[`${side}PlacedBinary`], sha("good"));
+  }
   await t.test("--order", () => {
     const bad = shuffled("plain", "bad");
     assert.equal(bad.status, 1, bad.stdout + bad.stderr);

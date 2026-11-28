@@ -373,6 +373,11 @@ that this run does not read it; both readings of the A/A; the benefit side when 
 whether the A/A records a spread; whether its placements are shuffled; every measure across
 placements; every placement; and each side's aligned sections, its list and the second pads' lines.
 
+For shuffled runs, `run.sh` verifies the unpadded and placed executables against the saved timing
+manifest (`sha256.txt`) before any turn. On replay, the `--order` and `--alike` receipts must name
+the same executable SHA-256s as that manifest, in addition to their ordering file and map digests.
+Replay does not need the executable files. Unshuffled receipts do not carry these fields.
+
 ## What it does not do
 
 1. It does not declare a plan. Posting the plan on the pull request or issue, or pushing it under
