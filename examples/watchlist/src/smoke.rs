@@ -7,7 +7,9 @@
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
-//! controls named after the members their paths read.
+//! controls named after the members their paths read, a nav whose entry is current at an older
+//! address of its page, one whose entry names an older address holding a raw NUL, and navs whose
+//! entries lead off the site.
 use corten::{
     Error, LiveResponse,
     prelude::*,
@@ -95,6 +97,190 @@ pub mod url {
     pub struct ReplaceSharedRefPart {
         pub instance: u32,
     }
+
+    /// A nav whose entry, `/smoke/nav/here`, is current at older addresses of its page too
+    /// (`NavTo::also`, #2119), each of which this route serves as well.
+    #[route("/smoke/nav/{name}", get = nav_page)]
+    pub struct NavPage<'a> {
+        pub name: &'a str,
+    }
+
+    /// A page under an older address of a nav entry, where another entry's own URL holds it more
+    /// deeply: in a nav with other addresses, every URL is compared by the same key (#2119).
+    #[route("/smoke/nav/{name}/team/people/{who}", get = nav_team)]
+    pub struct NavTeam<'a> {
+        pub name: &'a str,
+        pub who: &'a str,
+    }
+
+    /// A page under the team nav's older address and outside its deeper entry, where the section
+    /// that names that address is current by it alone (#2119).
+    #[route("/smoke/nav/{name}/team/{page}", get = nav_team_page)]
+    pub struct NavTeamPage<'a> {
+        pub name: &'a str,
+        pub page: &'a str,
+    }
+
+    /// Navs whose entries lead off this site in forms a browser reads as another host, never
+    /// current, by the server and the runtime alike (#2119).
+    #[route("/smoke/far/{name}", get = far_page)]
+    pub struct FarPage<'a> {
+        pub name: &'a str,
+    }
+
+    /// A nav whose entry is also current at an older address with characters HTML escapes in an
+    /// attribute (`NavTo::also`, #2119).
+    #[route("/smoke/amp/{name}", get = amp_page)]
+    pub struct AmpPage<'a> {
+        pub name: &'a str,
+    }
+
+    /// A nav whose entry names an older address holding a raw NUL, which is not a usable address,
+    /// and the same address with the NUL escaped, which is (`NavTo::also`, #2119).
+    #[route("/smoke/nul/{name}", get = nul_page)]
+    pub struct NulPage<'a> {
+        pub name: &'a str,
+    }
+}
+
+/// An older address of the nav page, written by hand as an app's own route might write it, in a
+/// form the browser does not show as written: a character beyond ASCII (asked for
+/// percent-encoded), a `..` segment written `%2e%2E` (resolved away), a trailing space (trimmed),
+/// or with escaped unreserved characters a `Local` refuses (`%2e`, `%7e`, `%41`), which WebKit asks
+/// for decoded and shows as written, so `NavTo::also` leaves such an address out; or one that leads
+/// off this site (`//host/x`), which no nav compares.
+struct OlderNav(&'static str);
+
+impl corten::Route for OlderNav {
+    type Data = corten::route::NoData;
+    const PATH: &'static str = "/smoke/nav/{name}";
+    fn write_href(&self, out: &mut String, _: bool) {
+        out.push_str(self.0);
+    }
+}
+
+/// The nav: the section `/smoke/nav`, which holds every address less deeply, and the entry, also
+/// current at `/smoke/nav/café`, `/smoke/nav/settings`, `/smoke/nav/a|b` (a `Local`, whose `|`
+/// Firefox and WebKit keep and Chromium encodes), `/smoke/nav/old%7chome` (a `Local` with a
+/// lowercase escape, which WebKit shows as written and asks for as `%7C`) and `/smoke/nav/older`;
+/// not at `/smoke/nav/%2e%2ex` and `/smoke/nav/%7eold%41`, which it names too but leaves out, as
+/// WebKit asks for them decoded (`/smoke/nav/..x`, `/smoke/nav/~oldA`) and shows them as written.
+async fn nav_page(req: Req, Params(_): Params<url::NavPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/nav").expect("a local path");
+    let piped = corten::Local::parse("/smoke/nav/a|b").expect("a local path");
+    let lower = corten::Local::parse("/smoke/nav/old%7chome").expect("a local path");
+    let (cafe, dotted, spaced) =
+        (OlderNav("/smoke/nav/caf\u{e9}"), OlderNav("/smoke/old/%2e%2E/nav/settings"), OlderNav("/smoke/nav/older "));
+    let (escaped_dots, unreserved) = (OlderNav("/smoke/nav/%2e%2ex"), OlderNav("/smoke/nav/%7eold%41"));
+    let here = url::NavPage { name: "here" };
+    let entry = corten::NavTo::page(&here).also(&cafe).also(&dotted).also(&piped).also(&lower).also(&spaced);
+    let nav = req.nav_of([(corten::NavTo::section(&section), "Nav"), (entry.also(&escaped_dots).also(&unreserved), "Here")]);
+    req.page(html! {
+        <Layout req={&req} title="Nav" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// The team nav: Settings, a section also at `/smoke/nav/old%7c/team`, and People, a section at
+/// `/smoke/nav/old%7c/team/people`, deeper, so current on every page under it in any spelling of
+/// its `%7c`: WebKit asks for it as `%7C` and shows it as written, and a stored link may carry `%7C`.
+async fn nav_team(req: Req, Params(_): Params<url::NavTeam<'_>>) -> HtmlResult {
+    team_nav(req)
+}
+
+/// The team nav at a page under `/smoke/nav/old%7c/team` but not under People, such as
+/// `/smoke/nav/old%7c/team/other`: only Settings's older address holds it.
+async fn nav_team_page(req: Req, Params(_): Params<url::NavTeamPage<'_>>) -> HtmlResult {
+    team_nav(req)
+}
+
+fn team_nav(req: Req) -> HtmlResult {
+    let settings = corten::Local::parse("/smoke/nav/settings").expect("a local path");
+    let team = corten::Local::parse("/smoke/nav/old%7c/team").expect("a local path");
+    let people = corten::Local::parse("/smoke/nav/old%7c/team/people").expect("a local path");
+    let nav =
+        req.nav_of([(corten::NavTo::section(&settings).also(&team), "Settings"), (corten::NavTo::section(&people), "People")]);
+    req.page(html! {
+        <Layout req={&req} title="Nav team" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// The NUL nav: the section `/smoke/nul` and Here, which names `/smoke/nul/raw<NUL>x` as an older
+/// address and leaves it out, since engines ask for it at different addresses (Chromium and WebKit
+/// with `%00`, Firefox cut at the NUL, `/smoke/nul/raw`), and `/smoke/nul/esc%00x`, the address
+/// written with the escape, which it keeps. Here is current at `/smoke/nul/esc%00x` alone, the
+/// section at every other page under it.
+async fn nul_page(req: Req, Params(_): Params<url::NulPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/nul").expect("a local path");
+    let (raw, escaped) = (OlderNav("/smoke/nul/raw\0x"), OlderNav("/smoke/nul/esc%00x"));
+    let here = url::NulPage { name: "here" };
+    let nav =
+        req.nav_of([(corten::NavTo::section(&section), "Nul"), (corten::NavTo::page(&here).also(&raw).also(&escaped), "Here")]);
+    req.page(html! {
+        <Layout req={&req} title="Nav nul" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// The amp nav: the section `/smoke/amp` and Here, also current at `/smoke/amp/a&copy;`, which the
+/// browser keeps in a path as written and the server must escape in `data-nav-also`: unescaped, the
+/// HTML parser would read `&copy;` as the copyright sign and the runtime would compare another address.
+async fn amp_page(req: Req, Params(_): Params<url::AmpPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/amp").expect("a local path");
+    let older = corten::Local::parse("/smoke/amp/a&copy;").expect("a local path");
+    let here = url::AmpPage { name: "here" };
+    let nav = req.nav_of([(corten::NavTo::section(&section), "Amp"), (corten::NavTo::page(&here).also(&older), "Here")]);
+    req.page(html! {
+        <Layout req={&req} title="Nav amp" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// Entries whose URL leads off this site, `//corten.invalid/smoke/far/old`, the same with `/\` or
+/// a tab after the first `/`, which the browser reads as that host's `/smoke/far/old`: in a nav with
+/// other addresses (one of them also at `/smoke/far/older`, which is left out, and Here, whose other
+/// address `//corten.invalid/smoke/far/old` is left out and `/smoke/far/before` kept), in one
+/// without (beside `//[`, which no browser can parse as a URL), and as a lone `req.nav` link. At
+/// `/smoke/far/old` and `/smoke/far/older` only the two sections are current, at `/smoke/far/before`
+/// Here and the plain nav's section.
+async fn far_page(req: Req, Params(_): Params<url::FarPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/far").expect("a local path");
+    let older = corten::Local::parse("/smoke/far/older").expect("a local path");
+    let before = corten::Local::parse("/smoke/far/before").expect("a local path");
+    let (slashes, backslash, tab, malformed) = (
+        OlderNav("//corten.invalid/smoke/far/old"),
+        OlderNav("/\\corten.invalid/smoke/far/old"),
+        OlderNav("/\t/corten.invalid/smoke/far/old"),
+        OlderNav("//["),
+    );
+    let here = url::FarPage { name: "here" };
+    let aliased = req.nav_of([
+        (corten::NavTo::section(&section), "Far"),
+        (corten::NavTo::page(&slashes).also(&older), "Slashes"),
+        (corten::NavTo::page(&backslash), "Backslash"),
+        (corten::NavTo::page(&tab), "Tab"),
+        (corten::NavTo::page(&here).also(&slashes).also(&before), "Here"),
+    ]);
+    let plain = req.nav_of([
+        (corten::NavTo::section(&section), "Plain far"),
+        (corten::NavTo::page(&slashes), "Plain slashes"),
+        (corten::NavTo::page(&backslash), "Plain backslash"),
+        (corten::NavTo::page(&tab), "Plain tab"),
+        (corten::NavTo::page(&malformed), "Plain malformed"),
+    ]);
+    let lone = req.nav(&slashes);
+    req.page(html! {
+        <Layout req={&req} title="Nav far" viewer={None} head="">
+            <nav>for (link, label) in aliased.links() { <a {..link}>{*label}</a> }</nav>
+            <nav>for (link, label) in plain.links() { <a {..link}>{*label}</a> }</nav>
+            <a {..lone}>"Lone"</a>
+        </Layout>
+    })
 }
 
 /// The components the smoke's pages draw.

@@ -254,50 +254,75 @@ test("a container that does not carry this run's owner label is neither started 
   assert.ok(!docker.calls.some((args) => args[0] === "start" || args[0] === "rm"));
 });
 
-test("the upstream records each request's idle, answers before the close and resets a connection idle past its keep-alive", async () => {
-  const upstream = closingUpstream({ "/a": { a: 1 } }, 300);
-  await new Promise((done) => upstream.server.listen(0, "127.0.0.1", done));
-  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
-  const port = upstream.server.address().port;
-  const fetchOnce = () => new Promise((resolve) => {
-    const req = request({ port, path: "/a", agent }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
+// One request's outcome, settled however it ends: the status once the body ends, the request's
+// error code, or "response:" and the code when the answer breaks off after its head. Bounded at 5 s.
+function statusOf(options) {
+  return new Promise((resolve) => {
+    const req = request({ ...options, signal: AbortSignal.timeout(5000) }, (res) => {
+      res.on("error", (e) => resolve(`response:${e.code}`));
+      res.on("end", () => resolve(res.statusCode));
+      res.resume();
+    });
     req.on("error", (e) => resolve(e.code));
     req.end();
   });
+}
+
+test("an answer that breaks off after its head settles as a response error, not a status or a hang", { timeout: 5000 }, async (t) => {
+  const server = createServer();
+  server.on("connection", (socket) => socket.once("data", () => {
+    socket.write("HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc");
+    setImmediate(() => socket.destroy());
+  }));
+  t.after(() => new Promise((done) => server.close(done)));
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  assert.match(String(await statusOf({ port: server.address().port, path: "/", agent: false })), /^response:/);
+});
+
+test("the upstream records each request's idle, answers before the close and refuses, without an answer, a request on a connection idle past its keep-alive", async (t) => {
+  // Advance the upstream's clock between real requests, not by waiting on the scheduler.
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const upstream = closingUpstream({ "/a": { a: 1 } }, 300);
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  t.after(async () => {
+    agent.destroy();
+    await upstream.close();
+    assert.equal(upstream.server.listening, false);
+  });
+  await new Promise((done) => upstream.server.listen(0, "127.0.0.1", done));
+  const port = upstream.server.address().port;
+  const fetchOnce = () => statusOf({ port, path: "/a", agent });
   assert.equal(await fetchOnce(), 200);
-  await new Promise((done) => setTimeout(done, 100));
+  const secondAt = now += 100.25;
   assert.equal(await fetchOnce(), 200);
-  await new Promise((done) => setTimeout(done, 350));
-  assert.notEqual(await fetchOnce(), 200);
-  agent.destroy();
-  await upstream.close();
+  now += 350.25;
+  assert.equal(await fetchOnce(), "ECONNRESET");
   const answered = upstream.events.filter((e) => e.kind === "answered");
   assert.equal(answered.length, 2);
   assert.equal(answered[0].idle, null);
-  assert.ok(answered[1].idle >= 90 && answered[1].idle < 300 && answered[1].connection === answered[0].connection, JSON.stringify(answered));
+  assert.equal(answered[1].idle, 100);
+  assert.equal(answered[1].connection, answered[0].connection);
   // Each request's arrival is on the monotonic clock, unrounded, and the connection keeps its last answer after it closes.
-  assert.ok(answered[1].arrival > answered[0].arrival && upstream.lastAnswerOf(answered[0].connection) >= answered[1].arrival, JSON.stringify(answered));
+  assert.equal(answered[1].arrival, secondAt);
+  assert.equal(upstream.lastAnswerOf(answered[0].connection), secondAt);
   assert.equal(upstream.lastAnswerOf(99), null);
   const closed = upstream.events.filter((e) => e.kind === "closedIdle");
   assert.equal(closed.length, 1);
-  assert.ok(closed[0].idle >= 300);
+  assert.equal(closed[0].connection, answered[0].connection);
+  assert.equal(closed[0].idle, 350);
   assert.equal(closed[0].lastPath, "/a");
-  assert.equal(upstream.server.listening, false);
 });
 
-test("the upstream takes a request's arrival from the read that completed its head, before any answer is prepared", async () => {
+test("the upstream takes a request's arrival before any answer is prepared", async (t) => {
   // Only the double's response work is slow: a serializer that spins 280 ms.
   let serializing = null;
   const slow = { toJSON() { serializing = performance.now(); while (performance.now() - serializing < 280); return { a: 1 }; } };
   const upstream = closingUpstream({ "/slow": slow });
+  t.after(() => upstream.close());
   await new Promise((done) => upstream.server.listen(0, "127.0.0.1", done));
   const port = upstream.server.address().port;
-  const status = await new Promise((resolve) => {
-    const req = request({ port, path: "/slow", agent: false }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
-    req.on("error", (e) => resolve(e.code));
-    req.end();
-  });
-  await upstream.close();
+  const status = await statusOf({ port, path: "/slow", agent: false });
   assert.equal(status, 200);
   const [answered] = upstream.events.filter((e) => e.kind === "answered");
   // The arrival precedes the response work; the answer time, kept apart, follows it.

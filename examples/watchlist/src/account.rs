@@ -278,13 +278,13 @@ const NAME_MAX: usize = 40;
 /// What the last change of name did: empty on the page, then each answer's text, announced.
 #[component]
 fn NameResult(text: &str) -> impl Patch {
-    html! { <p id={NameResultId} class={muted()} aria-live="polite">{text}</p> }
+    html! { <span id={NameResultId}>{text}</span> }
 }
 
 /// What the last upload did: empty on the page, then each answer's text, announced.
 #[component]
 fn AvatarResult(text: &str) -> impl Patch {
-    html! { <p id={AvatarResultId} class={muted()} aria-live="polite">{text}</p> }
+    html! { <span id={AvatarResultId}>{text}</span> }
 }
 
 /// The viewer's picture on the account page, large, or a note that there is none yet.
@@ -456,7 +456,7 @@ pub(crate) fn PictureUpload<'a>(viewer: &'a Viewer, result: &'a str) -> impl Ren
             </label>
             <div><button>"Upload"</button></div>
             <progress ref={bar} class={Bar} aria-label="Sending the picture"></progress>
-            <AvatarResult text={result} />
+            <p class={muted()} aria-live="polite"><AvatarResult text={result} /></p>
         </form>
     }
 }
@@ -487,7 +487,7 @@ fn account_page(req: &Req, viewer: &Viewer, said: Said<'_>, status: StatusCode) 
                             <input name={f.name} value={&viewer.name} required maxlength="40">
                         </label>
                         <div><button>"Save name"</button></div>
-                        <NameResult text={name} />
+                        <p class={muted()} aria-live="polite"><NameResult text={name} /></p>
                     </form>
                     <PictureUpload viewer={viewer} result={picture} />
                 </div>

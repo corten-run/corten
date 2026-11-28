@@ -595,6 +595,11 @@ impl<S: Send + Sync, T: Identify<S>> FromRequestParts<S> for Caller<T> {
 /// [`Caller`]'s refusal is: the error page for a browser (a sign-in is a redirect), JSON for an
 /// API or a data client, with `WWW-Authenticate` on a 401 and `Retry-After` on a 429.
 impl IntoResponse for Refused {
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
+
     fn into_response(self) -> Response {
         // Never shared in any form, whoever returned it and whatever status a middleware gives it
         // later: the mark is on the answer ([`crate::cache::Unshared`]).

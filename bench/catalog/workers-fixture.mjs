@@ -1,6 +1,6 @@
 // Small synthetic round for portable replay tests. Never native qualification.
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/inventory.mjs";
+import { allApps, catalogPeers } from "../fullstack/inventory.mjs";
 import { cpuSettings, expectedPageChecks, expectedDocumentHeaderPaths, parseArgs, phases, aggregate } from "./contract.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { records } from "./fixtures.mjs";
@@ -12,12 +12,13 @@ import { apparatus, digest, sourceProof, workerCommand, workerPhaseSchema, worke
 import { verifyTimedPhase } from "./timed.mjs";
 import { preflightArtifacts, preflightBinding, preflightCases, preflightSchema, requiredRoundArtifacts } from "./preflight.mjs";
 
-export function legacyRound(failure = null, { wideGenerator = false } = {}) {
+export function legacyRound(failure = null, { wideGenerator = false, historical = true } = {}) {
   const files = new Map(), put = (key, value) => files.set(key, typeof value === "string" ? value : JSON.stringify(value));
   const reader = { readText(key) { if (!files.has(key)) throw Object.assign(new Error(`missing ${key}`), { missing: true }); return files.get(key); },
     readJson: (key) => JSON.parse(reader.readText(key)) };
-  const group = groupDescriptor("catalog-page", { historical: true }), commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
-  const options = parseArgs(["c1", "--group", "catalog-page", "--passes", "1", "--duration", "3", "--warmup", "2", "--build"], allApps);
+  const group = groupDescriptor("catalog-page", { historical }), commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
+  const options = parseArgs(["c1", "--group", "catalog-page", "--passes", "1", "--duration", "3", "--warmup", "2", "--build"], { ...allApps, ...catalogPeers });
+  options.apps = group.apps;
   const catalog = records(), fixture = JSON.stringify(catalog) + "\n", fixtureSha256 = digest(fixture);
   const summary = { schema: groupResultSchema, group, options, workload: "catalog-v1", round: "c1", runId: "catalog-c1-test", commit,
     commitAfter: commit, dirty: false, dirtyAfter: false, complete: true, checksPassed: true, failures: [], cleanupFailures: [],
@@ -43,7 +44,7 @@ export function legacyRound(failure = null, { wideGenerator = false } = {}) {
       put(`${prefix}/checks.log`, "synthetic checks\n"); put(`${prefix}/app.log`, "");
     }
   }
-  for (const { app, pass, ...profile } of timingPlan(options, group.sources, group.targets)) {
+  for (const { app, pass, ...profile } of timingPlan(options, group.sources, group.targets, group.contractSha256)) {
     const raw = `${profile.source}/${app}/p${pass}-page`;
     const cold = { path: "/catalog/record_1", first200At: "2026-11-07T16:00:00.200Z", successfulRequestMs: 2, bytes: 1000, attempts: 2,
       containerStartedAt: "2026-11-07T16:00:00Z", first200MsFromContainerStart: 200, measuredBeforeReadinessOrWarmup: true,
@@ -71,7 +72,7 @@ export function syntheticDocumentHeaders(catalog, source) {
       .map(([name, value]) => ({ name, value })) }));
 }
 export function workerRound(failure = null, { historical = false, wideGenerator = false } = {}) {
-  const f = legacyRound(failure, { wideGenerator }), s = f.summary, initial = Date.parse(s.startedAt);
+  const f = legacyRound(failure, { wideGenerator, historical }), s = f.summary, initial = Date.parse(s.startedAt);
   if (!historical) s.group = groupDescriptor("catalog-page");
   const catalog = records();
   s.savedEvidence.schema = workerRawSchema; s.measurement.apparatus = apparatus; s.measurement.upstreamMemoryBytes = 512 * 2 ** 20;

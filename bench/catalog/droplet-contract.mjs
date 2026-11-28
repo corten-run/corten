@@ -47,7 +47,9 @@ export function validateState(s, round) {
   assert.match(s.commit ?? "", /^[a-f0-9]{40}$/); assert.match(s.token ?? "", /^[a-f0-9]{16}$/);
   assert.equal(s.name, `corten-catalog-page-${round}-${s.token}`);
   assert.equal(s.tag, `corten-catalog-page-run-${s.token}`); assert.equal(s.unit, `${s.name}.service`);
-  assert.deepEqual(s.group, groupDescriptor("catalog-page")); assert.deepEqual(s.options, measurements(round));
+  const group = groupDescriptor("catalog-page", { savedHash: s.group?.contractSha256 });
+  assert.deepEqual(s.group, group);
+  assert.deepEqual(s.options, { ...measurements(round), apps: group.apps });
   assert.deepEqual(s.host, host); assert.deepEqual(s.cpus, cpuSettings(cpuEnv));
   assert.ok(["creating", "preparing", "starting", "running", "collected"].includes(s.status));
   if (s.status !== "creating") assert.ok(s.id && s.ip, "created host identity missing");

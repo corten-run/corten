@@ -32,10 +32,9 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      # STOP_AT is when the readings end: 24 minutes from the job's first step, so the checkout,
-      # the setup and the builds come out of the job's thirty as the readings do. The six left are
-      # for a run stopped at the end (10 seconds from its stop to its kill), the table and the
-      # steps after it.
+      # STOP_AT is the cutoff for starting readings, sampled just before launching timeout:
+      # 24 minutes from the first step. The six minutes left are a reserve for a run stopped
+      # at the limit (10 seconds of grace), the table and the steps after it.
       - name: When the readings end
         run: echo "STOP_AT=$(($(date +%s) + 1440))" >> "$GITHUB_ENV"
       # The whole history: the merge base is found in it, and build.sh archives each commit from it.
@@ -67,17 +66,16 @@ jobs:
       # The checkout is the pull request's merge with its base. The kit, and so the probe's source
       # and job.sh, is the checkout's for both builds. The builds' directory is outside the
       # checkout and any git repository, as build.sh requires, and one for both: where a crate is
-      # built is part of the binary. A build that fails, or does not end in seven minutes, leaves
-      # why for the table, which is written either way.
+      # built is part of the binary. An unsuccessful build leaves its error or timeout's status
+      # and timing for the table; a successful one leaves its probe's checksum. Two builds that
+      # are one binary are compared in nothing (the kit's page).
       - name: Build the probe against the merge base, then against the head, in one directory
         if: steps.scope.outputs.run == 'true'
         shell: bash
-        run: |
-          bash bench/request-cost/job.sh build "$RUNNER_TEMP/request-cost"
-          sha256sum "$RUNNER_TEMP/request-cost"/bin/* || true
+        run: bash bench/request-cost/job.sh build "$RUNNER_TEMP/request-cost"
       # Each build's answers, then each run of the kit that compare.mjs names, on base and then on
-      # head, on one CPU, as job.sh says: a run is stopped at 120 seconds, none starts once STOP_AT
-      # has come, and one that gave no figure is taken again, once.
+      # head, on one CPU. The limit is at most 120 seconds. If the clock sample is at or past
+      # STOP_AT, the reading does not start. A run that gave no figure is retried once if time remains.
       - name: Answers, counts, allocations and idle memory
         if: steps.scope.outputs.run == 'true'
         shell: bash
@@ -102,6 +100,6 @@ jobs:
           {
             cat "$RUNNER_TEMP/table.md"
             echo
-            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$builds/seconds" | sed 's/,/, /g'). The head is counted against the commit where it left the base's branch, not as merged: what the base gained since is in neither build. The description was read as it stood when this run started: a line added to it since is read by the next run a push starts, not by a rerun of this one."
+            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$builds/seconds" | sed 's/,/, /g'). The head is counted against the commit where it left the base's branch, not as merged: what the base gained since is in neither build. The description was read as it stood when this run started: a line added to it since is read by the next run a push or a reopening of the pull request starts, not by a rerun of this one."
           } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$status"

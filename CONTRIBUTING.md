@@ -110,7 +110,7 @@ On pull requests and pushes to `main`, its scope job starts the suites only when
 benchmark, tooling, workflow or committed source-custody inputs change. These inputs
 include `docs/`, `crates/`, and the Cargo manifests and locks for the portable suites.
 The native Linux job scopes separately to benchmark, scripts, tooling and workflow inputs.
-A push with no usable base commit runs all Evidence jobs.
+A push that reaches scope with no usable base commit runs all Evidence jobs.
 Evidence is not a publication gate; Release calls CI only.
 They need Node 24 or later, the installed pinned Playwright Chromium, current Git,
 the full repository history and the integrity-checked npm cache used by `npm ci` and
@@ -141,19 +141,42 @@ their absence cannot establish framework or host qualification.
 
 `Catalog Contract` runs the harness and Corten parity for framework-only changes; app
 changes run the harness and the affected apps, including consumers of shared drivers.
-The listed fleet-controller files keep the harness, Corten's root-context build and both
-JSON jobs, but do not select unrelated app builds. Benchmark Evidence selection is unchanged.
+The listed fleet-controller files and the Corten Live and Marketplace apps' `Cargo.lock` files
+keep the harness, Corten's root-context build and both JSON jobs, but do not select unrelated
+app builds. Other files beside the locks can be shared drivers. Benchmark Evidence selection is unchanged.
 Changes to shared benchmark inputs or the workflow, and manual runs, test all 20 parity
-apps and both JSON jobs. A push to `main` is scoped the same way by its push diff, and tests
-everything when its base commit is unknown. This also applies to unknown app directories
-and files directly in `bench/fullstack/apps/`. An `aspnet-aot` change runs the JSON jobs.
+apps and both JSON jobs. Unknown app directories and files directly in `bench/fullstack/apps/`
+also select everything. An `aspnet-aot` change runs the JSON jobs.
 Run `node --test scripts/benchmark-scope.test.mjs` to check both selectors, including
 the imports of the Catalog parity commands for each app.
-Both workflows compare the pull request merge commit with its first parent, using
-the full Git diff rather than GitHub's path-filter file list, and the before and after
-commits on a push; a push whose before commit is unknown or not an ancestor of the new one (a
-force-push) tests everything. Newer pull request runs cancel older ones; `main` runs do not
-cancel one another, so each push's own diff is tested.
+Both scope jobs compare a pull request merge commit with its first parent, using the full Git
+diff rather than GitHub's path-filter file list. Newer pull request runs still cancel earlier
+runs of the same workflow. Pushes to `main` have separate groups: GitHub can admit them out of
+push order, so even a shared group that does not cancel running jobs could discard a pending
+tip run. A first-attempt main push reads the live tip before starting heavy jobs. If the tip
+differs, the run stops with a notice and a non-success status so it cannot be used as a base.
+If the tip cannot be read, the run checks its original commit. Work already admitted is not
+cancelled by another push, and a rerun checks its original commit without the tip check.
+
+On `main`, each scope job and CI's bench size check look at up to 100 successful runs of that
+workflow. A base must be a strict ancestor of the push and use the cumulative workflow command
+at that commit. A legacy green run checked only its own push and is not a coverage base.
+Scope includes changed and restored paths, mainline merges against their first parent, and
+topic merge resolutions, without counting the older main paths a topic merely imported.
+Catalog and Evidence use push successes only. The first cumulative push, a push whose base
+is outside the new tip's first-parent history, or any push without a usable base runs every
+job in that workflow.
+
+CI instead fails the bench size base step without guessing. To bootstrap after rollout, or
+recover when a rewrite or the bounded lookup leaves no cumulative ancestor, first verify
+bench size history through an earlier commit that is an ancestor of the current `main`. Then
+dispatch CI on `main` with that exact full SHA as `base` (`gh workflow run ci.yml --ref main -f
+base=VERIFIED_ANCESTOR_SHA`). CI validates the ancestry and checks every outstanding commit;
+the supplied base is the operator's assertion of prior coverage. If the dispatch fails or
+the anchor is no longer an ancestor, it establishes no coverage. A successful dispatch checks
+its exact commit and supplies a base for **later** pushes, not a rerun at the same SHA. Rerun a
+failed push after a transient lookup error only when an eligible ancestor exists. These CI
+checks establish no Catalog or Evidence coverage.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
@@ -241,11 +264,15 @@ any checkout unpacked. It builds them in a target directory of its own for the s
 cargo treats a registry crate as unchanged as long as its version stays the same, so the
 checkout's target volume would hand the dry run an earlier run's build of `corten`. The third
 builds on the oldest supported Rust, `rust-version` in the root `Cargo.toml`. The `CI` workflow
-(`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`,
-side by side on runners of their own: the release tests apart from the other Rust checks, and the
+(`.github/workflows/ci.yml`) runs the checks on pull requests and on pushes to `main` that
+pass the tip check described above. Later runs cover outstanding changes, not the skipped
+commit itself. To check that exact commit, rerun its workflow. Jobs run side by side on
+their own runners: the release tests apart from the other Rust checks, and the
 browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
-`rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
-supported Rust floor. A new smoke step names
+`rust` and `browser` pass only when every job under them ran and passed, `msrv` checks the
+supported Rust floor. `request-cost`, the one job of the `Request Cost` workflow
+(`.github/workflows/request-cost.yml`), is required too (Pull requests, item 2.1, Counted).
+A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
 The three example groups use the pinned Playwright image directly. Two more groups run the
 benchmark checks beside them: `benchmark-checks` runs the `npm-check` part, and
@@ -360,6 +387,12 @@ stylesheet, a runtime that skips the shared load still swaps in styled, but on t
 swaps in unstyled instead of loading in full.
 The watch form's other presses (watching and unwatching a stock, the submit the network fails
 and the formaction button) are made in the page too, as a loaded Firefox's click on them can miss.
+The multipart rejection case presses its button in the page and waits for its POST under one
+five-second deadline. It then gives the expected title and heading five seconds to appear.
+With JavaScript disabled, each account form uses a native Enter press after the preceding
+document has loaded. The press, matching main-frame POST and destination load share 30 seconds.
+The POST response is checked only if that same request led to the loaded document, directly or
+through a redirect. No missing post is retried.
 The two Firefox failures in
 [#2014 Firefox smoke fails a different waiting-submit or template-copy case on two commits that touch neither the runtime nor the watchlist](https://github.com/corten-run/corten/issues/2014)
 each logged only that an expected post was never sent. A loaded Firefox reproduction of those
@@ -505,11 +538,12 @@ tag's first push among them), means the merge base with `origin/main` as it is w
 runs. That is not a replay of the range the push brought: a rerun after `main` advances can check
 a different range, a tag on a commit already on `main` checks its tree with no history, and a push
 that creates `main` itself has none. A release needs green CI on the exact commit before it is
-tagged ([RELEASING.md](RELEASING.md)), which is its history check; the tag's check is in addition. CI gives the base from its event rather than let the script guess:
-a pull request's merge commit's first parent, and a push's `before` (after a push to `main`,
-`origin/main` is the pushed commit, so its merge base would check nothing). In GitHub Actions the
-check fails without one, and so does the CI step for an event it has no base for. A shallow clone
-fails too, since the commits it lacks would go unread: fetch the whole history
+tagged ([RELEASING.md](RELEASING.md)), which is its history check; the tag's check is in addition.
+CI supplies the base explicitly: a pull request uses its merge commit's first parent; a main
+push uses an earlier successful main CI commit as described in [Checks](#checks); a Release
+tag push uses its `before`; and manual dispatch uses the validated `base` input. In GitHub
+Actions the check fails without a base, as does the CI step for an event it has no base for.
+A shallow clone fails too, since the commits it lacks would go unread: fetch the whole history
 (`git fetch --unshallow`). When no base resolves, the check fails and says how to give one.
 
 ## Pull requests
@@ -575,13 +609,17 @@ establish a general ranking.
       7. A change whose reason is a win in cycles, time or requests a second.
 
       **Counted.** The hosted `Request Cost` job takes these counts for a pull request that
-      changes what a request is built from, base and head on one runner, and writes every
-      figure and its verdict to its summary, to copy into the description, so the author
-      prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
+      changes what the probe is built from or counted with, base and head on one runner, and
+      writes every figure and its verdict to its summary, to copy into the description, so the
+      author prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
       green check is evidence for a reviewer to read, not an attestation: the counts are of
       the pull request's own tree, by its own workflow, scope, kit and comparison, so a pull
       request that changes any of those has that change reviewed for what it does to the
-      verdict. On a host of one's own, build base and head with
+      verdict. The check is required on `main` (Checks), and being required makes it no more
+      than that evidence: the way, its line and what the measured way then gives are still the
+      review's to accept. [The hosted job](bench/request-cost/README.md#the-hosted-job) says what
+      the job passes and fails, which run reads a line added later and decides, and when a run
+      may be run again. On a host of one's own, build base and head with
       [`bench/request-cost`](bench/request-cost/README.md) and take each count under
       [Running it](bench/request-cost/README.md#running-it) on both, as that page says: one
       directory, one checkout of the kit, the answers compared first. The change passes when no
@@ -593,11 +631,11 @@ establish a general ranking.
       the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
       pages, over `--addresses 3`), so four pages are at most four bytes a connection, since a reading over
       fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
-      resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
-      than the larger of base's three span and four pages (of the size it prints, the step
-      resident memory is reported in: 16,384 bytes with 4,096-byte pages, under 3.3 bytes a
-      connection over the default 5,000); the figures a connection are rounded and do not decide
-      it. The floor was one page until 2026-11-27, when the maintainer raised it to four:
+      allocator live bytes (`idle.mjs --allocator`) is not above base's by more
+      than the larger of base's three-run span and four pages (16,384 bytes with 4,096-byte
+      pages, under 3.3 bytes a connection over the default 5,000). Report resident growth from
+      every run alongside live growth; it does not decide. Missing live bytes mean no figure,
+      never a comparison of resident memory instead. The four-page floor comes from the prior resident rule:
       [design Choice 76](docs/design.md#choice-counted-or-measured) gives the readings it rests
       on, whose cause was not established, and what it gives up, a cost under about 3.3 bytes a
       connection at the default, where 8 bytes more a connection is 40,000 bytes by arithmetic,

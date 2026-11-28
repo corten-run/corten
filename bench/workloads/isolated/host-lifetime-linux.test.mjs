@@ -213,6 +213,85 @@ for (const change of ["exec", "exec with rename", "chmod"]) test(`catalog execut
   }
 });
 
+for (const replace of [false, true]) test(`JSON API timing unpinned bookends: ${replace ? "same-name exec" : "unchanged"}`, {
+  skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
+}, async (t) => {
+  const { campaignRounds, jsonTimingInvocation } = await import("../registry.mjs");
+  const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-json-exec-")), directory = join(temporary, "command-host");
+  const old = join(temporary, "same"), next = join(temporary, "next", "same");
+  const campaign = `${unit[1]}-000000000000000a`, round = campaignRounds(unit[1])["json-api"], command = 8;
+  const invocation = jsonTimingInvocation(round, "/unused/audits.json");
+  const binding = { request: { group: "json-api", round, commit: "a".repeat(40) }, execution: { invocation } };
+  let child, closed, observer, finished = false, tick, faults = 0;
+  try {
+    fs.mkdirSync(join(temporary, "next"));
+    fs.copyFileSync("/bin/bash", old); fs.chmodSync(old, 0o500);
+    fs.copyFileSync("/bin/cat", next); fs.chmodSync(next, 0o500);
+    // Only the collector's binding is the timing invocation; no benchmark runs.
+    child = spawn(old, ["--noprofile", "--norc", "-c", 'echo ready; read -r line || exit 0; exec "$1"', "same", next],
+      { stdio: ["pipe", "pipe", "inherit"], timeout: 8000, killSignal: "SIGKILL" });
+    closed = once(child, "close");
+    const [ready] = await Promise.race([once(child.stdout, "data"), closed]);
+    assert.equal(String(ready), "ready\n");
+    const pid = child.pid, at = `/proc/${pid}`, exe = `${at}/exe`;
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    t.mock.method(globalThis, "setInterval", (cb) => { tick = cb; return 1; });
+    observer = await beginLifetime({ campaign, binding, invocation, directory, command, pid, onFault() { faults++; } });
+    await observer.attach(pid);
+    const before = processIdentity(readFileSync(`${at}/stat`, "utf8")), cgroup = readFileSync(`${at}/cgroup`, "utf8");
+    assert.equal(fs.readlinkSync(exe) === old, true, "opening image differs");
+    const digest = () => createHash("sha256").update(readFileSync(exe)).digest("hex");
+    const opening = digest(), original = fs.readFileSync;
+    let bookends = 0, reachedSuccessor = false;
+    // The exact cmdline read follows the opening digest and precedes both
+    // closing bookends. Coordinate the real exec without replacing any reads.
+    const hook = t.mock.method(fs, "readFileSync", function (path, ...args) {
+      if (path === `${at}/cmdline` && ++bookends === 1 && replace) {
+        child.stdin.write("go\n");
+        const deadline = performance.now() + 250;
+        do {
+          reachedSuccessor = fs.readlinkSync(exe) === next;
+          if (reachedSuccessor) break;
+          Atomics.wait(pause, 0, 0, 1);
+        } while (performance.now() < deadline);
+      }
+      return original.call(this, path, ...args);
+    });
+    syncBuiltinESMExports();
+    try { tick(); } finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(bookends, replace ? 2 : 1, "an exec gets exactly one fresh census");
+    assert.equal(reachedSuccessor, replace, "owned child did not exec within the fixture deadline");
+    assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), before);
+    assert.equal(readFileSync(`${at}/cgroup`, "utf8") === cgroup, true, "child changed cgroups");
+    assert.equal(digest() !== opening, replace);
+    await observer.drain();
+    child.stdin.end(); const [code, signal] = await closed;
+    assert.deepEqual([code, signal], [0, null]);
+    const result = { terminal: true, code, signal, cancelled: false, forced: false, success: true, error: null };
+    await observer.finish(result); finished = true;
+    const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    assert.equal(existsSync(join(directory, "executables.json")), false, "control must use the unpinned path");
+    assert.equal(faults, 0);
+    assert.equal(terminal.empty, true);
+    assert.equal(terminal.observerError, null);
+    assert.equal(terminal.observerFailures.count, 0);
+    const proof = inspectLifetime(binding, invocation, directory, { campaign, command, pid, result });
+    assert.equal(proof.status, "verified");
+    const closing = createHash("sha256").update(readFileSync(next)).digest("hex");
+    assert.deepEqual(proof.samples.map((sample) => sample.processes.map((row) => {
+      assert.deepEqual(processIdentity(row.stat), before);
+      assert.equal(row.cgroup === cgroup, true);
+      assert.equal(Object.hasOwn(row, "executableRef"), false);
+      return row.executableSha256;
+    })), [[], [opening], [replace ? closing : opening], []]);
+  } finally {
+    if (!finished) observer?.dispose();
+    if (child?.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    if (closed) await closed;
+    assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); rmSync(temporary, { recursive: true });
+  }
+});
+
 test("catalog retries a real fork and exec when only the parent image was previously sampled", {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
 }, async (t) => {

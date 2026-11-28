@@ -91,7 +91,7 @@ pub fn home(req: &Req, name: &str) -> impl Document {
                 <label>"Your name " <input name={f.name} value={name} required></label>
                 <button>"Greet me"</button>
             </form>
-            <Greeting name={name} />
+            <p aria-live="polite"><Greeting name={name} /></p>
             <ClickCounter />
         </Layout>
     }
@@ -116,12 +116,12 @@ pub fn ClickCounter() -> impl Render {
 #[derive(Id)]
 pub struct GreetingId;
 
-/// Inside the page, and on its own as the form's patch (the runtime swaps it in by `id`).
+/// Inside the page's live region, and on its own as the form's patch.
 #[component]
 pub fn Greeting(name: &str) -> impl Patch {
     html! {
-        <p id={GreetingId} aria-live="polite">
+        <span id={GreetingId}>
             if !name.is_empty() { "Hello, "{name}"!" }
-        </p>
+        </span>
     }
 }

@@ -716,6 +716,8 @@ journal with an expired peer lease, the matching audit delivery and no terminal
 or close record, collection evidence or recovery lock. It rechecks those bytes
 and the same census before create. This records the failed attempt without
 trying to recover or qualify it.
+Replay checks the roster in the original digest-bound subject. A newly listed
+adapter is required for new deliveries, not for a previously sealed audit.
 
 The same receipt can record external cleanup of a monitored attempt that stopped
 after an accepted create but before binding the droplet. The original reservation
@@ -1476,16 +1478,19 @@ positively reports the request unsent (the production checkpoint cancelled befor
 the action reached the provider, or the provider engine's own deadline check
 before its request, which the worker carries back over IPC) withdraws the intent:
 the controller restores the state it saved just before it (the receipt's recorded
-digest, with no intent or retirement) through its own fresh exclusive stage
-(`state.json.delete-unsent-<random>.tmp`), under the same custody check as the
-intent, and refuses with `DELETE was not dispatched; the next collect retires on
-a fresh proof`. The not-dispatched answer does not say whether expiry or
-cancellation refused, so the message names neither. The next collect keeps that
+digest, with no intent or retirement) under the same custody check as the intent.
+Before publishing that state, it writes an exclusive proof stage
+(`state.json.delete-unsent-<intent-sha256>.tmp`) with the hash of the exact saved
+intent and the state to restore. It then stages and publishes that restored state
+separately and normally removes the unchanged proof after publication. The collect
+refuses with `DELETE was not dispatched; the next collect retires on a fresh proof`.
+The not-dispatched answer does not say whether expiry or cancellation refused, so
+the message names neither. The next collect keeps that
 receipt as an interrupted one (below) and retires on a fresh drain proof of the
 same session.
 The restore only records how the DELETE ended, so it runs even after
-cancellation; a custody mismatch at the restore refuses and keeps the intent,
-which leaves the host as a torn withdrawal does (below). Any
+cancellation; a custody mismatch at the restore refuses and keeps the intent.
+An interrupted withdrawal is reconciled only under the checks below. Any
 other outcome after the intent keeps the intent, with recovery by exact absence
 alone: a request that started (an HTTP error, a timeout or a lost
 acknowledgement), an unacknowledged worker result, or a refusal by the
@@ -1533,11 +1538,10 @@ to archive.
 
 Every deletion intent and `destroyedAt` the controller saves goes through its
 own fresh exclusive stage the same way (`state.json.deletion-intent-<random>.tmp`
-and `state.json.destroyed-<random>.tmp`), and so does every withdrawal of a
-positively unsent DELETE's intent (`state.json.delete-unsent-<random>.tmp`). A
-torn save of any of them leaves only that unread stage and the previous
-`state.json`, never the fixed-name `state.json.tmp`. What the next collect does
-with it depends on the retirement kind:
+and `state.json.destroyed-<random>.tmp`), and so does publication of every withdrawal
+of a positively unsent DELETE's intent. An interrupted publication can leave a
+stage beside the previous `state.json`, never the fixed-name `state.json.tmp`.
+What the next collect does with it depends on the retirement kind:
 
 1. The unused, failed-setup (v1, v2 and v3) and failed-native (without a handoff)
    retirements, and an ordinary deletion, recover. A torn intent leaves the state
@@ -1546,14 +1550,28 @@ with it depends on the retirement kind:
    fresh proof retires). A torn `destroyedAt` leaves the intent after the one
    DELETE, so the next collect only checks exact absence and records
    `destroyedAt`, with no second DELETE.
-2. A torn withdrawal (the drain proof's or an ordinary collect's) does not
-   recover by itself. It keeps the intent of a DELETE that was never sent, while
-   the droplet still exists, so every later collect waits for an exact absence
-   that does not come and refuses with `deletion not confirmed; outcome
-   uncertain`, sending no DELETE. Nothing clears the intent. The operator
-   cleanup below removes that exact host and leaves the intent as saved; the
-   next collect then confirms exact absence and records `destroyedAt`, sending
-   no DELETE of its own.
+2. If a drain withdrawal could not publish the restored state but left a complete
+   proof stage, the next collect under its operation lock verifies the existing
+   v3 receipt and compares the stage byte for byte with the proof reconstructed
+   from the exact saved intent. Only a positive exact-ID read allows the collect
+   to finish the withdrawal and retire on a fresh drain proof. The interrupted
+   receipt is then kept for archival only. If operator cleanup already removed
+   the host, even a complete stage leaves the intent in place: collect confirms
+   exact absence and records `destroyedAt` without sending a DELETE. A failed or
+   inconclusive read also leaves the intent in place, without recording absence.
+   A partial or mismatched stage, an older unbound stage
+   (`state.json.delete-unsent-<random>.tmp`), and a missing or uncertain dispatch
+   acknowledgement do not authorize a withdrawal. An ordinary collect's torn
+   withdrawal also remains absence-only. Without a usable withdrawal proof, if
+   the droplet remains present, collect refuses with `deletion not confirmed;
+   outcome uncertain` and sends no DELETE. The operator cleanup below removes
+   that exact host and leaves the intent as saved for the next collect to confirm
+   absence.
+   A torn restore can leave `state.json.delete-unsent-restore-<random>.tmp`, and a
+   stop after the restore's rename but before unlink can leave the proof stage
+   beside a state with no deletion intent. These leftovers do not affect ordinary
+   drain recovery: it does not read the restore stage or use a proof that does not
+   match the current intent. They can remain on disk for the operator to archive.
 3. The handoff and exit-one retirements refuse. Their state save rechecks handoff
    custody and keeps the operation lock when it fails, and their publication check
    refuses every `state.json.*.tmp` name as an unsettled publication.
@@ -2343,7 +2361,7 @@ DELETE intent, no recorded destruction and a previously verified, monitored
 result, a fresh collect may use up to 25 minutes for replay only after a
 same-account exact 404. It checks absence again and rechecks the archive,
 extracted evidence and terminal campaign and seal before recording cleanup.
-It never sends another DELETE. Other replay deadlines are unchanged.
+It never sends another DELETE.
 If ordinary collection at the measured commit cannot finish that replay, a
 reviewed merged successor can reconcile an already verified, successfully
 collected child with closed monitoring and a saved DELETE intent. Run the child
@@ -2356,6 +2374,35 @@ account and host may be read; a present host, changed reservation, or different
 replay result refuses. This route records only `destroyedAt`; it cannot connect
 to the guest or send another DELETE. Other collection paths keep their source
 requirements.
+
+If a completed monitored child already has a saved archive and extraction but
+ordinary replay exceeded its deadline, run the
+`cloud-production.mjs ROUND --state-dir PATH --collect --sealed-measured-checkout CHECKOUT --print-approval`
+preview from the reviewed controller. Use the clean original measured checkout
+for `CHECKOUT`. The preview checks that it can capture the measured replay
+sources. A closed terminal seal and a successful saved exit marker are
+required. The approval names `collect-saved-sealed-archive-with-measured-replay`
+and binds the measured commit, reservation, host, archive, extraction and
+terminal seal. Each replay may take up to 45 minutes; the measured source
+snapshot and all archive and native checks are unchanged. The ordinary
+ownership, remote idle and archive checks still precede any DELETE. A timeout,
+interruption or unverified replay does not authorize a DELETE. Once custody is
+clear, a retry after a recorded deletion intent confirms absence without
+sending another DELETE, unless it has proof that the earlier DELETE was never
+sent. The recovery checks its extraction, saved reservation,
+operation lock and approved terminal seal again before recording intent and
+before handing the request to the private provider worker. The worker does not
+repeat those local custody checks. A positive not-dispatched acknowledgement
+withdraws the saved intent only under the same operation lock and with the exact
+saved state still present. If the state save is interrupted, a fresh approved
+collect can finish the withdrawal from the complete proof for that exact intent
+while the host still exists, then obtain a new idle proof. Approval includes
+the matching proof's digest (or its absence), checked again under the operation
+lock; a proof that appears after preview requires a new approval. A missing, partial,
+or mismatched proof, or a host that is already absent, keeps absence-only
+recovery. Uncertain dispatch never writes the withdrawal proof.
+This mode does not pack, download or start a job. Other replay budgets are unchanged.
+
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { allApps } from "../fullstack/inventory.mjs";
+import { allApps, catalogPeers, jsonPeers } from "../fullstack/inventory.mjs";
 import { locales } from "../marketplace/contract.mjs";
 
 export const springWebflux = Object.freeze({
@@ -27,10 +27,10 @@ const records = (payload, targets, pageLocales = [null]) => sources.flatMap((sou
 // Reviewed challenger selection, not a ranking or an implementation-status filter.
 // Keep old marketplace group identities in marketplace/groups.mjs immutable for saved rounds.
 export const groups = freeze({
-  "catalog-page": { ...group("Catalog page", ["aspnet", "express", "fastapi"], ["axum-maud", "drogon", "gin"],
+  "catalog-page": { ...group("Catalog page", ["aspnet", "express", "fastapi"], ["axum-maud", "drogon", "gin", "proa"],
     ["typed-record", "escaped-fields-and-links", "get-filter", "request-time-source", "no-output-cache"], records("catalog-v1", ["page"])),
     documentHeaders: "catalog-document-headers/v1" },
-  "json-api": group("JSON API", ["aspnet", "fastapi", "express", "spring"], ["axum-maud", "drogon", "gin", "aspnet-aot"],
+  "json-api": group("JSON API", ["aspnet", "fastapi", "express", "spring"], ["axum-maud", "drogon", "gin", "aspnet-aot", "ntex"],
     ["typed-complete-schema", "numeric-json", "tested-errors", "fetch-parse-reserialize", "no-output-cache"],
     ["catalog-v1", "marketplace-v2"].flatMap((payload) => records(payload, ["json"]))),
   "localized-marketplace": { ...group("Localized marketplace", ["nextjs", "aspnet", "django"], ["topcoat", "leptos", "gin", "drogon"],
@@ -132,7 +132,7 @@ export const retainedFamilies = freeze([
 ]);
 
 export function validateInventory() {
-  const allowed = new Set([...Object.keys(allApps), "react", "vue", "solid", "svelte", "remix"]);
+  const allowed = new Set([...Object.keys(allApps), ...Object.keys(catalogPeers), ...Object.keys(jsonPeers), "react", "vue", "solid", "svelte", "remix"]);
   for (const name of groupNames) {
     const d = definition(name), selected = selectedApps(name);
     assert.ok(selected.every((app) => allowed.has(app)), `${name}: unknown adapter`);
