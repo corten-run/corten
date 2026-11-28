@@ -7,6 +7,7 @@
   "nativeStartedAt": "2026-11-27T21:25:58.341Z",
   "nativeFinishedAt": "2026-11-28T00:02:16.71Z",
   "archiveSha256": "fd761d332e3f8515e4a2fda68b72d4e77ad547ac23dfe231de993bf5f86669e1",
+  "custodyRef": "cbcustody-7e547ec0146249b8bda91ebb15f26a94",
   "archiveBytes": 86873064,
   "archiveResultSuffix": "/00-hardening-timing/native/summary.json",
   "nativeSummarySha256": "da6a85386e246a77a969df5de10bb3bd255b3673d98c2dcf67fb48dfd131b92e",
