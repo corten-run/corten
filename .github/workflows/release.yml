@@ -25,10 +25,13 @@ env:
     corten-x86_64-pc-windows-msvc.zip
 
 jobs:
-  # Reuses CI, whose actions follow tags. It holds only contents: read (ci.yml asks for no more and
-  # is passed no secrets) and produces nothing the release uses; the jobs below pin every action
-  # to a commit.
+  # Reuses CI, whose actions follow tags. Allow its smoke job to request actions: read for main
+  # push lookups, which are not made on tags. CI is passed no secrets and produces nothing the
+  # release uses; the jobs below pin every action to a commit.
   checks:
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/ci.yml
 
   version:

@@ -155,6 +155,9 @@ jobs:
   smoke:
     name: smoke (${{ matrix.group }})
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      actions: read
     # Bound each group independently so a hung check cannot hold the runner for six hours.
     timeout-minutes: 30
     strategy:
@@ -199,15 +202,15 @@ jobs:
       # check:groups:browser parse with (bench/package.json).
       - run: npm --prefix bench ci
         if: contains(env.PARTS, ' npm-check ') || contains(env.PARTS, ' group-apparatus ')
-      # scripts/bench-size.mjs checks every commit since the base, which it does not guess here: a
-      # pull request's checkout is its merge with the base, whose first parent is the base; a push's
-      # base is the commit the branch was at before it, all zeros for a new branch or tag (the
-      # script then takes the merge base with origin/main). Release calls this on a tag's push. Any
-      # other event fails until its base is wired here.
+      # Check every commit since the last successful CI push to main, including superseded pushes.
+      # With no usable success, check from the root: origin/main may already be the tip.
+      # For a PR use the merge commit's first parent. Release still uses the tag push's before
+      # (all zeros for a new tag, which uses its merge base with origin/main).
       - name: The bench size check's base
         if: contains(env.PARTS, ' npm-check ')
         env:
-          BEFORE: ${{ github.event.before }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          GITHUB_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.token || '' }}
         run: |
           case "$GITHUB_EVENT_NAME" in
             pull_request)
@@ -216,7 +219,12 @@ jobs:
                 exit 1
               fi
               base=$(git rev-parse 'HEAD^1') ;;
-            push) base=$BEFORE ;;
+            push)
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                base=$(node scripts/benchmark-scope.mjs ci-base)
+              else
+                base=$PUSH_BEFORE
+              fi ;;
             *) base= ;;
           esac
           if [ -z "$base" ]; then

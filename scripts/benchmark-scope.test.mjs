@@ -9,7 +9,8 @@ import { build } from "esbuild";
 import { parse } from "yaml";
 import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
-import { eventPaths, selectEvidence, selectKernel, selectRequestCost, selectScope } from "./benchmark-scope.mjs";
+import { eventPaths, mainPushBase, selectEvidence, selectKernel, selectRequestCost, selectScope } from "./benchmark-scope.mjs";
+import { LIMIT, LIST, run as checkBenchSize } from "./bench-size.mjs";
 import { fixtureGitEnv } from "./fixture-git.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -86,7 +87,7 @@ test("Catalog always starts its scope job and gates parity and JSON on the selec
   assert.equal(jsonAot.if, jsonHarness.if);
 });
 
-test("the Actions lookup gets a read-only token only in the two scope jobs", () => {
+test("the Actions lookup gets a read-only token in the benchmark scope jobs and the CI base step", () => {
   for (const [name, mode] of [["catalog.yml", "catalog"], ["benchmark-evidence.yml", "evidence"]]) {
     const { permissions, jobs } = parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8"));
     assert.deepEqual(permissions, { contents: "read" });
@@ -97,6 +98,18 @@ test("the Actions lookup gets a read-only token only in the two scope jobs", () 
     assert.deepEqual(step.env, { PUSH_BEFORE: "${{ github.event.before }}",
       GITHUB_TOKEN: "${{ github.event_name == 'push' && github.token || '' }}" });
   }
+  const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
+  const release = parse(readFileSync(new URL(".github/workflows/release.yml", root), "utf8"));
+  const { smoke } = ci.jobs;
+  assert.deepEqual(ci.permissions, { contents: "read" });
+  assert.deepEqual(smoke.permissions, { contents: "read", actions: "read" });
+  assert.deepEqual(release.permissions, ci.permissions);
+  assert.deepEqual(release.jobs.checks.permissions, smoke.permissions);
+  const step = smoke.steps.find(step => step.name === "The bench size check's base");
+  assert.deepEqual(step.env, { PUSH_BEFORE: "${{ github.event.before }}",
+    GITHUB_TOKEN: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.token || '' }}" });
+  assert.match(step.run, /base=\$\(git rev-parse 'HEAD\^1'\) ;;/);
+  assert.match(step.run, /if \[ "\$GITHUB_REF" = refs\/heads\/main \]; then\s+base=\$\(node scripts\/benchmark-scope.mjs ci-base\)\s+else\s+base=\$PUSH_BEFORE/);
 });
 
 test("direct PRs and initial main pushes share ref groups; main reruns, dispatch and calls do not", () => {
@@ -538,6 +551,37 @@ function pushEvent(GITHUB_SHA, file, PUSH_BEFORE) {
 
 const successfulPush = head_sha => ({ event: "push", head_branch: "main", status: "completed", conclusion: "success", head_sha });
 const workflowRuns = (...runs) => Response.json({ workflow_runs: runs });
+
+test("CI checks a deleted oversized blob since its last success, or from the root with no usable success", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write(LIST, "# grandfathered\n");
+  const success = commit();
+  const path = "bench/r2/run.log";
+  write(path, Buffer.alloc(LIMIT + 1, 97));
+  const superseded = commit();
+  git("rm", path);
+  const head = commit();
+  git("update-ref", "refs/remotes/origin/main", head);
+  const event = pushEvent(head, "ci.yml", superseded);
+  const workflow = "ci-base";
+  const base = await mainPushBase(event, cwd, env, { workflow, fetchRuns: url => {
+    assert.equal(url.pathname, "/repos/example/repo/actions/workflows/ci.yml/runs");
+    return workflowRuns(successfulPush(success));
+  } });
+  assert.equal(base, success);
+  // Neither the previous tip nor the already-updated origin/main range reads the added blob.
+  assert.deepEqual(checkBenchSize(cwd, { head, base: superseded, env }).problems, []);
+  assert.deepEqual(checkBenchSize(cwd, { head, base: "0".repeat(40), env }).problems, []);
+  const wanted = new RegExp(`bench/r2/run\\.log: .* from commit ${superseded},`);
+  assert.match(checkBenchSize(cwd, { head, base, env }).problems[0], wanted);
+
+  const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
+  const fallback = execFileSync(process.execPath, [script, workflow], {
+    cwd, env: { ...env, ...event, GITHUB_TOKEN: "" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+  assert.equal(fallback, "root");
+  assert.match(checkBenchSize(cwd, { head, env: { ...env, GITHUB_ACTIONS: "true", CORTEN_BENCH_SIZE_BASE: fallback } }).problems[0], wanted);
+});
 
 test("a push to main scopes Catalog and Evidence from each last successful run, including superseded paths", async t => {
   const { cwd, env, write, commit } = fixture(t);

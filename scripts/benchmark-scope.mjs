@@ -31,7 +31,7 @@ const requestCostInputs = [".node-version", ".github/workflows/request-cost.yml"
   "bench/request-cost"];
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
 const sha = /^[0-9a-f]{40}$/;
-const scopeWorkflows = { catalog: "catalog.yml", evidence: "benchmark-evidence.yml" };
+const scopeWorkflows = { catalog: "catalog.yml", evidence: "benchmark-evidence.yml", "ci-base": "ci.yml" };
 
 export function selectScope(allApps, paths) {
   if (paths === undefined) return { apps: allApps, json: true };
@@ -103,15 +103,9 @@ async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TO
       && typeof run.head_sha === "string" && sha.test(run.head_sha)) return run.head_sha;
 }
 
-// Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR to
-// read its own repository.
-export async function eventPaths(event, cwd, env = process.env, { workflow, fetchRuns = fetch } = {}) {
+// Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR.
+export async function mainPushBase(event, cwd, env = process.env, { workflow, fetchRuns = fetch } = {}) {
   const { GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REF, GITHUB_REPOSITORY, GITHUB_WORKFLOW_REF, GITHUB_TOKEN, PUSH_BEFORE } = event;
-  if (GITHUB_EVENT_NAME === "pull_request") {
-    assert.match(GITHUB_SHA ?? "", sha);
-    // Actions tests the synthetic merge, including any base-side path moves.
-    return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd, env);
-  }
   // Called workflows see the caller's event and workflow_ref, not their own.
   const file = scopeWorkflows[workflow];
   if (file && GITHUB_EVENT_NAME === "push" && GITHUB_REF === "refs/heads/main"
@@ -122,12 +116,30 @@ export async function eventPaths(event, cwd, env = process.env, { workflow, fetc
       const base = GITHUB_TOKEN && sha.test(GITHUB_SHA ?? "") && await successfulMainBase(event, file, fetchRuns);
       if (isEarlierCommit(base, GITHUB_SHA, cwd, env)
           && (PUSH_BEFORE === base || isEarlierCommit(PUSH_BEFORE, GITHUB_SHA, cwd, env))) {
-        return changedPaths(base, GITHUB_SHA, cwd, env);
+        return base;
       }
     } catch {
       // Do not print the response or error from an authenticated request.
     }
-    console.warn("Successful main push base unavailable; selecting every benchmark job.");
+    console.warn("Successful main push base unavailable; using the conservative fallback.");
+  }
+  return undefined;
+}
+
+export async function eventPaths(event, cwd, env = process.env, options) {
+  const { GITHUB_EVENT_NAME, GITHUB_SHA } = event;
+  if (GITHUB_EVENT_NAME === "pull_request") {
+    assert.match(GITHUB_SHA ?? "", sha);
+    // Actions tests the synthetic merge, including any base-side path moves.
+    return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd, env);
+  }
+  const base = await mainPushBase(event, cwd, env, options);
+  if (base) {
+    try {
+      return changedPaths(base, GITHUB_SHA, cwd, env);
+    } catch {
+      console.warn("Main push diff unavailable; selecting every benchmark job.");
+    }
   }
   return undefined;
 }
@@ -135,15 +147,20 @@ export async function eventPaths(event, cwd, env = process.env, { workflow, fetc
 if (import.meta.main) {
   const { GITHUB_OUTPUT, PARITY_APPS } = process.env;
   const workflow = process.argv[2];
-  const paths = await eventPaths(process.env, undefined, process.env, { workflow });
-  if (workflow === "catalog") {
-    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
-    appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
-  } else if (workflow === "evidence") {
-    appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
-  } else if (workflow === "request-cost") {
-    appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(paths)}\n`);
+  const options = { workflow };
+  if (workflow === "ci-base") {
+    console.log(await mainPushBase(process.env, undefined, process.env, options) ?? "root");
   } else {
-    throw new Error("Expected catalog, evidence or request-cost scope");
+    const paths = await eventPaths(process.env, undefined, process.env, options);
+    if (workflow === "catalog") {
+      const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
+      appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
+    } else if (workflow === "evidence") {
+      appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
+    } else if (workflow === "request-cost") {
+      appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(paths)}\n`);
+    } else {
+      throw new Error("Expected catalog, evidence, request-cost or ci-base");
+    }
   }
 }

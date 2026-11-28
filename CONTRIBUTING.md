@@ -144,16 +144,15 @@ changes run the harness and the affected apps, including consumers of shared dri
 The listed fleet-controller files keep the harness, Corten's root-context build and both
 JSON jobs, but do not select unrelated app builds. Benchmark Evidence selection is unchanged.
 Changes to shared benchmark inputs or the workflow, and manual runs, test all 20 parity
-apps and both JSON jobs. A push to `main` is scoped the same way by its push diff, and tests
-everything when its base commit is unknown. This also applies to unknown app directories
-and files directly in `bench/fullstack/apps/`. An `aspnet-aot` change runs the JSON jobs.
+apps and both JSON jobs. Unknown app directories and files directly in `bench/fullstack/apps/`
+also select everything. An `aspnet-aot` change runs the JSON jobs.
 Run `node --test scripts/benchmark-scope.test.mjs` to check both selectors, including
 the imports of the Catalog parity commands for each app.
-Both workflows compare the pull request merge commit with its first parent, using
-the full Git diff rather than GitHub's path-filter file list, and the before and after
-commits on a push; a push whose before commit is unknown or not an ancestor of the new one (a
-force-push) tests everything. Newer pull request runs cancel older ones; `main` runs do not
-cancel one another, so each push's own diff is tested.
+Both scope jobs compare a pull request merge commit with its first parent, using the full Git
+diff rather than GitHub's path-filter file list. Newer pull request runs and new pushes to
+`main` cancel superseded runs of the same workflow. On `main`, each scope job and CI's bench
+size check cover commits since their workflow's last successful main push. With no usable base
+(including a rewritten push), scope selects every job and bench size checks the full history.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
