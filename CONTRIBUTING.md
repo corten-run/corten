@@ -386,6 +386,12 @@ stylesheet, a runtime that skips the shared load still swaps in styled, but on t
 swaps in unstyled instead of loading in full.
 The watch form's other presses (watching and unwatching a stock, the submit the network fails
 and the formaction button) are made in the page too, as a loaded Firefox's click on them can miss.
+The multipart rejection case presses its button in the page and waits for its POST under one
+five-second deadline. It then gives the expected title and heading five seconds to appear.
+With JavaScript disabled, each account form uses a native Enter press after the preceding
+document has loaded. The press, matching main-frame POST and destination load share 30 seconds.
+The POST response is checked only if that same request led to the loaded document, directly or
+through a redirect. No missing post is retried.
 The two Firefox failures in
 [#2014 Firefox smoke fails a different waiting-submit or template-copy case on two commits that touch neither the runtime nor the watchlist](https://github.com/corten-run/corten/issues/2014)
 each logged only that an expected post was never sent. A loaded Firefox reproduction of those
