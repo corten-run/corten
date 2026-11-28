@@ -11,7 +11,7 @@ import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remot
 import { archiveLimit, archiveMembers, digest, discardPublicationStage, durable, durableCopy, durableNew, evidenceFileIdentity, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
 import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full,
-  pendingCreate, providerAccount, providerFailure, sealedCollectionCandidate, sealedCollectionPolicy, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
+  pendingCreate, providerAccount, providerFailure, sealedCollectionCandidate, sealedCollectionPolicy, unitQuery, unsentCreate, unsentDelete, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
 import { captureValidation, validationTask } from "./cloud-validation-snapshot.mjs";
@@ -244,9 +244,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       } : undefined;
       // A transport may await between run() and the request (production crosses a
       // cancellation checkpoint), so the caller's last check runs again in the guard
-      // it calls after that await, refusing by throwing before any pinned outcome.
+      // it calls after that await. A proof-bound check can also refuse as unsent.
       const guardDispatch = beforeDispatch === undefined ? pinnedGuard
-        : () => { beforeDispatch(); return pinnedGuard?.(); };
+        : () => beforeDispatch() === false ? false : pinnedGuard?.();
       if (expiry !== undefined) {
         if (pinnedGuard && !prepareDelete?.publishIntent) checkHandoffDelete(false);
         fresh();
@@ -264,8 +264,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       // After the account preflight and the proof's deadline, the last local check before run().
       // The sealed intent checked its tree in the same turn. Only repeat the
       // scan after the transport awaits; its other local checks still run here.
-      beforeDispatch?.(false);
-      try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
+      try {
+        r = beforeDispatch?.(false) === false ? unsentDelete
+          : await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch);
+      }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r === unsentCreate) {
         assert.equal(argv[2], "create");
@@ -2082,11 +2084,19 @@ else ${pack}; fi` : pack, 11 * 60000);
                 requireDispatchCustody();
                 state.deletionIntentAt = new Date().toISOString(); save("deletion-intent");
               },
+              onUnsent() {
+                boundary(); requireSealedState();
+                delete state.deletionIntentAt;
+                writeState(state, renameSync, "delete-unsent");
+              },
             } : {}), async expiresAt() {
               const proof = await ssh(idleScript(false, stamp) + "\n" + query, 60000, true);
               assert.ok(proof.status === 0 && !proof.error && sealedUnit(proof.stdout, state), "idle archive or terminal unit changed");
               return proof.startedAtMs + 60000;
-            } }, undefined, undefined, sealedRecovery ? requireDispatchCustody : undefined);
+            } }, undefined, undefined, sealedRecovery ? includeTree => {
+              try { requireDispatchCustody(includeTree); } catch { return false; }
+              return true;
+            } : undefined);
           } else {
             assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check(); unchanged();
             state.deletionIntentAt = new Date().toISOString(); save("deletion-intent"); await execute("doctl", deletion, 120000);

@@ -362,7 +362,6 @@ test("approved sealed collection uses the measured replay and does not create or
       writeFileSync(h.statePath, beforeProbe); // discard this synthetic command's interrupted receipt
     }
   }
-  const beforeLateChange = readFileSync(h.statePath);
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const interrupted = p.deps.interrupted;
   let changedAtDispatch = false;
@@ -372,11 +371,12 @@ test("approved sealed collection uses the measured replay and does not create or
     }
     return interrupted();
   };
-  await assert.rejects(run(), /approved terminal seal/);
-  assert.ok(changedAtDispatch && h.saved().deletionIntentAt);
+  await assert.rejects(run(), /DELETE not dispatched; fresh collection approval required/);
+  assert.ok(changedAtDispatch);
+  assert.equal(h.saved().deletionIntentAt, undefined);
   assert.equal(h.deletes, 0);
   p.deps.interrupted = interrupted;
-  writeFileSync(terminalPath, terminalBytes); writeFileSync(h.statePath, beforeLateChange);
+  writeFileSync(terminalPath, terminalBytes);
   const beforeDeleteReplays = replayed;
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const live = h.host();

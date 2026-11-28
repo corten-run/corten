@@ -258,11 +258,11 @@ export function productionDispatch({ processRun, provider, interrupted, historic
     if (guardDispatch !== undefined) {
       assert.ok(args[0] === "doctl" && args[1][2] === "delete");
       // The controller's local custody must still match after this last await,
-      // before the private worker receives the mutation. A refusal throws; only a
-      // DELETE bounded by a proof deadline can instead report its proof expired.
+      // before the private worker receives the mutation. A guard may throw; only
+      // a DELETE bounded by a proof deadline may report a known-unsent refusal.
       if (guardDispatch() === false) {
-        assert.ok(args[4] !== undefined, "an unbounded DELETE guard cannot report an expired proof");
-        return unsentDelete; // The local proof expired before worker dispatch.
+        assert.ok(args[4] !== undefined, "an unbounded DELETE guard cannot report an unsent refusal");
+        return unsentDelete;
       }
     }
     const checkHistoricalDispatch = historicalDispatch();
