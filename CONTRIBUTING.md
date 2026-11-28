@@ -557,7 +557,13 @@ establish a general ranking.
          `cargo test --release -p corten-run --lib -- staged_page_future_sizes --nocapture`.
          A future that test does not print is taken as unchanged.
       4. A change of allocator, toolchain or build profile.
-      5. A change whose changed code no case of the kit runs as the requests it is for do.
+      5. A change whose changed code no case of the kit runs as the requests it is for do. A
+         change to Corten's own HTTP/1.1 connection (`App::own_http1`) is run by the kit's
+         cases with the switch on, the ones whose names end in `-own`, where they send the
+         requests it is for; it is of this kind where they do not, and of any other kind here
+         it is, as when it changes when the connection writes to its socket (the second). The
+         maintainer ruled so on 2026-11-27
+         ([design Choice 76](docs/design.md#choice-counted-or-measured)).
       6. A count over the budget, allocations or idle memory that rise, or a case the kit
          cannot count (Counted, below).
       7. A change whose reason is a win in cycles, time or requests a second.

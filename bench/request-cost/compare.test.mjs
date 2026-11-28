@@ -16,6 +16,9 @@ import { median } from "./figures.mjs";
 import { cases } from "./requests.mjs";
 
 const CASES = Object.keys(cases).length;
+/** The cases counted 16 at a time, and the idle readings, each taken RUNS times on a build. */
+const DEEPS = 5;
+const READINGS = 6;
 
 const kit = dirname(fileURLToPath(import.meta.url));
 const names = Object.keys(cases);
@@ -28,9 +31,9 @@ const expect = Object.fromEntries(readings().map((reading) => [reading.file, rea
  */
 const figures = () => ({
   count: Object.fromEntries(names.map((name, at) => [name, [20_000 + at, 20_000 + at, 20_001 + at]])),
-  deep: { pipeline: [9_000, 9_000, 9_000], get: [15_000, 15_001, 15_000], unstaged: [10_000, 10_000, 10_000], text: [9_500, 9_500, 9_500] },
+  deep: { pipeline: [9_000, 9_000, 9_000], get: [15_000, 15_001, 15_000], unstaged: [10_000, 10_000, 10_000], text: [9_500, 9_500, 9_500], "pipeline-own": [8_000, 8_000, 8_000] },
   allocations: Object.fromEntries(names.map((name) => [name, [16_000, 16_000]])),
-  idle: { request: [10_279, 10_281, 10_280], browser: [11_108, 11_108, 11_109], silent: [3_224, 3_227, 3_225] },
+  idle: { request: [10_279, 10_281, 10_280], browser: [11_108, 11_108, 11_109], silent: [3_224, 3_227, 3_225], "request-own": [9_064, 9_065, 9_064], "browser-own": [9_258, 9_258, 9_259], "silent-own": [2_782, 2_783, 2_782] },
   page: 4_096,
 });
 
@@ -95,9 +98,9 @@ const readMeasured = "Read from the description: `Request path: measured`, at li
 /** The verdict's line of a table. @param {string} markdown */
 const verdict = (markdown) => /** @type {string} */ (markdown.split("\n").find((line) => line.startsWith("**")));
 
-test("the runs to take are every case's instructions, four at a depth of 16, every case's allocations and three idle readings three times", () => {
+test("the runs to take are every case's instructions, five at a depth of 16, every case's allocations and six idle readings three times", () => {
   const all = readings();
-  assert.equal(all.length, CASES + 4 + CASES + 3 * RUNS);
+  assert.equal(all.length, CASES + DEEPS + CASES + READINGS * RUNS);
   assert.equal(RUNS, 3);
   assert.deepEqual(all[0], { file: "count-get.json", script: "count.mjs", options: ["--json", "--cases", "get"], expect: { kind: "instructions", case: "get", depth: 1, requests: 1000 } });
   assert.deepEqual(all.filter(({ options }) => options.includes("--depth")).map(({ file, options, expect: of }) => [file, options.join(" "), of.requests]), [
@@ -105,11 +108,12 @@ test("the runs to take are every case's instructions, four at a depth of 16, eve
     ["count-16-get.json", "--json --depth 16 --cases get", 992],
     ["count-16-unstaged.json", "--json --depth 16 --cases unstaged", 992],
     ["count-16-text.json", "--json --depth 16 --cases text", 992],
+    ["count-16-pipeline-own.json", "--json --depth 16 --cases pipeline-own", 992],
   ]);
   assert.deepEqual(all.filter(({ options }) => options.includes("--allocations")).map(({ options }) => options.at(-1)), names);
   // An idle reading's three runs are not one after another: the other readings are between them.
-  assert.deepEqual(all.filter(({ script }) => script === "idle.mjs").map(({ file, options }) => `${file} ${options.join(" ")}`), [1, 2, 3].flatMap((run) => [`idle-request-${run}.json --json`, `idle-browser-${run}.json --json --case get-browser --requests 3`, `idle-silent-${run}.json --json --silent`]));
-  assert.deepEqual(all.at(-1)?.expect, { kind: "idle", case: "pipeline", requests: 0, connections: 5000, addresses: 1 });
+  assert.deepEqual(all.filter(({ script }) => script === "idle.mjs").map(({ file, options }) => `${file} ${options.join(" ")}`), [1, 2, 3].flatMap((run) => [`idle-request-${run}.json --json`, `idle-browser-${run}.json --json --case get-browser --requests 3`, `idle-silent-${run}.json --json --silent`, `idle-request-own-${run}.json --json --case pipeline-own`, `idle-browser-own-${run}.json --json --case get-browser-own --requests 3`, `idle-silent-own-${run}.json --json --silent --case pipeline-own`]));
+  assert.deepEqual(all.at(-1)?.expect, { kind: "idle", case: "pipeline-own", requests: 0, connections: 5000, addresses: 1 });
   // No two runs write one file, and none names the probe, its CPU or its port: the caller's.
   assert.equal(new Set(all.map(({ file }) => file)).size, all.length);
   assert.ok(all.every(({ options }) => !options.some((option) => option === "--cpu" || option === "--port")));
@@ -237,10 +241,10 @@ test("a change inside the budget passes as counted, and the table gives every ru
   // Each run's growth in bytes, its rounded figure a connection after it, and what base allows.
   assert.ok(markdown.includes("| after one request | 42,106,880 | 42,106,880 | 0 | 0.00% | 8,192 | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) |  |"), markdown);
   // A row a case and a row a reading, and no section for runs with no figure when all gave one.
-  assert.equal(markdown.split("\n").filter((line) => line.startsWith("| `") || /^\| (after|before) /.test(line)).length, CASES + 4 + CASES + 3);
+  assert.equal(markdown.split("\n").filter((line) => line.startsWith("| `") || /^\| (after|before) /.test(line)).length, CASES + DEEPS + CASES + READINGS);
   // Each idle run is given whole, with its before, after, growth and page size, which decide.
   const record = markdown.split("\n").filter((line) => /^(base|head), .*, run [1-3]: /.test(line));
-  assert.equal(record.length, 2 * 3 * 3, markdown);
+  assert.equal(record.length, 2 * READINGS * 3, markdown);
   assert.ok(record.includes("base, after one request, run 2: 8422 bytes a connection (5000 that answered 1 pipeline, from 1 address; 7577600 before, 49688576 after, 42110976 grown, in 4096-byte pages)"), record.join("\n"));
   assert.doesNotMatch(markdown, /no figure|over the budget|rose|not decided/);
 });
@@ -328,7 +332,7 @@ test("an idle reading over fewer connections than its page has bytes, or of two 
     for (const what of ["after one request", "after three of a browser's requests", "before any byte"]) {
       assert.ok(verdict(markdown).includes(`idle memory ${what} is not decided (\`not a gate reading: one 65536-byte page over 5000 connections is more than a byte a connection; open at least 65536\`)`), `${what}\n${markdown}`);
     }
-    assert.equal(markdown.match(/\| not decided \|$/gm)?.length, 3, markdown);
+    assert.equal(markdown.match(/\| not decided \|$/gm)?.length, READINGS, markdown);
   }
   // Base read in 4,096-byte pages and head in 65,536-byte ones: two page sizes are not one reading.
   const mixed = builds(t, (_, head) => {
@@ -425,8 +429,8 @@ test("a probe that did not build is said once: against base it leaves the change
   const counted = compare(empty, head, { description: counting });
   assert.equal(counted.status, 1);
   assert.equal(verdict(counted.markdown), `**Does not pass as counted:** ${said}. ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
-  assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, CASES + 4 + CASES + 3);
-  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `post-absolute`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`, `unstaged-subdomain`\.$/m);
+  assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, CASES + DEEPS + CASES + READINGS);
+  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `post-absolute`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`, `unstaged-subdomain`, `get-own`, `post-own`, `unstaged-own`, `pipeline-own`, `get-browser-own`, `page-browser-own`, `unstaged-any-long-own`\.$/m);
   const measured = compare(empty, head, { description: measuring });
   assert.deepEqual([measured.status, measured.holds], [0, false]);
   assert.equal(verdict(measured.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said}. ${readMeasured}`);
@@ -437,7 +441,7 @@ test("a probe that did not build is said once: against base it leaves the change
   assert.equal(verdict(broken.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said.replace("base", "head")}; \`get\`'s instructions has no figure on base (\`the run left no output\`). ${readMeasured} The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.`);
   // A build with nothing in its directory and no word of why lacks every figure and every answer.
   rmSync(join(empty, "unbuilt"));
-  assert.equal(verdict(compare(base, empty, { description: counting }).markdown).match(/ has no (figure|answer) on (base and )?head /g)?.length, CASES + 4 + CASES + 3 * RUNS + CASES);
+  assert.equal(verdict(compare(base, empty, { description: counting }).markdown).match(/ has no (figure|answer) on (base and )?head /g)?.length, CASES + DEEPS + CASES + READINGS * RUNS + CASES);
   // The file being there is the failure: empty, and beside every figure and answer of a build
   // that ran all the same, it leaves that build none.
   const whole = builds(t);
@@ -445,7 +449,7 @@ test("a probe that did not build is said once: against base it leaves the change
   const marked = compare(whole.base, whole.head, { description: counting });
   assert.equal(marked.status, 1);
   assert.ok(verdict(marked.markdown).startsWith(`**Does not pass as counted:** the probe did not build against base (\`the build left no word of why\`). ${readCounted} By `), marked.markdown);
-  assert.equal(marked.markdown.match(/\| no figure \|$/gm)?.length, CASES + 4 + CASES + 3);
+  assert.equal(marked.markdown.match(/\| no figure \|$/gm)?.length, CASES + DEEPS + CASES + READINGS);
   assert.doesNotMatch(marked.markdown, /^\| `get` \| 20,000 /m);
   writeFileSync(join(whole.head, "unbuilt"), "");
   assert.equal(compare(whole.base, whole.head, { description: measuring }).status, 1);
@@ -516,6 +520,209 @@ test("builds that answer differently are said to and fail nothing; a case either
     assert.deepEqual([status, holds], [description === measuring ? 0 : 1, false], description);
     for (const clause of ["`post` has no answer on head (`not the body of post: \"ok\"`)", "`text` has no answer on base and head (`no capture`)", "`page` has no answer on base (`no capture`)", `\`page-browser\` has no answer on head ${not}`, `\`get\` has no answer on base ${not}`, `\`pipeline\` has no answer on base ${not}`]) assert.ok(verdict(markdown).includes(clause), `${clause}\n${markdown}`);
     assert.match(markdown, /^No answer to compare in `get`, `post`, `pipeline`, `text`, `page`, `page-browser`\.$/m);
+  }
+});
+
+/** What a probe built without its own-http1 feature says when asked for the switch. */
+const WITHOUT = "NO own_http1: this probe was built without the own-http1 feature, as against a Corten that has no App::own_http1";
+const OWNED = names.filter((name) => cases[name]?.own === true);
+/** Writes, in place of each run and answer of a case with own_http1 on, what the kit writes when the build's probe cannot run it. @param {string} at */
+function without(at) {
+  writeFileSync(join(at, "own-http1"), "without\n");
+  for (const { file, expect: of } of readings()) if (cases[of.case]?.own === true) writeFileSync(join(at, file), `${JSON.stringify({ ...of, unsupported: WITHOUT })}\n`);
+  for (const name of OWNED) {
+    rmSync(join(at, "answers", `${name}.http`));
+    writeFileSync(join(at, "answers", `${name}.unsupported`), `${WITHOUT}\n`);
+  }
+}
+
+test("a case with own_http1 on that base's probe could not run is not compared, and neither passes nor fails; one head's could not run is no figure", (t) => {
+  // Head's rows with the switch on over the budget, up in allocations and up in idle memory: none is compared.
+  const { base, head } = builds(t, (_, build) => {
+    build.count["get-own"] = [30_000, 30_000, 30_000];
+    build.allocations["post-own"] = [20_000, 16_000];
+    build.idle["silent-own"] = [9_000, 9_000, 9_000];
+  });
+  without(base);
+  const list = OWNED.map((name) => `\`${name}\``).join(", ");
+  for (const description of [counting, "", measuring]) {
+    const { markdown, status, holds } = compare(base, head, { description });
+    assert.deepEqual([status, holds], [0, true], description);
+    assert.ok(verdict(markdown).endsWith(` Not compared, so neither passed nor failed: ${list}, which base's probe could not run (\`${WITHOUT}\`).`), markdown);
+  }
+  const { markdown } = compare(base, head, { description: counting });
+  assert.ok(verdict(markdown).startsWith(`**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations rise, idle memory does not rise, and both builds gave every case compared its answer. ${readCounted} Not compared`), markdown);
+  assert.ok(markdown.includes("| `get-own` | none | 30,000 |  |  | none | 30000 30000 30000 (0.9 s; others 243 in 1) | not compared |"), markdown);
+  assert.ok(markdown.includes("| `pipeline-own`, 16 at a time | none | 8,000 |  |  | none | 8000 8000 8000 (0.9 s; others 243 in 1) | not compared |"), markdown);
+  assert.ok(markdown.includes("| `post-own` | none | 20.00 |  |  | none | 20,000 and 16,000 frees | not compared |"), markdown);
+  assert.ok(markdown.includes("| before any byte, own_http1 on | none | 36,864,000 |  |  |  | none none none | 36,864,000 (7,373) 36,864,000 (7,373) 36,864,000 (7,373) | not compared |"), markdown);
+  // Every row of a case with the switch on, the one at a depth of 16 and the three idle readings, and no other.
+  assert.equal(markdown.match(/\| not compared \|$/gm)?.length, OWNED.length + 1 + OWNED.length + 3);
+  assert.ok(markdown.includes(`Both builds give the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in ${CASES - OWNED.length} cases both ran.`), markdown);
+  assert.doesNotMatch(markdown, /no figure|over the budget|\| rose \||not decided/);
+  // Head's probe could not run what base's ran: no figure, which cannot be counted, as any other.
+  const lost = builds(t);
+  without(lost.head);
+  // Neither build can run the switch: base's refusal still cannot supply figures for head.
+  const neither = builds(t);
+  without(neither.base);
+  without(neither.head);
+  for (const run of [lost, neither]) {
+    for (const description of [counting, "", measuring]) {
+      const fails = compare(run.base, run.head, { description });
+      assertMiss(fails, description);
+      assert.ok(verdict(fails.markdown).includes(`\`get-own\`'s instructions has no figure on head (\`${WITHOUT}\`)`), fails.markdown);
+      assert.ok(verdict(fails.markdown).includes(`\`get-own\` has no answer on head (\`${WITHOUT}\`)`), fails.markdown);
+      assert.doesNotMatch(fails.markdown, /not compared/);
+    }
+  }
+  // Only a case with the switch on is one a build may not run, and only in the probe's own words
+  // and as the whole of the run asked for: anything else is no figure, and no answer.
+  const other = builds(t);
+  writeFileSync(join(other.base, "count-get.json"), `${JSON.stringify({ ...expect["count-get.json"], unsupported: WITHOUT })}\n`);
+  writeFileSync(join(other.base, "count-get-own.json"), `${JSON.stringify({ ...expect["count-get-own.json"], unsupported: "the probe would rather not" })}\n`);
+  writeFileSync(join(other.base, "count-unstaged-own.json"), `${JSON.stringify({ ...expect["count-unstaged-own.json"], unsupported: WITHOUT, counts: [1] })}\n`);
+  writeFileSync(join(other.base, "allocations-post-own.json"), `${JSON.stringify({ ...expect["allocations-post-own.json"], depth: 16, unsupported: WITHOUT })}\n`);
+  rmSync(join(other.base, "answers", "pipeline.http"));
+  writeFileSync(join(other.base, "answers", "pipeline.unsupported"), `${WITHOUT}\n`);
+  const refused = compare(other.base, other.head, { description: counting });
+  assert.equal(refused.status, 1);
+  const not = "(`the run's output is not the whole of the run asked for`)";
+  for (const clause of [`\`get\`'s instructions has no figure on base ${not}`, `\`get-own\`'s instructions has no figure on base ${not}`, `\`unstaged-own\`'s instructions has no figure on base ${not}`, `\`post-own\`'s allocations has no figure on base ${not}`, "`pipeline` has no answer on base (`no capture`)"]) {
+    assert.ok(verdict(refused.markdown).includes(clause), `${clause}\n${refused.markdown}`);
+  }
+  assert.doesNotMatch(refused.markdown, /not compared/);
+});
+
+/** @param {ReturnType<typeof compare>} result @param {string} description */
+function assertMiss({ markdown, status, holds }, description) {
+  assert.deepEqual([status, holds], [description === measuring ? 0 : 1, false], `${description}\n${verdict(markdown)}`);
+  assert.match(verdict(markdown), description === measuring ? /As counted they would not pass:/ : /^\*\*Does not pass as counted:/);
+}
+
+test("a base without the switch cannot hide a missing or invalid head reading or answer", (t) => {
+  const { base, head } = builds(t);
+  without(base);
+  // The reviewer's missing count, capture and one idle sample, plus malformed head evidence.
+  for (const file of ["count-get-own.json", "answers/get-own.http", "idle-silent-own-2.json"]) rmSync(join(head, file));
+  writeFileSync(join(head, "allocations-post-own.json"), "{}");
+  writeFileSync(join(head, "answers/post-own.http"), answer("pipeline"));
+  for (const description of [counting, "", measuring]) {
+    const result = compare(base, head, { description });
+    assertMiss(result, description);
+    for (const clause of ["`get-own`'s instructions has no figure on head", "`get-own` has no answer on head", "idle memory before any byte, own_http1 on, run 2, has no figure on head", "`post-own`'s allocations has no figure on head", "`post-own` has no answer on head"]) {
+      assert.ok(verdict(result.markdown).includes(clause), `${clause}\n${verdict(result.markdown)}`);
+    }
+    assert.match(result.markdown, /^\| before any byte, own_http1 on \|.*\| no figure \|$/m);
+  }
+});
+
+test("every switch-on row validates head's evidence the same way with or without a capable base", (t) => {
+  const idle = ["after one request", "after three of a browser's requests", "before any byte"].map((what) => `${what}, own_http1 on`);
+  const figures = readings().filter(({ expect: of }) => cases[of.case]?.own);
+  const tableRows = (/** @type {string} */ markdown) => markdown.split("\n").filter((line) => /^\| (?:`[^`]+-own`|.*own_http1 on \|)/.test(line));
+  const rule = (/** @type {string} */ row) => row.split("|").at(-2)?.trim();
+  const { base } = builds(t);
+  const absent = builds(t).base;
+  without(absent);
+  for (const state of ["valid", "missing", "malformed", "wrong case", "refused", "mixed pages", "large pages", "two samples"]) {
+    const { head } = builds(t);
+    const samplesOnly = ["mixed pages", "large pages", "two samples"].includes(state);
+    for (const { file, expect: of } of figures) {
+      const at = join(head, file);
+      if (state === "missing" || (state === "two samples" && of.kind === "idle" && file.endsWith("-2.json"))) rmSync(at);
+      else if (state === "malformed") writeFileSync(at, "{");
+      else if (state === "wrong case") writeFileSync(at, printed(file, of.kind === "instructions" ? [20_000, 20_000, 20_000] : of.kind === "allocations" ? [16_000, 16_000] : 10, 4_096).replace(`"case":"${of.case}"`, '"case":"other"'));
+      else if (state === "refused") writeFileSync(at, `${JSON.stringify({ ...of, unsupported: WITHOUT })}\n`);
+      else if (state === "two samples" && of.kind === "instructions") writeFileSync(at, printed(file, [20_000, 20_000]));
+      else if (of.kind === "idle" && (state === "large pages" || (state === "mixed pages" && file.endsWith("-2.json")))) writeFileSync(at, printed(file, 10, 65_536));
+    }
+    for (const name of OWNED) {
+      const at = join(head, "answers", `${name}.http`);
+      if (state === "missing" || state === "refused") rmSync(at);
+      if (state === "malformed") writeFileSync(at, answer(name).subarray(0, -1));
+      if (state === "wrong case") writeFileSync(at, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+      if (state === "refused") writeFileSync(join(head, "answers", `${name}.unsupported`), `${WITHOUT}\n`);
+    }
+    for (const description of [counting, measuring, ""]) {
+      const waived = compare(absent, head, { description });
+      const ordinary = compare(base, head, { description });
+      const context = `${state}, ${description.trim() || "no declaration"}`;
+      const rows = tableRows(waived.markdown);
+      const usual = tableRows(ordinary.markdown);
+      assert.equal(rows.length, OWNED.length * 2 + 1 + idle.length, context);
+      for (const [at, row] of rows.entries()) {
+        const what = row.split("|")[1]?.trim();
+        const isIdle = idle.some((label) => label === what);
+        const isCount = at < OWNED.length + 1;
+        const expected = state === "valid" || (samplesOnly && !isIdle && !(state === "two samples" && isCount))
+          ? "not compared"
+          : isIdle && (state === "mixed pages" || state === "large pages") ? "not decided" : "no figure";
+        assert.equal(rule(row), expected, `${context}: ${row}`);
+        assert.equal(rule(/** @type {string} */ (usual[at])), expected === "not compared" ? "" : expected, context);
+        if (expected === "not decided") {
+          const why = state === "mixed pages" ? "its runs read pages of 4,096 and 65,536 bytes, and the rule compares runs of one page size" : "not a gate reading: one 65536-byte page over 5000 connections is more than a byte a connection; open at least 65536";
+          assert.ok(verdict(waived.markdown).includes(`idle memory ${what} is not decided (\`${why}\`)`), `${context}: ${verdict(waived.markdown)}`);
+        }
+      }
+      const quoted = OWNED.map((name) => `\`${name}\``);
+      if (state === "valid" || samplesOnly) {
+        assert.ok(waived.markdown.includes(`in ${CASES - OWNED.length} cases both ran.`), context);
+        assert.doesNotMatch(waived.markdown, /No answer to compare/);
+      } else {
+        for (const result of [waived, ordinary]) {
+          assert.ok(result.markdown.includes(`No answer to compare in ${quoted.join(", ")}.`), context);
+          for (const name of quoted) assert.ok(verdict(result.markdown).includes(`${name} has no answer on head`), context);
+        }
+      }
+      for (const result of [waived, ordinary]) {
+        if (state === "valid") assert.deepEqual([result.status, result.holds], [0, true], context);
+        else assertMiss(result, description);
+      }
+    }
+  }
+});
+
+test("a refusal among figures and answers is not a capability and cannot hide a head rise", (t) => {
+  const { base, head } = builds(t, (_, build) => {
+    build.count["get-own"] = [30_000, 30_000, 30_000];
+  });
+  // The reviewer's lone refusal, with the valid answer and all other readings still present.
+  writeFileSync(join(base, "count-get-own.json"), `${JSON.stringify({ ...expect["count-get-own.json"], unsupported: WITHOUT })}\n`);
+  for (const description of [counting, "", measuring]) {
+    const result = compare(base, head, { description });
+    assertMiss(result, description);
+    assert.match(verdict(result.markdown), /`get-own`'s instructions has no figure on base/);
+    assert.doesNotMatch(result.markdown, /not compared/);
+  }
+  // Another row still has two figures and must be decided by the usual budget.
+  writeFileSync(join(head, "count-post-own.json"), printed("count-post-own.json", [30_000, 30_000, 30_000]));
+  assert.match(verdict(compare(base, head).markdown), /`post-own` runs .* over the budget/);
+});
+
+test("only the build record and every exact refusal together establish the absent capability", (t) => {
+  const { base, head } = builds(t);
+  without(base);
+  const record = join(base, "own-http1");
+  const capture = join(base, "answers", "pipeline-own.http");
+  const refusal = join(base, "answers", "pipeline-own.unsupported");
+  const idle = join(base, "idle-silent-own-2.json");
+  const sample = `${JSON.stringify({ ...expect["idle-silent-own-2.json"], unsupported: WITHOUT })}\n`;
+  for (const [breakEvidence, restore] of /** @type {[() => void, () => void][]} */ ([
+    [() => rmSync(record), () => writeFileSync(record, "without\n")],
+    [() => writeFileSync(record, "with\n"), () => writeFileSync(record, "without\n")],
+    [() => writeFileSync(capture, answer("pipeline-own")), () => rmSync(capture)],
+    [() => writeFileSync(refusal, `${WITHOUT}\nunexpected\n`), () => writeFileSync(refusal, `${WITHOUT}\n`)],
+    [() => rmSync(idle), () => writeFileSync(idle, sample)],
+    [() => writeFileSync(idle, sample.replace(WITHOUT, "NO own_http1: other")), () => writeFileSync(idle, sample)],
+  ])) {
+    breakEvidence();
+    for (const description of [counting, "", measuring]) {
+      const result = compare(base, head, { description });
+      assertMiss(result, description);
+      assert.doesNotMatch(result.markdown, /not compared/);
+    }
+    restore();
   }
 });
 

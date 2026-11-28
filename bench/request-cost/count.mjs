@@ -12,6 +12,7 @@
 //        `--json` with either of the first two prints, in place of the table, a line of JSON a
 //          case: what was measured, unrounded (each window's instructions, the allocator's calls
 //          and the requests they are over), for compare.mjs to read
+//        A case whose name ends in `-own` is sent with `App::own_http1` on (requests.mjs, `OWN`).
 //
 // A count is one run of the probe under callgrind: 240 requests on one connection, then the 1,000
 // that are counted on the same connection, each written after the answer before it (or `--depth`
@@ -22,13 +23,16 @@
 // some work once a second whatever it serves, so a longer window counts a little more a request:
 // the seconds are printed to compare (README.md, How a number is read).
 // `--allocations` reads the calls into the allocator from the same kind of dump.
+// A case with `App::own_http1` on, given a probe built without that switch (build.sh), is not
+// run: its line says so (with `--json`, its JSON's `unsupported` holds the probe's word, and with
+// `--answers` a file `<case>.unsupported` does), and the other cases are counted.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { allocatorCalls } from "./allocations.mjs";
 import { COUNTED, WARM, each, median, sent } from "./figures.mjs";
-import { Connection, counted, send, start } from "./probe.mjs";
+import { Connection, WithoutOwnHttp1, counted, send, start } from "./probe.mjs";
 import { cases, named } from "./requests.mjs";
 
 const { values, positionals } = parseArgs({
@@ -78,7 +82,13 @@ async function count() {
   if (!values.json) console.log(row(["case", "median", "least", "most", "seconds", "other threads", "counts"]));
   for (const name of names) {
     const windows = [];
-    for (let rep = 0; rep < reps; rep += 1) windows.push(await counted(binary, name, { cpu, port, depth, scratch }));
+    try {
+      for (let rep = 0; rep < reps; rep += 1) windows.push(await counted(binary, name, { cpu, port, depth, scratch }));
+    } catch (error) {
+      if (!(error instanceof WithoutOwnHttp1)) throw error;
+      unsupported("instructions", name, error);
+      continue;
+    }
     const counts = windows.map((window) => Math.round(each(window.serving, depth)));
     // The longest window, and the most the other threads ran in one, with how many they were.
     const seconds = Math.max(...windows.map((window) => window.seconds)).toFixed(1);
@@ -93,11 +103,24 @@ function of(kind, name) {
   return { kind, case: name, depth, requests: sent(COUNTED, depth) };
 }
 
+/** Says that the probe could not run a case, which has no figure. @param {string} kind @param {string} name @param {Error} error */
+function unsupported(kind, name, error) {
+  console.log(values.json ? JSON.stringify({ ...of(kind, name), unsupported: error.message }) : `${name.padEnd(width)}not run: ${error.message}`);
+}
+
 async function allocations() {
   const two = (/** @type {number} */ count) => each(count, depth).toFixed(2);
   if (!values.json) console.log("case".padEnd(width) + "allocations".padStart(12) + "frees".padStart(10) + "  calls");
   for (const name of names) {
-    const found = allocatorCalls((await counted(binary, name, { cpu, port, depth, scratch })).profile);
+    let window;
+    try {
+      window = await counted(binary, name, { cpu, port, depth, scratch });
+    } catch (error) {
+      if (!(error instanceof WithoutOwnHttp1)) throw error;
+      unsupported("allocations", name, error);
+      continue;
+    }
+    const found = allocatorCalls(window.profile);
     // Every case allocates for each request: fewer means the profile is not of the requests.
     if (found.allocations < sent(COUNTED, depth)) throw new Error(`${name}: the profile holds ${found.allocations} allocations for ${sent(COUNTED, depth)} requests`);
     const calls = Object.entries(found.calls).sort().map(([call, count]) => `${call}=${two(count)}`).join(" ");
@@ -108,8 +131,18 @@ async function allocations() {
 async function answers(/** @type {string} */ directory) {
   mkdirSync(directory, { recursive: true });
   for (const name of names) {
-    const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
-    const probe = await start(binary, configuration, { cpu, port, hosts });
+    for (const suffix of ["http", "unsupported"]) rmSync(join(directory, `${name}.${suffix}`), { force: true });
+  }
+  for (const name of names) {
+    const { configuration, hosts, own } = /** @type {typeof cases[string]} */ (cases[name]);
+    let probe;
+    try {
+      probe = await start(binary, configuration, { cpu, port, hosts, own });
+    } catch (error) {
+      if (!(error instanceof WithoutOwnHttp1)) throw error;
+      writeFileSync(join(directory, `${name}.unsupported`), `${error.message}\n`);
+      continue;
+    }
     try {
       const connection = await Connection.open(port);
       writeFileSync(join(directory, `${name}.http`), await send(connection, name, 3));

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import zlib from "node:zlib";
-import { Answers, cases, masked, named, unexpected } from "./requests.mjs";
+import { Answers, OWN, cases, masked, named, unexpected } from "./requests.mjs";
 
 const answer = (/** @type {string} */ body, more = "", status = "200 OK") => Buffer.from(`HTTP/1.1 ${status}\r\ncontent-length: ${Buffer.byteLength(body, "latin1")}\r\n${more}\r\n${body}`, "latin1");
 
@@ -69,12 +69,22 @@ test("each case is its request, byte for byte, to its configuration", () => {
     "unstaged-any-short": ["api", "GET /unstaged11?a=1&b=2 HTTP/1.1\r\nHost: a.test:8123\r\n\r\n", "*"],
     "unstaged-subdomain": ["api", "GET /unstaged11?a=1&b=2 HTTP/1.1\r\nHost: seller-desk.localhost:8123\r\n\r\n"],
   };
+  // The cases with App::own_http1 on, last: each the request of its case with the switch off.
+  const own = ["get", "post", "unstaged", "pipeline", "get-browser", "page-browser", "unstaged-any-long"];
+  assert.deepEqual(OWN, own);
+  const all = { ...expected, ...Object.fromEntries(own.map((name) => [`${name}-own`, [...expected[/** @type {keyof typeof expected} */ (name)], "own"]])) };
   assert.deepEqual(
     Object.fromEntries(
-      Object.entries(cases).map(([name, { configuration, hosts, request }]) => [name, [configuration, request(8123).latin1Slice(), ...(hosts === undefined ? [] : [hosts])]]),
+      Object.entries(cases).map(([name, { configuration, hosts, own, request }]) => [name, [configuration, request(8123).latin1Slice(), ...(hosts === undefined ? [] : [hosts]), ...(own ? ["own"] : [])]]),
     ),
-    expected,
+    all,
   );
+  assert.deepEqual(Object.keys(cases), Object.keys(all));
+  for (const name of own) {
+    const { own: on, ...rest } = /** @type {typeof cases[string]} */ (cases[`${name}-own`]);
+    assert.equal(on, true, name);
+    assert.deepEqual(rest, cases[name], name);
+  }
   // The names other than `localhost`: 40 bytes, 4,096 whose last is the only one not a letter,
   // 4,096 whose last three are its only percent-encoded byte, 6, fewer than the 8 read in line,
   // and one under `localhost` whose part before it is 11 bytes, between the 8 and 16 read in line.
@@ -122,6 +132,12 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
     "unstaged-any-encoded": "3",
     "unstaged-any-short": "3",
     "unstaged-subdomain": "3",
+    "get-own": "3",
+    "post-own": "23",
+    "unstaged-own": "3",
+    "pipeline-own": "ok",
+    "get-browser-own": "3",
+    "unstaged-any-long-own": "3",
   })) {
     assert.equal(unexpected(name, answer(body)), null, name);
     assert.match(String(unexpected(name, answer(body, "", "404 Not Found"))), /^not a 200: HTTP\/1\.1 404 Not Found$/, name);
@@ -131,6 +147,8 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
   }
   // The compressed page is the page once decompressed: not another page, not what only begins as zstd does.
   assert.equal(unexpected("page-browser", answer(zstd(page), "content-encoding: zstd\r\n")), null);
+  assert.equal(unexpected("page-browser-own", answer(zstd(page), "content-encoding: zstd\r\n")), null);
+  assert.match(String(unexpected("page-browser-own", answer(page))), /^Content-Encoding none, not zstd$/);
   assert.match(String(unexpected("page-browser", answer(zstd(page)))), /^Content-Encoding none, not zstd$/);
   assert.match(String(unexpected("page-browser", answer(zstd(page), "content-encoding: br\r\n"))), /^Content-Encoding br, not zstd$/);
   assert.match(String(unexpected("page-browser", answer(page, "content-encoding: zstd\r\n"))), /^not a zstd body: /);

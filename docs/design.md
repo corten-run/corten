@@ -11569,7 +11569,13 @@ rules something out.
     so the rule above, which allows one page, cannot decide that run (one page passes, two fail),
     and the hosted job's growths on its head decide it. No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
-    figure, so taking it again is not that. The maintainer accepted both figures, this budget
+    figure, so taking it again is not that. The [hosted run on `f3df7acb5`](https://github.com/corten-run/corten/actions/runs/46075454535/job/140762020599)
+    against `2f8984ddc`, with the same crates on both builds, read a rise before any byte with
+    the switch off (one run, three readings a build): head's median was 13,295,616 bytes over
+    5,000 connections against base's 13,275,136, 20,480 more, over that branch's 4,096-byte
+    allowance (one page). The rise also exceeds the 16,384 bytes of `main`'s later four-page
+    floor. This met the hosted idle revisit condition, below. The run establishes no cause
+    and changes no floor. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
     neither is measured: they are bets still, and the description of
     [#2116 Name three ways a change around the handler is decided: counted, measured and the trend](https://github.com/corten-run/corten/pull/2116)
@@ -11603,6 +11609,19 @@ rules something out.
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     ran 1.52% fewer user instructions on `kept` and read 0.07% fewer cycles across placements,
     with a bound of +0.28%, one change in a reading that gated nothing.
+
+    A change to Corten's own HTTP/1.1 connection ([design Choice 78](#choice-own-http1)) was of
+    the list's fifth kind whatever it changed, since no case of the kit turned `App::own_http1`
+    on. Asked whether such changes should be counted by cases that do, take cycles each, or
+    merge on counts as code an app opts into, the maintainer chose the first on 2026-11-27, with
+    the condition [Choice 78](#choice-own-http1) records for the switch's default. So the kit has cases with the
+    switch on (its page, The cases), and such a change is counted where they run its code and a
+    count can see what it changes. It is measured where they do not run it, by the fifth kind,
+    and where it is of another kind on the list: one that changes when the connection writes to
+    its socket, or what the kernel does or a request waits for. A count does not show a win in
+    cycles, so a saving there is claimed in instructions, as any is, and nothing has read a
+    browser's request with the switch on in cycles. The change that added the switch is measured,
+    by the second kind among others, and this does not move it.
 
     The trend's first run. Its first run with every workload read was a condition under Revisit
     when (below), and that run has been made. It read `main` at `056aba61c` against `v0.2.0`
@@ -11707,7 +11726,11 @@ rules something out.
     run records and nobody reviews, so part of what a run reads there is the answer and not
     the path to it; and a rise of one page over base's three when they agree, at most a byte a
     connection at the gate's settings, is too small a regression to refuse a change for, which
-    no reading has tested); measured (the kit's
+    no reading has tested; and a change to Corten's own HTTP/1.1 connection that the kit's
+    cases with the switch on run, and that is none of the listed kinds, costs a request in
+    cycles about what it costs in instructions. That is the counted way's untested premise, not
+    a finding of the maintainer's ruling; nothing has read that connection's cycles, a browser's
+    request least of all); measured (the kit's
     repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
@@ -11760,15 +11783,18 @@ rules something out.
     a quarter of the budget apart in a case, which fails no job and means its count no longer
     resolves the budget there (two binaries of the same crates that differ so are where the
     code was placed, which a count cannot tell from a change); the hosted job reads idle
-    memory to rise between two builds of the same crates, so it fails a change for what the
-    runner did (three runs a build drawn from one distribution read a rise in about one
+    memory to rise between two builds of the same crates, so the check can fail without a
+    change to those crates (three runs a build drawn from one distribution read a rise in about one
     comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
     growths in 4,096-byte pages and base's span alone, and in about one in nineteen by those
     growths with the one page allowed, on the same draws, at a spread of 1.5 bytes a
     connection, each simulated, not a rate seen on runners, which the rule's idle statistic was
     not chosen against); a job comes to tell the kinds a count cannot judge
     from a diff, so the line says nothing the job does not know and can be dropped; or a reading
-    across placements comes to cost what a count does, so cycles can be asked of every change.
+    across placements comes to cost what a count does, so cycles can be asked of every change;
+    or `App::own_http1` becomes the default, so the kit's cases without `-own` no longer count
+    the connection an app has unless it asks, or the kit's cases with the switch on are taken
+    out, so a change to that connection is of the fifth kind again.
 
     Last checked: 2026-11-25, the kit's page read at `3eb752d8e` for its repeats and its builds
     in five directories (taken on `c9666dc96`, not taken again), and
@@ -11795,7 +11821,13 @@ rules something out.
     `run.exit`, `run/row.md`, `run/plan.json` and each part's `results/report.json`, the
     change's and the A/A's cycles, user and kernel, as recorded and with the labels swapped,
     each K and the pilot it was sized from, and each side's aligned sections and second pads,
-    none in any part.
+    none in any part; 2026-11-27, the kit's cases with `App::own_http1` on at `8c4957bea`,
+    against `2f8984ddc`: the kit's existing rows with the kit before them, at `2f8984ddc`, and
+    after, on one host, every answer the same byte for byte, every allocation the same and
+    every median of instructions within 1, which its three counts span; 2026-11-27 (UTC),
+    the hosted job's log on `f3df7acb5` against `2f8984ddc`: switch-off idle memory before any
+    byte, 13,295,616 against 13,275,136 bytes over 5,000 connections, 20,480 over, against
+    4,096 allowed on that branch and 16,384 at `main`'s later floor.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits
@@ -12430,12 +12462,15 @@ rules something out.
     saving reads as a larger share of it. These are
     instructions, allocations and bytes, which measure work and memory and not speed. The change
     is one [Choice 76](#choice-counted-or-measured) has measured and not counted: with the switch
-    on a connection writes to its socket at other times than hyper's does, no case of the kit asks
-    for the switch (the counts with it on are of the kit's probe with that one call added), a
+    on a connection writes to its socket at other times than hyper's does, no case of the kit
+    asked for the switch when these were counted (the counts with it on above are of the kit's
+    probe with that one call added; the kit now has cases that ask for it, Stands on, below), a
     connection handed to hyper holds more idle memory than hyper's own (below), and its reason is
     a win in cycles. No cycles or times have been taken for it, so it claims no
-    CPU-cost win, and the plan that would read one across placements
-    ([Choice 72](#choice-placement-runs)) is not yet declared.
+    CPU-cost win. The plan to read cycles across placements ([Choice 72](#choice-placement-runs))
+    was [declared on the pull request](https://github.com/corten-run/corten/pull/2133#issuecomment-7224166803)
+    on 2026-11-27. Its GETs send a `Host` line and no browser header lines; its POST also
+    sets `Content-Type` and sends a body.
 
     **What the connection is** (`crates/corten/src/h1.rs`). One loop for a connection: it reads a
     request's head, calls the connection's service with it, writes the answer into one buffer and
@@ -12933,8 +12968,15 @@ rules something out.
     connection with bodies nothing in cycles and no more memory than hyper's own; a placement run reads a CPU-cost win on the
     requests without a body and meets +1% on the others; a security review of the connection and
     the gate has been made by someone who wrote neither, with nothing it found left open; the
-    gate, or a fixed test where the gate cannot, covers what it does not send today; and the gate
-    has run on every change to either connection since with no new class. What the gate does not
+    gate, or a fixed test where the gate cannot, covers what it does not send today; the gate
+    has run on every change to either connection since with no new class; and cycles a request
+    with a browser's header lines are read across placements, the switch on against off, under a
+    plan declared before the run ([Choice 72](#choice-placement-runs)). The maintainer made that
+    last a condition on 2026-11-27 ([Choice 76](#choice-counted-or-measured)). No such reading
+    exists: the plan posted on
+    [#2133 Answer an HTTP/1.1 connection's requests without a body on Corten's own connection when an app asks (App::own_http1, off unless set)](https://github.com/corten-run/corten/pull/2133)
+    for this change's cycles sends no browser header lines (as described above). Until such a
+    reading is made a saving on a browser's request is claimed in instructions alone. What the gate does not
     send today, each named by a review: an answer whose body fails, has trailers, or is cut by
     its handler, a `1xx` and a head a handler makes that cannot be sent (fixed tests cover a
     failing and a panicking body, trailers and a `101` nobody asked for, on both connections);
@@ -12988,6 +13030,19 @@ rules something out.
     count from `db425e336`, `c9b910952` and `ffb331816`, with the switch on, and are committed
     nowhere;
     no cycles or times taken);
+    measured (the same with the kit's own cases with the switch on, which the earlier counts
+    above, of a probe with a call added by hand, are not, and which they stay as read at their
+    commits: the kit at `8c4957bea` with this change at `2f8984ddc`, on an 8-CPU host with
+    rustc 1.100.0, each case's three counts on each of two builds of one binary, as the hosted
+    job takes them, which agreed within 1: `get` 17,095 where the call added by hand read 17,096,
+    `pipeline` 9,335 and 9,335, sixteen at a time 6,928 and 6,928, `get-browser` 23,810 and
+    23,811 against 23,811, `post` 22,811 and 22,812 against 22,815, `unstaged-any-long` 24,313
+    and 24,313, and `page-browser` 211,954 against 211,950, each with the allocations given
+    above; the idle readings with the switch on there, 6,999 to 7,354 bytes a connection after
+    one request (medians 7,340), 7,340 and 7,341 after three of a browser's and 3,684 to 3,810
+    before any byte, are that host's
+    and not comparable with the figures above, its readings with the switch off being 9,529 to
+    19,620 after one request where the earlier host's were 8,471; one run of each);
     measured (the gate's long run, seed 20261124, at `568aa8d1a`: 252,454 streams, 252,276
     answered alike, the app answering in 177,925 of them, 178 in the one listed class, none
     failed; one run, which the same seed repeats; before its app had a route whose body
@@ -13067,11 +13122,19 @@ rules something out.
     tree and Corten's part versions; request bodies on this connection are proposed, which
     rewrites the handoff rule; a count with the switch off moves away from `main` by more than
     the 48 instructions it was at an earlier head; the look for a client's end is found to be more
-    than hyper's own, or a way is found to know the client's end without it; or hyper is fixed
-    where the gate met it, which lets the gate send bodies over pipes that hold little.
+    than hyper's own, or a way is found to know the client's end without it; the kit's cases
+    with the switch on count a case further from the counts above, taken with the call added
+    by hand, than the +0.5% budget of [Choice 76](#choice-counted-or-measured), so the two
+    probes are not one program; cycles of a request with a browser's header lines are read
+    across placements with the switch on against off (a condition for the default, above); or
+    hyper is fixed where the gate met it, which lets the gate send bodies over pipes that hold
+    little.
 
     Last checked: 2026-11-26, the counts and idle figures with `bench/request-cost`, on
-    `0e1d764fb` and on `568aa8d1a` with the switch off and on; 2026-11-26, the
+    `0e1d764fb` and on `568aa8d1a` with the switch off and on; 2026-11-27, the kit's cases with
+    the switch on, the kit at `8c4957bea` against this change at `2f8984ddc`, and that no
+    reading of a browser's request in cycles exists, the plan posted on the change's pull
+    request read for its requests; 2026-11-26, the
     gate's long run and the suite on both connections at `568aa8d1a`; 2026-11-27, the handlers
     that run for a client that reads nothing, by the two fixed tests on `93247e58b`, with the
     connection's tests, the gate's 3,000 streams and the server's on both connections there;

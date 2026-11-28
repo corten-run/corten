@@ -6,6 +6,7 @@ import net from "node:net";
 import { join } from "node:path";
 import { instructions } from "./allocations.mjs";
 import { COUNTED, WARM, alone } from "./figures.mjs";
+import { REFUSAL, builtWithoutOwnHttp1 } from "./own-http1.mjs";
 import { Answers, cases, masked, unexpected } from "./requests.mjs";
 
 /**
@@ -17,18 +18,29 @@ import { Answers, cases, masked, unexpected } from "./requests.mjs";
 const ALLOCATOR = { LD_PRELOAD: "libjemalloc.so.2", MALLOC_CONF: "background_thread:false,tcache_max:524288", PROBE_ALLOCATOR: "jemalloc" };
 
 /**
- * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`, with `HOSTS` set to
- * `hosts` or, without it, not set, whatever this process's environment holds. With `callgrind`,
- * under callgrind writing its profiles to `callgrind.out`, with `callgrind.options` more.
- * @param {string} binary @param {"api" | "pages"} configuration
- * @param {{ cpu: string, port: number, hosts?: string, callgrind?: { out: string, options?: string[] } }} how
+ * What `start` rejects with when the probe refuses `App::own_http1`, having been built without the
+ * feature that calls it (build.sh, against a Corten that has no such method): a case this build
+ * cannot run, which is not a failure of the run. `message` is the probe's own line.
  */
-export async function start(binary, configuration, { cpu, port, hosts, callgrind }) {
+export class WithoutOwnHttp1 extends Error {}
+
+/**
+ * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`, with `HOSTS` set to
+ * `hosts` or, without it, not set, and `PROBE_OWN_HTTP1=1` with `own` or, without it, not set,
+ * whatever this process's environment holds. With `callgrind`, under callgrind writing its
+ * profiles to `callgrind.out`, with `callgrind.options` more.
+ * @param {string} binary @param {"api" | "pages"} configuration
+ * @param {{ cpu: string, port: number, hosts?: string, own?: boolean, callgrind?: { out: string, options?: string[] } }} how
+ */
+export async function start(binary, configuration, { cpu, port, hosts, own, callgrind }) {
   const under = callgrind ? ["valgrind", "--tool=callgrind", `--callgrind-out-file=${callgrind.out}`, ...(callgrind.options ?? [])] : [];
   /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, ...ALLOCATOR };
   delete env.HOSTS;
   if (hosts !== undefined) env.HOSTS = hosts;
+  delete env.PROBE_OWN_HTTP1;
+  if (own) env.PROBE_OWN_HTTP1 = "1";
+  const without = own && builtWithoutOwnHttp1(`${binary}.own-http1`);
   const child = spawn("taskset", ["-c", cpu, ...under, binary, String(port), configuration], {
     env,
     stdio: ["ignore", "ignore", "pipe"],
@@ -39,10 +51,19 @@ export async function start(binary, configuration, { cpu, port, hosts, callgrind
     const late = setTimeout(() => reject(new Error(`the probe did not say READY in 120 s:\n${said}`)), 120_000);
     child.stderr.on("data", (text) => {
       said += text;
-      if (/^READY /m.test(said)) resolve(clearTimeout(late));
+      if (/^READY /m.test(said)) {
+        clearTimeout(late);
+        if (without) reject(new Error("the probe said READY with own_http1 on, but its build record says without"));
+        else resolve(undefined);
+      }
     });
     child.on("error", reject);
-    child.on("exit", () => reject(new Error(`the probe stopped before it was ready:\n${said}`)));
+    // Once its output has closed, so that what it said is all there.
+    child.on("close", (status) => {
+      clearTimeout(late);
+      const refused = without && status === 1 && said.split("\n").includes(REFUSAL);
+      reject(refused ? new WithoutOwnHttp1(REFUSAL) : new Error(`the probe stopped before it was ready:\n${said}`));
+    });
   });
   try {
     await ready;
@@ -190,8 +211,8 @@ export async function counted(binary, name, { cpu, port, depth, scratch }) {
   const directory = mkdtempSync(join(scratch, "run-"));
   const out = join(directory, "callgrind");
   const options = ["--separate-threads=yes", "--compress-strings=no", "--compress-pos=no"];
-  const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
-  const probe = await start(binary, configuration, { cpu, port, hosts, callgrind: { out, options } });
+  const { configuration, hosts, own } = /** @type {typeof cases[string]} */ (cases[name]);
+  const probe = await start(binary, configuration, { cpu, port, hosts, own, callgrind: { out, options } });
   /** The files of a dump, one a thread: `callgrind.<part>-<thread>`. */
   const written = (/** @type {number} */ part) => readdirSync(directory).filter((file) => new RegExp(`^callgrind\\.${part}-\\d+$`).test(file));
   // callgrind_control exits 0 whether or not it reached the process: a dump is known by its files.

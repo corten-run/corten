@@ -5,7 +5,9 @@
 //          [--addresses 1] [--cpu 0] [--port 8080] [--json]
 //
 // `--json` prints the run as a line of JSON in place of the sentence, for compare.mjs to read,
-// once the probe has been stopped: a run that fails there has printed no reading.
+// once the probe has been stopped: a run that fails there has printed no reading. A case with
+// `App::own_http1` on, given a probe built without that switch, is not run: the line says so
+// (with `--json`, its `unsupported` holds the probe's word), and the run exits 0.
 // Starts the probe (not under callgrind), opens the connections one after another, sends one
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
@@ -23,7 +25,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { spawnSync } from "node:child_process";
 import { held, resident } from "./figures.mjs";
-import { Connection, send, start } from "./probe.mjs";
+import { Connection, WithoutOwnHttp1, send, start } from "./probe.mjs";
 import { cases, named } from "./requests.mjs";
 
 const { values, positionals } = parseArgs({
@@ -52,7 +54,7 @@ const addresses = whole("addresses", values.addresses);
 const port = whole("port", values.port);
 if (addresses > 254) throw new Error("--addresses takes at most 254");
 const [name] = /** @type {[string]} */ (named(values.case));
-const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
+const { configuration, hosts, own } = /** @type {typeof cases[string]} */ (cases[name]);
 
 // Resident memory moves a page at a time, so a difference of one page is the least a reading shows.
 const pageSize = spawnSync("getconf", ["PAGESIZE"], { encoding: "utf8" });
@@ -60,7 +62,16 @@ const pageText = pageSize.stdout?.trim() ?? "";
 const page = Number(pageText);
 if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText) || !Number.isSafeInteger(page)) throw new Error("getconf PAGESIZE did not give the page size");
 
-const probe = await start(binary, configuration, { cpu: values.cpu, port, hosts });
+let probe;
+try {
+  probe = await start(binary, configuration, { cpu: values.cpu, port, hosts, own });
+} catch (error) {
+  if (!(error instanceof WithoutOwnHttp1)) throw error;
+  // A case with the switch on and a probe built without it: no reading, and no failure of the run.
+  const of = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses };
+  console.log(values.json ? JSON.stringify({ ...of, unsupported: error.message }) : `not run: ${error.message}`);
+  process.exit(0);
+}
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
 const files = () => readdirSync(`/proc/${probe.pid}/fd`).length;
 /** The run as JSON, printed after the probe has stopped. @type {string | undefined} */

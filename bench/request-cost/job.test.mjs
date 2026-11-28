@@ -24,6 +24,7 @@ const standIns = {
     'mkdir -p "$2/bin"',
     'echo "#!/bin/sh" > "$2/bin/$1"',
     'chmod +x "$2/bin/$1"',
+    'if [ "$1" = "${STAND_IN_WITHOUT:-}" ]; then echo without; else echo with; fi > "$2/bin/$1.own-http1"',
     'echo "built $2/bin/$1"',
   ],
   // node compare.mjs --readings: two runs to take on each build.
@@ -117,7 +118,7 @@ for (const failing of /** @type {const} */ (["base", "head"])) {
     // The merge base and the merge's second parent, not the base's branch as it now is.
     assert.deepEqual([left("base/commit"), left("head/commit")], [`${made.base}\n`, `${made.head}\n`]);
     assert.deepEqual([left(`${failing}/unbuilt`), left(`${other}/unbuilt`)], ["the build failed, error: could not compile the probe\n", null]);
-    assert.deepEqual(readdirSync(join(builds, "bin")), [made[other]]);
+    assert.deepEqual(readdirSync(join(builds, "bin")).sort(), [made[other], `${made[other]}.own-http1`]);
     assert.match(built.stdout, new RegExp(`^::warning::the probe did not build against ${failing} ${made[failing]}$`, "m"));
     // A build that was stopped can have left a binary: it is still not run.
     writeFileSync(join(builds, "bin", made[failing]), "#!/bin/sh\n");
@@ -131,7 +132,7 @@ for (const failing of /** @type {const} */ (["base", "head"])) {
 
 test("a run the kit refuses is taken again, once, with why kept, and a run that gave its output is not taken again", { skip }, (t) => {
   const { builds, base, head, job, called, left } = fixture(t);
-  assert.equal(job({}, "build", builds).status, 0);
+  assert.equal(job({ STAND_IN_WITHOUT: base }, "build", builds).status, 0);
   const refused = `${head} --json --cases get`;
   const read = job({ STOP_AT: later(), STAND_IN_DOES: JSON.stringify({ [refused]: ["refuses"] }) }, "read", builds, "3");
   assert.equal(read.status, 0, read.stderr);
@@ -147,9 +148,46 @@ test("a run the kit refuses is taken again, once, with why kept, and a run that 
   // The second attempt's output, the first's reason and nothing else of either.
   assert.equal(left("head/count-get.json"), `${JSON.stringify({ call: refused })}\n`);
   assert.equal(left("head/count-get.json.refused"), "Error: not a count: the stand-in refuses\n");
-  assert.deepEqual(readdirSync(join(builds, "head")).sort(), ["answers", "build.log", "commit", "count-get.json", "count-get.json.refused", "idle-silent-1.json"]);
-  assert.deepEqual(readdirSync(join(builds, "base")).sort(), ["answers", "build.log", "commit", "count-get.json", "idle-silent-1.json"]);
+  assert.deepEqual([left("base/own-http1"), left("head/own-http1")], ["without\n", "with\n"]);
+  assert.deepEqual(readdirSync(join(builds, "head")).sort(), ["answers", "build.log", "commit", "count-get.json", "count-get.json.refused", "idle-silent-1.json", "own-http1"]);
+  assert.deepEqual(readdirSync(join(builds, "base")).sort(), ["answers", "build.log", "commit", "count-get.json", "idle-silent-1.json", "own-http1"]);
 });
+
+for (const skipHead of ["without an executable", "with unbuilt", "past the cutoff"]) {
+  test(`a second read ${skipHead} leaves no evidence from the first read`, { skip }, (t) => {
+    const { builds, base, head, job, called, left } = fixture(t);
+    assert.equal(job({}, "build", builds).status, 0);
+    const count = `${head} --json --cases get`;
+    const first = job({ STOP_AT: later(), STAND_IN_DOES: JSON.stringify({ [count]: ["refuses"] }) }, "read", builds, "3");
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(left("head/answers/get.http"), "an answer");
+    assert.ok(left("head/count-get.json"));
+    assert.ok(left("head/idle-silent-1.json"));
+    assert.equal(left("head/count-get.json.refused"), "Error: not a count: the stand-in refuses\n");
+    assert.equal(left("head/own-http1"), "with\n");
+    writeFileSync(join(builds, "head/answers/get-own.unsupported"), "an old refusal\n");
+    writeFileSync(join(builds, "head/idle-silent-1.json.said"), "an interrupted write\n");
+    writeFileSync(join(builds, "head/notes"), "leave unrelated files alone\n");
+    if (skipHead === "without an executable") rmSync(join(builds, "bin", head));
+    if (skipHead === "with unbuilt") writeFileSync(join(builds, "head/unbuilt"), "the probe did not build\n");
+    const cutoff = skipHead === "past the cutoff";
+    const before = called().length;
+    const second = job({ STOP_AT: later(cutoff ? -1 : 3600) }, "read", builds, "3");
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(called().slice(before), cutoff ? [] : [`${base} --answers ${join(builds, "base", "answers")}`, `${base} --json --cases get`, `${base} --json --silent`]);
+    for (const file of ["answers/get.http", "answers/get-own.unsupported", "count-get.json", "idle-silent-1.json", "idle-silent-1.json.said"]) assert.equal(left(`head/${file}`), null, file);
+    assert.equal(left("head/count-get.json.refused"), cutoff ? "not attempted, the job's time for readings was spent\n" : null);
+    assert.equal(left("head/own-http1"), cutoff ? "with\n" : null);
+    if (cutoff) {
+      assert.equal(left("base/answers/get.http"), null);
+      assert.equal(left("base/count-get.json"), null);
+    }
+    assert.equal(left("head/notes"), "leave unrelated files alone\n");
+    assert.equal(left("head/commit"), `${head}\n`);
+    assert.match(String(left("head/build.log")), /built /);
+    assert.equal(left("head/unbuilt"), skipHead === "with unbuilt" ? "the probe did not build\n" : null);
+  });
+}
 
 test("a run stopped when the time is spent leaves none of what it had printed, and no run starts after it", { skip }, (t) => {
   const { builds, base, job, called, left } = fixture(t);

@@ -222,6 +222,10 @@ are hyper's, as all are with the switch off. So a request's body is read by hype
 a WebSocket's handshake and a tunnel are hyper's too: a route sees the same `Upgrade` and the same
 socket.
 
+The [request-cost kit](../../bench/request-cost/README.md#the-cases) has switch-on cases to
+help evaluate the connection. Its `post-own` row measures requests after handoff, not the
+handoff itself.
+
 The app is given the same requests, and its clients are answered in correct HTTP with the head
 hyper writes: the same lines in the same order. This is not a promise of hyper's bytes for every
 answer. A test sends both connections the same streams of bytes, well formed and not, and

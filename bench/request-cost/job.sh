@@ -10,8 +10,9 @@
 #   that fails, or does not end in 420 seconds, leaves why at <directory>/<side>/unbuilt and
 #   fails nothing here. Exit status 1, with nothing built, when there is no merge base.
 # bash job.sh read <directory> <cpu>
-#   Each build's answers, then each run `compare.mjs --readings` names, on base and then on
-#   head, the probe held to <cpu>. A build with `unbuilt` is not run at all, whatever it left.
+#   Each build's switch capability and answers, then each run `compare.mjs --readings` names,
+#   on base and then on head, the probe held to <cpu>. Clears both builds' previous evidence
+#   first. A build with `unbuilt` is not run at all.
 #   A run ends in 120 seconds or is stopped (and killed 10 seconds later if it has not ended),
 #   and none starts once STOP_AT has come, which must be set: seconds since the epoch. A run that
 #   fails or is stopped gave no figure: what it printed is removed, why is added to
@@ -72,16 +73,28 @@ read)
     if [ "$status" = 124 ]; then echo "Error: did not end in $left s" >&2; fi
     return "$status"
   }
+  node "$kit/compare.mjs" --readings > "$builds/readings"
+  # Clear both sides before looking for a probe or checking the cutoff. These filenames belong
+  # to the readings, not the builds; keep commits, build logs and everything else.
+  for side in base head; do
+    at=$builds/$side
+    evidence=("$at/own-http1" "$at/answers/"*.http "$at/answers/"*.unsupported)
+    while read -r file _; do
+      evidence+=("$at/$file" "$at/$file.refused" "$at/$file.said")
+    done < "$builds/readings"
+    rm -f -- "${evidence[@]}"
+  done
   began=$SECONDS
   for side in base head; do
+    record=$builds/$side/own-http1
     binary=$(probe "$side")
     [ -n "$binary" ] || continue
+    if [ -f "$binary.own-http1" ]; then cp "$binary.own-http1" "$record"; fi
     within node "$kit/count.mjs" "$binary" --cpu "$cpu" --answers "$builds/$side/answers" < /dev/null || echo "::warning::not every answer from $side"
   done
   if diff -r "$builds/base/answers" "$builds/head/answers"; then echo "the two builds answer the same"; fi
   echo "answers $((SECONDS - began))" >> "$builds/seconds"
   began=$SECONDS
-  node "$kit/compare.mjs" --readings > "$builds/readings"
   while read -r file script options; do
     for side in base head; do
       binary=$(probe "$side")

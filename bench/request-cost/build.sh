@@ -1,6 +1,7 @@
 #!/bin/sh
 # sh build.sh <commit> <directory>: builds the probe against Corten as it is at <commit>, a
-# release build with the repository's profile, and leaves it at <directory>/bin/<commit>.
+# release build with the repository's profile, and leaves it at <directory>/bin/<commit>, with
+# the build's switch capability at <directory>/bin/<commit>.own-http1.
 #
 # <directory>, which must be outside the checkout and any git repository, gets the commit's tree
 # at work/ (what a build of the crates reads) and a copy of probe/ beside it with the commit's
@@ -46,7 +47,7 @@ case "$root/" in "$directory"/work/* | "$directory"/probe/*) echo "build.sh: the
 mkdir -p "$directory/bin"
 
 # The binary of an earlier build of this commit goes too: a build that fails leaves none.
-rm -rf "$directory/work" "$directory/probe" "$directory/bin/$commit"
+rm -rf "$directory/work" "$directory/probe" "$directory/bin/$commit" "$directory/bin/$commit.own-http1"
 mkdir "$directory/work"
 # -m: every file is as new as this build, so cargo builds the crates again; with the commit's
 # own times a commit older than the last one built here would be taken for already built.
@@ -54,7 +55,25 @@ git -C "$root" archive "$commit" Cargo.toml Cargo.lock README.md crates docs | t
 cp -R "$here/probe" "$directory/probe"
 cp "$directory/work/Cargo.lock" "$directory/probe/Cargo.lock"
 
-(cd "$directory/probe" && CARGO_TARGET_DIR="$directory/target" ZSTD_SYS_USE_PKG_CONFIG=1 cargo build --release)
+build() (cd "$directory/probe" && CARGO_TARGET_DIR="$directory/target" ZSTD_SYS_USE_PKG_CONFIG=1 cargo build --release "$@")
+# Only a compiler error at the probe's own call saying the method is absent permits a retry.
+status=0
+build --features own-http1 --message-format=json > "$directory/probe/build.json" || status=$?
+diagnostic=0
+(cd "$directory/probe" && node "$here/build-output.mjs" build.json) || diagnostic=$?
+rm "$directory/probe/build.json"
+if [ "$status" = 0 ] && [ "$diagnostic" = 0 ]; then
+    capability=with
+elif [ "$status" = 101 ] && [ "$diagnostic" = 10 ]; then
+    echo "the commit's Corten has no App::own_http1: retrying without the probe's own-http1 feature"
+    cp "$directory/work/Cargo.lock" "$directory/probe/Cargo.lock"
+    build
+    capability=without
+else
+    echo "build.sh: the feature-on build failed without establishing that App::own_http1 is absent" >&2
+    [ "$status" = 0 ] && exit 1
+    exit "$status"
+fi
 
 # Cargo rewrites the copied lock file for the probe's own crates (--locked would refuse the copy,
 # which names the whole workspace). Nothing it kept may be a version the commit's does not have.
@@ -66,5 +85,9 @@ other=$(versions "$directory/probe/Cargo.lock" | grep -v '^request-cost-probe ' 
 rm "$directory/locked.txt"
 [ -z "$other" ] || { echo "build.sh: built with versions the commit's Cargo.lock does not have:" >&2; echo "$other" >&2; exit 1; }
 
-cp "$directory/target/release/probe" "$directory/bin/$commit"
-echo "built $directory/bin/$commit"
+printf '%s\n' "$capability" > "$directory/bin/$commit.own-http1"
+cp "$directory/target/release/probe" "$directory/bin/$commit" || {
+    rm -f "$directory/bin/$commit" "$directory/bin/$commit.own-http1"
+    exit 1
+}
+echo "built $directory/bin/$commit ($capability own-http1)"
