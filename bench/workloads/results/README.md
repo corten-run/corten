@@ -18,7 +18,7 @@ checking the reported numbers, not native replay or qualification.
 | Localized marketplace | [28cdc5bc7](https://github.com/corten-run/corten/commit/28cdc5bc7ec3a48cb0db7288f9d448becfdff81f) | 2026-11-26 | [Localized pages and locale-neutral JSON](r84/localized-marketplace/report.md). Eight adapters passed the feature gate; load failures are marked by phase. |
 | Mixed production | | | No verified result yet |
 | Fullstack browser | | | No verified result yet |
-| Client-heavy | [8b4e863b1](https://github.com/corten-run/corten/commit/8b4e863b15020d720b22d5cf1665f9ae16b2473a) | 2026-11-26 | [Browser journey timings](r87/client-heavy/report.md). Native replay verified; archive locator pending. |
+| Client-heavy | [8b4e863b1](https://github.com/corten-run/corten/commit/8b4e863b15020d720b22d5cf1665f9ae16b2473a) | 2026-11-26 | [Browser journey timings](r87/client-heavy/report.md). Six contenders passed; action-level ranges, not an overall ranking. |
 | Live delivery | | | No verified result yet |
 | Recoverable live | | | No verified result yet |
 | Hardening | | | No verified result yet |

@@ -1,7 +1,7 @@
 # Client-heavy screens r87
 
-**Draft:** The archived result passed native replay. Droplet deletion is
-recorded. A retrievable archive locator is still needed before publication.
+The archived result passed native replay, including a separate publication
+check, and droplet deletion is recorded.
 
 Measured commit: [`8b4e863b15020d720b22d5cf1665f9ae16b2473a`](https://github.com/corten-run/corten/commit/8b4e863b15020d720b22d5cf1665f9ae16b2473a).
 Measured November 26, 2026 UTC on a dedicated DigitalOcean `c-8` in `sfo3`,
@@ -54,6 +54,7 @@ On the largest list create, Corten recorded **68.3 ms [68.1-68.6]** and Solid
 **46.0 ms [42.4-49.9]** for React; the ranges overlap. Use the action-level
 numbers rather than treating either observation as an overall speed ranking.
 
-The [evidence record](provenance.json) names the original archive and the
-result document used for this table. No timing samples were pooled across
-groups, commits or hosts.
+The [evidence record](provenance.json) binds the private original archive and
+the compact report inputs. The compact inputs reproduce this table, but cannot
+replay native qualification. No timing samples were pooled across groups,
+commits or hosts.

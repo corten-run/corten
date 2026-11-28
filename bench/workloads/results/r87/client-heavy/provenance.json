@@ -14,13 +14,15 @@
     "onlineCpus": "0-7"
   },
   "archiveSha256": "d378fd98918dd598e66f35b75a46c308b9133080a801dda108eee9ae8611e430",
+  "custodyRef": "cbcustody-d3fb6d6ac1514cf3b90103188bdd3743",
+  "exportLocator": "https://github.com/corten-run/benchmark-evidence/releases/download/results-r87-client-heavy/r87-report-inputs-profile.json",
+  "exportSha256": "d87b9a5efbc3447f40a39bcb0d47dc144be0ada1cb3ab133f897509b95a3c11c",
   "archiveBytes": 227835877,
   "archiveResultSuffix": "/00-client-heavy-timing/native/result.json",
   "nativeResultSha256": "3114aea43c140d329fdcf814b97575cf3d2c1f1f2848da79374e472c89c7d95c",
-  "publishedReportSha256": "173e124d3320e99df31032558cfac58a362a69509be20364613a30d0d64d34bd",
+  "publishedReportSha256": "5fb2e4821219578b5df3ec9de12a5ad1b3ffe69fb14312a19c0f37f983fec30c",
   "nativeResultBytes": 50031423,
   "workloadSha256": "a34fc9992599bfb507d55d4041e5e17de45c353ef3422a2e763d0b6653e77988",
   "measuredPassesPerContender": 3,
-  "timedActionsPerPass": 19,
-  "archiveLocator": null
+  "timedActionsPerPass": 19
 }
