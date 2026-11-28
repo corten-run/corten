@@ -146,6 +146,8 @@ export async function followPicks(page) {
     items: a.parsed?.rows.length,
     readNow: a.parsed?.readNow,
   }));
+  const noAnswer = () =>
+    `no answer to the navigation to ${asked} carried the picks (10 s from click start, ${requests} click requests, answers ${JSON.stringify(said())}), at ${page.url()}`;
   page.on("request", onRequest);
   page.on("response", onResponse);
   try {
@@ -160,9 +162,7 @@ export async function followPicks(page) {
       async () => selected(),
       (a) => !!a && (carries(a) || (a === direct && !!(a.parsed || a.unread || a.request.failure() || non2xx(a)))),
     );
-    if (!answered.ok || !carries(selected())) {
-      return `no answer to the navigation to ${asked} carried the picks (10 s from click start, ${requests} click requests, answers ${JSON.stringify(said())}), at ${page.url()}`;
-    }
+    if (!answered.ok || !carries(selected())) return noAnswer();
     const drawn = await watch(
       performance.now() + 10_000,
       () => page.evaluate(() => {
@@ -177,6 +177,7 @@ export async function followPicks(page) {
       (seen) => seen.at === link && !seen.readNow && !seen.waiting && reads === 0 && carries(selected()) && JSON.stringify(selected()?.parsed?.rows) === JSON.stringify(seen.rows),
     );
     if (!drawn.ok) {
+      if (!carries(selected())) return noAnswer();
       const error = drawn.error ? `; last probe error: ${drawn.error}` : "";
       return `the picks the answer carried were not drawn at ${link} within 10 s of accepting it (last seen ${JSON.stringify(drawn.last ?? null)}, ${reads} part reads, ${requests} click requests, answers ${JSON.stringify(said())}${error})`;
     }

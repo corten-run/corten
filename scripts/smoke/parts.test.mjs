@@ -24,7 +24,7 @@ test("the failed-part link's smoke checks the first click and its answer", async
     { name: "a consumed prefetch answers the click without a second fetch", mode: "reuse", clicks: 1, requests: ["prefetch"] },
     { name: "a swallowed first click is not made again", mode: "swallow", failure: /no answer.*0 click requests/, clicks: 1, requests: [] },
     { name: "a failed first navigation is not replaced by a second click", mode: "first-503", failure: /"status":503/, clicks: 1, requests: ["click"] },
-    { name: "a good unused prefetch cannot hide the click's 503 and stale picks", mode: "stale", failure: /"status":503/, clicks: 1, requests: ["prefetch", "click"] },
+    { name: "a good unused prefetch cannot hide the click's 503 and stale picks", mode: "stale", failure: /no answer.*"status":503/, clicks: 1, requests: ["prefetch", "click"] },
     { name: "a held prefetch body does not delay the click's good answer", mode: "held-prefetch", clicks: 1, requests: ["prefetch", "click"] },
     { name: "a held click body is reported as unread", mode: "held-click", failure: /body not read in time/, clicks: 1, requests: ["click"] },
     { name: "the answer deadline starts at click invocation, not click settlement", mode: "late-click-body", failure: /body not read in time/, clicks: 1, requests: ["click"] },
@@ -40,12 +40,12 @@ test("the failed-part link's smoke checks the first click and its answer", async
       const asked = [];
       let clickStarted;
       let release;
-      // A route can fulfill a whole body, but cannot send just the response headers. Leave this
-      // local response open until teardown so Playwright has a Response and its text() is pending.
+      // A route can fulfill a whole body, but cannot leave it open. Send headers and the start of
+      // an HTML body so Firefox exposes the Response too, then hold its text() open.
       const server = createServer((req, res) => {
         asked.push(req.headers.purpose === "prefetch" ? "prefetch" : "click");
-        res.writeHead(200, { "content-type": "text/html" });
-        res.flushHeaders();
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "x-content-type-options": "nosniff" });
+        res.write(`<!--${" ".repeat(1024)}-->`);
         if (mode === "late-click-body") release = setTimeout(() => res.end(rows), Math.max(0, clickStarted + 11_500 - performance.now()));
       });
       t.after(() => {
