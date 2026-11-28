@@ -594,7 +594,7 @@ try {
    * then show exactly the rows the answer carried. The controls delay or change the draw,
    * hide the button or rows with CSS, or mask an unfiltered answer in the browser.
    * @param {import("@playwright/test").BrowserContext} context
-   * @param {"real" | "delayed" | "masked" | "decoy" | "same-url-decoy" | "transparent-button" | "transparent-rows" | "wrong-set" | "hidden-set"} kind
+   * @param {"real" | "delayed" | "masked" | "decoy" | "same-url-decoy" | "no-submit" | "transparent-button" | "transparent-rows" | "wrong-set" | "hidden-set"} kind
    * @param {string[]} errors
    */
   const blockedFilter = async (context, kind, errors) => {
@@ -638,14 +638,14 @@ try {
         };
       }));
     }
-    const isFilterSubmit = (/** @type {import("@playwright/test").Request} */ request) =>
+    const isNavRequest = (/** @type {import("@playwright/test").Request} */ request) =>
       request.isNavigationRequest() || request.headers().corten === "nav";
     const masking = kind === "masked" || kind === "decoy" || kind === "same-url-decoy";
     const filteredUrl = new URL("/?q=tidebreak", base).href;
     const preview = kind === "same-url-decoy" ? filteredUrl : kind === "decoy" ? new URL("/preview?q=tidebreak", base).href : "";
     if (masking) {
       const isPreview = (/** @type {import("@playwright/test").Request} */ request) =>
-        request.url() === preview && !isFilterSubmit(request);
+        request.url() === preview && !isNavRequest(request);
       const previewAnswered = preview ? blocked.waitForResponse((r) => isPreview(r.request()), { timeout: 15_000 }) : null;
       void previewAnswered?.catch(() => {});
       await filterStep("intercept the masked control's response", blocked.route((url) => url.searchParams.get("q") === "tidebreak", async (route) => {
@@ -714,13 +714,76 @@ try {
     }));
     const atDestination = (/** @type {URL} */ url) => url.origin + url.pathname + url.search === destination;
     if (kind === "same-url-decoy") expect(preview).toBe(destination);
-    // Read the browser's document request or the runtime's GET navigation, not a plain fetch
-    // by another script in the same frame, even if it asks for exactly the same URL.
+    const witness = "x-smoke-filter-submit";
+    await filterStep("watch the Filter submission", blocked.locator(button).evaluate((element, { destination, witness }) => {
+      const submitter = /** @type {HTMLButtonElement} */ (element);
+      const { form } = submitter;
+      if (!form) throw new Error("Filter has no form");
+      let clicked = false;
+      submitter.addEventListener("click", (event) => { clicked ||= event.isTrusted; }, { capture: true });
+      /** @type {SubmitEvent | undefined} */
+      let submit;
+      form.addEventListener("submit", (event) => {
+        if (!clicked || !event.isTrusted || event.target !== form || event.submitter !== submitter) return;
+        submit = event;
+        sessionStorage.setItem(witness, "submit");
+      }, { capture: true });
+      // Read cancellation after dispatch, not before a later submit listener can prevent it.
+      const uncancelled = () => submit && submit.eventPhase === Event.NONE && !submit.defaultPrevented;
+      const sameDestination = (/** @type {string} */ address) => {
+        const url = new URL(address);
+        return url.origin + url.pathname + url.search === destination;
+      };
+      /** @type {AbortSignal | undefined} */
+      let signal;
+      if (window.navigation) {
+        window.navigation.addEventListener("navigate", (event) => {
+          if (uncancelled() && event.isTrusted && !event.destination.sameDocument &&
+              (event.sourceElement === submitter || event.sourceElement === form) && sameDestination(event.destination.url)) {
+            signal = event.signal;
+            sessionStorage.setItem(witness, destination);
+          }
+        }, { capture: true });
+      } else {
+        // On an engine without the Navigation API, the uncancelled submit builds a native GET.
+        form.addEventListener("formdata", (event) => {
+          if (event.isTrusted && uncancelled()) sessionStorage.setItem(witness, destination);
+        });
+      }
+      const fetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        // The runtime passes the form navigation's very signal to fetch. Tag only that request,
+        // not an unrelated fetch (even one made from a submit listener) with the same URL/header.
+        if (signal && init?.signal === signal) {
+          const headers = new Headers(init.headers);
+          headers.set(witness, "1");
+          return fetch(input, { ...init, headers });
+        }
+        return fetch(input, init);
+      };
+    }, { destination, witness }));
+    if (kind === "no-submit") {
+      await filterStep("install the matching fetch without submission", blocked.locator(button).evaluate((element, url) => {
+        element.addEventListener("click", async (event) => {
+          event.preventDefault();
+          const response = await fetch(url, { headers: { corten: "nav" } });
+          await response.text();
+          for (const row of /** @type {NodeListOf<HTMLTableRowElement>} */ (document.querySelectorAll("tbody tr"))) {
+            row.hidden = row.cells[2]?.textContent !== "Tidebreak";
+          }
+          history.pushState(null, "", url);
+        }, { once: true });
+      }, destination));
+    }
+    // Read the native document request or the fetch tagged by that form's navigation. The
+    // negative alone also reads an untagged candidate, to prove the old matcher would pass it.
     const answered = blocked.waitForResponse((r) => {
       const request = r.request();
-      if (request.method() !== "GET" || !atDestination(new URL(r.url())) || !isFilterSubmit(request)) return false;
+      if (request.method() !== "GET" || !atDestination(new URL(r.url())) || !isNavRequest(request)) return false;
       try {
-        return r.frame() === blocked.mainFrame();
+        return r.frame() === blocked.mainFrame() &&
+          (request.isNavigationRequest() || request.headers()[witness] === "1" ||
+            (kind === "no-submit" && request.headers().corten === "nav"));
       } catch {
         // A worker or a navigation before its frame exists cannot prove a main-frame submit.
         return false;
@@ -732,6 +795,9 @@ try {
     const response = await filterStep("receive the filter response headers", answered);
     const body = await filterStep("read the filter response body", response.text());
     await filterStep("reach the filtered URL", blocked.waitForURL(atDestination));
+    const submission = await filterStep("read the form submission witness", blocked.evaluate((key) => sessionStorage.getItem(key), witness));
+    const request = response.request();
+    const bound = submission === destination && (request.isNavigationRequest() || request.headers()[witness] === "1");
     // Parsed in a blank page of the same browser: the app's page allows no markup from a string.
     const reader = await filterStep("open the response reader", context.newPage());
     const sent = await filterStep("parse the filter response body", reader.evaluate((html) => {
@@ -804,15 +870,18 @@ try {
     const setNamesMatch = drawn.every((r, i) => r.set === sent.sets[i]);
     const matches = sameIds(shownIds, sent.ids) && sameIds(drawnIds, sent.ids) && setNamesMatch;
     return {
-      ok: reached && answerOk && matches,
+      ok: bound && reached && answerOk && matches,
       answerOk,
-      invisibleRows: reached && answerOk && sameIds(shownIds, expected) && drawn.length === 0,
-      wrongSet: reached && answerOk && sameIds(drawnIds, expected) && drawn.every((r) => r.set === "Wrong set"),
-      hiddenSet: reached && answerOk && sameIds(shownIds, expected) && sameIds(drawnIds, expected) && drawnSets === 0,
-      masked: reached && sameIds(sent.ids, inventory) && sameIds(shownIds, expected) &&
+      noSubmit: submission === null && !request.isNavigationRequest() && request.headers().corten === "nav" &&
+        !request.headers()[witness] && reached && answerOk && matches,
+      invisibleRows: bound && reached && answerOk && sameIds(shownIds, expected) && drawn.length === 0,
+      wrongSet: bound && reached && answerOk && sameIds(drawnIds, expected) && drawn.every((r) => r.set === "Wrong set"),
+      hiddenSet: bound && reached && answerOk && sameIds(shownIds, expected) && sameIds(drawnIds, expected) && drawnSets === 0,
+      masked: bound && reached && sameIds(sent.ids, inventory) && sameIds(shownIds, expected) &&
         sameIds(drawnIds, expected) && drawn.every((r) => r.set === "Tidebreak"),
       delayed: heldRows === all,
-      detail: `aborted ${aborted}; ${before} of ${all} shown before; GET ${response.url()} ${response.request().resourceType()} ${response.status()}; ` +
+      detail: `aborted ${aborted}; ${before} of ${all} shown before; submit ${submission === null ? "not seen" : "seen"}, response ${bound ? "bound" : "unbound"}; ` +
+        `GET ${response.url()} ${request.resourceType()} ${response.status()}; ` +
         `answer: ${n} of ${sent.inventory.length} rows unhidden, ${sent.inSet} in the set, unhidden ids ${exact ? "as expected" : "differ"}, ` +
         `all ids ${keptInventory ? "as expected" : "differ"}, says "${sent.says}"; ` +
         `page: ${shownIds.length} unhidden, ${drawn.length} drawn${matches ? " as sent" : " not as sent"}${setNamesMatch ? "" : ` (${drawnSets} set cells drawn; set names differ)`}; ` +
@@ -825,20 +894,21 @@ try {
   // grid sorted by its column, the filter kept. And with JavaScript but the grid's module never
   // loading (`blockedFilter`): `scripting` still matches `enabled`, so the Filter button must not
   // depend on it to be drawn, and the server's answer, not a script on the page, must filter.
-  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
-    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+  /** @param {string} name @param {import("@playwright/test").Browser} engine */
+  const checkFilters = async (name, engine) => {
     for (const [kind, label] of /** @type {const} */ ([
       ["real", "with JavaScript and the grid's module not loading: the Filter button is drawn and the server's answer filters the rows"],
       ["delayed", "control: a correct answer passes with the client draw delayed by 2.5 s"],
       ["masked", "control: an unfiltered answer whose rows a script hides on the page is refused, though the page alone would pass"],
       ["decoy", "control: an unrelated filtered response does not hide an unfiltered answer at the form's destination"],
       ["same-url-decoy", "control: a same-URL fetch does not hide the form's unfiltered answer"],
+      ["no-submit", "control: a same-URL fetch with corten: nav but no form submit is refused"],
       ["transparent-button", "control: a hit-testable button with filter opacity zero is refused"],
       ["transparent-rows", "control: filtered rows made transparent by their table body are refused"],
       ["wrong-set", "control: matching drawn row ids with the wrong set names are refused"],
       ["hidden-set", "control: matching drawn row ids with all set cells hidden are refused"],
     ])) {
-      const context = await filterStep("open the filter context", (own ?? browser).newContext());
+      const context = await filterStep("open the filter context", engine.newContext());
       const what = `${name} ${label}`;
       /** @type {string[]} */
       const errors = [];
@@ -847,6 +917,7 @@ try {
       try {
         const run = await blockedFilter(context, kind, errors);
         if (kind === "masked" || kind === "decoy" || kind === "same-url-decoy") pass = !!run.masked && !run.answerOk;
+        else if (kind === "no-submit") pass = !!run.noSubmit && !run.ok;
         else if (kind === "transparent-button") pass = !!run.invisibleButton && !run.ok;
         else if (kind === "transparent-rows") pass = !!run.invisibleRows && !run.ok;
         else if (kind === "wrong-set") pass = !!run.wrongSet && !run.ok;
@@ -860,7 +931,7 @@ try {
       }
       check(what, pass && errors.length === 0, [detail, ...errors].join(" | "));
     }
-    const plainContext = await (own ?? browser).newContext({ javaScriptEnabled: false });
+    const plainContext = await filterStep("open the no-script filter context", engine.newContext({ javaScriptEnabled: false }));
     try {
       const plain = await plainContext.newPage();
       await plain.goto(base);
@@ -887,8 +958,15 @@ try {
         `${plain.url()}; ${names.slice(0, 3).join(", ")}`,
       );
     } finally {
-      await plainContext.close();
-      await own?.close();
+      await filterStep("close the no-script filter context", plainContext.close());
+    }
+  };
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    try {
+      await checkFilters(name, own ?? browser);
+    } finally {
+      if (own) await filterStep(`close the ${name} filter browser`, own.close());
     }
   }
 
