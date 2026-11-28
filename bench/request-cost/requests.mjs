@@ -44,7 +44,7 @@ const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as lon
  * `Content-Encoding`, none unless given. A body sent with an encoding is the case's once decoded.
  * `hosts` is the `HOSTS` the probe is started with (`*`: it answers to any host); without it
  * the probe answers to its own, `localhost` and IP addresses.
- * @type {Record<string, { configuration: "api" | "pages", hosts?: "*", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }>}
+ * @type {Record<string, { configuration: "api" | "pages" | "public-page", hosts?: "*", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }>}
  */
 export const cases = {
   // A staged route in an API: typed query parameters in, a short String out.
@@ -57,6 +57,7 @@ export const cases = {
   // In an app without an API: a short text answer and a page.
   text: { configuration: "pages", request: get("/text"), body: "ok" },
   page: { configuration: "pages", request: get("/page"), body: PAGE },
+  "page-public": { configuration: "public-page", request: get("/page"), body: PAGE },
   // The same with a browser's header lines: the page is compressed, the short answers are not.
   "get-browser": { configuration: "api", request: get("/baseline11?a=1&b=2", BROWSER), body: "3" },
   "text-browser": { configuration: "pages", request: get("/text", BROWSER), body: "ok" },
@@ -100,6 +101,10 @@ export function unexpected(name, answer) {
   const end = answer.indexOf("\r\n\r\n");
   const head = answer.latin1Slice(0, end);
   if (!head.startsWith("HTTP/1.1 200 ")) return `not a 200: ${head.split("\r\n")[0]}`;
+  if (name === "page-public") {
+    const policy = head.split("\r\n").filter((line) => /^cache-control:/i.test(line));
+    if (policy.length !== 1 || !/^cache-control:[ \t]*public, max-age=60[ \t]*$/i.test(policy[0] ?? "")) return "not the public page's Cache-Control";
+  }
   const coded = /^content-encoding:[ \t]*(\S*)[ \t]*$/im.exec(head)?.[1];
   if (coded !== encoding) return `Content-Encoding ${coded ?? "none"}, not ${encoding ?? "none"}`;
   let bytes = answer.subarray(end + 4);

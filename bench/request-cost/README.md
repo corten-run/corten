@@ -33,8 +33,11 @@ item 2 asks for cycles under load as well, which this kit does not give.
 
 ## The cases
 
-Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
-API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
+Each case is one request. The `api` and `pages` configurations keep every `App` default:
+the former has an API and no pages; the latter has pages and no API. The `public-page`
+configuration serves the same document as `pages` at the same address, but the handler returns
+`Public<HtmlResult>` and `kept_answers(0)` disables the store. Each request therefore measures
+public-page handling, not a cache hit. All configurations answer
 to the names an app answers to by default (`localhost`, a name under it and IP addresses) but in
 the eight cases with `-any` in their name, where the probe is started with `HOSTS=*` and answers
 to any host. A `HOSTS` in the environment the kit is run in never reaches the probe.
@@ -48,6 +51,7 @@ to any host. A `HOSTS` in the environment the kit is run in never reaches the pr
 | `pipeline` | `api` | `GET /pipeline`: an `unstaged` route | `ok` |
 | `text` | `pages` | `GET /text` | `ok` |
 | `page` | `pages` | `GET /page` | A page of about 12 KB |
+| `page-public` | `public-page` | `GET /page` | The same page; requires a single `Cache-Control: public, max-age=60` |
 | `get-browser`, `text-browser`, `page-browser` | as above | The same with the seven header lines a browser sends with a navigation | The same; the page compressed with zstd |
 | `get-any`, `unstaged-any` | `api`, `HOSTS=*` | As `get` and `unstaged` | `3` |
 | `get-any-last`, `unstaged-any-last` | `api`, `HOSTS=*` | As `get` and `unstaged` with the browser's seven lines before `Host`, which is the last of eight | `3` |
