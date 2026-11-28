@@ -226,7 +226,7 @@ The app is given the same requests, and its clients are answered in correct HTTP
 hyper writes: the same lines in the same order. This is not a promise of hyper's bytes for every
 answer. A test sends both connections the same streams of bytes, well formed and not, and
 compares what comes back byte for byte, `Date` aside; what it sends and what it does not is in
-the Choice, and the differences known are the ones listed here. Every limit above holds as it
+the Choice. Every limit above holds as it
 does with hyper: the header and send timeouts, the size of a head and its 100 headers, the cap on
 connections, the deadline, and shutdown's grace. The host check answers these requests as it
 answers any other ([below](#host-names)). What differs:
@@ -306,6 +306,9 @@ answers any other ([below](#host-names)). What differs:
    the answer by then: of 41 MB in 20 KiB pieces a run read all from hyper and 2.6 MB from
    Corten's connection, and of 20 MB in 512-byte pieces 1.1 MB from hyper and 2.1 MB from
    Corten's.
+9. A request without a body that Corten answers arrives with `Body::empty()`, where hyper gives
+   the handler a body that has already ended. Both hold nothing and report that they have ended
+   with length 0; only the body's `Debug` text differs for the handler.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
 connection, at `568aa8d1a`): the shortest request the counting kit sends, to a route that says

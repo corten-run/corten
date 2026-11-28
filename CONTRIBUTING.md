@@ -257,11 +257,12 @@ docker network rm feeds
 ```
 
 The first command also compiles every `rust` code block in `README.md` and `docs/guide/` as a
-doctest, and runs `corten`'s unit tests a second time with `CORTEN_TEST_OWN_HTTP1` set: the
+doctest, and runs `corten`'s unit tests a second time with `CORTEN_TEST_OWN_HTTP1=1`: the
 servers those tests start with the default connection then answer on Corten's own HTTP/1.1
-connection, as an app that calls `App::own_http1(true)` does (a test that says which connection
-it wants, or calls the router with no server, runs as it did the first time;
-[Choice 78](docs/design.md#choice-own-http1)); card-market's smoke runs
+connection, as an app that calls `App::own_http1(true)` does. Only `1` forces the switch on;
+unset, empty, `0` and every other value leave the test defaults unchanged. A test that says
+which connection it wants, or calls the router with no server, runs as it did the first time
+([Choice 78](docs/design.md#choice-own-http1)); card-market's smoke runs
 a second time for the same reason, against the app started with `OWN_HTTP1`. Mark a fragment that cannot compile on its own `rust,ignore`, and a complete program
 that serves forever `rust,no_run`. The second's `corten check` runs `--no-script-types`, since
 the Rust image has no Node; CI's `rust-checks` job installs TypeScript and type-checks the new app's

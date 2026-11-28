@@ -321,11 +321,10 @@ async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_br
 /// one with `Expect: 100-continue`, one that asks to switch protocols) has ended when the handler
 /// has it: its length is zero, reading it gives nothing, a limit of no bytes holds it, and no
 /// `100 Continue` is sent for it. One sent chunked has not ended and has no length until it is
-/// read, with data, with none, or with trailers alone, which the handler still reads. None is a
-/// body held whole, and each prints as any body that is not empty does. What differs is what was
-/// kept for it: the body of a request without one holds nothing, so the box it is kept in was not
-/// allocated, and any other holds its stream. HTTP/1.0 is the same by its length, and so are a
-/// request with a length that asks to switch protocols and a `CONNECT`.
+/// read, with data, with none, or with trailers alone, which the handler still reads. The body of
+/// a request without one holds nothing: hyper's box holds a value of no size, and Corten's own
+/// connection gives `Body::empty()`. Neither allocates. A request with a body holds its stream.
+/// An HTTP/1.0 request with a length, a protocol switch and a `CONNECT` go to hyper.
 #[tokio::test]
 async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunked_one_has_not() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -377,15 +376,19 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
         answer(format!("{method} {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n{lines}\r\n{body}"))
     };
 
-    const ENDED: &str = "ended true, length Some(0), whole false, Body(..), keeps nothing, switches false; read 0 and []";
-    for (method, lines) in [
-        ("GET", ""),
-        ("POST", "content-length: 0\r\n"),
-        ("POST", "content-length: 0\r\nexpect: 100-continue\r\n"),
-        ("DELETE", ""),
+    const HYPER_ENDED: &str = "ended true, length Some(0), whole false, Body(..), keeps nothing, switches false; read 0 and []";
+    const OWN_ENDED: &str = "ended true, length Some(0), whole true, Body(empty), keeps nothing, switches false; read 0 and []";
+    let own = crate::app::Connections::default().own;
+    let ended = |stays_on_own| if own && stays_on_own { OWN_ENDED } else { HYPER_ENDED };
+    // Content-Length and Expect hand the connection to hyper, whatever their values.
+    for (method, lines, stays_on_own) in [
+        ("GET", "", true),
+        ("POST", "content-length: 0\r\n", false),
+        ("POST", "content-length: 0\r\nexpect: 100-continue\r\n", false),
+        ("DELETE", "", true),
     ] {
         let got = ask(method, "/told", lines, "").await;
-        assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(ENDED), "{method} with {lines:?}: {got}");
+        assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(ended(stays_on_own)), "{method} with {lines:?}: {got}");
         let got = ask(method, "/none", lines, "").await;
         assert!(got.starts_with("HTTP/1.1 200") && got.ends_with("Some(0)"), "{method} with {lines:?}, no byte allowed: {got}");
     }
@@ -394,21 +397,21 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
     // A request that asks to switch protocols has no body either, and still brings what switches.
     let got =
         answer("GET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close, Upgrade\r\nupgrade: websocket\r\n\r\n".into()).await;
-    let switching = ENDED.replace("switches false", "switches true");
+    let switching = HYPER_ENDED.replace("switches false", "switches true");
     assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&switching), "{got}");
     // So does a `CONNECT`.
     let got = ask("CONNECT", "/refused", "", "").await;
     assert!(got.starts_with("HTTP/1.1 403") && got.ends_with(&switching), "{got}");
-    // HTTP/1.0 has no chunks, and a request of it with no length has no body.
+    // Without a length or a request to keep the connection, HTTP/1.0 stays on Corten's own.
     let got = answer("GET /told HTTP/1.0\r\nhost: localhost\r\n\r\n".into()).await;
-    assert!(got.starts_with("HTTP/1.0 200") && got.ends_with(ENDED), "{got}");
+    assert!(got.starts_with("HTTP/1.0 200") && got.ends_with(ended(true)), "{got}");
     // The connection goes on to its next request.
     let got = answer(
         "GET /told HTTP/1.1\r\nhost: localhost\r\n\r\nGET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n".into(),
     )
     .await;
     assert_eq!(got.matches("HTTP/1.1 200").count(), 2, "{got}");
-    assert_eq!(got.matches(ENDED).count(), 2, "{got}");
+    assert_eq!(got.matches(ended(true)).count(), 2, "{got}");
 
     // Chunked, the end of the body is in the body: nothing is known of it until it is read.
     const OPEN: &str = "ended false, length None, whole false, Body(..), keeps a stream, switches false; read";

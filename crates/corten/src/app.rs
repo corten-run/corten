@@ -618,13 +618,19 @@ impl Default for Connections {
     }
 }
 
-/// Whether an app that does not say is served by Corten's own connection ([`App::own_http1`]):
-/// never, outside this crate's tests. In them, when `CORTEN_TEST_OWN_HTTP1` is set, so the
-/// servers the suite starts with the default are run on each connection (CONTRIBUTING.md,
-/// Checks). A test that compares the two says which it wants, and one that calls the router
-/// with no server meets neither.
+/// Whether the crate's tests override the default connection (CONTRIBUTING.md, Checks).
 fn own_in_tests() -> bool {
-    cfg!(test) && std::env::var_os("CORTEN_TEST_OWN_HTTP1").is_some()
+    #[cfg(test)]
+    {
+        own_http1_test_override(std::env::var_os("CORTEN_TEST_OWN_HTTP1").as_deref())
+    }
+    #[cfg(not(test))]
+    false
+}
+
+#[cfg(test)]
+pub(crate) fn own_http1_test_override(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
 }
 
 impl App {

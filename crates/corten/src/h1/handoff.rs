@@ -104,9 +104,7 @@ where
     type Future = HandedAnswer<S::Future>;
 
     fn call(&self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
-        // Marks a read of the body that waits for the client, for the deadline, as
-        // `Connection` does for hyper's request.
-        let req = req.map(|body| Body::new(crate::extract::Arriving(body)));
+        let req = req.map(crate::extract::arriving);
         // Called without `poll_ready`: the router's is ready at once, always
         // (`docs/design.md#choice-axum-router`), and a connection's service only passes it on.
         HandedAnswer(self.0.clone().call(req))

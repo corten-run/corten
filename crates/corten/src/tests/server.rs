@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn only_one_forces_the_own_http1_test_default() {
+    use crate::app::own_http1_test_override;
+    use std::ffi::OsStr;
+
+    assert!(!own_http1_test_override(None));
+    for value in ["", "0", "true", "01", "1 "] {
+        assert!(!own_http1_test_override(Some(OsStr::new(value))), "{value:?}");
+    }
+    assert!(own_http1_test_override(Some(OsStr::new("1"))));
+}
+
 /// Whether this system has an IPv6 loopback address to listen on.
 fn has_ipv6_loopback() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()

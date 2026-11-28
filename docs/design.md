@@ -13025,9 +13025,9 @@ rules something out.
     on a connection writes to its socket at other times than hyper's does, no case of the kit asks
     for the switch (the counts with it on are of the kit's probe with that one call added), a
     connection handed to hyper holds more idle memory than hyper's own (below), and its reason is
-    a win in cycles. No cycles or times have been taken for it, so it claims no
-    CPU-cost win, and the plan that would read one across placements
-    ([Choice 72](#choice-placement-runs)) is not yet declared.
+    a win in cycles. The placement runs ([Choice 72](#choice-placement-runs)) at `2f8984ddc`
+    and `0bcb3138c` are recorded under `evidence/own-http1-cycles`; they do not include the
+    later handoff change or requests with a browser's header lines.
 
     **What the connection is** (`crates/corten/src/h1.rs`). One loop for a connection: it reads a
     request's head, calls the connection's service with it, writes the answer into one buffer and
@@ -13107,12 +13107,16 @@ rules something out.
     has: the service, the watched socket and so both timeouts and the connection's place under the
     cap, the request's deadline and shutdown. The timer a connection keeps for its requests'
     deadlines ([Choice 77](#choice-deadline-timer)) is kept here as there: the connection's task
-    is polled through the same wrapper, so the timer is made at the second request of the
-    connection's to wait and taken by each after it, and it is the task's and not the
-    connection code's, so a connection handed to hyper has the one it had made and a request
-    with a body waits on it. That Choice stands on a connection polling one request's future at
-    a time inside its own poll, which this one does too: a pipeline's handlers run one after
-    another, each to its answer before the next is asked. When `main` gained that Choice, this
+    is polled through the same wrapper, and a connection handed to hyper keeps any timer the
+    wrapper has made. That Choice stands on a connection polling one request's future at a
+    time inside its own poll, which this one does too: a pipeline's handlers run one after
+    another, each to its answer before the next is asked. Corten's connection can flush an answer
+    and start another request in the same poll where hyper yields. So the poll by which the
+    wrapper has made its timer can differ. If a handler serves an inner request on its own
+    runtime and the connection's runtime shuts down, the inner request can be answered 500 when
+    polling a borrowed timer reaches the shut-down driver, or be answered as any whose deadline
+    fires if it made its own timer. That is the corner in [Choice 77](#choice-deadline-timer),
+    cost 6; neither connection fixes the outcome. When `main` gained that Choice, this
     branch's connection had no wrapper, every deadline on it made its own timer as all did
     before, and seven tests said so with the suite on Corten's connection, six of `main`'s and
     one written here for the handoff
@@ -13341,8 +13345,11 @@ rules something out.
     the value and however often they come: Corten's connection reads no value of any of them, so
     it cannot read one differently from hyper, which is how a request is smuggled. A request it
     answers has none of the four, so its message ends where its head does (RFC 9112 6.3), and an
-    HTTP/1.0 request it answers is its connection's last. Nothing is taken from the read buffer
-    before that is known. For a request that is hyper's, the answers before it are sent, and the
+    HTTP/1.0 request it answers is its connection's last. A request Corten answers arrives with
+    `Body::empty()`, where hyper gives the handler a body that has already ended. Both hold
+    nothing and report that they have ended with length 0; a handler can tell them apart only
+    by the body's `Debug` text. Nothing is taken from the read buffer before the handoff has
+    been decided. For a request that is hyper's, the answers before it are sent, and the
     socket is given to hyper with everything read and not answered put back in front, that
     request's head first, in the allocation it was read into; hyper reads the request itself and
     serves the connection to its end, so a body is read by hyper alone and an app that switches
@@ -13522,8 +13529,9 @@ rules something out.
     hyper's one; it would take keeping the count of requests across a wait while answers
     remain unsent, which is not built or counted);
     request bodies are read on Corten's connection, or the handoff has been shown to cost a
-    connection with bodies nothing in cycles and no more memory than hyper's own; a placement run reads a CPU-cost win on the
-    requests without a body and meets +1% on the others; a security review of the connection and
+    connection with bodies nothing in cycles and no more memory than hyper's own; a placement run
+    reads a CPU-cost win on the requests without a body and meets +1% on the others, and a cycles
+    run with a browser's header lines compares the switch on against off; a security review of the connection and
     the gate has been made by someone who wrote neither, with nothing it found left open; the
     gate, or a fixed test where the gate cannot, covers what it does not send today; and the gate
     has run on every change to either connection since with no new class. What the gate does not
@@ -13578,8 +13586,9 @@ rules something out.
     `main`, `db425e336` against `cbca34579`, and `c9b910952` and `ffb331816` against
     `e8734f929`; the counts with one of a round's changes taken out are of builds made for the
     count from `db425e336`, `c9b910952` and `ffb331816`, with the switch on, and are committed
-    nowhere;
-    no cycles or times taken);
+    nowhere);
+    measured (cycles by workload across placements at `2f8984ddc` and `0bcb3138c`, the plans
+    and complete reports under `evidence/own-http1-cycles`);
     measured (the gate's long run, seed 20261124, at `568aa8d1a`: 252,454 streams, 252,276
     answered alike, the app answering in 177,925 of them, 178 in the one listed class, none
     failed; one run, which the same seed repeats; before its app had a route whose body
@@ -13644,8 +13653,7 @@ rules something out.
     bet (an app that turns this on before the flood's memory is fixed sits behind a proxy that
     does not pipeline, or bounds connections with `App::max_connections`; its handlers for
     requests without a body are cheap enough, or bounded by the app itself, that as many as
-    16 KiB of answers allow may run for a client that reads none of them; and fewer instructions
-    here will read as fewer cycles, which nothing has measured);
+    16 KiB of answers allow may run for a client that reads none of them);
     value (fast and proven fast, with a number behind the claim and none claimed that was not
     taken, Value 1; correctness before speed, which is why bodies and switches stay hyper's and a
     differential test gates the rest, and why the look for a client's end stays at what it
@@ -13674,7 +13682,11 @@ rules something out.
     httpdate 1.0.3
     as `Cargo.lock` has them, hyper's server parse, encoder, read strategy, write queue and its
     look for a client's end read against `crates/corten/src/h1.rs` and
-    `crates/corten/src/h1/head.rs` at `68f3437a0`.
+    `crates/corten/src/h1/head.rs` at `68f3437a0`; 2026-11-27, cycles across placements at
+    `2f8984ddc` and `0bcb3138c`; 2026-11-28, the shutdown test fixed on
+    `8e456e75f`, read against the connection's polls and run with the switch forced on after
+    the merge: five full library suites with no failures, and 200 runs of the shutdown test
+    under load with no failures.
 
 ## Rules
 
