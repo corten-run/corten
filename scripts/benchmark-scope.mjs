@@ -30,6 +30,8 @@ const requestCostInputs = [".node-version", ".github/workflows/request-cost.yml"
   "Cargo.toml", "Cargo.lock", "crates/corten", "crates/corten-macros", "crates/corten-feed", "crates/corten-protocol",
   "bench/request-cost"];
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
+const sha = /^[0-9a-f]{40}$/;
+const scopeWorkflows = { catalog: "catalog.yml", evidence: "benchmark-evidence.yml" };
 
 export function selectScope(allApps, paths) {
   if (paths === undefined) return { apps: allApps, json: true };
@@ -81,26 +83,51 @@ function changedPaths(base, head, cwd, env) {
   }).split("\0").filter(Boolean);
 }
 
+function isEarlierCommit(base, head, cwd, env) {
+  return typeof base === "string" && sha.test(base) && base !== head &&
+    spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd, stdio: "ignore", env }).status === 0;
+}
+
+async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN }, workflow, fetchRuns) {
+  const url = new URL(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs`);
+  url.search = new URLSearchParams({ branch: "main", event: "push", status: "success", per_page: "1" });
+  const response = await fetchRuns(url, {
+    headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${GITHUB_TOKEN}` },
+    redirect: "error", signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return undefined;
+  const { workflow_runs: runs } = await response.json();
+  if (!Array.isArray(runs)) return undefined;
+  const run = runs[0];
+  if (run?.event === "push" && run.head_branch === "main" && run.status === "completed" && run.conclusion === "success"
+      && typeof run.head_sha === "string" && sha.test(run.head_sha)) return run.head_sha;
+}
+
 // Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR to
 // read its own repository.
-export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd, env = process.env) {
-  const sha = /^[0-9a-f]{40}$/;
+export async function eventPaths(event, cwd, env = process.env, { workflow, fetchRuns = fetch } = {}) {
+  const { GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REF, GITHUB_REPOSITORY, GITHUB_WORKFLOW_REF, GITHUB_TOKEN, PUSH_BEFORE } = event;
   if (GITHUB_EVENT_NAME === "pull_request") {
     assert.match(GITHUB_SHA ?? "", sha);
     // Actions tests the synthetic merge, including any base-side path moves.
     return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd, env);
   }
-  if (GITHUB_EVENT_NAME === "push") {
-    assert.match(GITHUB_SHA ?? "", sha);
-    if (sha.test(PUSH_BEFORE ?? "") && PUSH_BEFORE !== "0".repeat(40)) {
-      const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore", env });
-      if (base.error) throw base.error;
-      // A force-push's old tip is not an ancestor; its tree diff can hide changes.
-      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore", env });
-      if (ancestor?.error) throw ancestor.error;
-      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd, env);
+  // Called workflows see the caller's event and workflow_ref, not their own.
+  const file = scopeWorkflows[workflow];
+  if (file && GITHUB_EVENT_NAME === "push" && GITHUB_REF === "refs/heads/main"
+      && GITHUB_WORKFLOW_REF === `${GITHUB_REPOSITORY}/.github/workflows/${file}@${GITHUB_REF}`) {
+    try {
+      // Only a successful run proves the scope job and its selected checks finished. Use the
+      // prior tip only to detect a force-push; the successful run can predate a rewrite.
+      const base = GITHUB_TOKEN && sha.test(GITHUB_SHA ?? "") && await successfulMainBase(event, file, fetchRuns);
+      if (isEarlierCommit(base, GITHUB_SHA, cwd, env)
+          && (PUSH_BEFORE === base || isEarlierCommit(PUSH_BEFORE, GITHUB_SHA, cwd, env))) {
+        return changedPaths(base, GITHUB_SHA, cwd, env);
+      }
+    } catch {
+      // Do not print the response or error from an authenticated request.
     }
-    console.warn("Push base unavailable; selecting every benchmark job.");
+    console.warn("Successful main push base unavailable; selecting every benchmark job.");
   }
   return undefined;
 }
@@ -108,14 +135,14 @@ export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd, 
 if (import.meta.main) {
   const { GITHUB_OUTPUT, PARITY_APPS } = process.env;
   const workflow = process.argv[2];
+  const paths = await eventPaths(process.env, undefined, process.env, { workflow });
   if (workflow === "catalog") {
-    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), eventPaths(process.env));
+    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
     appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
   } else if (workflow === "evidence") {
-    const paths = eventPaths(process.env);
     appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
   } else if (workflow === "request-cost") {
-    appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(eventPaths(process.env))}\n`);
+    appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(paths)}\n`);
   } else {
     throw new Error("Expected catalog, evidence or request-cost scope");
   }

@@ -6,17 +6,22 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Only newer PR runs supersede older ones; keep a run for every main commit, so each push's own
-# diff is scoped once and no main change goes untested.
+# Initial main pushes and PR updates supersede earlier runs for that ref. Main scope starts at
+# the last successful Catalog push. Dispatch and main reruns keep a separate group per run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: >-
+    ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == '1'))
+    && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == '1') }}
 
 permissions:
   contents: read
 
 jobs:
   scope:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -38,6 +43,7 @@ jobs:
       - id: scope
         env:
           PUSH_BEFORE: ${{ github.event.before }}
+          GITHUB_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
         run: node scripts/benchmark-scope.mjs catalog
 
   harness:
