@@ -73,7 +73,7 @@ const progress = (/** @type {string} */ what) => {
   const created = !existsSync(progressFile);
   const fd = openSync(progressFile, "a+");
   const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd()
-    : what === "finished" && publishedCount ? `${what} ${publishedCount}` : what;
+    : what === "finished" ? `${what} ${publishedCount || "no-count"}` : what;
   try { appendLine(fd, `${now()} ${line}`); fsyncSync(fd); } finally { closeSync(fd); }
   if (created) syncDir(here);
 };
@@ -122,7 +122,9 @@ const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) =
   const stage = counting ? mkdtempSync(join(dirname(results), ".count-")) : args[0] === "summarize.mjs" ? countedStage : null;
   if (counting && stage) process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
   // Unattended, its output passes through here so a quiet call can be told from a busy one.
-  const child = spawn("node", stage ? [...args, countStageArg + stage] : args, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
+  const argv = stage ? [...args, countStageArg + stage]
+    : unattended && args[0] === "summarize.mjs" ? [...args, "--omit-count"] : args;
+  const child = spawn("node", argv, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
   const result = await superviseCall(child, {
     label: args[0],
     limitMs: unattended ? limit * minute : Infinity,
@@ -291,6 +293,10 @@ try {
       skip("count", halted);
       throw new Error(halted);
     }
+    if (!invocationId) {
+      recordFailure = false;
+      throw new Error("cannot start an unattended round without a valid systemd invocation");
+    }
     // Written before anything else, so every start counts, even one cut short in reset().
     progress("boot");
     if (state.boots) {
@@ -316,7 +322,14 @@ try {
   // call, clean slate or summary, and the round is recorded failed.
   await runSteps(first ? stepsUntil(first, until).steps : [], all, {
     call,
-    progress,
+    progress: (what) => {
+      if (what === "finished" && countedStage) recordFailure = false;
+      progress(what);
+      if (what === "finished" && countedStage) {
+        rmSync(countFailureFile);
+        syncDir(results);
+      }
+    },
     skip,
     countFailed: existsSync(countFailureFile),
     recordCount: (failed) => {
@@ -329,14 +342,12 @@ try {
         syncDir(here);
       } else {
         if (!countedStage) throw new Error("no staged count to publish");
-        const publication = unattended && invocationId ? countPublicationOf(countedStage) : null;
-        if (unattended && invocationId && !publication) throw new Error("the staged count is missing publication files");
+        const publication = unattended ? countPublicationOf(countedStage) : null;
+        if (unattended && !publication) throw new Error("the staged count is missing publication files");
         // The two closed files were synced by their writers. If interrupted before either rename
         // is durable, both readers still see the marker and show no instruction counts.
         renameSync(join(countedStage, "instructions.json"), join(results, "instructions.json"));
         renameSync(join(countedStage, "summary.json"), join(results, "summary.json"));
-        syncDir(results);
-        rmSync(countFailureFile);
         syncDir(results);
         if (publication) publishedCount = `count ${invocationId} ${publication}`;
       }

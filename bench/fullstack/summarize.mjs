@@ -44,7 +44,7 @@ summary.ssr = ssrOf(raw, Object.keys(apps));
 const countFailed = !stage && existsSync(join(dir, COUNT_FAILED_FILE));
 if (countFailed) summary.countFailed = true;
 const instructions = stage ? JSON.parse(readFileSync(join(stage, "instructions.json"), "utf8"))
-  : countFailed ? {} : read(join(dir, "instructions.json")) ?? {};
+  : countFailed || process.argv[3] === "--omit-count" ? {} : read(join(dir, "instructions.json")) ?? {};
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 for (const [key, runs] of Object.entries(instructions)) {
   if (!Array.isArray(runs)) { summary.instructions[key] = { failed: runs.failed }; continue; }

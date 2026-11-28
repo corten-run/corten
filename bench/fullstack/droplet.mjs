@@ -10,11 +10,11 @@
 //     another launch of the round refuses while it is held. A launch whose unit's start was not
 //     acknowledged leaves it, with how to check the round and remove it)
 //   --detach: start the round and leave: it runs on the droplet by itself; collect it later.
-//   --collect: look at the round once: download its results and destroy the droplet if it has
-//     ended (exit 0 when it finished, 1 when it stopped short), or show where it is (exit 3). It
+//   --collect: look at the round once: collect a finished round (exit 0), keep diagnostics if
+//     it stopped short (exit 1), or show where it is (exit 3). It
 //     has ended only when its unit reads inactive or failed with no job queued for it, in two
 //     snapshots that agree (round.mjs, snapshotsEnded), one taken before its log is read and one
-//     after; its droplet is destroyed only once a snapshot after the download still reads so.
+//     after; deletion after download needs the same snapshot and a known finish or failure.
 //   --attach: wait for a round already started and download it (then destroy its droplet).
 //   --from <step>: start run-all.mjs at that step and keep the droplet's earlier results.
 //   --stall <minutes>: how long a droplet may not answer before it is power-cycled (default 15).
@@ -39,7 +39,8 @@
 //   --suite browser: only the browser step of this comparison (run-all.mjs browser through browser:
 //     parity, look, bytes, browser timing), then bench/browser's run-all.mjs; results in both
 //     results folders.
-// Results land in bench/fullstack/results/<round>/; a finished full-stack round's raw output is
+// Completed results land in bench/fullstack/results/<round>/; partial Fullstack archives are
+// kept under bench/fullstack/diagnostics. A finished full-stack round's raw output is
 // then packed into raw.tar.xz there (pack.mjs). A droplet this creates is destroyed once its
 // round has ended (finished or stopped short, after the download) or when it fails before the round
 // starts, unless --keep; a droplet passed with --host never is.
@@ -52,7 +53,7 @@
 // which does the same.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -266,52 +267,94 @@ const write = (/** @type {string} */ path, /** @type {string} */ text) => `echo 
 
 const log = `${suiteDir}/results-${round}.log`;
 const progressFile = `/bench/bench/fullstack/results-${round}.progress`;
-const localCountFence = join(here, "results", round, COUNT_FAILED_FILE);
 // host.txt: the CPU model and the rest, since droplets of one size are not all the same machine.
 const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --version; npx playwright --version)";
-const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, /** @type {string | null} */ countPublication = null, /** @type {string | null} */ snapshot = null) => {
+/** @typedef {{kind: "count", hashes: string} | {kind: "legacy" | "no-count" | "suite"}} Publication */
+const countFree = (/** @type {string} */ summary) => {
+  if (!lstatSync(summary, { throwIfNoEntry: false })?.isFile()) return false;
+  try {
+    const doc = JSON.parse(readFileSync(summary, "utf8"));
+    return doc && typeof doc === "object" && !Array.isArray(doc)
+      && (!Object.hasOwn(doc, "instructions") || (doc.instructions && typeof doc.instructions === "object"
+        && !Array.isArray(doc.instructions) && Object.keys(doc.instructions).length === 0));
+  } catch { return false; }
+};
+// The only archive-to-Fullstack-replay boundary. Partial archives never enter it.
+const publishFullstack = (/** @type {string} */ staged, /** @type {string} */ result, /** @type {Publication} */ publication) => {
+  const entry = (/** @type {string} */ dir, /** @type {string} */ name) => lstatSync(join(dir, name), { throwIfNoEntry: false });
+  if (!lstatSync(staged, { throwIfNoEntry: false })?.isDirectory()) throw new Error("the downloaded round is not a directory");
+  const retained = lstatSync(result, { throwIfNoEntry: false });
+  if (retained && !retained.isDirectory()) throw new Error("the retained round is not a directory");
+  const summary = join(staged, "summary.json");
+  const oldInstructions = retained && entry(result, "instructions.json");
+  const oldFence = retained && entry(result, COUNT_FAILED_FILE);
+  const hasCountFiles = entry(staged, "instructions.json") || (entry(staged, "summary.json") && !countFree(summary));
+  if (publication.kind === "suite") {
+    // Browser and Hardening share this destination, but neither measures instruction counts.
+    for (const name of ["instructions.json", COUNT_FAILED_FILE, ARCHIVE]) rmSync(join(staged, name), { force: true });
+    const oldSummary = join(result, "summary.json");
+    if (suite !== "browser" || !countFree(summary) || oldInstructions || oldFence
+      || (entry(result, "summary.json") && !countFree(oldSummary))) rmSync(summary, { force: true });
+  } else {
+    if (publication.kind === "count" && (entry(staged, COUNT_FAILED_FILE) || countPublicationOf(staged) !== publication.hashes)) {
+      throw new Error("downloaded count files contradict the finished count record");
+    }
+    if (publication.kind === "legacy" && (entry(staged, COUNT_FAILED_FILE) || (hasCountFiles
+      && (!entry(staged, "instructions.json")?.isFile() || !entry(staged, "summary.json")?.isFile())))) {
+      throw new Error("the legacy finish does not contain a complete unfenced count pair");
+    }
+    if (publication.kind === "no-count") {
+      if (entry(staged, COUNT_FAILED_FILE) || !countFree(summary)) throw new Error("the no-count finish contains an invalid or count-bearing summary");
+      rmSync(join(staged, "instructions.json"), { force: true });
+    }
+  }
+  if (!retained) return renameSync(staged, result);
+  // Keep a retained fence on legacy/no-count collection. Also fence a copy that can replace only
+  // one member of a pair, including a count-free summary beside retained instructions.
+  const fence = join(result, COUNT_FAILED_FILE);
+  const replacingPair = publication.kind === "count" || (publication.kind === "legacy" && hasCountFiles);
+  const needsFence = replacingPair || (publication.kind !== "suite" && oldInstructions && entry(staged, "summary.json"));
+  if (needsFence && !oldFence) writeFileSync(fence, "count collection incomplete or no fresh count\n", { flag: "wx", flush: true });
+  cpSync(staged, result, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
+  if (publication.kind === "count" || (replacingPair && !oldFence)) rmSync(fence);
+};
+const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, /** @type {Publication | null} */ publication, /** @type {string | null} */ snapshot) => {
   const local = join(here, "..", localName, "results");
-  mkdirSync(local, { recursive: true });
   await retry(3, () => remote(`cd ${remoteDir} && mkdir -p results/${round} && (cp ${log} results/${round}/run.log 2>/dev/null || true) && ${hostInfo} > results/${round}/host.txt 2>&1; tar -czf /tmp/results.tgz -C results ${round}`, 5));
-  // Extract a proof-bearing download away from the retained round. Neither previous local
-  // files nor an incomplete extraction can supply a member of the proved pair.
-  const stage = countPublication === null ? null : mkdtempSync(join(local, ".count-"));
-  const archive = join(stage ?? local, ".results.tgz");
+  mkdirSync(local, { recursive: true });
+  const diagnostics = join(here, "diagnostics");
+  if (localName === "fullstack") mkdirSync(diagnostics, { recursive: true });
+  const stage = localName === "fullstack" ? mkdtempSync(join(diagnostics, `${suite}-${round}-`)) : local;
+  const archive = join(stage, stage === local ? ".results.tgz" : "results.tgz");
   const result = join(local, round);
+  let keepDiagnostic = false;
   let extracted = false;
   try {
     await retry(3, () => scp(`root@${host}:/tmp/results.tgz`, archive));
-    run("tar", ["-xzf", archive, "-C", stage ?? local], { timeout: 5 * minute });
+    if (stage !== local && !publication) {
+      run("tar", ["-tzf", archive], { quiet: true, timeout: 5 * minute });
+      const fd = openSync(archive, "r+");
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+      keepDiagnostic = true;
+      console.log(`${label} kept as diagnostics in ${archive}`);
+      return true;
+    }
+    run("tar", ["-xzf", archive, "-C", stage], { timeout: 5 * minute });
     extracted = true;
-    if (stage) {
-      const stagedRound = join(stage, round);
-      if (!lstatSync(stagedRound, { throwIfNoEntry: false })?.isDirectory()
-        || lstatSync(join(stagedRound, COUNT_FAILED_FILE), { throwIfNoEntry: false })
-        || countPublicationOf(stagedRound) !== countPublication) {
-        throw new Error("downloaded count files contradict the finished count record");
-      }
+    if (stage !== local && publication) {
       if (!stillEnded(snapshot, "the download")) return false;
-      const retained = lstatSync(result, { throwIfNoEntry: false });
-      if (!retained) renameSync(stagedRound, result);
-      else {
-        if (!retained.isDirectory()) throw new Error("the retained count result is not a directory");
-        // Recollection overlays prior files, as legacy tar does. Keep the pair fenced if that
-        // copy is interrupted, even if there was no marker before the download.
-        if (!existsSync(localCountFence)) writeFileSync(localCountFence, "count collection incomplete\n", { flag: "wx", flush: true });
-        cpSync(stagedRound, result, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
-        rmSync(localCountFence);
-      }
+      publishFullstack(join(stage, round), result, publication);
     }
     console.log(`${label} in ${result}`);
     return true;
   } finally {
-    if (stage) remove(stage, true);
-    else if (extracted) remove(archive);
+    if (stage === local) { if (extracted) remove(archive); }
+    else if (!keepDiagnostic) remove(stage, true);
   }
 };
-const downloadAll = async (/** @type {string} */ label, /** @type {string | null} */ countPublication = null, /** @type {string | null} */ snapshot = null) => {
-  const confirmed = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, countPublication, snapshot);
-  if (suite === "browser") await download("/bench/bench/browser", "browser", label);
+const downloadAll = async (/** @type {string} */ label, /** @type {Publication | null} */ publication, /** @type {string | null} */ snapshot) => {
+  const confirmed = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, publication, snapshot);
+  if (suite === "browser" && confirmed) await download("/bench/bench/browser", "browser", label, publication, snapshot);
   return confirmed;
 };
 // The round's unit as it reads now when two snapshots of it agree and show it ended (round.mjs,
@@ -439,7 +482,7 @@ const launch = async () => {
     mkdirSync(dirname(tarball), { recursive: true });
     // Not the droplet's own results, nor a round's progress file or log (round.mjs, hostOnlyFile):
     // the archive is unpacked over /bench after the clear below.
-    run("tar", ["-czf", tarball, "--exclude=target", "--exclude=node_modules", "--exclude=./bench/fullstack/results", "--exclude=./bench/live/results", "--exclude=./bench/browser/results", "--exclude=./bench/browser/out", "--exclude=./bench/fullstack/results-*.progress", "--exclude=./bench/fullstack/results-*.log", "--exclude=./bench/live/results-*.progress", "--exclude=./bench/live/results-*.log", "--exclude=./.git", "-C", repo, "."], { timeout: 5 * minute });
+    run("tar", ["-czf", tarball, "--exclude=target", "--exclude=node_modules", "--exclude=./bench/fullstack/results", "--exclude=./bench/fullstack/diagnostics", "--exclude=./bench/live/results", "--exclude=./bench/browser/results", "--exclude=./bench/browser/out", "--exclude=./bench/fullstack/results-*.progress", "--exclude=./bench/fullstack/results-*.log", "--exclude=./bench/live/results-*.progress", "--exclude=./bench/live/results-*.log", "--exclude=./.git", "-C", repo, "."], { timeout: 5 * minute });
     const listed = run("tar", ["-tzf", tarball], { quiet: true, timeout: 5 * minute }).stdout.split("\n").filter(hostOnlyFile);
     if (listed.length) throw new Error(`the upload holds ${listed.map((m) => m.trim()).join(", ")}, which only a droplet's round writes: remove it from the working tree, or exclude it`);
     const from = flag("from");
@@ -608,13 +651,19 @@ const watch = async (/** @type {boolean} */ once) => {
         const observed = beforeFields?.InvocationID;
         if (proof && proof.invocation !== observed) return { state: "count-unbound", snapshot: null,
           countError: observed ? "finished count record names a different systemd invocation" : "finished count record has no observed systemd invocation" };
-        return { state: "finished", snapshot: before.trim(), countPublication: proof?.publication ?? null };
+        /** @type {Publication} */
+        const publication = proof ? { kind: "count", hashes: proof.publication }
+          : { kind: suite !== "fullstack" ? "suite" : terminal?.noCount ? "no-count" : "legacy" };
+        return { state: "finished", snapshot: before.trim(), publication };
       }
       // The unit has ended and the round did not finish. A full-stack round's droplet that
       // restarted less than five minutes ago may not have started the unit again yet, and the unit
       // may be between states, so this has to hold for three polls.
       stopped = ended && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
-      if (stopped >= 3 || (stopped && (suite === "fullstack" ? terminal?.state === "failed" : /round failed/.test(text)))) return { state: "stopped", snapshot: before.trim() };
+      const failed = suite === "fullstack" ? terminal?.state === "failed" : /round failed/.test(text);
+      if (stopped >= 3 || (stopped && failed)) {
+        return { state: suite === "fullstack" && !failed ? "ambiguous" : "stopped", snapshot: before.trim() };
+      }
       if (once && !stopped) return { state: unreadable ? "unknown" : "running", snapshot: null };
       if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its queued job could not be read (${before}; ${after}): round ${round} is watched until it reads as ended`);
       unreadableSaid = unreadable;
@@ -643,7 +692,7 @@ const watch = async (/** @type {boolean} */ once) => {
   }
 };
 
-let countProofRequired = false;
+let watched = false;
 try {
   if (collect || attach) {
     mayDestroy = false;
@@ -655,9 +704,9 @@ try {
       process.exit(0);
     }
   }
-  const { state, snapshot, countPublication, countError } = await watch(collect);
-  countProofRequired = state === "count-unbound" || (state === "finished" && countPublication !== null);
-  if (state === "count-unbound") throw new Error(countError);
+  const { state, snapshot, publication, countError } = await watch(collect);
+  watched = true;
+  if (state === "count-unbound") throw new Error(countError + deleteHint());
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
   if (state === "finished" || state === "stopped") startUnconfirmed = false;
   if (state === "running" || state === "unknown") {
@@ -670,7 +719,7 @@ try {
     let confirmed = true;
     if (state === "finished") {
       console.log("downloading the results");
-      confirmed = await downloadAll("results", countPublication, snapshot);
+      confirmed = await downloadAll("results", /** @type {Publication} */ (publication), snapshot);
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
       // harden.mjs prints the marker only when every phase ran and its file was written; a download
@@ -701,22 +750,23 @@ try {
     } else {
       // A round that stopped short keeps what it measured.
       console.log("the round stopped before it finished; downloading what it has");
-      await downloadAll("partial results (the round did not finish)");
+      await downloadAll("partial results (the round did not finish)", null, snapshot);
       process.exitCode = 1;
     }
     // The watch saw the unit ended before its log was read and after; it goes only if it still
     // reads so once the results are down.
-    if (confirmed && stillEnded(snapshot, "the download")) mayDestroy = true;
-    else {
+    if (confirmed && stillEnded(snapshot, "the download")) {
+      if (state === "ambiguous") console.log(`the Fullstack terminal outcome is not known; the droplet is left as it is${deleteHint()}`);
+      else mayDestroy = true;
+    } else {
       leftRunning();
       process.exitCode = 3;
     }
   }
 } catch (e) {
-  // A run that waits for its round (not --collect, which leaves the droplet for the next look) and
-  // cannot go on keeps what the round measured, then destroys the droplet as it would at the end,
-  // but only when its unit reads ended before the download and the same after it (below). If the
-  // download fails too, the droplet stays for a --collect. A start not acknowledged may have
+  // A waiting run (not --collect) that cannot go on may save a diagnostic archive if the unit
+  // can be read as ended, but cannot infer a terminal Fullstack outcome that permits DELETE.
+  // The other suites keep their existing policy. A start not acknowledged may have
   // started the round, which goes on by itself, and so may a start that succeeded whose round the
   // watch has not seen end: the droplet is left for a --collect. A launch refused for its custody
   // (another launch holds or took the lock, the round's unit could not be confirmed stopped, or its
@@ -733,17 +783,20 @@ try {
   // Only a round whose unit reads ended (inactive or failed with no job queued, in two snapshots
   // that agree) before the download and the same after it is downloaded from and destroyed: a
   // watch that lost the droplet for a while says nothing of whether the round is still running.
-  // An unbound count proof or failed proof-bearing download must not fall back to
-  // unverified partial collection.
-  if (!countProofRequired && !collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
+  // Fullstack can keep diagnostics on a watch error, but without an observed terminal outcome
+  // it can neither publish nor delete. Never retry a refused Fullstack publication as partial.
+  if ((!watched || suite !== "fullstack") && !collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
     const why = String(/** @type {any} */ (e).message).split("\n")[0];
     const seen = endedNow();
     if (seen === null) console.log(`the round could not go on (${why}), and ${unitName} on the droplet at ${host} could not be confirmed ended (inactive or failed with no job queued, in two snapshots that agree): it is not ended, or could not be read, so nothing is downloaded and the droplet is left as it is${deleteHint()}`);
     else {
       console.log(`the round could not go on (${why}); ${unitName} reads ended, so downloading what it has`);
       try {
-        await downloadAll("partial results (the round did not finish)");
-        if (stillEnded(seen, "the download")) mayDestroy = true;
+        await downloadAll("partial results (the round did not finish)", null, seen);
+        if (stillEnded(seen, "the download")) {
+          if (suite === "fullstack") console.log(`diagnostics alone do not settle the Fullstack round${deleteHint()}`);
+          else mayDestroy = true;
+        }
       } catch (d) {
         console.log(`could not download them: ${String(/** @type {any} */ (d).message).split("\n")[0]}`);
       }

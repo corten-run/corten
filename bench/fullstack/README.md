@@ -1398,7 +1398,8 @@ three runs:
    `run-all.mjs` syncs `count-failed.txt` before recording the count step's start. A clean exit 0
    must produce a fresh file in a private directory, with every requested app and target's
    repeats with numeric user and kernel counts, or an explicit failure for that target. The round
-   clears the marker only after publishing both `instructions.json` and its new `summary.json`. A restart
+   clears the marker only after publishing both `instructions.json` and its new `summary.json`
+   and, for an unattended round, recording their bound finish. A restart
    before publication does not adopt the staging files. On an ordinary count error, including
    incomplete output, later steps and the summary still run, but the round exits non-zero.
    With the marker present, `summarize.mjs` omits instructions and reports `countFailed: true`,
@@ -1471,23 +1472,27 @@ three runs:
    launch is running (`rm` it on the droplet). Do not `--collect` such a round until its unit is
    running, or no start job for it is queued and it is inactive or failed: `--collect` waits for
    a queued job, but a start still waiting its turn at the droplet's flock is not yet queued and
-   reads as a stopped round, and `--collect` then downloads partial results and destroys the
-   droplet. The watch (`--collect`, or a launch that waits) takes a round as ended, and downloads
+   may look stopped. Without a terminal record, `--collect` can save diagnostics but does not
+   destroy the full-stack droplet. The watch (`--collect`, or a launch that waits) takes a round as ended, and downloads
    from its droplet, only when two snapshots of its unit, each its state and queued job from one
    query, one taken before the log is read and one after, agree and read inactive or failed with
    no job queued; it destroys the droplet only once a snapshot after the download still reads the
    same (otherwise it leaves it, exit 3). A unit still active, changing, or whose snapshot could not
    be read is watched on (`--collect` leaves it, exit 3). A launch or `--attach` whose watch gives
-   up (the droplet stopped answering) downloads and destroys under the same rule: when the unit
-   cannot then be confirmed ended, nothing is downloaded and the droplet is left, with how to delete
-   it. For a fullstack round, the last complete `finished` or `failed` record in the
-   current launch's progress file says how the ended unit finished. A missing, nonterminal or
-   cut-short last record cannot prove success. A launch clears that file even when `--from`
+   up (the droplet stopped answering) can save diagnostic output if the unit can be confirmed ended.
+   For Fullstack this is not permission to delete. For a fullstack round, the current launch's
+   progress file must end in a complete `finished` or `failed` record to establish its outcome.
+   A launch clears that file even when `--from`
    keeps the earlier log, so an old `all done` cannot turn a failed recount into a finished
    round. The other suites still use their log's completion line. None of these records
-   substitutes for the unit snapshots. When a `finished count` record names the ended systemd
-   invocation, the collector extracts the archive into a private directory (with a five-minute
-   extraction bound). The archive must supply both `instructions.json` and `summary.json` with the
+   substitutes for the unit snapshots. Only a completed collection can enter `results/<round>`.
+   Partial Fullstack archives are saved, unextracted, under `bench/fullstack/diagnostics/`, outside
+   replay. A complete `failed` record permits normal deletion after that download and the
+   unchanged-ended-unit check; missing or cut-short evidence does not.
+   A new unattended run requires a nonzero systemd invocation ID before doing work.
+   Collection extracts a completed archive privately and checks that the ended unit is unchanged.
+   For `finished count`, the record must also name that systemd invocation. The archive must
+   supply both `instructions.json` and `summary.json` with the
    recorded SHA-256 hashes and no `count-failed.txt`. Missing or mismatched files or an archive
    with the marker fail collection without replacing local files or deleting the droplet. The
    same ended unit must still be confirmed before publishing the verified files and removing any
@@ -1496,8 +1501,11 @@ three runs:
    runner can bind the same finished count to its new invocation without running any steps. It
    requires known, different boot IDs, both original hashes, and no failure marker. It writes the
    new terminal record with the current boot ID in an atomic journal replacement; on refusal it
-   leaves the old proof intact. Only a plain finish without a count proof uses the legacy download
-   and leaves any local marker in place. The upload leaves out the working tree's own
+   leaves the old proof intact. A continuation without a fresh count records `finished no-count`:
+   it publishes a count-free summary, not any inherited instructions. Only a genuine plain
+   `finished` uses historical collection rules; it does not clear a local count fence.
+   Browser and Hardening collections preserve their own artifacts but cannot publish counts into
+   the shared Fullstack results directory. The upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.
    A droplet

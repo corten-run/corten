@@ -5,3 +5,5 @@
 /results/*/raw.tar.xz
 # Private count publication stages (can remain after an abrupt stop).
 /results/.count-*
+# Collected diagnostics and private extraction stages, never replay inputs.
+/diagnostics/

@@ -337,7 +337,8 @@ const countFinish = new RegExp(`^finished count ((?!0{32} )[0-9a-f]{32}) ([0-9a-
 export function terminalRecord(line) {
   const record = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (.*)$/.exec(line)?.[1];
   if (record === "finished" || record === "failed") return { state: record, count: null };
-  if (!record || !/^finished count(?: |$)/.test(record)) return null;
+  if (record === "finished no-count") return { state: "finished", count: null, noCount: true };
+  if (!record || !/^finished (?:count|no-count)(?: |$)/.test(record)) return null;
   const proof = countFinish.exec(record);
   return proof
     ? { state: "finished", count: { invocation: proof[1], publication: proof[2], boot: proof[3] } }
@@ -522,7 +523,7 @@ export const launchLock = (round) => `/var/lib/corten-bench/launch-${round}.lock
  * a new round read as finished). The upload leaves them out and refuses an archive holding one.
  * @param {string} member a path as `tar -t` lists it
  */
-export const hostOnlyFile = (member) => /^(?:\.\/)?bench\/(?:fullstack|live)\/results-[^/]+\.(?:progress|log)$/.test(member.trim());
+export const hostOnlyFile = (member) => /^(?:\.\/)?bench\/(?:(?:fullstack|live)\/results-[^/]+\.(?:progress|log)$|fullstack\/diagnostics(?:\/|$))/.test(member.trim());
 
 /**
  * Takes the launch lock for `token`, or exits 3 with how to clear it when another launch holds it
@@ -811,8 +812,8 @@ export async function runSteps(list, all, { call, progress, skip, countFailed = 
   if (result.stopped || result.code !== 0) throw new Error(result.stopped ?? `summarize.mjs exited with ${result.code}`);
   if (countFailed) throw new Error("count step failed; summary omits instruction counts");
   if (counted) recordCount(false);
-  done();
   progress("finished");
+  done();
 }
 
 /**

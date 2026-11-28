@@ -173,7 +173,7 @@ test("a count call that exits 4, or is stopped or killed before count.mjs saw it
     assert.deepEqual(log.filter((l) => /^(progress |call |count failed: |build$|done$)/.test(l)), [
       "count failed: true", "progress start count", "call count.mjs", "progress end count", "progress start conform", "call conform.mjs", "progress end conform",
       "progress start browser", "call parity.mjs", "call look.mjs", "call bytes.mjs", "call browser.mjs", "progress end browser",
-      "progress start build", "build", "progress end build", "progress start summary", "call summarize.mjs", ...(code === 0 ? ["count failed: false", "done", "progress finished"] : []),
+      "progress start build", "build", "progress end build", "progress start summary", "call summarize.mjs", ...(code === 0 ? ["count failed: false", "progress finished", "done"] : []),
     ], String(code));
   }
   // Another step's call stopped at its limit skips the rest of that step alone and asks for a clean slate, as before.
@@ -366,7 +366,7 @@ const fakeSystemctl = [
   "    esac ;;",
   '  disable) exit "${FAKE_DISABLE_RC:-0}" ;;',
   '  stop) exit "${FAKE_STOP_RC:-0}" ;;',
-  '  start) [ -z "$FAKE_STARTED" ] || : > "$FAKE_STARTED"; [ -z "$FAKE_START_DONE" ] || echo "all done" >> "$FAKE_START_DONE"; [ -z "$FAKE_START_PROGRESS" ] || printf "%s\\n" "${FAKE_START_PROGRESS_LINE-2026-11-27T00:02:00.000Z finished}" >> "$FAKE_START_PROGRESS"; exit "${FAKE_START_RC:-0}" ;;',
+  '  start) [ -z "$FAKE_STARTED" ] || : > "$FAKE_STARTED"; [ -z "$FAKE_START_DONE" ] || echo "${FAKE_START_LOG-all done}" >> "$FAKE_START_DONE"; if [ -n "$FAKE_START_PROGRESS" ]; then printf "%s" "${FAKE_START_PROGRESS_LINE-2026-11-27T00:02:00.000Z finished}" >> "$FAKE_START_PROGRESS"; [ -n "$FAKE_START_TORN" ] || printf "\\n" >> "$FAKE_START_PROGRESS"; fi; exit "${FAKE_START_RC:-0}" ;;',
   '  is-active) exit "${FAKE_ACTIVE_RC:-0}" ;;',
   '  list-jobs) [ -z "$FAKE_JOBS_FAIL" ] || exit 1; if [ -n "$FAKE_JOBS" ] && [ -e "$FAKE_JOBS" ]; then cat "$FAKE_JOBS"; fi ;;',
   '  daemon-reload) [ -z "$FAKE_RELOAD_HOOK" ] || sh "$FAKE_RELOAD_HOOK" ;;',
@@ -673,8 +673,8 @@ test("startUnit says its start settled only when systemctl start succeeded, and 
   }
 });
 
-test("droplet.mjs uploads none of a round's progress files or logs from the working tree", () => {
-  for (const member of ["./bench/fullstack/results-r1.progress", "bench/fullstack/results-m3.log", "./bench/live/results-l2.log", "./bench/live/results-l2.progress\r"]) assert.ok(hostOnlyFile(member), member);
+test("droplet.mjs uploads none of a round's progress, logs or diagnostics from the working tree", () => {
+  for (const member of ["./bench/fullstack/results-r1.progress", "bench/fullstack/results-m3.log", "./bench/live/results-l2.log", "./bench/live/results-l2.progress\r", "./bench/fullstack/diagnostics/", "bench/fullstack/diagnostics/fullstack-r1-abc/results.tgz"]) assert.ok(hostOnlyFile(member), member);
   for (const member of ["./bench/fullstack/round.mjs", "./bench/fullstack/results-r1.progress.bak", "./bench/browser/results-r1.log", "./bench/fullstack/results/r1/run.log", "./x/bench/fullstack/results-r1.progress"]) assert.ok(!hostOnlyFile(member), member);
 });
 
@@ -759,7 +759,7 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
     // Fail only the collector's private extraction, not remote tar or legacy extraction.
     writeFileSync(join(bin, "tar"), [
       "#!/bin/bash",
-      'if [ -n "$FAKE_EXTRACT_FAIL" ] && [ "$1" = -xzf ] && [[ "$2" = */.count-*/*.tgz ]]; then exit 96; fi',
+      'if [ -n "$FAKE_EXTRACT_FAIL" ] && [ "$1" = -xzf ] && [[ "$2" = */diagnostics/*/*.tgz ]]; then printf partial > "$4/r1"; exit 96; fi',
       `exec ${quote(spawnSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).stdout.trim())} "$@"`,
       "",
     ].join("\n"), { mode: 0o755 });
@@ -800,7 +800,8 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       if (hook) writeFileSync(join(root, "hook"), hook);
       for (const file of ["log", "systemctl", "started", "jobs", "flips", "download-start"]) rmSync(join(root, file), { force: true });
       rmSync(join(fullstack, "results"), { recursive: true, force: true });
-      const argv = [...(fast ? ["--import", fastTimers] : []), join(fullstack, "droplet.mjs"), "r1", ...(collect ? ["--collect"] : [...(create ? ["--ssh-key", "1"] : ["--host", "203.0.113.9"]), ...extra, ...(detach ? ["--detach"] : [])])];
+      rmSync(join(fullstack, "diagnostics"), { recursive: true, force: true });
+      const argv = [...(fast ? ["--import", fastTimers] : []), join(fullstack, "droplet.mjs"), "r1", ...(collect ? ["--collect", ...extra] : [...(create ? ["--ssh-key", "1"] : ["--host", "203.0.113.9"]), ...extra, ...(detach ? ["--detach"] : [])])];
       return { argv, options: { cwd: tree, encoding: /** @type {const} */ ("utf8"), env: { ...env, ...(create ? { FAKE_DOCTL_CREATE: "1" } : {}), ...(collect ? { FAKE_DOCTL_LIST: "4242 corten-bench-r1 203.0.113.9" } : {}), ...fake } } };
     };
     const callsOf = () => existsSync(join(root, "log")) ? readFileSync(join(root, "log"), "utf8").split("\n=====\n").filter(Boolean) : [];
@@ -813,6 +814,15 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
     const launch = (/** @type {Setup} */ setup) => {
       const { argv, options } = prepare(setup);
       return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
+    };
+    const diagnostic = () => {
+      const root = join(fullstack, "diagnostics");
+      const [kept] = readdirSync(root);
+      assert.ok(kept);
+      const archive = join(root, kept, "results.tgz");
+      const listed = spawnSync("tar", ["-tzf", archive], { encoding: "utf8" });
+      assert.equal(listed.status, 0, listed.stderr);
+      return listed.stdout;
     };
     // A launch interrupted (SIGINT, as Ctrl-C) once `until` holds of its calls so far.
     const interrupted = async (/** @type {Setup} */ setup, /** @type {(calls: string[]) => boolean} */ until) => {
@@ -1156,7 +1166,9 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
         const partial = collectWith({ progress, fast: true });
         assert.match(partial.stdout, /the round stopped before it finished/, partial.stdout);
         assert.equal(partial.status, 1, partial.stderr);
-        assert.ok(partial.downloaded && partial.deleted, partial.stdout);
+        assert.ok(partial.downloaded && !partial.deleted, partial.stdout);
+        assert.match(diagnostic(), /r1\/run.log/);
+        assert.ok(!existsSync(join(fullstack, "results", "r1")));
       }
     });
     const remoteResult = join(dirname(remoteProgress), "results", "r1");
@@ -1169,12 +1181,14 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
     const instructions = readFileSync(counted.instructions, "utf8");
     const summary = readFileSync(counted.summary, "utf8");
     const oldSummary = '{"countFailed":true,"instructions":{}}';
-    const collectCount = (/** @type {{ progress?: string, oldFence?: boolean, retained?: boolean, incomingFence?: boolean, both?: boolean, changedFile?: string, attach?: boolean, fake?: Record<string, string> }} */
-      { progress = proof, oldFence = true, retained = oldFence, incomingFence = false, both = true, changedFile, attach = false, fake = {} } = {}) => {
+    const collectCount = (/** @type {{ progress?: string, oldFence?: boolean, retained?: boolean, incomingFence?: boolean, both?: boolean, changedFile?: string, incomingSummary?: string, attach?: boolean, start?: boolean, suite?: "browser" | "harden", fake?: Record<string, string> }} */
+      { progress = proof, oldFence = true, retained = oldFence, incomingFence = false, both = true, changedFile, incomingSummary = summary, attach = false, start = false, suite, fake = {} } = {}) => {
       // Attach looks up the same fake droplet by name (no --host), so it too could delete it.
-      const { argv, options } = prepare({ log: done, progress, collect: !attach, fast: true,
+      const { argv, options } = prepare({ log: suite === "browser" ? "browser suite done\n" : done, progress, collect: !attach && !start, fast: true,
+        ...(suite ? { extra: ["--suite", suite] } : {}),
         ...(attach ? { create: true, detach: false, extra: ["--attach"] } : {}),
-        fake: { FAKE_INVOCATION: countInvocation, FAKE_DOCTL_LIST: "4242 corten-bench-r1 203.0.113.9", ...fake } });
+        ...(start ? { create: true, detach: false, extra: ["--from", "count", "--stall", "0.00001"] } : {}),
+        fake: { FAKE_INVOCATION: countInvocation, FAKE_DOCTL_LIST: start ? "" : `4242 corten-bench-${suite ? suite + "-" : ""}r1 203.0.113.9`, ...fake } });
       if (retained) {
         mkdirSync(localResult, { recursive: true });
         if (oldFence) writeFileSync(localMarker, "old failure\n");
@@ -1182,10 +1196,12 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
         writeFileSync(join(localResult, "summary.json"), oldSummary);
       }
       mkdirSync(remoteResult, { recursive: true });
-      writeFileSync(join(remoteResult, "summary.json"), summary);
+      writeFileSync(join(remoteResult, "summary.json"), incomingSummary);
       if (both) writeFileSync(join(remoteResult, "instructions.json"), instructions);
       if (changedFile) writeFileSync(join(remoteResult, changedFile), "{}");
       if (incomingFence) writeFileSync(join(remoteResult, COUNT_FAILED_FILE), "new failure\n");
+      if (suite) writeFileSync(join(remoteResult, suite === "browser" ? "browser.json" : "hardening.json"), "{}");
+      if (suite === "browser") mkdirSync(join(remote, "bench", "bench", "browser"), { recursive: true });
       return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
     };
     await t.test("collect verifies the count files before publishing or deleting", () => {
@@ -1205,6 +1221,10 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.match(legacy.stdout, /trend saw the count fence/);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
       assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary);
+      const missingLegacyFile = collectCount({ progress: end("finished"), both: false, fake: { FAKE_INVOCATION: "" } });
+      assert.match(missingLegacyFile.stderr, /the legacy finish does not contain a complete unfenced count pair/);
+      assert.ok(!missingLegacyFile.deleted);
+      assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
 
       const rebooted = counted.restart(rebootId, rebootInvocation);
       assert.equal(rebooted.status, 0, rebooted.said);
@@ -1217,15 +1237,30 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary);
       const continued = counted.run([], "conform");
       assert.equal(continued.status, 0, continued.said);
-      const withoutCount = collectCount({ progress: readFileSync(join(counted.here, "results-r1.progress"), "utf8") });
+      const noCount = readFileSync(join(counted.here, "results-r1.progress"), "utf8");
+      assert.match(noCount, /finished no-count\n$/);
+      const countFreeSummary = readFileSync(counted.summary, "utf8");
+      assert.deepEqual(JSON.parse(countFreeSummary).instructions, {});
+      const withoutCount = collectCount({ progress: noCount, incomingSummary: countFreeSummary });
       assert.equal(withoutCount.status, 0, withoutCount.stdout + withoutCount.stderr);
       assert.match(withoutCount.stdout, /trend saw the count fence/);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "continuing after count does not publish one");
+      const freshNoCount = collectCount({ progress: noCount, incomingSummary: countFreeSummary, oldFence: false });
+      assert.equal(freshNoCount.status, 0, freshNoCount.stdout + freshNoCount.stderr);
+      assert.ok(freshNoCount.deleted && !existsSync(join(localResult, "instructions.json")));
+      const retainedNoCount = collectCount({ progress: noCount, incomingSummary: countFreeSummary, oldFence: false, retained: true });
+      assert.equal(retainedNoCount.status, 0, retainedNoCount.stdout + retainedNoCount.stderr);
+      assert.match(retainedNoCount.stdout, /trend saw the count fence/);
+      assert.equal(readFileSync(join(localResult, "instructions.json"), "utf8"), instructions);
+      const lyingNoCount = collectCount({ progress: noCount, oldFence: false });
+      assert.match(lyingNoCount.stderr, /the no-count finish contains an invalid or count-bearing summary/);
+      assert.ok(!lyingNoCount.deleted && !existsSync(localResult));
 
       const failed = collectCount({ progress: end("failed"), incomingFence: true, oldFence: false });
       assert.equal(failed.status, 1, failed.stdout + failed.stderr);
       assert.match(failed.stdout, /the round stopped before it finished/);
-      assert.equal(readFileSync(localMarker, "utf8"), "new failure\n");
+      assert.ok(failed.deleted && !existsSync(localResult));
+      assert.match(diagnostic(), /r1\/count-failed.txt/);
 
       for (const [why, setup] of /** @type {const} */ ([
         ["different instructions without an old marker", { oldFence: false, changedFile: "instructions.json" }],
@@ -1267,6 +1302,34 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
       assert.doesNotMatch(changed.stdout, /trend saw/);
       assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
       assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
+    });
+    await t.test("torn and watch-error archives with unfenced pairs never reach Fullstack replay", () => {
+      const terminal = proof.trimEnd().split("\n").at(-1) ?? "";
+      const fake = { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_START_PROGRESS: remoteProgress,
+        FAKE_STARTED_INVOCATION: countInvocation, FAKE_START_PROGRESS_LINE: terminal };
+      for (const options of [
+        { progress: proof.trimEnd() },
+        { start: true, progress: unfinished(other), fake: { ...fake, FAKE_START_TORN: "1" } },
+        { start: true, progress: unfinished(other), fake: { ...fake, FAKE_DROP_WATCH: "1", FAKE_DOCTL_ACCOUNT: "1" } },
+      ]) {
+        const r = collectCount({ ...options, oldFence: false, retained: true });
+        assert.equal(r.status, 1, r.stdout + r.stderr);
+        assert.ok(r.downloaded && !r.deleted, r.stdout + r.stderr);
+        assert.match(diagnostic(), /r1\/instructions.json/);
+        assert.match(diagnostic(), /r1\/summary.json/);
+        assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), oldSummary);
+        assert.equal(readFileSync(join(localResult, "instructions.json"), "utf8"), instructions);
+        assert.ok(!existsSync(localMarker));
+      }
+    });
+    await t.test("the shared destination keeps Browser and Hardening artifacts, not foreign count files", () => {
+      for (const suite of /** @type {const} */ (["browser", "harden"])) {
+        const r = collectCount({ suite, oldFence: false, incomingFence: true });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.ok(r.deleted);
+        assert.ok(existsSync(join(localResult, suite === "browser" ? "browser.json" : "hardening.json")));
+        assert.ok(!existsSync(join(localResult, "instructions.json")) && !existsSync(join(localResult, "summary.json")) && !existsSync(localMarker));
+      }
     });
     await t.test("an unbound count invocation refuses before download or deletion on collect and launch", async (t) => {
       const differentInvocation = "b".repeat(32);
@@ -1333,12 +1396,11 @@ console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no coun
     assert.match(lostWatch.stdout, /the round could not go on \(the droplet at 203\.0\.113\.9 is stuck/);
     assert.match(lostWatch.stdout, /corten-bench-r1 on the droplet at 203\.0\.113\.9 could not be confirmed ended/);
     assert.match(lostWatch.stdout, /delete it with doctl compute droplet delete 4242 --force/);
-    // The control: the same, but the unit then reads ended: what the round has is downloaded and
-    // the droplet destroyed, as before.
+    // The same, but the unit then reads ended: retain diagnostics only, not DELETE authority.
     const lostEnded = launch({ progress: unfinished(other), extra: ["--stall", "0.00001"], fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_DROP_WATCH: "1", FAKE_DOCTL_ACCOUNT: "1" }, create: true, detach: false, fast: true });
     assert.notEqual(lostEnded.status, 0, lostEnded.stdout);
     assert.match(lostEnded.stdout, /downloading what it has/, `${lostEnded.stdout}${lostEnded.stderr}`);
-    assert.ok(lostEnded.downloaded && lostEnded.deleted, lostEnded.calls.join("\n---\n").slice(0, 2000));
+    assert.ok(lostEnded.downloaded && !lostEnded.deleted, lostEnded.calls.join("\n---\n").slice(0, 2000));
     // The same, but a start of the unit runs during the download, after the snapshots that let it
     // begin: the results come down, but the unit no longer reads ended after the download, so the
     // droplet is left (the check after the download), with how to delete it.
@@ -1443,7 +1505,7 @@ syncBuiltinESMExports();
       const scratch = join(root, mode, "tmp");
       mkdirSync(scratch);
       const child = spawn(process.execPath, ["--import", pathToFileURL(patch).href, join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
-        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", INVOCATION_ID: countInvocation }, stdio: ["ignore", "pipe", "pipe"],
       });
       let said = "";
       for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
@@ -1455,7 +1517,7 @@ syncBuiltinESMExports();
         assert.equal(exit, 0, said);
         // The start line is whole, on its own line, and names this boot.
         assert.equal(lines[1].split(" ").slice(1).join(" "), `start count ${boot}`, text);
-        assert.deepEqual(lines.map((l) => l.split(" ").slice(1, 3).join(" ")), ["boot", "start count", "end count", "start conform", "end conform", "start summary", "finished"], text);
+        assert.deepEqual(lines.map((l) => l.split(" ").slice(1, 3).join(" ")), ["boot", "start count", "end count", "start conform", "end conform", "start summary", "finished count"], text);
         assert.deepEqual(ran, ["count.mjs", "conform.mjs", "summarize.mjs"], said);
       } else {
         assert.equal(exit, 1, said);
@@ -1515,15 +1577,15 @@ ${script}
   const call = (/** @type {string[]} */ args, invocation = countInvocation) => {
     const r = spawnSync(process.execPath, args, {
       cwd: here, encoding: "utf8", timeout: 15_000,
-      env: { PATH: dirname(process.execPath), HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", INVOCATION_ID: invocation },
+      env: { PATH: dirname(process.execPath), HOME: root, TMPDIR: root, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", ...(invocation ? { INVOCATION_ID: invocation } : {}) },
     });
     assert.ifError(r.error);
     return { status: r.status, signal: r.signal, said: r.stdout + r.stderr };
   };
   return {
-    run: (/** @type {string[]} */ nodeArgs = [], from = "count") => {
+    run: (/** @type {string[]} */ nodeArgs = [], from = "count", invocation = countInvocation) => {
       if (from !== "count") rmSync(progress);
-      return call([...nodeArgs, "run-all.mjs", round, "10", from, "conform", "--unattended"]);
+      return call([...nodeArgs, "run-all.mjs", round, "10", from, "conform", "--unattended"], invocation);
     },
     restart: (/** @type {string} */ boot, /** @type {string} */ invocation, blockPublish = false) => {
       const patch = join(root, "boot.mjs");
@@ -1542,6 +1604,19 @@ syncBuiltinESMExports();
 }
 
 const linuxCount = { skip: process.platform !== "linux" && "an unattended round runs on Linux only" };
+
+test("new unattended count requires a nonzero invocation before touching retained rows", linuxCount, (t) => {
+  for (const invocation of ["", "0".repeat(32)]) {
+    const f = countFixture(t, `writeFileSync(output, ${JSON.stringify(fullInstructions)});`, staleInstructions);
+    const refused = f.run([], "count", invocation);
+    assert.equal(refused.status, 1, refused.said);
+    assert.match(refused.said, /without a valid systemd invocation/);
+    assert.doesNotMatch(refused.said, /node count\.mjs|all done/);
+    assert.ok(!existsSync(join(f.here, "results-r1.progress")));
+    assert.equal(readFileSync(f.instructions, "utf8"), staleInstructions);
+    assert.ok(!existsSync(f.summary));
+  }
+});
 
 test("count review: a halted round writes no summary but later replay omits the stale count", linuxCount, (t) => {
   const f = countFixture(t, "process.exit(4);", staleInstructions);
@@ -1879,7 +1954,7 @@ test("an unattended count that exits 4 stops immediately; one that exits 1 fails
       mkdirSync(scratch);
       // No docker on PATH: the clean slate's docker calls fail and change nothing.
       const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
-        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APPS: "corten", BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", INVOCATION_ID: countInvocation }, stdio: ["ignore", "pipe", "pipe"],
       });
       let said = "";
       for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
@@ -1898,7 +1973,7 @@ test("an unattended count that exits 4 stops immediately; one that exits 1 fails
       } else {
         assert.equal(exit, code, said);
         assert.deepEqual(ran, ["count.mjs", "conform.mjs", "summarize.mjs"], said);
-        assert.deepEqual(progress, ["boot", "start count", "end count", "start conform", "end conform", "start summary", code === 0 ? "finished" : "failed"], said);
+        assert.deepEqual(progress, ["boot", "start count", "end count", "start conform", "end conform", "start summary", code === 0 ? "finished count" : "failed"], said);
         assert.equal(existsSync(countFailed), code === 1, said);
         assert.equal(said.includes("all done"), code === 0, said);
         assert.ok(!existsSync(join(here, "results", "r1", "skipped.txt")), said);
@@ -1929,7 +2004,7 @@ test("an unattended run-all.mjs that starts again in the boot its count step sta
       const scratch = join(root, name, "tmp");
       mkdirSync(scratch);
       const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
-        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1", INVOCATION_ID: countInvocation }, stdio: ["ignore", "pipe", "pipe"],
       });
       let said = "";
       for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
@@ -1940,7 +2015,7 @@ test("an unattended run-all.mjs that starts again in the boot its count step sta
       if (name === "other") {
         assert.equal(exit, 0, said);
         assert.deepEqual(ran, ["conform.mjs", "summarize.mjs"], said);
-        assert.deepEqual(progress, ["boot", "start count", "boot", "start conform", "end conform", "start summary", "finished"], said);
+        assert.deepEqual(progress, ["boot", "start count", "boot", "start conform", "end conform", "start summary", "finished no-count"], said);
         assert.match(skipped, /step count skipped: the droplet restarted while it ran/);
       } else {
         assert.equal(exit, 1, `${name}: ${said}`);
@@ -2075,7 +2150,7 @@ test("an unattended run-all.mjs whose count exits 4 while a descendant holds its
     const scratch = join(root, "tmp");
     mkdirSync(scratch);
     const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
-      cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+      cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1", INVOCATION_ID: countInvocation }, stdio: ["ignore", "pipe", "pipe"],
     });
     let said = "";
     for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
