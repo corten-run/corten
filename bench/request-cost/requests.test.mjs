@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import zlib from "node:zlib";
-import { Answers, cases, masked, named, unexpected } from "./requests.mjs";
+import { Answers, cases, masked, named, screenDocument, unexpected, unexpectedScreenDocument } from "./requests.mjs";
 
 const answer = (/** @type {string} */ body, more = "", status = "200 OK") => Buffer.from(`HTTP/1.1 ${status}\r\ncontent-length: ${Buffer.byteLength(body, "latin1")}\r\n${more}\r\n${body}`, "latin1");
 
@@ -57,6 +57,7 @@ test("each case is its request, byte for byte, to its configuration", () => {
     text: ["pages", `GET /text HTTP/1.1\r\n${host}\r\n`],
     page: ["pages", `GET /page HTTP/1.1\r\n${host}\r\n`],
     "page-public": ["public-page", `GET /page HTTP/1.1\r\n${host}\r\n`],
+    "screen-json": ["screen", `GET /listing HTTP/1.1\r\n${host}Accept: application/json\r\n\r\n`],
     "get-browser": ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}${browser}\r\n`],
     "text-browser": ["pages", `GET /text HTTP/1.1\r\n${host}${browser}\r\n`],
     "page-browser": ["pages", `GET /page HTTP/1.1\r\n${host}${browser}\r\n`],
@@ -98,6 +99,25 @@ test("a list of cases is refused when it names one that is not a case", () => {
   assert.deepEqual(named("get,page-browser"), ["get", "page-browser"]);
   assert.throws(() => named("get,pages"), /no case "pages"/);
   assert.throws(() => named("toString"), /no case "toString"/);
+});
+
+test("the screen must negotiate its listing, not return a fixed document or fixed JSON", () => {
+  const json = '{"title":"Listing","data":{"name":"Ashen"}}';
+  const doc = '<!DOCTYPE html><html lang="en"><head><title>Listing</title></head><body><main>Ashen</main></body></html>';
+  const type = "Content-Type: application/json\r\n";
+  const html = answer(doc, "Content-Type: text/html; charset=utf-8\r\n");
+  assert.equal(screenDocument(8123).latin1Slice(), "GET /listing HTTP/1.1\r\nHost: localhost:8123\r\n\r\n");
+  assert.equal(unexpectedScreenDocument(html), null);
+  assert.match(String(unexpectedScreenDocument(answer(json, type))), /Content-Type/);
+  assert.match(String(unexpectedScreenDocument(answer(json, "Content-Type: text/html; charset=utf-8\r\n"))), /body/);
+  assert.equal(unexpected("screen-json", answer(json, type)), null);
+  assert.match(String(unexpected("screen-json", html)), /Content-Type/);
+  assert.match(String(unexpected("screen-json", answer(doc, type))), /body/);
+  assert.match(String(unexpected("screen-json", answer(json.replace("Ashen", "Other"), type))), /body/);
+  assert.match(String(unexpected("screen-json", answer(json, type, "201 Created"))), /not a 200/);
+  for (const headers of ["", "content-type: text/plain\r\n", type + type.toLowerCase(), type + " extra\r\n"]) {
+    assert.match(String(unexpected("screen-json", answer(json, headers))), /single Content-Type/);
+  }
 });
 
 test("an answer is the case's only as a 200 with the case's body and encoding", () => {

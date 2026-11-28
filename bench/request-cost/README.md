@@ -52,6 +52,7 @@ to any host. A `HOSTS` in the environment the kit is run in never reaches the pr
 | `text` | `pages` | `GET /text` | `ok` |
 | `page` | `pages` | `GET /page` | A page of about 12 KB |
 | `page-public` | `public-page` | `GET /page` | The same page; requires a single `Cache-Control: public, max-age=60` and no `Age` (a kept hit has one even in its first second) |
+| `screen-json` | `screen` | `GET /listing` with `Accept: application/json`, to a typed route using `Req::screen` | 200, one `Content-Type: application/json`, exactly `{"title":"Listing","data":{"name":"Ashen"}}` |
 | `get-browser`, `text-browser`, `page-browser` | as above | The same with the seven header lines a browser sends with a navigation | The same; the page compressed with zstd |
 | `get-any`, `unstaged-any` | `api`, `HOSTS=*` | As `get` and `unstaged` | `3` |
 | `get-any-last`, `unstaged-any-last` | `api`, `HOSTS=*` | As `get` and `unstaged` with the browser's seven lines before `Host`, which is the last of eight | `3` |
@@ -60,6 +61,16 @@ to any host. A `HOSTS` in the environment the kit is run in never reaches the pr
 | `unstaged-any-encoded` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,093 `a` and `%4a` and the port | `3` |
 | `unstaged-any-short` | `api`, `HOSTS=*` | As `unstaged` to `Host: a.test` and the port, a name of 6 bytes | `3` |
 | `unstaged-subdomain` | `api` | As `unstaged` to `Host: seller-desk.localhost` and the port, a name under `localhost` whose 11 bytes before it are read as a name | `3` |
+
+The screen has its own route tree. Before saving its JSON answer, `--answers` requests the
+same listing without an `Accept` line and requires the HTML document with its title and name.
+That control is not counted. The lowercase media type compares **successful JSON** on both
+commits; a request that changes from HTML to JSON is a correctness check, not that comparison.
+The extra case adds one answer capture, three depth-one instruction windows and one allocation
+window per build. It adds no depth-16 or idle runs. In a local Linux run those extra commands
+took 23.4 s on `8178187f5` and 22.2 s on `749bf6ec0`, excluding builds; this is not a
+hosted time allowance or a request latency. A kit-only change builds the same framework
+inputs on both sides with the new probe; that is not a measurement of a framework change.
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler

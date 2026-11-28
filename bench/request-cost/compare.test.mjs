@@ -88,7 +88,7 @@ const page = "<!DOCTYPE html><table><tr><td>119</td><td>A row of the page, about
 function answer(name) {
   const { body, encoding } = /** @type {typeof cases[string]} */ (cases[name]);
   const sent = typeof body === "string" ? Buffer.from(body) : encoding ? zlib.zstdCompressSync(page) : Buffer.from(page);
-  const policy = name === "page-public" ? "cache-control: public, max-age=60\r\n" : "";
+  const policy = name === "page-public" ? "cache-control: public, max-age=60\r\n" : name === "screen-json" ? "content-type: application/json\r\n" : "";
   return Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\ncontent-length: ${sent.length}\r\n${encoding ? `content-encoding: ${encoding}\r\n` : ""}${policy}date: -\r\n\r\n`), sent]);
 }
 
@@ -128,6 +128,10 @@ test("the runs to take are every case's instructions, four at a depth of 16, eve
   const all = readings();
   assert.equal(all.length, CASES + 4 + CASES + 3 * RUNS);
   assert.equal(RUNS, 3);
+  assert.deepEqual(all.filter(({ expect }) => expect.case === "screen-json").map(({ file, expect }) => [file, expect.kind, expect.depth, expect.requests]), [
+    ["count-screen-json.json", "instructions", 1, 1000],
+    ["allocations-screen-json.json", "allocations", 1, 1000],
+  ]);
   assert.deepEqual(all[0], { file: "count-get.json", script: "count.mjs", options: ["--json", "--cases", "get"], expect: { kind: "instructions", case: "get", depth: 1, requests: 1000 } });
   assert.deepEqual(all.filter(({ options }) => options.includes("--depth")).map(({ file, options, expect: of }) => [file, options.join(" "), of.requests]), [
     ["count-16-pipeline.json", "--json --depth 16 --cases pipeline", 992],
@@ -634,7 +638,7 @@ test("a probe that did not build is said once: against base it leaves the change
   assert.equal(counted.status, 1);
   assert.equal(verdict(counted.markdown), `**Does not pass as counted:** ${said}. ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
   assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, CASES + 4 + CASES + 3);
-  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `post-absolute`, `unstaged`, `pipeline`, `text`, `page`, `page-public`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`, `unstaged-subdomain`\.$/m);
+  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `post-absolute`, `unstaged`, `pipeline`, `text`, `page`, `page-public`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`, `unstaged-subdomain`, `screen-json`\.$/m);
   const measured = compare(empty, head, { description: measuring });
   assert.deepEqual([measured.status, measured.holds], [0, false]);
   assert.equal(verdict(measured.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said}. ${readMeasured}`);
@@ -737,6 +741,15 @@ test("matching public pages with Age on both builds are not unkept readings", (t
   const { markdown, status, holds } = compare(base, head, { description: counting });
   assert.deepEqual([status, holds], [1, false]);
   assert.ok(verdict(markdown).includes("`page-public` has no answer on base and head (`a kept public page (Age header)`)"));
+});
+
+test("equal screen captures with a non-JSON type cannot qualify a comparison", (t) => {
+  const { base, head } = builds(t);
+  const wrong = answer("screen-json").latin1Slice().replace("application/json", "text/plain");
+  for (const side of [base, head]) writeFileSync(join(side, "answers", "screen-json.http"), wrong, "latin1");
+  const { markdown, status, holds } = compare(base, head, { description: counting });
+  assert.deepEqual([status, holds], [1, false]);
+  assert.ok(verdict(markdown).includes("`screen-json` has no answer on base and head (`expected a single Content-Type of application/json`)"));
 });
 
 const SUM = "e59d3e11".padEnd(64, "0");
