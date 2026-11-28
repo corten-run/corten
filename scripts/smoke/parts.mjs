@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { base, engine, skip, check, within } from "./helpers.mjs";
 
 /** An error's first line, or the value as text. @param {unknown} error */
@@ -38,7 +39,7 @@ async function watch(until, probe, done) {
  * Follows the waiting part's link to the page with the picks read in, and says which step did not
  * happen, or "" when every one did (#2246):
  * 1. one Playwright click on a link to the exact Watchlist picks URL, with hover prefetch off;
- * 2. the first request that click makes to that address (a whole load or `corten: nav` or
+ * 2. the first request to that address after the click lands (a whole load or `corten: nav` or
  *    `page`) answers with the picks and no read template. Both steps have 10 s from invoking
  *    the click, including any navigation that Playwright waits for;
  * 3. those picks drawn at that address: the page's address is the expected one when they are seen, the
@@ -46,15 +47,17 @@ async function watch(until, probe, done) {
  *    (`corten: action`) was sent after the click that could have filled them. Drawing has 10 s
  *    from accepting the answer.
  * @param {import("@playwright/test").Page} page
+ * @param {{ answerMs?: number, drawMs?: number }} [budgets] Shorter deadlines for fixture tests.
  */
-export async function followPicks(page) {
+export async function followPicks(page, { answerMs = 10_000, drawMs = 10_000 } = {}) {
   const target = new URL("/?picks=true", page.url()).href;
+  const marker = `picks click ${randomUUID()}:`;
   let link = "";
   try {
     link = await within(
       5000,
       "not settled within 5 s",
-      page.evaluate((target) => {
+      page.evaluate(({ target, marker }) => {
         const part = document.querySelector("#picks");
         const a = part?.querySelector("a");
         if (!(a instanceof HTMLAnchorElement)) return "";
@@ -62,9 +65,17 @@ export async function followPicks(page) {
           // Isolate click navigation; the dedicated prefetch smoke checks reuse separately.
           a.setAttribute("data-no-prefetch", "");
           /** @type {any} */ (part).__waitingPicks = true;
+          // Report the landing from the old document, even for a full load that replaces it.
+          /** @param {MouseEvent} event */
+          const land = (event) => {
+            if (!event.isTrusted || event.button !== 0 || !event.composedPath().includes(a) || a.href !== target) return;
+            window.removeEventListener("click", land, true);
+            console.debug(marker + (performance.timeOrigin + performance.now()));
+          };
+          window.addEventListener("click", land, true);
         }
         return a.href;
-      }, target),
+      }, { target, marker }),
     );
   } catch (error) {
     return `the link could not be read (${firstLine(error)}), at ${page.url()}`;
@@ -79,12 +90,20 @@ export async function followPicks(page) {
   let requests = 0;
   let reads = 0;
   let until = 0;
+  let landed = 0;
+  /** @param {import("@playwright/test").ConsoleMessage} message */
+  const onConsole = (message) => {
+    const text = message.text();
+    if (until && !landed && message.type() === "debug" && text.startsWith(marker)) {
+      landed = Number(text.slice(marker.length));
+    }
+  };
   /** @param {Request} r */
   const onRequest = (r) => {
     if (!until) return;
     const { corten, purpose } = r.headers();
     if (corten === "action") reads++;
-    if (purpose === "prefetch" || r.url() !== target || r.method() !== "GET") return;
+    if (!landed || purpose === "prefetch" || r.url() !== target || r.method() !== "GET") return;
     const how = r.resourceType() === "document" ? "load" : corten === "nav" || corten === "page" ? corten : "";
     if (!how) return;
     direct ??= { request: r, how };
@@ -102,6 +121,12 @@ export async function followPicks(page) {
   const onResponse = async (res) => {
     const a = direct;
     if (!a || a.request !== res.request()) return;
+    // Console and network notifications can arrive on different channels. An answer is not
+    // evidence for the click if its browser-reported start predates the landing.
+    if (!(a.request.timing().startTime > landed)) {
+      a.unread = "request start was not observed after the click landed";
+      return;
+    }
     a.status = res.status();
     if (!res.ok()) return;
     // The body read is bounded by the time left since invoking the click.
@@ -136,15 +161,16 @@ export async function followPicks(page) {
     readNow: a.parsed?.readNow,
   });
   const noAnswer = () =>
-    `no answer to the navigation to ${target} carried the picks (10 s from click start, ${requests} click requests, answer ${JSON.stringify(direct ? describe(direct) : null)}), at ${page.url()}`;
+    `no answer to the navigation to ${target} carried the picks (${answerMs / 1000} s from click start, ${requests} click requests, answer ${JSON.stringify(direct ? describe(direct) : null)}), at ${page.url()}`;
+  page.on("console", onConsole);
   page.on("request", onRequest);
   page.on("response", onResponse);
   try {
-    until = performance.now() + 10_000;
+    until = performance.now() + answerMs;
     try {
       await page.click("#picks a", { timeout: Math.max(1, Math.floor(until - performance.now())) });
     } catch (error) {
-      return `the click on the link failed (${firstLine(error)}; 10 s click budget), ${requests} click requests for ${target} sent, at ${page.url()}`;
+      return `the click on the link failed (${firstLine(error)}; ${answerMs / 1000} s click budget), ${requests} click requests for ${target} sent, at ${page.url()}`;
     }
     const answered = await watch(
       until,
@@ -154,7 +180,7 @@ export async function followPicks(page) {
     const a = answered.last;
     if (!answered.ok || !a || !carries(a)) return noAnswer();
     const drawn = await watch(
-      performance.now() + 10_000,
+      performance.now() + drawMs,
       () => page.evaluate(() => {
         const part = document.querySelector("#picks");
         return {
@@ -168,10 +194,11 @@ export async function followPicks(page) {
     );
     if (!drawn.ok) {
       const error = drawn.error ? `; last probe error: ${drawn.error}` : "";
-      return `the picks the answer carried were not drawn at ${target} within 10 s of accepting it (last seen ${JSON.stringify(drawn.last ?? null)}, ${reads} part reads, ${requests} click requests, answer ${JSON.stringify(describe(a))}${error})`;
+      return `the picks the answer carried were not drawn at ${target} within ${drawMs / 1000} s of accepting it (last seen ${JSON.stringify(drawn.last ?? null)}, ${reads} part reads, ${requests} click requests, answer ${JSON.stringify(describe(a))}${error})`;
     }
     return "";
   } finally {
+    page.off("console", onConsole);
     page.off("request", onRequest);
     page.off("response", onResponse);
   }
