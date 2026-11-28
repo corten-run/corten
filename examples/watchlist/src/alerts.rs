@@ -253,19 +253,37 @@ fn AlertList<'a>(t: Msg, alerts: &'a [Alert]) -> impl Patch {
 ///
 /// The runtime's read of it gets a patch, never the page (`HtmlResult<Patches>`): the route says
 /// `patches`, so `ReadAgain::from` takes it.
-pub(crate) async fn page(
+pub(crate) fn page(
     req: Req,
     viewer: Option<Caller<Viewer>>,
     State(store): State<AlertStore>,
     visitor: Visitor,
     Params(at): Params<url::Alerts>,
-) -> HtmlResult<Patches> {
+) -> impl Future<Output = HtmlResult<Patches>> {
     let read = store.read(Instant::now(), visitor.known(), at.saved);
+    render_read(req, viewer, url::Alerts { saved: at.saved }, read)
+}
+
+/// The smoke-only route holds the status, not the store. Unknown receipts remain unknown.
+pub(crate) fn smoke_saving(
+    req: Req,
+    viewer: Option<Caller<Viewer>>,
+    State(store): State<AlertStore>,
+    visitor: Visitor,
+    Params(at): Params<crate::smoke::url::SavingAlerts>,
+) -> impl Future<Output = HtmlResult<Patches>> {
+    let mut read = store.read(Instant::now(), visitor.known(), at.saved);
+    if read.status == Status::Saved {
+        read.status = Status::Saving;
+    }
+    render_read(req, viewer, url::Alerts { saved: at.saved }, read)
+}
+
+async fn render_read(req: Req, viewer: Option<Caller<Viewer>>, from: url::Alerts, read: Reading) -> HtmlResult<Patches> {
     let t: Msg = req.t();
     // A read again from a write's patch: the status line and the list, asking again from this
     // route while the write is landing. A view renders only when it is sent, so a page load does
     // not build the read-again.
-    let from = url::Alerts { saved: at.saved };
     let (status, alerts) = (read.status, &read.alerts);
     let again = (status == Status::Saving).then(|| ReadAgain { after: Duration::from_secs(1) }.from(&from));
     let parts = html! {

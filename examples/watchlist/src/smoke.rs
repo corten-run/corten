@@ -19,10 +19,16 @@ use futures_util::{StreamExt, stream};
 
 use crate::layout::Layout;
 
-#[corten::routes(area = Smoke)]
+#[corten::routes(area = Smoke, state = crate::app::Shared)]
 pub mod url {
     #[route("/smoke")]
     pub struct Smoke;
+
+    /// The real alerts document or part, with a known receipt rendered as still saving.
+    #[route("/smoke/alerts/saving", get = crate::alerts::smoke_saving, patches)]
+    pub struct SavingAlerts {
+        pub saved: Option<u64>,
+    }
 
     /// One event of 640 rows (it decodes to 52,395 bytes), then a quiet stream until the keepalive.
     #[route("/smoke/live/large", get = large)]
@@ -795,7 +801,7 @@ mod tests {
     /// `<details>` open. The runtime's request still gets the patch.
     #[tokio::test]
     async fn the_smokes_patches_answer_a_plain_request_with_a_page_or_a_redirect() {
-        let app = crate::app::app(Market::new()).area(|area| url::area(area).components(super::COMPONENTS)).test();
+        let app = crate::app::app_with(Market::new(), crate::alerts::AlertStore::new(crate::alerts::LAG), true).test();
         let plain = app.post(&url::Styled).await;
         assert_eq!(plain.status(), 303, "{}", plain.text());
         assert_eq!(plain.headers()["location"], "/");

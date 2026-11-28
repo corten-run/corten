@@ -1,5 +1,120 @@
-import { base, shadowing, skip, check, within, steps, pollFor } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, steps, pollFor, cleanUp } from "./helpers.mjs";
 import { liveRegion } from "./live-region.mjs";
+
+/** Capture the document's slot before allowing the read. A new message element means the
+ * patch drew even if its tag did not, so a misplaced or missing replacement gets reported. */
+export function captureAlertsDraw() {
+  const selector = "main template[data-corten-read-again][data-from]";
+  const tag = document.querySelector(selector);
+  const parent = tag?.parentNode;
+  if (!tag || !parent) throw new Error("missing original alerts ReadAgain tag");
+  const slot = Array.from(parent.childNodes).indexOf(tag);
+  const message = document.getElementById("alert-status");
+  return () => {
+    const drawn = document.getElementById("alert-status");
+    if (!drawn || drawn === message) return false;
+    const tags = Array.from(document.querySelectorAll(selector));
+    return {
+      status: drawn.textContent,
+      tags: tags.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
+      pageTagGone: !tag.isConnected,
+      sameSlot: tags.length === 1 && parent.childNodes[slot] === tags[0],
+    };
+  };
+}
+
+/** @param {ReturnType<ReturnType<typeof captureAlertsDraw>>} draw @param {string} url */
+export const askingInPlace = (draw, url) =>
+  !!draw && draw.status === "Saving..." && draw.tags.length === 1 && draw.tags[0] === url && draw.pageTagGone && draw.sameSlot;
+
+/** Only the document and first part get the still-saving fixture. Playwright calls route
+ * handlers outside the test body: settle them here, even when a gate opens during teardown. */
+export function alertsReadFixture(/** @type {string} */ url) {
+  const first = Promise.withResolvers();
+  const next = Promise.withResolvers();
+  const active = new Set();
+  let partRead = false, closing = false;
+  const fixture = new URL(url);
+  fixture.pathname = "/smoke/alerts/saving";
+  const parts = [], whole = new Set();
+  let opening = false, initial, retry;
+  const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
+    if (r.method() !== "GET") return;
+    const target = new URL(r.url());
+    if (target.origin !== fixture.origin || target.pathname !== "/alerts") return;
+    if (r.headers()["corten"] === "action") parts.push(r.url());
+    else {
+      whole.add(r);
+      // Mark only the explicit main-frame goto. A reload can inherit its Referer, so give
+      // the retry a slot only after the first attempt failed, not just while goto is pending.
+      if (opening && r.url() === url && r.headers().referer === fixture.href && r.isNavigationRequest() && !r.frame().parentFrame()) {
+        if (!initial) initial = r;
+        else if (initial.failure()) retry ??= r;
+      }
+    }
+  };
+  const failures = [];
+  const serve = async (/** @type {import("@playwright/test").Route} */ route, abort) => {
+    if (closing) return abort();
+    const request = route.request();
+    if (request.method() !== "GET") return route.fallback();
+    if (request.headers()["corten"] === "action") {
+      if (partRead) {
+        await next.promise;
+        return closing ? abort() : route.fallback();
+      }
+      partRead = true;
+      await first.promise;
+      if (closing) return abort();
+    } else if (request !== initial && request !== retry) return route.fallback();
+    const response = await route.fetch({
+      url: fixture.href, headers: { ...request.headers(), "accept-encoding": "identity" }, timeout: 6000,
+    });
+    await cleanUp(() => closing ? abort() : route.fulfill({ response }), () => response.dispose());
+  };
+  const saving = (route) => {
+    let aborting = false;
+    const abort = () => {
+      aborting = true;
+      return route.abort();
+    };
+    const work = serve(route, abort).catch(async (error) => {
+      failures.push(error);
+      // A failed fetch still owns an unanswered browser request. If already handled or closed,
+      // abort can reject too; the route's first error is the one this case must report.
+      if (!aborting) await route.abort().catch(() => {});
+    });
+    active.add(work);
+    return work.finally(() => active.delete(work));
+  };
+  return {
+    first, next, saving, parts, whole, onPart,
+    // The first part asks again; its follow-up is terminal. Count even a read aborted by close().
+    stopped: () => parts.length === 2 && parts.every(part => part === url) && whole.size === 0,
+    async goto(page) {
+      opening = true;
+      try {
+        const response = await page.goto(url, { referer: fixture.href });
+        const arrived = response?.request();
+        if (!arrived || (arrived !== initial && arrived !== retry)) throw new Error("alerts goto did not return its explicit document");
+        whole.delete(arrived);
+        if (arrived === retry) whole.delete(initial);
+      } finally {
+        opening = false;
+      }
+    },
+    async close(page) {
+      closing = true;
+      first.resolve();
+      next.resolve();
+      await cleanUp(
+        () => within(3000, "unroute the first alerts part", page.unroute(url, saving)),
+        () => within(3000, "drain the alerts route callbacks", Promise.all(active)),
+        () => { if (failures.length) throw failures[0]; },
+      );
+    },
+  };
+}
 
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
@@ -33,70 +148,87 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // reached, and the form beside them stays as the user has it. Its head's ReadAgain is for a
     // browser without JavaScript.
     {
-      /** @type {string[]} */
-      const parts = [];
-      /** @type {string[]} */
-      const whole = [];
-      const onPart = (/** @type {import("@playwright/test").Request} */ r) => {
-        if (r.method() !== "GET" || !r.url().includes("/alerts?saved=")) return;
-        (r.headers()["corten"] === "action" ? parts : whole).push(r.url());
-      };
-      const url = await pending();
-      // The page's own tag, as the server drew it, so the check below can tell it from the one an
-      // answer put in its place.
-      await page.addInitScript(() =>
-        document.addEventListener("DOMContentLoaded", () => {
-          (/** @type {any} */ (window)).__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
-        }),
-      );
-      await page.goto(url);
+      const { step } = steps(15_000, "the first alerts part did not draw and settle in 15 s");
+      const url = await step(pending);
+      // Use the real renderer, not the race between the browser's first poll and the store's
+      // 1.5 s lag. Only the document and its first part read render as still saving. Hold the
+      // first read until the original DOM is captured, the next until the asking patch is seen.
+      const fixture = alertsReadFixture(url);
+      const { parts, whole, onPart } = fixture;
       page.on("request", onPart);
-      const { stayed: regionStayed } = await liveRegion(page, "alert-status");
-      const waiting = await saved();
-      await page.fill("input[name=above]", "123.45");
-      await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
-      const entries = await page.evaluate(() => history.length);
-      await savedSoon();
-      check("reading an alert's status again replaces only the live region's message", await regionStayed());
-      check(
-        "a page's part waiting for a write is read again after a full load, not the page",
-        waiting === "Saving..." && (await saved()) === "Saved." && parts.length > 0 && whole.length === 0 && page.url() === url,
-        `${waiting} -> ${await saved()} after ${parts.length} part and ${whole.length} page reads`,
-      );
-      const kept = await page.evaluate(() => ({
-        marker: (/** @type {any} */ (window)).__marker,
-        entries: history.length,
-        above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
-      }));
-      check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
-      // The part's answer that asked again put its tag in the page's tag's place: one tag, the
-      // last read's, and not the page's own (whose address is the same here).
-      const tagged = await page.evaluate(() => {
-        const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
-        const first = (/** @type {any} */ (window)).__pageTag;
-        return {
-          tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
-          pageTag: !!first,
-          pageTagGone: !!first && !first.isConnected && !all.includes(first),
-        };
-      });
-      const tags = tagged.tags;
-      check(
-        "a page part's answer that asks again takes the place of the tag that asked",
-        tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
-        `${JSON.stringify(tagged)} after ${parts.at(-1)}`,
-      );
-      const settled = parts.length;
+      let before, regionStayed;
+      let failed = false;
+      try {
+        await step(() => page.route(url, fixture.saving));
+        await step(() => fixture.goto(page));
+        const region = await step(() => liveRegion(page, "alert-status"));
+        regionStayed = region.stayed;
+        before = await step(() => page.evaluateHandle(captureAlertsDraw));
+        await step(() => page.fill("input[name=above]", "123.45"));
+        const entries = await step(() => page.evaluate(() => {
+          (/** @type {any} */ (window)).__marker = 8;
+          return history.length;
+        }));
+        fixture.first.resolve();
+        const tagged = await step(async () => {
+          const draw = await page.waitForFunction((read) => read(), before, { timeout: 6000 });
+          try {
+            return await draw.jsonValue();
+          } finally {
+            await draw.dispose();
+          }
+        });
+        check(
+          "a page part's answer that asks again takes the place of the tag that asked",
+          parts[0] === url && askingInPlace(tagged, url),
+          `${JSON.stringify(tagged)} after ${parts[0]}`,
+        );
+        fixture.next.resolve();
+        await step(savedSoon);
+        const regionKept = await step(() => {
+          regionStayed = undefined;
+          return region.stayed();
+        });
+        check("reading an alert's status again replaces only the live region's message", regionKept);
+        const terminal = await step(saved);
+        check(
+          "a page's part waiting for a write is read again after a full load, not the page",
+          region.text === "Saving..." && terminal === "Saved." && fixture.stopped() && page.url() === url,
+          `${region.text} -> ${terminal} after ${parts.length} part and ${whole.size} page reads`,
+        );
+        const kept = await step(() => page.evaluate(() => ({
+          marker: (/** @type {any} */ (window)).__marker,
+          entries: history.length,
+          above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
+        })));
+        check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
+      } catch (error) {
+        failed = true;
+        page.off("request", onPart);
+        throw error;
+      } finally {
+        await cleanUp(
+          () => fixture.close(page),
+          () => regionStayed && within(3000, "release the alerts live-region check", regionStayed()),
+          () => before && within(3000, "release the original alerts DOM handle", before.dispose()),
+        ).catch((error) => {
+          if (!failed) {
+            page.off("request", onPart);
+            throw error;
+          }
+          console.error("Alerts cleanup also failed:", error);
+        });
+      }
       await page.waitForTimeout(2200);
-      check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);
+      check("a page's part stops once its patch no longer asks", fixture.stopped(), `expected two reads of ${url}; got ${JSON.stringify(parts)} and ${whole.size} page reads`);
       if (swaps) {
         const from = parts.length;
         await go(await pending());
         await savedSoon();
         check(
           "a page's part reached by the runtime's navigation is read again, not the page",
-          (await saved()) === "Saved." && parts.length > from && whole.length === 1,
-          `${await saved()} after ${parts.length - from} part reads, ${whole.length} page loads (the navigation's)`,
+          (await saved()) === "Saved." && parts.length > from && whole.size === 1,
+          `${await saved()} after ${parts.length - from} part reads, ${whole.size} page loads (the navigation's)`,
         );
         // Away before the read: the runtime's navigation leaves the page, and its part is not read.
         await go(await pending());
