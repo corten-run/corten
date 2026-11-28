@@ -3332,55 +3332,90 @@ async fn deadlines_on_four_threads_fire_and_none_before_its_limit() {
     tokio::time::timeout(Duration::from_secs(60), all).await.expect("every deadline under one limit fired");
 }
 
-/// A handler that serves a request on a runtime of its own inside a connection's poll
-/// (`block_in_place` and `block_on`) has that request's deadline wait on the connection's timer
-/// from the connection's third such request, and that timer is of the runtime that polls the
-/// connection. If that runtime shuts down while the inner request waits, the deadline's next poll
-/// panics inside the handler's catch (tokio's check that the timer's runtime is running) and the
-/// inner request is answered 500, where a timer of its own would have answered 503 at the
-/// deadline (`docs/design.md#choice-deadline-timer`, cost 6).
+/// An inner request on a handler's own runtime can borrow the connection's timer, which belongs
+/// to the runtime that polls the connection. If that runtime shuts down while the deadline waits
+/// on the timer, its next poll panics inside the handler's catch. The inner request is answered
+/// 500, not the 503 it would get if its deadline fired (`docs/design.md#choice-deadline-timer`, cost 6).
 #[test]
 fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down() {
-    use tokio::io::AsyncWriteExt;
-    let outer = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
-    let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
-    // The status of each inner request, which no client can be sent once the runtime is gone.
-    let (saw, seen) = std::sync::mpsc::channel();
-    let inner = waiting(told).router();
-    let relay = |path: &'static str| {
-        let (inner, saw) = (inner.clone(), saw.clone());
-        get(move || {
-            let (inner, saw) = (inner.clone(), saw.clone());
-            async move {
-                tokio::task::block_in_place(move || {
-                    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                    let res = runtime.block_on(inner.oneshot(Request::get(path).body(Body::empty()).unwrap())).unwrap();
-                    let _ = saw.send(res.status().as_u16());
-                    res.status().as_u16().to_string()
-                })
-            }
-        })
+    use std::{
+        future::{poll_fn, Future},
+        pin::pin,
+        time::Instant,
     };
-    let routes = Table::new().route("/inner/wait", relay("/wait")).route("/inner/never", relay("/never"));
-    let open = outer.block_on(async {
+    use tokio::io::AsyncWriteExt;
+    const WAIT: Duration = Duration::from_secs(10);
+    const DEADLINE: Duration = Duration::from_secs(60);
+    let outer = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let (armed, mut arming) = tokio::sync::mpsc::unbounded_channel();
+    // The inner answer cannot be sent to the client once the outer runtime is gone.
+    let (saw, seen) = std::sync::mpsc::channel();
+    let inner_routes = Table::new().route("/never", get(std::future::pending::<&'static str>));
+    let inner = App::new(Routes::from(inner_routes)).deadline(DEADLINE).dev(true).router();
+    let relay = get(move || {
+        let (inner, armed, saw) = (inner.clone(), armed.clone(), saw.clone());
+        async move {
+            tokio::task::block_in_place(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                let (status, body) = runtime.block_on(async {
+                    let request = Request::get("/never").header("accept", "text/html").body(Body::empty()).unwrap();
+                    let mut answer = pin!(inner.oneshot(request));
+                    let began = Instant::now();
+                    let before = taken();
+                    let mut armed = Some(armed);
+                    let res = poll_fn(|cx| {
+                        let polled = answer.as_mut().poll(cx);
+                        if let Some(armed) = armed.take() {
+                            assert!(polled.is_pending(), "the inner request waits on its deadline");
+                            assert_eq!(taken() - before, 1, "the inner deadline borrowed the connection's timer");
+                            // Counted at reset, and the request's pending poll has now armed it.
+                            let _ = armed.send(began);
+                        }
+                        polled
+                    })
+                    .await
+                    .unwrap();
+                    let status = res.status().as_u16();
+                    let body = res.into_body().collect().await.unwrap().to_bytes();
+                    (status, body)
+                });
+                let _ = saw.send((status, body));
+                status.to_string()
+            })
+        }
+    });
+    let warm_up = get(|| async {
+        let (counted, waited) = tokio::sync::oneshot::channel();
+        crate::deadline::WAITED_POLL.set(Some(counted));
+        waited.await.expect("the connection counted this deadline in a pending poll");
+        "done"
+    });
+    let routes = Table::new().route("/wait", warm_up).route("/inner/never", relay);
+    let (open, borrowed) = outer.block_on(async {
         let (addr, stop, server) = listening(App::new(Routes::from(routes))).await;
         let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
-        // Two requests whose deadlines make their own timers, after which the connection has its.
+        // Each answer is held until its deadline's wait counts. Only then send the next request.
         for _ in 0..2 {
-            assert_eq!(asked(&mut conn, "GET /inner/wait").await.1, "200");
+            let (status, body, _) = asked(&mut conn, "GET /wait").await;
+            assert_eq!((status, body.as_str()), (200, "done"));
         }
         conn.write_all(b"GET /inner/never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
-        let began = tokio::time::timeout(Duration::from_secs(10), async {
-            while heard.recv().await.expect("the handlers tell") != Told::Began {}
-        });
-        began.await.expect("the third inner request's handler begins");
-        (conn, stop, server)
+        let borrowed = tokio::time::timeout(WAIT, arming.recv()).await;
+        ((conn, stop, server), borrowed)
     });
-    assert_eq!((seen.recv(), seen.recv()), (Ok(200), Ok(200)));
-    // The inner request is waiting on the connection's timer, well inside its deadline.
-    std::thread::sleep(Duration::from_millis(50));
     outer.shutdown_background();
-    assert_eq!(seen.recv_timeout(Duration::from_secs(10)), Ok(500), "answered 500 once the connection's runtime has shut down");
+    let began =
+        borrowed.expect("the inner request armed the connection's timer in time").expect("the inner request reports arming");
+    let (status, body) = seen.recv_timeout(WAIT).expect("the inner request answered after the connection's runtime shut down");
+    assert!(began.elapsed() < DEADLINE, "the inner request answered before its deadline");
+    assert_eq!(status, 500, "answered 500 once the connection's runtime has shut down");
+    let body = String::from_utf8_lossy(&body);
+    // Tokio can notice shutdown at the timer entry's check or when it reads the entry's result.
+    assert!(
+        body.contains("the handler panicked: A Tokio 1.x context was found, but it is being shutdown.")
+            || body.contains("the handler panicked: timer error: the timer is shutdown"),
+        "{body}"
+    );
     drop(open);
 }
 

@@ -12024,17 +12024,17 @@ rules something out.
     one and dropped it, and in tokio 1.54.1 a timer made and a timer dropped each take the one
     lock of the runtime's timer wheel, so on the multi-threaded runtime every thread serving such
     requests queued there twice a request. A connection `corten::serve` accepts now keeps one
-    (`crates/corten/src/deadline.rs`) once two of its requests have waited: the connection's
-    first two deadlines to wait make their own, as before, and at the second the connection makes
-    one; each deadline after them moves that timer later (`Sleep::reset`, a compare-and-swap with
-    no lock while the timer is still set and the new time is not earlier) and gives it back still
-    set; the timer is dropped with the connection. A connection whose only request waits makes
-    none. The connection's task owns the timer and lends it to the thread only while the
-    connection is polled, under a number of the connection's own, so a deadline finds it there
-    and gives it back only to the connection that made it. A deadline that finds none makes its
-    own and drops it: the connection's first two to wait, a second deadline in one request, and a
-    request polled anywhere else (`app.router()` served another way, a call a layer moved to
-    another task).
+    (`crates/corten/src/deadline.rs`) once two distinct polls of the connection have returned
+    pending with a deadline of its newly waiting. Until then those deadlines make their own, as
+    before. A deadline that borrows the connection's timer moves it later (`Sleep::reset`, a
+    compare-and-swap with no lock while the timer is still set and the new time is not earlier)
+    and gives it back still set; the timer is dropped with the connection. A connection on
+    which only one deadline waits makes none. The connection's task owns the timer and lends
+    it to the thread only while the connection is polled, under a number of the connection's own,
+    so a deadline finds it there and gives it back only to the connection that made it. A deadline
+    that finds none makes its own and drops it, whether the connection has not made a timer,
+    another deadline is using it, or the request is polled anywhere else (`app.router()` served
+    another way, a call a layer moved to another task).
 
     What it gave is requests a second where threads queued on that lock, measured on this form
     (`bf13f4822` against `main` at `e2d0c464e`; every run, with its scripts, under the tag
@@ -12235,15 +12235,15 @@ rules something out.
        on a runtime of its own, or a layer polls through a `FuturesUnordered`): then that waker,
        and what it holds (an inner runtime's handle, after that runtime is dropped), stays for up
        to the deadline, an hour under an area's long one.
-    6. A handler that serves a request on a runtime of its own inside a connection's poll
-       (`block_in_place` and `block_on`, which a test here treats as supported) has that request's
-       deadline wait on the connection's timer, the outer runtime's, once two deadlines of the
-       connection have waited, whichever requests they were. It fires on time while the outer
-       runtime runs. If the outer runtime shuts down first, the deadline's next poll panics
-       inside the handler's catch ("it is being shutdown", tokio's check) and the inner request
-       is answered 500, where its own timer would have gone on waiting (a test serves such a
-       request, shuts the outer runtime down and sees the 500). Whether the current runtime is
-       the timer's is not checked: the way to a runtime's identity is `Handle::current()`, which
+    6. A handler can serve a request on a runtime of its own inside a connection's poll
+       (`block_in_place` and `block_on`, which a test here treats as supported). If the inner
+       deadline borrows the connection's timer, it waits on the outer runtime's timer. It fires
+       on time while the outer runtime runs. If that runtime shuts down first, the timer's next
+       poll panics inside the handler's catch and the inner request is answered 500. If the
+       deadline instead made a timer on its own runtime, it goes on waiting and answers 503 if
+       the deadline fires while the handler still waits. The test waits for the borrow and the
+       timer's first pending poll before shutting the outer runtime down. Whether the current
+       runtime is the timer's is not checked: the way to a runtime's identity is `Handle::current()`, which
        clones the runtime's `Arc`, two atomic operations on a count every thread shares. Making
        a timer and registering it cloned it twice, and `Sleep::reset` clones it once itself
        (read in tokio 1.54.1), so a deadline on the kept timer does that pair once where it did
@@ -12606,7 +12606,8 @@ rules something out.
     hosted job's runs 45880658451 and 45901199943 read for cost 3 and for the kit's counts,
     and `Cargo.toml`, `Cargo.lock` and the crate's own manifest read as the same git objects
     in `cbca34579` and `49e9a3a1f`, with `app.rs` differing in one line, of the request's
-    layer.
+    layer; 2026-11-27, for cost 6, `Keeps::poll` and the inner-request shutdown test read on
+    `aff499aa7`, and tokio 1.54.1 read for a timer's shutdown error.
 
 ## Rules
 
