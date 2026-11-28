@@ -561,26 +561,32 @@ try {
     return Promise.race([work, late]).finally(() => clearTimeout(timer));
   };
 
-  // Playwright's :visible tests layout, not opacity or whether a control is covered.
+  // Check the ways the page's own CSS hides a control: display, visibility, opacity,
+  // filter opacity, and being covered (for a click). This is not a test for every paint effect.
   /** @param {Element[]} elements @param {boolean} [hitTest] */
-  const drawnIds = (elements, hitTest = false) => elements.filter((element) => {
+  const drawnEntries = (elements, hitTest = false) => elements.filter((element) => {
     if (hitTest) element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     const { left, top, width, height } = element.getBoundingClientRect();
-    if (width <= 0 || height <= 0 || getComputedStyle(element).visibility !== "visible") return false;
+    if (width <= 0 || height <= 0) return false;
     for (let node = /** @type {Element | null} */ (element); node; node = node.parentElement) {
-      if (Number(getComputedStyle(node).opacity) <= 0) return false;
+      const style = getComputedStyle(node);
+      if ((node === element && style.visibility !== "visible") || Number(style.opacity) <= 0) return false;
+      // Read opacity components of the computed filter, ignoring text inside quoted URLs.
+      for (const [, amount] of style.filter.matchAll(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\bopacity\(([^()]*)\)/g)) {
+        if (amount !== undefined && Number.parseFloat(amount) === 0) return false;
+      }
     }
     return !hitTest || element.contains(document.elementFromPoint(left + width / 2, top + height / 2));
-  }).map((element) => element.id);
+  }).map((element) => ({ id: element.id, set: element instanceof HTMLTableRowElement ? (element.cells[2]?.innerText ?? "") : "" }));
 
   /**
    * Loads the grid with JavaScript on and its module never loading (every request for it, the
    * runtime's retries too, aborted), filters through the visible Filter button, and reads the
    * server's answer as sent: its rows, those it leaves unhidden and the count it says. The page must
-   * then show exactly the rows the answer carried. The controls delay drawing a real answer
-   * or mask an unfiltered answer in the browser.
+   * then show exactly the rows the answer carried. The controls delay or change the draw,
+   * hide the button or rows with CSS, or mask an unfiltered answer in the browser.
    * @param {import("@playwright/test").BrowserContext} context
-   * @param {"real" | "delayed" | "masked"} kind
+   * @param {"real" | "delayed" | "masked" | "decoy" | "transparent-button" | "transparent-rows" | "wrong-set"} kind
    * @param {string[]} errors
    */
   const blockedFilter = async (context, kind, errors) => {
@@ -624,13 +630,23 @@ try {
         };
       }));
     }
-    if (kind === "masked") {
+    const masking = kind === "masked" || kind === "decoy";
+    if (masking) {
+      const preview = new URL("/preview?q=tidebreak", base).href;
+      const previewAnswered = kind === "decoy" ? blocked.waitForResponse((r) => r.url() === preview, { timeout: 15_000 }) : null;
+      void previewAnswered?.catch(() => {});
       await filterStep("intercept the masked control's response", blocked.route((url) => url.searchParams.get("q") === "tidebreak", async (route) => {
+        if (route.request().url() === preview) {
+          await route.fulfill({ response: await route.fetch({ url: new URL("/?q=tidebreak", base).href }) });
+          return;
+        }
+        // The unrelated filtered answer must arrive before the form's unfiltered one.
+        if (previewAnswered) expect((await previewAnswered).status()).toBe(200);
         const unfiltered = new URL(route.request().url());
         unfiltered.searchParams.delete("q");
         await route.fulfill({ response: await route.fetch({ url: unfiltered.href }) });
       }));
-      await filterStep("install the masked-answer control", blocked.addInitScript(() => {
+      await filterStep("install the masked-answer control", blocked.addInitScript((decoy) => {
         let sent = false;
         const hide = () => {
           if (!sent) return;
@@ -638,9 +654,13 @@ try {
             if (!row.hidden && row.cells[2]?.textContent !== "Tidebreak") row.hidden = true;
           }
         };
-        addEventListener("submit", () => (sent = true, hide()), { capture: true });
+        addEventListener("submit", () => {
+          sent = true;
+          hide();
+          if (decoy) void fetch(decoy);
+        }, { capture: true });
         new MutationObserver(hide).observe(document, { childList: true, subtree: true, attributeFilter: ["hidden"] });
-      }));
+      }, kind === "decoy" ? preview : ""));
     }
     await filterStep("load the filter page", blocked.goto(base));
     // The runtime ran (it is a module of its own), and it found no grid module to hand events to.
@@ -662,18 +682,41 @@ try {
     await filterStep("type the filter", blocked.fill("input[type=search]", "tidebreak"));
     // Typing filtered nothing: no grid handler ran.
     const before = await filterStep("count rows after typing", blocked.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length));
-    if (!(await filterStep("check that Filter is drawn", blocked.locator(button).evaluateAll(drawnIds, true))).length) {
-      return { ok: false, detail: `aborted ${aborted}; the Filter button is not drawn` };
+    if (kind === "transparent-button") {
+      await filterStep("apply the transparent button control", blocked.locator(button).evaluate((b) => {
+        /** @type {HTMLButtonElement} */ (b).style.filter = "opacity(0)";
+      }));
     }
+    if (!(await filterStep("check that Filter is drawn", blocked.locator(button).evaluateAll(drawnEntries, true))).length) {
+      return { ok: false, invisibleButton: aborted > 0 && ran === 1 && before === all, detail: `aborted ${aborted}; the Filter button is not drawn` };
+    }
+    const destination = await filterStep("resolve the filter form destination", blocked.locator(button).evaluate((element) => {
+      const submitter = /** @type {HTMLButtonElement} */ (element);
+      const { form } = submitter;
+      if (!form) throw new Error("Filter has no form");
+      const url = new URL(submitter.hasAttribute("formaction") ? submitter.formAction : form.action);
+      url.search = new URLSearchParams(Array.from(new FormData(form, submitter), ([name, value]) =>
+        [name, typeof value === "string" ? value : value.name])).toString();
+      return url.origin + url.pathname + url.search;
+    }));
+    const atDestination = (/** @type {URL} */ url) => url.origin + url.pathname + url.search === destination;
     // The runtime still sends a GET form itself (a client navigation), so the answer may be a
     // fetch rather than a document load: either is the server's filter.
-    const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "tidebreak", { timeout: 0 });
+    const answered = blocked.waitForResponse((r) => {
+      if (r.request().method() !== "GET" || !atDestination(new URL(r.url()))) return false;
+      try {
+        return r.frame() === blocked.mainFrame();
+      } catch {
+        // A worker or a navigation before its frame exists cannot prove a main-frame submit.
+        return false;
+      }
+    }, { timeout: 0 });
     // Arm the listener before the click, but report a stalled click separately from missing headers.
     void answered.catch(() => {}); // The page can close before we reach the response step.
     await filterStep("click Filter", blocked.click(button));
     const response = await filterStep("receive the filter response headers", answered);
     const body = await filterStep("read the filter response body", response.text());
-    await filterStep("reach the filtered URL", blocked.waitForURL(/[?&]q=tidebreak/));
+    await filterStep("reach the filtered URL", blocked.waitForURL(atDestination));
     // Parsed in a blank page of the same browser: the app's page allows no markup from a string.
     const reader = await filterStep("open the response reader", context.newPage());
     const sent = await filterStep("parse the filter response body", reader.evaluate((html) => {
@@ -710,30 +753,45 @@ try {
     }, {
       message: "the settled filter page shows the expected row ids",
       timeout: 5_000,
-    }).toEqual(kind === "masked" ? expected : sent.ids));
-    const shown = await filterStep("read the page's unhidden rows", unhiddenRows.evaluateAll((rows) =>
-      rows.map((r) => ({ id: r.id, set: /** @type {HTMLTableRowElement} */ (r).cells[2]?.textContent ?? "" }))));
-    const shownIds = shown.map((r) => r.id);
-    const drawn = await filterStep("read the browser's drawn row ids", blocked.locator(rows).evaluateAll(drawnIds));
+    }).toEqual(masking ? expected : sent.ids));
+    if (kind === "transparent-rows") {
+      await filterStep("apply the transparent rows control", blocked.locator("main tbody").evaluate((body) => {
+        /** @type {HTMLElement} */ (body).style.filter = "brightness(1) opacity(0%)";
+      }));
+    }
+    if (kind === "wrong-set") {
+      await filterStep("apply the wrong set control", unhiddenRows.evaluateAll((rows) => {
+        for (const row of rows) {
+          const cell = /** @type {HTMLTableRowElement} */ (row).cells[2];
+          if (cell) cell.textContent = "Wrong set";
+        }
+      }));
+    }
+    const shownIds = await filterStep("read the page's unhidden rows", unhiddenRows.evaluateAll((rows) => rows.map((r) => r.id)));
+    const drawn = await filterStep("read the browser's drawn row ids and set names", blocked.locator(rows).evaluateAll(drawnEntries));
+    const drawnIds = drawn.map((r) => r.id);
     const n = sent.ids.length;
-    const reached = aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 &&
-      new URL(blocked.url()).searchParams.get("q") === "tidebreak";
+    const reached = aborted > 0 && ran === 1 && before === all && response.status() === 200 && atDestination(new URL(blocked.url()));
     const filtered = n > 0 && n === sent.inSet && sent.sets.every((s) => s === "Tidebreak") && sent.inventory.length === all &&
       sent.says === `${n.toLocaleString("en")} of ${all.toLocaleString("en")} shown`;
     const exact = sameIds(sent.ids, expected);
     const keptInventory = inventory.every(Boolean) && new Set(inventory).size === all && sameIds(sent.inventory, inventory);
     const answerOk = filtered && exact && keptInventory;
-    const matches = sameIds(shownIds, sent.ids) && sameIds(drawn, sent.ids);
+    const setNamesMatch = drawn.every((r, i) => r.set === sent.sets[i]);
+    const matches = sameIds(shownIds, sent.ids) && sameIds(drawnIds, sent.ids) && setNamesMatch;
     return {
       ok: reached && answerOk && matches,
       answerOk,
+      invisibleRows: reached && answerOk && sameIds(shownIds, expected) && drawn.length === 0,
+      wrongSet: reached && answerOk && sameIds(drawnIds, expected) && drawn.every((r) => r.set === "Wrong set"),
       masked: reached && sameIds(sent.ids, inventory) && sameIds(shownIds, expected) &&
-        sameIds(drawn, expected) && shown.every((r) => r.set === "Tidebreak"),
+        sameIds(drawnIds, expected) && drawn.every((r) => r.set === "Tidebreak"),
       delayed: heldRows === all,
-      detail: `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ` +
+      detail: `aborted ${aborted}; ${before} of ${all} shown before; GET ${response.url()} ${response.request().resourceType()} ${response.status()}; ` +
         `answer: ${n} of ${sent.inventory.length} rows unhidden, ${sent.inSet} in the set, unhidden ids ${exact ? "as expected" : "differ"}, ` +
         `all ids ${keptInventory ? "as expected" : "differ"}, says "${sent.says}"; ` +
-        `page: ${shown.length} unhidden, ${drawn.length} drawn${matches ? " as sent" : " not as sent"}; ${kind === "delayed" ? `${heldRows} rows while draw was held; ` : ""}${blocked.url()}`,
+        `page: ${shownIds.length} unhidden, ${drawn.length} drawn${matches ? " as sent" : " not as sent"}${setNamesMatch ? "" : " (set names differ)"}; ` +
+        `${kind === "delayed" ? `${heldRows} rows while draw was held; ` : ""}${blocked.url()}`,
     };
   };
 
@@ -748,6 +806,10 @@ try {
       ["real", "with JavaScript and the grid's module not loading: the Filter button is drawn and the server's answer filters the rows"],
       ["delayed", "control: a correct answer passes with the client draw delayed by 2.5 s"],
       ["masked", "control: an unfiltered answer whose rows a script hides on the page is refused, though the page alone would pass"],
+      ["decoy", "control: an unrelated filtered response does not hide an unfiltered answer at the form's destination"],
+      ["transparent-button", "control: a hit-testable button with filter opacity zero is refused"],
+      ["transparent-rows", "control: filtered rows made transparent by their table body are refused"],
+      ["wrong-set", "control: matching drawn row ids with the wrong set names are refused"],
     ])) {
       const context = await filterStep("open the filter context", (own ?? browser).newContext());
       const what = `${name} ${label}`;
@@ -757,7 +819,11 @@ try {
       let detail = "";
       try {
         const run = await blockedFilter(context, kind, errors);
-        pass = kind === "masked" ? run.masked && !run.answerOk : run.ok && (kind !== "delayed" || run.delayed);
+        if (kind === "masked" || kind === "decoy") pass = !!run.masked && !run.answerOk;
+        else if (kind === "transparent-button") pass = !!run.invisibleButton && !run.ok;
+        else if (kind === "transparent-rows") pass = !!run.invisibleRows && !run.ok;
+        else if (kind === "wrong-set") pass = !!run.wrongSet && !run.ok;
+        else pass = run.ok && (kind !== "delayed" || !!run.delayed);
         detail = run.detail;
       } catch (error) {
         detail = String(error);
