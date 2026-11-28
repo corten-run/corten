@@ -438,7 +438,7 @@ export async function navigationMarks(page) {
     const marks = ["patched-here", "patched-there", "appended-here"].map((id) => document.getElementById(id)?.getAttribute("aria-current") ?? "-").join(" ");
     // A group (Req::nav_of) whose deepest link a patch removes: the section at "/" takes the mark.
     await patch(
-      __html(`<div id="nav-part"><a id="group-root" href="/" data-nav="section" data-nav-group="p">All</a><span id="group-deep"><a href="${here}" data-nav data-nav-group="p">Here</a></span></div>`),
+      __html(`<div id="nav-part"><a id="group-root" href="/" data-nav="section" data-nav-group="PPPPPP-">All</a><span id="group-deep"><a href="${here}" data-nav data-nav-group="PPPPPP0">Here</a></span></div>`),
     );
     const root = () => document.getElementById("group-root")?.getAttribute("aria-current") ?? "-";
     const before = root();

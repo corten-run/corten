@@ -1,6 +1,10 @@
 use super::caller::admin_url;
 use super::*;
 
+fn group_token(attrs: &str) -> &str {
+    attrs.split_once(r#" data-nav-group=""#).unwrap().1.split('"').next().unwrap()
+}
+
 #[test]
 fn a_nav_link_writes_its_route_once_and_says_when_it_is_the_page() {
     use crate::{page::Nav, view::Attrs};
@@ -89,18 +93,28 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
             .collect::<Vec<_>>()
     };
     let group = |links: &[String]| {
-        let groups: Vec<_> =
-            links.iter().map(|link| link.split(r#" data-nav-group=""#).nth(1).unwrap()[..8].to_string()).collect();
-        assert!(groups.iter().all(|g| *g == groups[0] && g.bytes().all(|b| b.is_ascii_hexdigit())), "{groups:?}");
-        groups[0].clone()
+        let groups: Vec<_> = links.iter().map(|link| group_token(link)).collect();
+        assert!(
+            groups.len() <= 4
+                && groups
+                    .iter()
+                    .zip(b"-012")
+                    .all(|(g, digit)| g.len() == 7 && g.starts_with(&groups[0][..6]) && g.as_bytes()[6] == *digit),
+            "{groups:?}"
+        );
+        groups[0][..6].to_string()
     };
     let marked = |path: &str| {
         let links = written(nav_links(
             path,
             [NavTo::page(&Home), NavTo::section(&Desk), NavTo::section(&Money), NavTo::page(&help)].map(|e| (e, ())),
         ));
-        let g = format!(r#" data-nav-group="{}""#, group(&links));
-        links.into_iter().map(|link| link.replace(&g, "")).collect::<Vec<_>>()
+        let group = group(&links);
+        links
+            .into_iter()
+            .zip(b"-012")
+            .map(|(link, digit)| link.replace(&format!(r#" data-nav-group="{group}{}""#, *digit as char), ""))
+            .collect::<Vec<_>>()
     };
     assert_eq!(
         marked("/account/desk/repricing"),
@@ -289,13 +303,14 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
         "/catalog/integrations/governance",
         vec![NavTo::section(&Catalog), NavTo::page(&Settings).also(&Governance).also(&old)],
     );
-    let group = links[1].split(r#" data-nav-group=""#).nth(1).unwrap().split('"').next().unwrap();
-    assert!(group.len() == 9 && group.ends_with('+'), "a group with other addresses says so: {group}");
-    assert_eq!(links[0], format!(r#" href="/catalog" data-nav="section" data-nav-group="{group}""#));
+    let token = group_token(&links[1]);
+    assert!(token.len() == 8 && token.ends_with("+0"), "a group with other addresses says so: {token}");
+    let group = &token[..7];
+    assert_eq!(links[0], format!(r#" href="/catalog" data-nav="section" data-nav-group="{group}-""#));
     assert_eq!(
         links[1],
         format!(
-            r#" href="/catalog/integrations/settings" data-nav data-nav-group="{group}" data-nav-also="/catalog/integrations/governance /old/settings" aria-current="page""#
+            r#" href="/catalog/integrations/settings" data-nav data-nav-group="{token}" data-nav-also="/catalog/integrations/governance /old/settings" aria-current="page""#
         ),
         "the other addresses are written by their paths alone, the query and fragment left out"
     );
@@ -324,8 +339,9 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
         "which entry an address belongs to names the group too"
     );
 
-    // A nav with no other addresses names the same group as before they existed.
-    assert_eq!(group(written("/", vec![NavTo::page(&Settings)])), "b6f787d3");
+    // A nav with no other addresses still hashes to 0xb6f787d3, now written in six digits and
+    // followed by the first entry's order digit.
+    assert_eq!(group(written("/", vec![NavTo::page(&Settings)])), "1qxsUI-");
 
     // A route written by hand whose path has a space is written with it encoded, as the browser
     // asks for it, so the runtime can split the attribute on spaces.
@@ -572,7 +588,7 @@ fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
     let (link, ()) = nav.links().next().unwrap();
     let mut out = String::new();
     link.render_attrs(&mut out);
-    assert!(out.ends_with(r#"+" data-nav-also="/old/b" aria-current="page""#), "{out}");
+    assert!(out.ends_with(r#"+-" data-nav-also="/old/b" aria-current="page""#), "{out}");
     // An escape of a reserved character, or of `%`, is not the character.
     assert!(!marked("/old/a/b", "/old/a%2fb") && marked("/old/a%2Fb", "/old/a%2fb"));
     // `%252e` is `%` and the text `2e`, which no browser asks for as `%252E`.
@@ -588,7 +604,7 @@ fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
     // The check is made once the `.` and `..` segments are resolved, escaped or not, as every
     // engine resolves them: `/old/%2e%2e/x` is `/x`, and kept.
     assert!(
-        drawn("/x", "/old/%2e%2e/x").ends_with(r#"+" data-nav-also="/x" aria-current="page""#),
+        drawn("/x", "/old/%2e%2e/x").ends_with(r#"+-" data-nav-also="/x" aria-current="page""#),
         "{}",
         drawn("/x", "/old/%2e%2e/x")
     );
@@ -715,6 +731,55 @@ fn a_nav_entry_is_as_deep_as_the_address_that_holds_the_page() {
         ),
         ["Integrations"]
     );
+}
+
+#[test]
+fn a_ranked_nav_breaks_ties_by_own_url_then_entry_order() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    let settings = Local::parse("/settings").unwrap();
+    let legacy = Local::parse("/legacy").unwrap();
+    let query = Local::parse("/legacy?tab=2").unwrap();
+    let alternate = Local::parse("/alternate").unwrap();
+    let check = |path, entries, expected: &[&str]| {
+        let nav = nav_links(path, entries);
+        let mut marked = Vec::new();
+        for (link, item) in nav.links() {
+            let mut out = String::new();
+            link.render_attrs(&mut out);
+            assert_eq!(link.is_current(), out.contains(r#" aria-current="page""#), "{item}: {out}");
+            if link.is_current() {
+                marked.push(*item);
+            }
+        }
+        assert_eq!(marked, expected, "{path}");
+    };
+    check("/legacy", [(NavTo::page(&settings).also(&legacy), "alias"), (NavTo::page(&legacy), "own")], &["own"]);
+    check("/legacy", [(NavTo::page(&query), "first own"), (NavTo::page(&legacy), "second own")], &["first own"]);
+    check(
+        "/legacy/child",
+        [(NavTo::section(&settings).also(&legacy), "first alias"), (NavTo::section(&alternate).also(&legacy), "second alias")],
+        &["first alias"],
+    );
+    check(
+        "/legacy/child",
+        [(NavTo::section(&settings).also(&legacy), "alias"), (NavTo::section(&legacy).also(&query), "own and alias")],
+        &["own and alias"],
+    );
+
+    let nav = nav_links("/legacy", (0..65).map(|index| (NavTo::page(if index < 63 { &settings } else { &legacy }), index)));
+    let mut last = nav.links().skip(63);
+    for (index, suffix) in [(63, "z"), (64, "0-")] {
+        let (link, item) = last.next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        assert_eq!(group_token(&out).get(6..), Some(suffix));
+        assert_eq!(*item, index);
+        assert_eq!(link.is_current(), index == 63);
+    }
 }
 
 /// In a nav with other addresses the entries' own URLs are compared by the same key as the other
@@ -848,7 +913,7 @@ fn a_nav_url_that_is_not_a_path_on_this_site_is_never_current() {
     // An entry left with no address is written as one without them.
     let only = || NavTo::page(&here).also(&a);
     let links = drawn("/old", vec![(NavTo::section(&root), "Root"), (only(), "Here")]);
-    assert!(links.iter().all(|(_, out)| !out.contains("data-nav-also") && !out.contains(r#"+""#)), "{links:?}");
+    assert!(links.iter().all(|(_, out)| !out.contains("data-nav-also") && !group_token(out).contains('+')), "{links:?}");
 
     // Without other addresses, and for a lone link, the same: never current, even where the
     // request path is the URL's text.
@@ -937,7 +1002,10 @@ fn a_nav_entry_with_a_nul_in_its_url_is_ranked_where_the_link_goes() {
         for path in ["/older%00x", "/older%00", "/older", "/older%EF%BF%BDx", "/%00", "/"] {
             assert_eq!(marked(path, NavTo::page(&here).also(&nul)), ["Root"], "{url:?} at {path:?}");
             let links = drawn(path, NavTo::page(&here).also(&nul));
-            assert!(links.iter().all(|(_, out)| !out.contains("data-nav-also") && !out.contains(r#"+""#)), "{url:?}: {links:?}");
+            assert!(
+                links.iter().all(|(_, out)| !out.contains("data-nav-also") && !group_token(out).contains('+')),
+                "{url:?}: {links:?}"
+            );
         }
         let links = drawn("/kept", NavTo::page(&here).also(&nul).also(&older));
         assert!(links[1].1.contains(r#" data-nav-also="/older""#), "{url:?}: {links:?}");

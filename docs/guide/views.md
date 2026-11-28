@@ -577,12 +577,15 @@ does `data-nav` written by hand.
 Each `req.nav` link is judged alone, so a section and a page under it (Seller Desk at
 `/account/desk`, Money at `/account/desk/money`) are both current on Money's page. A nav whose
 entries nest, or that is read from data, is written whole with `req.nav_of`: of its entries
-that hold the page, only the deepest is current. Its links carry the group they were ranked in
-(`data-nav-group`), so the runtime ranks the same links after a client navigation wherever the
-markup puts them, so render every link it gives back: leave out an entry the user may not see
-before the call. Each entry comes with its item (a label, or the row it was read from), which
-`links()` hands back beside its link. An entry is a route or a `Local` path, written as the
-browser asks for it (a link to another site is a plain link, never current). A link of `req.nav`
+that hold the page, only the deepest is current. At the same depth, a match at the entry's own
+URL wins over one at an `also` address, then the first entry passed to `req.nav_of` wins. The
+links carry their group and original order, so the server and runtime choose the same entry after
+a navigation or patch, even if the markup splits or reorders the links. Equivalent copies of a nav,
+such as a desktop and a mobile copy, each mark that entry. Render every link the call gives back:
+leave out an entry the user may not see before the call. Each entry comes with its item (a label,
+or the row it was read from), which `links()` hands back beside its link. An entry is a route or a
+`Local` path, written as the browser asks for it (a link to another site is a plain link, never
+current). A link of `req.nav`
 or `req.nav_of` whose URL is not a path on this site, one `/` and then not `/` or `\` (`//host/x`,
 `/\host/x`, which only a route implemented by hand writes, or a full or a relative URL), is never
 current, on the server and in the runtime, which test the same `href` text; the browser would read
@@ -596,7 +599,7 @@ html! { <nav>for (link, item) in nav.links() { <a {..link}>{&item.label}</a> }</
 ```
 
 For a breadcrumb in the rendered page, read the same mark:
-`nav.links().find_map(|(link, item)| link.is_current().then_some(item))` gives the first marked
+`nav.links().find_map(|(link, item)| link.is_current().then_some(item))` gives the one marked
 item, or `None`. This reads the link's `aria-current="page"` decision, including other addresses;
 it does not write or compare its URL again. On a client navigation the runtime updates the links,
 not arbitrary breadcrumb text outside the swapped content.
@@ -624,8 +627,9 @@ key and the runtime `location.pathname`, and each compares
 the keys as plain text, so for every address Corten writes they mark the same entry at first render
 and after a client navigation in Playwright's Chromium, Firefox and WebKit builds, where these
 spellings were measured. A nav without other addresses compares the paths as written, as before.
-The nav's group name ends in `+` when an entry has other addresses, so the runtime reads
-`data-nav-also` and compares by key only in such a nav. Like `data-nav`, `html!` refuses
+The runtime reads `data-nav-also` and compares by key only in a nav with other addresses.
+The `data-nav-group` token the server uses to tell the runtime this, group the links and preserve
+their order is internal. Like `data-nav`, `html!` refuses
 `data-nav-also` written as an attribute by hand; a spread of pairs passes it through, as it does
 `data-nav` and `data-nav-group`.
 
