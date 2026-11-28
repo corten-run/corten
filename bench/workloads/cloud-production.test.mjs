@@ -377,6 +377,41 @@ test("approved sealed collection uses the measured replay and does not create or
   assert.equal(h.deletes, 0);
   p.deps.interrupted = interrupted;
   writeFileSync(terminalPath, terminalBytes);
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  changedAtDispatch = false;
+  let renameFailed = false;
+  const rename = fs.renameSync;
+  const fault = t.mock.method(fs, "renameSync", (from, to) => {
+    if (changedAtDispatch && to === h.statePath && !renameFailed) {
+      renameFailed = true; throw Object.assign(new Error("injected withdrawal rename failure"), { code: "EIO" });
+    }
+    return rename(from, to);
+  });
+  syncBuiltinESMExports();
+  p.deps.interrupted = () => {
+    if (!changedAtDispatch && h.saved().deletionIntentAt) {
+      changedAtDispatch = true; changeTerminal();
+    }
+    return interrupted();
+  };
+  try { await assert.rejects(run(), /injected withdrawal rename failure/); }
+  finally {
+    fault.mock.restore(); syncBuiltinESMExports(); p.deps.interrupted = interrupted;
+    writeFileSync(terminalPath, terminalBytes);
+  }
+  assert.ok(renameFailed && h.saved().deletionIntentAt);
+  assert.equal(h.deletes, 0);
+  const intentBytes = readFileSync(h.statePath);
+  const proof = join(h.local, `state.json.delete-unsent-${digest(intentBytes)}.tmp`);
+  const proofBytes = readFileSync(proof);
+  for (const bytes of [proofBytes.subarray(0, 80), Buffer.concat([proofBytes, Buffer.from(" ")])]) {
+    writeFileSync(proof, bytes);
+    assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+    await assert.rejects(run(), /deletion not confirmed; outcome uncertain/);
+    assert.deepEqual(readFileSync(h.statePath), intentBytes);
+    assert.equal(h.deletes, 0);
+  }
+  writeFileSync(proof, proofBytes);
   const beforeDeleteReplays = replayed;
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const live = h.host();
@@ -384,6 +419,7 @@ test("approved sealed collection uses the measured replay and does not create or
   await assert.rejects(run(), /provider control failed/);
   assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
   assert.equal(h.deletes, 1); assert.equal(replayed, beforeDeleteReplays + 2);
+  assert.equal(existsSync(proof), false);
   assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
   const retryStart = p.calls.length;
   await assert.rejects(run(), { code: "EEXIST" });

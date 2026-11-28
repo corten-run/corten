@@ -2386,13 +2386,17 @@ snapshot and all archive and native checks are unchanged. The ordinary
 ownership, remote idle and archive checks still precede any DELETE. A timeout,
 interruption or unverified replay does not authorize a DELETE. Once custody is
 clear, a retry after a recorded deletion intent confirms absence without
-sending another DELETE. The recovery checks its extraction, saved reservation,
+sending another DELETE, unless it has proof that the earlier DELETE was never
+sent. The recovery checks its extraction, saved reservation,
 operation lock and approved terminal seal again before recording intent and
 before handing the request to the private provider worker. The worker does not
 repeat those local custody checks. A positive not-dispatched acknowledgement
 withdraws the saved intent only under the same operation lock and with the exact
-saved state still present. A fresh approval is needed to retry; uncertain
-dispatch keeps the intent.
+saved state still present. If the state save is interrupted, a fresh approved
+collect can finish the withdrawal from the complete proof for that exact intent
+while the host still exists, then obtain a new idle proof. A missing, partial,
+or mismatched proof, or a host that is already absent, keeps absence-only
+recovery. Uncertain dispatch never writes the withdrawal proof.
 This mode does not pack, download or start a job. Other replay budgets are unchanged.
 
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign

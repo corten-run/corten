@@ -1001,9 +1001,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     verifyRetirementRecord(bytes, state.retirement.kind, false, pins);
   };
   // Only the positive not-dispatched acknowledgement creates this stage. The digest
-  // binds the exact retired state, both in the filename and in the stage: the same
+  // binds the exact deletion intent, both in the filename and in the stage: the same
   // pre-intent state can yield a different intent, and copying the stage cannot rebind it.
-  const drainWithdrawal = (intentBytes, restore) => {
+  const withdrawalProof = (intentBytes, restore) => {
     const intentSha256 = digest(intentBytes);
     return { path: stateStage("delete-unsent", intentSha256), bytes: Buffer.from(stateBytes({ intentSha256, restore })) };
   };
@@ -1015,10 +1015,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // The proof itself cannot be renamed over state.json. Save the canonical
     // restoration durably; if that save fails, keep the proof for the next collect.
     writeState(restore, (stage, target) => {
-      assert.ok(matchesWithdrawal(proof), "drain withdrawal proof changed; preserve deletion intent");
+      assert.ok(matchesWithdrawal(proof), "withdrawal proof changed; preserve deletion intent");
       fence();
       assert.ok(regular(stage, restoredBytes.length).equals(restoredBytes) && matchesWithdrawal(proof),
-        "drain withdrawal stage changed; preserve deletion intent");
+        "withdrawal stage changed; preserve deletion intent");
       renameSync(stage, target);
     }, "delete-unsent-restore");
     state = restore;
@@ -1032,7 +1032,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // Reconstruct it, rather than loading any state from the stage.
     const restore = { ...state, status: "starting", pendingRetirement: state.retirement };
     delete restore.retirement; delete restore.deletionIntentAt;
-    const proof = drainWithdrawal(intent, restore);
+    const proof = withdrawalProof(intent, restore);
     if (!matchesWithdrawal(proof)) return;
     const path = join(local, retirementFile("setup-failed")), limit = 8 * 1024 * 1024;
     const receipt = regular(path, limit);
@@ -1248,7 +1248,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const withdrawUnsentIntent = () => {
       assert.ok(intentSaved && beforeIntent && !dispatched, "no unsent deletion intent to withdraw; preserve host");
       const fence = () => { boundary(); requireCustody(); };
-      const proof = drainWithdrawal(trusted, beforeIntent);
+      const proof = withdrawalProof(trusted, beforeIntent);
       fence(); durable(proof.path, proof.bytes);
       publishWithdrawal(proof, beforeIntent, fence);
       throw new Error("DELETE was not dispatched; the next collect retires on a fresh proof");
@@ -1992,6 +1992,20 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         // ownedR21 above already excludes retired and pre-bootstrap reservations; the r21
         // test stays so the resume never runs for a measured checkout if that changes.
         if (setupCandidate && !options.r21MeasuredCheckout) await resumeDrainWithdrawal();
+        const sealedWithdrawal = () => {
+          const restore = { ...state };
+          delete restore.deletionIntentAt;
+          return { restore, proof: withdrawalProof(sealedStateBytes, restore) };
+        };
+        if (sealedRecovery && state.deletionIntentAt) {
+          const { restore, proof } = sealedWithdrawal();
+          // An interrupted withdrawal may be finished only against the exact
+          // saved intent. Preserve the intent if that host is already absent.
+          if (matchesWithdrawal(proof) && await exactHost() !== undefined) {
+            const fence = () => { check(); requireApprovedSeal(); requireSealedState(); };
+            fence(); publishWithdrawal(proof, restore, fence);
+          }
+        }
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();
@@ -2085,9 +2099,10 @@ else ${pack}; fi` : pack, 11 * 60000);
                 state.deletionIntentAt = new Date().toISOString(); save("deletion-intent");
               },
               onUnsent() {
-                boundary(); requireSealedState();
-                delete state.deletionIntentAt;
-                writeState(state, renameSync, "delete-unsent");
+                const fence = () => { boundary(); requireSealedState(); };
+                const { restore, proof } = sealedWithdrawal();
+                fence(); durable(proof.path, proof.bytes);
+                publishWithdrawal(proof, restore, fence);
               },
             } : {}), async expiresAt() {
               const proof = await ssh(idleScript(false, stamp) + "\n" + query, 60000, true);
