@@ -4,7 +4,7 @@ import { globSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { parse } from "yaml";
 import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
@@ -95,8 +95,7 @@ test("the Actions lookup gets a read-only token in the benchmark scope jobs and 
     assert.equal(jobs.scope.if, undefined);
     assert.equal(jobs.scope.steps.find(step => step.uses?.startsWith("actions/checkout")).with["fetch-depth"], 0);
     const step = jobs.scope.steps.find(step => step.run === `node scripts/benchmark-scope.mjs ${mode}`);
-    assert.deepEqual(step.env, { PUSH_BEFORE: "${{ github.event.before }}",
-      GITHUB_TOKEN: "${{ github.event_name == 'push' && github.token || '' }}" });
+    assert.deepEqual(step.env, { GITHUB_TOKEN: "${{ github.event_name == 'push' && github.token || '' }}" });
   }
   const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
   const release = parse(readFileSync(new URL(".github/workflows/release.yml", root), "utf8"));
@@ -116,7 +115,7 @@ test("the Actions lookup gets a read-only token in the benchmark scope jobs and 
   assert.match(step.run, /workflow_dispatch\)[^]*git merge-base --is-ancestor "\$DISPATCH_BASE" "\$GITHUB_SHA"[^]*base=\$DISPATCH_BASE ;;/);
 });
 
-test("direct PRs and initial main pushes share ref groups; main reruns, dispatch and calls do not", () => {
+test("only direct PRs share a cancellable ref group; an older main run cannot cancel the tip", () => {
   for (const [file, name, isolated] of [["ci.yml", "CI", "ci-run-"], ["catalog.yml", "Catalog Contract", ""],
     ["benchmark-evidence.yml", "Benchmark Evidence", "benchmark-evidence-run-"]]) {
     const { concurrency, on } = parse(readFileSync(new URL(`.github/workflows/${file}`, root), "utf8"));
@@ -141,8 +140,8 @@ test("direct PRs and initial main pushes share ref groups; main reruns, dispatch
     const main = "refs/heads/main";
     const pr = "refs/pull/27/merge";
     assert.deepEqual(on.push, { branches: ["main"] });
-    assert.deepEqual(group("push", main, "1"), [`${name}-${main}`, true]);
-    assert.deepEqual(group("push", main, "2"), group("push", main, "1"));
+    assert.deepEqual(group("push", main, "1"), [`${name}-${isolated}1`, false]);
+    assert.deepEqual(group("push", main, "2"), [`${name}-${isolated}2`, false]);
     assert.deepEqual(group("push", main, "1", { run_attempt: "2" }), [`${name}-${isolated}1`, false]);
     assert.deepEqual(group("pull_request", pr, "3"), [`${name}-${pr}`, true]);
     assert.deepEqual(group("pull_request", pr, "3", { run_attempt: "2" }), group("pull_request", pr, "3"));
@@ -156,6 +155,60 @@ test("direct PRs and initial main pushes share ref groups; main reruns, dispatch
       assert.deepEqual(group("pull_request", pr, "6", call), [`${name}-${isolated}6`, false]);
       assert.deepEqual(group("push", "refs/tags/v1.0.0", "7", { caller: "release.yml", workflow: "Release" }), [`Release-${isolated}7`, false]);
     }
+  }
+});
+
+test("only a first direct main push reads the tip, before any heavy work can begin", () => {
+  const initial = "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1'";
+  const read = (file) => parse(readFileSync(new URL(`.github/workflows/${file}`, root), "utf8")).jobs;
+  const direct = (file) => ` && github.workflow_ref == format('{0}/.github/workflows/${file}@refs/heads/main', github.repository)`;
+  const ci = read("ci.yml");
+  assert.equal(ci["main-tip"].if, initial + direct("ci.yml"));
+  assert.deepEqual(ci["main-tip"].steps.map(step => step.name), ["Stop a superseded main push"]);
+  const admit = "(needs.main-tip.result == 'success' || needs.main-tip.result == 'skipped')";
+  for (const [name, job] of Object.entries(ci)) {
+    if (name === "main-tip") continue;
+    assert.ok([job.needs].flat().includes("main-tip"), name);
+    assert.equal(job.if, (name === "rust" || name === "browser" ? "always()" : "!cancelled()") + " && " + admit, name);
+  }
+  for (const [file, condition] of [["catalog.yml", initial], ["benchmark-evidence.yml", initial + direct("benchmark-evidence.yml")]]) {
+    const jobs = read(file);
+    const [first] = jobs.scope.steps;
+    assert.equal(first.name, "Stop a superseded main push");
+    assert.equal(first.if, condition);
+    assert.equal(first.run, ci["main-tip"].steps[0].run);
+    for (const [name, job] of Object.entries(jobs)) {
+      if (name === "scope") continue;
+      assert.ok([job.needs].flat().includes("scope"), name);
+      assert.doesNotMatch(job.if, /always\(|failure\(|cancelled\(|success\(/, name);
+    }
+  }
+});
+
+test("the main-tip Bash step checks the newer push and stops the older push even if it arrives last", {
+  skip: process.platform === "win32" && "requires Linux Bash and GNU timeout",
+}, t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write("older");
+  const older = commit();
+  write("newer");
+  const newer = commit();
+  const server = join(cwd, "server");
+  mkdirSync(join(server, "example"), { recursive: true });
+  git("clone", "--quiet", "--bare", cwd, join(server, "example", "repo.git"));
+  const ci = parse(readFileSync(new URL(".github/workflows/ci.yml", root), "utf8"));
+  const { run } = ci.jobs["main-tip"].steps[0];
+  for (const [GITHUB_SHA, GITHUB_REPOSITORY, status, message] of [
+    [newer, "example/repo", 0, /^$/],
+    [older, "example/repo", 1, /::notice::Main has moved/],
+    [newer, "example/unavailable", 0, /::warning::Could not read the live main tip/],
+  ]) {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", run], {
+      cwd, env: { ...env, GITHUB_SERVER_URL: pathToFileURL(server).href, GITHUB_REPOSITORY, GITHUB_SHA },
+      encoding: "utf8", timeout: 25_000,
+    });
+    assert.equal(result.status, status, result.error ?? result.stderr);
+    assert.match(result.stdout, message);
   }
 });
 
@@ -552,6 +605,7 @@ function pushEvent(GITHUB_SHA, file, PUSH_BEFORE) {
 }
 
 const successfulPush = head_sha => ({ event: "push", head_branch: "main", status: "completed", conclusion: "success", head_sha });
+const successfulDispatch = head_sha => ({ ...successfulPush(head_sha), event: "workflow_dispatch" });
 const workflowRuns = (...runs) => Response.json({ workflow_runs: runs });
 
 test("CI checks a deleted oversized blob since its last successful main push", async t => {
@@ -587,17 +641,19 @@ test("CI base lookup failure emits one actionable error and no base, even with a
   const event = pushEvent(head, "ci.yml", before);
   const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
   const mock = source => `--import=data:text/javascript,${encodeURIComponent("globalThis.fetch = " + source)}`;
-  for (const [extra, reason] of [
-    [{ GITHUB_TOKEN: "" }, "the GitHub Actions API token is missing"],
-    [{}, "the GitHub Actions API returned HTTP 403"],
+  const forbidden = '() => new Response("untrusted body", { status: 403 })';
+  for (const [extra, reason, response] of [
+    [{ GITHUB_TOKEN: "" }, "the GitHub Actions API token is missing", forbidden],
+    [{}, "the GitHub Actions API returned HTTP 403", forbidden],
+    [{}, "none of the most recent 100 successful main runs is an available earlier ancestor", '() => Response.json({ workflow_runs: [] })'],
   ]) {
-    const result = spawnSync(process.execPath, [mock('() => new Response("untrusted body", { status: 403 })'), script, "ci-base"], {
+    const result = spawnSync(process.execPath, [mock(response), script, "ci-base"], {
       cwd, env: { ...env, ...event, ...extra }, encoding: "utf8",
     });
     assert.equal(result.status, 1, result.stderr);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr.trim(),
-      `::error::Could not find the last successful main CI push: ${reason}. Rerun CI or run it manually (workflow_dispatch) with an explicit base.`);
+      `::error::Could not find a successful main CI base: ${reason}. Rerun CI or dispatch it on main (workflow_dispatch) with an explicit base.`);
   }
 });
 
@@ -617,7 +673,7 @@ test("a push to main scopes Catalog and Evidence from each last successful run, 
       calls++;
       assert.equal(url.origin, event.GITHUB_API_URL);
       assert.equal(url.pathname, `/repos/${event.GITHUB_REPOSITORY}/actions/workflows/${file}/runs`);
-      assert.deepEqual(Object.fromEntries(url.searchParams), { branch: "main", event: "push", status: "success", per_page: "1" });
+      assert.deepEqual(Object.fromEntries(url.searchParams), { branch: "main", event: "push", status: "success", per_page: "100" });
       assert.equal(options.headers.Authorization, "Bearer fixture-token");
       return workflowRuns(successfulPush(base));
     } });
@@ -641,7 +697,7 @@ test("a missing, failed or non-ancestor main run lookup selects everything", asy
     ["no successful runs", () => workflowRuns()],
     ["failed run", () => workflowRuns({ ...successfulPush(base), conclusion: "failure" })],
     ["cancelled run", () => workflowRuns({ ...successfulPush(base), conclusion: "cancelled" })],
-    ["manual run", () => workflowRuns({ ...successfulPush(base), event: "workflow_dispatch" })],
+    ["manual run", () => workflowRuns(successfulDispatch(base))],
     ["HTTP error", () => new Response(null, { status: 403 })],
     ["network error", () => { throw new Error("request refused"); }],
     ["malformed response", () => new Response("not JSON")],
@@ -660,7 +716,53 @@ test("a missing, failed or non-ancestor main run lookup selects everything", asy
   }
 });
 
-test("a rewritten or unknown push tip selects everything even if its successful base is an ancestor", async t => {
+test("CI can use a successful dispatch on the rewritten main line as the next push base", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  write("initial");
+  const fork = commit();
+  write("old-tip");
+  const oldTip = commit();
+  git("switch", "--quiet", "--detach", fork);
+  write("new-line");
+  const dispatched = commit();
+  write("after-dispatch");
+  const head = commit();
+  const event = pushEvent(head, "ci.yml", dispatched);
+  const workflow = "ci-base";
+  const unavailable = await mainPushBase(event, cwd, env, { workflow, fetchRuns: () => workflowRuns(
+    successfulPush(oldTip), { ...successfulDispatch(dispatched), head_branch: "topic" },
+    { ...successfulDispatch(dispatched), conclusion: "failure" },
+  ) });
+  assert.match(unavailable.reason, /none of the most recent 100/);
+  const recovered = await mainPushBase(event, cwd, env, { workflow, fetchRuns: url => {
+    assert.deepEqual(Object.fromEntries(url.searchParams), { branch: "main", status: "success", per_page: "100" });
+    return workflowRuns(successfulPush(oldTip), successfulDispatch(dispatched));
+  } });
+  assert.deepEqual(recovered, { base: dispatched });
+});
+
+test("an older run skips invalid, same-head and newer successes and picks the first strict ancestor within 100 rows", async t => {
+  const { cwd, env, write, commit } = fixture(t);
+  write("earliest");
+  const earliest = commit();
+  write("latest-ancestor");
+  const ancestor = commit();
+  write("rerun-head");
+  const head = commit();
+  write("newer-success");
+  const newer = commit();
+  const ignored = [successfulPush(newer), successfulPush(head), successfulPush("a".repeat(40))];
+  for (const [workflow, file] of [["ci-base", "ci.yml"], ["catalog", "catalog.yml"], ["evidence", "benchmark-evidence.yml"]]) {
+    const event = pushEvent(head, file, ancestor);
+    const lookup = (...runs) => mainPushBase(event, cwd, env, { workflow, fetchRuns: () => workflowRuns(...runs) });
+    assert.deepEqual(await lookup(...ignored, successfulPush(ancestor), successfulPush(earliest)), { base: ancestor });
+    const late = Array.from({ length: 99 }, () => successfulPush(head));
+    assert.deepEqual(await lookup(...late, successfulPush(ancestor)), { base: ancestor });
+    assert.match((await lookup(...late, successfulPush(head), successfulPush(ancestor))).reason, /none of the most recent 100/);
+  }
+});
+
+test("a rewrite still scopes safely if a checked ancestor remains, without using the previous tip", async t => {
   const { cwd, env, git, write, commit } = fixture(t);
   write("initial");
   const base = commit();
@@ -672,9 +774,34 @@ test("a rewritten or unknown push tip selects everything even if its successful 
   const options = { workflow: "catalog", fetchRuns: () => workflowRuns(successfulPush(base)) };
   for (const before of [oldTip, "0".repeat(40)]) {
     const event = pushEvent(head, "catalog.yml", before);
-    assert.equal(await eventPaths(event, cwd, env, options), undefined);
+    assert.deepEqual(await eventPaths(event, cwd, env, options), ["new-tip"]);
   }
   assert.deepEqual(await eventPaths(pushEvent(head, "catalog.yml", base), cwd, env, options), ["new-tip"]);
+});
+
+test("the main-push union includes a restored app path and a path introduced only by a merge", async t => {
+  const { cwd, env, git, write, commit } = fixture(t);
+  const app = "bench/fullstack/apps/rails/app.rb";
+  write(app, "original");
+  const base = commit();
+  git("switch", "--quiet", "-c", "topic");
+  write("topic");
+  const topic = commit();
+  git("switch", "--quiet", "main");
+  write(app, "changed");
+  commit();
+  write(app, "original");
+  const before = commit();
+  git("merge", "--quiet", "--no-ff", "--no-commit", topic);
+  const resolution = "bench/fullstack/apps/express/file with spaces.mjs";
+  write(resolution);
+  const head = commit();
+  assert.deepEqual(git("diff", "--name-only", base, head).split(/\r?\n/), [resolution, "topic"]);
+  const paths = await eventPaths(pushEvent(head, "catalog.yml", before), cwd, env, {
+    workflow: "catalog", fetchRuns: () => workflowRuns(successfulPush(base)),
+  });
+  assert.deepEqual(paths, [resolution, app, "topic"]);
+  assert.deepEqual(selectScope(allApps, paths), { apps: ["rails", "express"], json: false });
 });
 
 test("manual and called workflows do not look up a main push base", async t => {

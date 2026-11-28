@@ -32,6 +32,7 @@ const requestCostInputs = [".node-version", ".github/workflows/request-cost.yml"
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
 const sha = /^[0-9a-f]{40}$/;
 const scopeWorkflows = { catalog: "catalog.yml", evidence: "benchmark-evidence.yml", "ci-base": "ci.yml" };
+const mainRunLimit = 100;
 
 export function selectScope(allApps, paths) {
   if (paths === undefined) return { apps: allApps, json: true };
@@ -76,11 +77,16 @@ export function selectRequestCost(paths) {
   return paths === undefined || paths.some(path => matches(path, requestCostInputs) || /(^|\/)\.gitattributes$/.test(path));
 }
 
-function changedPaths(base, head, cwd, env) {
+function changedPaths(base, head, cwd, env, everyCommit = false) {
+  const diffFlags = ["--name-only", "--no-renames", "--ignore-submodules=none", "-z"];
   // Keep both sides of a move and don't hide gitlinks from source-custody checks.
-  return execFileSync("git", ["diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", base, head, "--"], {
+  const args = everyCommit
+    ? ["log", "--format=", "--diff-merges=separate", ...diffFlags, `${base}..${head}`, "--"]
+    : ["diff", ...diffFlags, base, head, "--"];
+  const paths = execFileSync("git", args, {
     cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env,
   }).split("\0").filter(Boolean);
+  return everyCommit ? [...new Set(paths)].sort() : paths;
 }
 
 function isEarlierCommit(base, head, cwd, env) {
@@ -88,9 +94,11 @@ function isEarlierCommit(base, head, cwd, env) {
     spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd, stdio: "ignore", env }).status === 0;
 }
 
-async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN }, workflow, fetchRuns) {
+async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN }, workflow, fetchRuns, isEarlier) {
   const url = new URL(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs`);
-  url.search = new URLSearchParams({ branch: "main", event: "push", status: "success", per_page: "1" });
+  const allowsDispatch = workflow === "ci.yml";
+  url.search = new URLSearchParams({ branch: "main", status: "success", per_page: String(mainRunLimit) });
+  if (!allowsDispatch) url.searchParams.set("event", "push");
   const response = await fetchRuns(url, {
     headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${GITHUB_TOKEN}` },
     redirect: "error", signal: AbortSignal.timeout(10_000),
@@ -98,38 +106,33 @@ async function successfulMainBase({ GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TO
   if (!response.ok) return { reason: `the GitHub Actions API returned HTTP ${response.status}` };
   const runs = (await response.json().catch(() => null))?.workflow_runs;
   if (!Array.isArray(runs)) return { reason: "the GitHub Actions API returned an invalid workflow-runs response" };
-  const run = runs[0];
-  if (run?.event === "push" && run.head_branch === "main" && run.status === "completed" && run.conclusion === "success"
-      && typeof run.head_sha === "string" && sha.test(run.head_sha)) return { base: run.head_sha };
-  return { reason: "the GitHub Actions API did not list a valid successful main push" };
+  // The API lists newest runs first. CI's manual run validates its explicit base and runs all
+  // checks. Other workflows keep using push results (Evidence's manual run can be native-only).
+  for (const run of runs.slice(0, mainRunLimit)) {
+    if ((run?.event === "push" || (allowsDispatch && run?.event === "workflow_dispatch")) &&
+        run.head_branch === "main" && run.status === "completed" && run.conclusion === "success" &&
+        isEarlier(run.head_sha)) return { base: run.head_sha };
+  }
+  return { reason: `none of the most recent ${mainRunLimit} successful main runs is an available earlier ancestor` };
 }
 
 // Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR.
 export async function mainPushBase(event, cwd, env = process.env, { workflow, fetchRuns = fetch } = {}) {
-  const { GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REF, GITHUB_REPOSITORY, GITHUB_WORKFLOW_REF, GITHUB_TOKEN, PUSH_BEFORE } = event;
+  const { GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REF, GITHUB_REPOSITORY, GITHUB_WORKFLOW_REF, GITHUB_TOKEN } = event;
   // Called workflows see the caller's event and workflow_ref, not their own.
   const file = scopeWorkflows[workflow];
   if (!file || GITHUB_EVENT_NAME !== "push" || GITHUB_REF !== "refs/heads/main"
       || GITHUB_WORKFLOW_REF !== `${GITHUB_REPOSITORY}/.github/workflows/${file}@${GITHUB_REF}`) return undefined;
   if (!GITHUB_TOKEN) return { reason: "the GitHub Actions API token is missing" };
   if (!sha.test(GITHUB_SHA ?? "")) return { reason: "the pushed commit SHA is invalid" };
-  let result;
+  // A usable success proves coverage through its commit even if the previous tip was rewritten.
+  // The previous tip itself proves no coverage: that run may have stopped or failed.
   try {
-    result = await successfulMainBase(event, file, fetchRuns);
+    return await successfulMainBase(event, file, fetchRuns, base => isEarlierCommit(base, GITHUB_SHA, cwd, env));
   } catch {
     // Do not print the response or error from an authenticated request.
     return { reason: "the GitHub Actions workflow-runs request failed or timed out" };
   }
-  if (result.reason) return result;
-  // Only a successful run proves the checks finished. The prior tip detects a force-push;
-  // it is not a base, since that push may have been cancelled.
-  if (!isEarlierCommit(result.base, GITHUB_SHA, cwd, env)) {
-    return { reason: "the last successful push's commit is not available as an earlier ancestor" };
-  }
-  if (PUSH_BEFORE !== result.base && !isEarlierCommit(PUSH_BEFORE, GITHUB_SHA, cwd, env)) {
-    return { reason: "the previous main tip is unknown or is not an ancestor (main may have been rewritten)" };
-  }
-  return result;
 }
 
 export async function eventPaths(event, cwd, env = process.env, options) {
@@ -143,7 +146,7 @@ export async function eventPaths(event, cwd, env = process.env, options) {
   if (result?.reason) console.warn(`Successful main push base unavailable: ${result.reason}; selecting every benchmark job.`);
   if (result?.base) {
     try {
-      return changedPaths(result.base, GITHUB_SHA, cwd, env);
+      return changedPaths(result.base, GITHUB_SHA, cwd, env, true);
     } catch {
       console.warn("Main push diff unavailable; selecting every benchmark job.");
     }
@@ -161,7 +164,7 @@ if (import.meta.main) {
       console.log(result.base);
     } else {
       const reason = result?.reason ?? "this is not a direct push to main";
-      console.error(`::error::Could not find the last successful main CI push: ${reason}. Rerun CI or run it manually (workflow_dispatch) with an explicit base.`);
+      console.error(`::error::Could not find a successful main CI base: ${reason}. Rerun CI or dispatch it on main (workflow_dispatch) with an explicit base.`);
       process.exitCode = 1;
     }
   } else {

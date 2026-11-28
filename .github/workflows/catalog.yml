@@ -6,13 +6,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Initial main pushes and PR updates supersede earlier runs for that ref. Main scope starts at
-# the last successful Catalog push. Dispatch and main reruns keep a separate group per run.
+# Only PRs share a ref group. Main pushes must not cancel one another when admitted out of order.
 concurrency:
-  group: >-
-    ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == '1'))
-    && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == '1') }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -33,6 +30,20 @@ jobs:
         "django", "rails", "laravel", "aspnet", "spring", "phoenix", "astro", "nuxt",
         "topcoat", "axum-maud", "gin", "drogon", "fastapi", "express"]
     steps:
+      - name: Stop a superseded main push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1'
+        shell: bash
+        run: |
+          tip_pattern=$'^([0-9a-f]{40})\trefs/heads/main$'
+          if tip=$(timeout -k 2s 15s git ls-remote --exit-code "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" refs/heads/main) &&
+              [[ "$tip" =~ $tip_pattern ]]; then
+            if [[ "${BASH_REMATCH[1]}" != "$GITHUB_SHA" ]]; then
+              echo "::notice::Main has moved; this run did not check its commit. Rerun to check this exact commit."
+              exit 1
+            fi
+          else
+            echo "::warning::Could not read the live main tip; checking the original push."
+          fi
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -42,7 +53,6 @@ jobs:
           node-version-file: .node-version
       - id: scope
         env:
-          PUSH_BEFORE: ${{ github.event.before }}
           GITHUB_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
         run: node scripts/benchmark-scope.mjs catalog
 

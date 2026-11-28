@@ -110,7 +110,7 @@ On pull requests and pushes to `main`, its scope job starts the suites only when
 benchmark, tooling, workflow or committed source-custody inputs change. These inputs
 include `docs/`, `crates/`, and the Cargo manifests and locks for the portable suites.
 The native Linux job scopes separately to benchmark, scripts, tooling and workflow inputs.
-A push with no usable base commit runs all Evidence jobs.
+A push that reaches scope with no usable base commit runs all Evidence jobs.
 Evidence is not a publication gate; Release calls CI only.
 They need Node 24 or later, the installed pinned Playwright Chromium, current Git,
 the full repository history and the integrity-checked npm cache used by `npm ci` and
@@ -149,13 +149,23 @@ also select everything. An `aspnet-aot` change runs the JSON jobs.
 Run `node --test scripts/benchmark-scope.test.mjs` to check both selectors, including
 the imports of the Catalog parity commands for each app.
 Both scope jobs compare a pull request merge commit with its first parent, using the full Git
-diff rather than GitHub's path-filter file list. Newer pull request runs and new pushes to
-`main` cancel superseded runs of the same workflow. On `main`, each scope job and CI's bench
-size check cover commits since their workflow's last successful main push. With no usable base
-(including a rewritten push), Catalog and Evidence select every job. CI instead fails its bench
-size base step and reports why, without guessing a range. Rerun CI or dispatch CI manually with
-`base` set to the full SHA of a known checked ancestor that covers the outstanding commits.
-A manual run checks that explicit range; it does not become the base for later main pushes.
+diff rather than GitHub's path-filter file list. Newer pull request runs still cancel earlier
+runs of the same workflow. Pushes to `main` have separate groups: GitHub can admit them out of
+push order, so even a shared group that does not cancel running jobs could discard a pending
+tip run. A first-attempt main push reads the live tip before starting heavy jobs. If the tip
+differs, the run stops with a notice and a non-success status so it cannot be used as a base.
+If the tip cannot be read, the run checks its original commit. Work already admitted is not
+cancelled by another push, and a rerun checks its original commit without the tip check.
+
+On `main`, each scope job and CI's bench size check use the newest of up to 100 successful
+runs of that workflow whose commit is a strict ancestor of the push's commit. Scope includes
+every path touched in that range, even one restored before the tip. Catalog and Evidence use
+push successes only and select every job when no base is usable. CI instead fails the bench
+size base step and reports why, without guessing a range. If a rewrite leaves no checked CI
+ancestor in the lookup, dispatch CI on `main` with `base` set to the full SHA of an earlier
+ancestor known to be checked, so the explicit range covers the outstanding commits. CI
+validates the base; a successful dispatch on `main` then supplies a base for later pushes.
+If a lookup failed for a transient reason, a rerun can also recover.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
@@ -507,11 +517,12 @@ tag's first push among them), means the merge base with `origin/main` as it is w
 runs. That is not a replay of the range the push brought: a rerun after `main` advances can check
 a different range, a tag on a commit already on `main` checks its tree with no history, and a push
 that creates `main` itself has none. A release needs green CI on the exact commit before it is
-tagged ([RELEASING.md](RELEASING.md)), which is its history check; the tag's check is in addition. CI gives the base from its event rather than let the script guess:
-a pull request's merge commit's first parent, and a push's `before` (after a push to `main`,
-`origin/main` is the pushed commit, so its merge base would check nothing). In GitHub Actions the
-check fails without one, and so does the CI step for an event it has no base for. A shallow clone
-fails too, since the commits it lacks would go unread: fetch the whole history
+tagged ([RELEASING.md](RELEASING.md)), which is its history check; the tag's check is in addition.
+CI supplies the base explicitly: a pull request uses its merge commit's first parent; a main
+push uses an earlier successful main CI commit as described in [Checks](#checks); a Release
+tag push uses its `before`; and manual dispatch uses the validated `base` input. In GitHub
+Actions the check fails without a base, as does the CI step for an event it has no base for.
+A shallow clone fails too, since the commits it lacks would go unread: fetch the whole history
 (`git fetch --unshallow`). When no base resolves, the check fails and says how to give one.
 
 ## Pull requests
