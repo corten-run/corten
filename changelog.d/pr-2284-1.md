@@ -1,0 +1,1 @@
+- Read `link.is_current()` alongside its item in `req.nav_of(...).links()` to label a breadcrumb from the same decision that marks the link. [#2137 NavLinks does not say which entry it marked current, so a trail or phone bar re-derives the rule](https://github.com/corten-run/corten/issues/2137)

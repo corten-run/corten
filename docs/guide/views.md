@@ -595,6 +595,12 @@ let nav = req.nav_of(items.iter().map(|item| (NavTo::section(&item.href), item))
 html! { <nav>for (link, item) in nav.links() { <a {..link}>{&item.label}</a> }</nav> }
 ```
 
+For a breadcrumb in the rendered page, read the same mark:
+`nav.links().find_map(|(link, item)| link.is_current().then_some(item))` gives the first marked
+item, or `None`. This reads the link's `aria-current="page"` decision, including other addresses;
+it does not write or compare its URL again. On a client navigation the runtime updates the links,
+not arbitrary breadcrumb text outside the swapped content.
+
 A page that also answers at another address, such as an older one that stored links still carry,
 names it with `also`, a route or a `Local` as the entry is: `NavTo::page(&Settings).also(&Governance)`
 is current at `/governance` as at `/settings`, by the same rule, and its link still goes to

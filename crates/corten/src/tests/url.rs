@@ -205,6 +205,34 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     assert!(<dyn crate::Href>::prefetch(&crate::Route::at(&print, QtyId)));
 }
 
+#[test]
+fn a_nav_item_knows_whether_its_link_is_marked_current() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    let section = Local::parse("/catalog").unwrap();
+    let page = Local::parse("/catalog/settings").unwrap();
+    let older = Local::parse("/catalog/governance").unwrap();
+    for (path, expected) in [
+        ("/catalog/items", Some("Catalog")),
+        ("/catalog/settings", Some("Settings")),
+        ("/catalog/governance", Some("Settings")),
+        ("/elsewhere", None),
+    ] {
+        let nav = nav_links(path, [(NavTo::section(&section), "Catalog"), (NavTo::page(&page).also(&older), "Settings")]);
+        let mut marked = nav.links().filter_map(|(link, label)| {
+            let mut attrs = String::new();
+            link.render_attrs(&mut attrs);
+            assert_eq!(link.is_current(), attrs.contains(r#" aria-current="page""#));
+            link.is_current().then_some(*label)
+        });
+        assert_eq!(marked.next(), expected);
+        assert_eq!(marked.next(), None);
+    }
+}
+
 /// An entry whose page also answers at another address (an older one stored links still carry) is
 /// current there by the same rule as at its own URL, its link still going to its own, and the
 /// other addresses name its group (#2119).
