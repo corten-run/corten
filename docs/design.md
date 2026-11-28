@@ -12611,9 +12611,9 @@ rules something out.
     replace and hides that from it (a `currententrychange` listener that replaces it with another
     state and stops the nested event's propagation; without the Navigation API, a wrapper of
     `history.replaceState` that replaces it again), and the press's answer then puts its address
-    in over the page's replace: the runtime does not defend against page code that hides history
-    events from it. It trusts the page's own `getState` and history methods to report what they
-    did (a `getState` wrapped to answer a stale state is believed), and does not guard against a
+    in over the page's replace: the runtime does not reconstruct same-address replaces from
+    history events the page hides. It trusts the page's own `getState` and history methods to
+    report what they did (a `getState` wrapped to answer a stale state is believed), and does not guard against a
     page script that deliberately cancels or rewrites the runtime's own history call. So of two
     marked forms pressed before either
     answers, the answer that draws first puts its address in and the second leaves that address.
@@ -12647,15 +12647,19 @@ rules something out.
     that draws another page is a turn, as a visit to that page is: a page answer (`corten-page`,
     another route's `<main>` included, and a 5xx's, which puts no address in) as it is drawn, and a
     patch once its address on another path is in (where a page's `navigate` listener holds the
-    replace, as the held navigation commits that address). The runtime then does what it does as a
-    visit begins, with the same code: it ends every submit of another form on its way as the draw
+    replace, as the held navigation commits that address). It checks the committed address before
+    an answer can act and when the held navigation settles, even if the page stops
+    `currententrychange`. The runtime does what it does as a visit begins, with the same code:
+    it ends every submit of another form on its way as the draw
     began (not one the draw itself made, which is the new page's), numbering a write it cut off
     before its answer came, so the next navigation reads the page whole, and counts the turn by
     which a failed write is said only on a form drawn with no navigation to another address since
     its press. A press the draw made of a form whose write it ends (an element's
     `connectedCallback` that presses a form of the layout), which waits for that write as any press
-    of the form does, is the new page's too, as a press made once a visit has begun is: it is sent
-    once that write has ended, as a press waiting for a write is. So a Save on its way draws nothing on
+    of the form does, is the new page's too. Only a press attributed to the draw itself is kept,
+    not one a history listener makes or one made later while the old address is still active.
+    Aborting the write leaves that exact queued press current, so a GET can pass the usual
+    checks for a queued read. So a Save on its way draws nothing on
     the other page once its 200 patch comes, though that page has an element of the id it patches,
     and its 503 fires `corten:error` on no form there, though one has its id, `action` and
     `method`. A patch that changes only the query draws on the same page, and is no turn: a write
@@ -12924,11 +12928,14 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 3,743 bytes larger raw (46,502 to 50,245), 1,518
-    with gzip (16,718 to 18,236) and 1,359 with brotli (15,106 to 16,465), paid once a release by
-    every user (225, 85 and 81 larger than the build before this one, which, as a marked answer drew
-    another page, dropped a press its draw made of a form whose write it ended; ended no submit for
-    a marked answer's 5xx page, nor for a patch whose replace a page's `navigate` listener held
+    What it costs: the runtime every page loads is 3,824 bytes larger raw (46,502 to 50,326), 1,539
+    with gzip (16,718 to 18,257) and 1,385 with brotli (15,106 to 16,491), paid once a release by
+    every user (81, 21 and 26 larger than `e281140d6`, which replayed a later press as the draw's,
+    dropped a marked read queued by the draw, and could let an old write draw if a listener stopped
+    the commit event; that build was 225, 85 and 81 larger than the build before it, which, as a
+    marked answer drew another page, dropped a press its draw made of a form whose write it ended;
+    ended no submit for a marked answer's 5xx page, nor for a patch whose replace a page's
+    `navigate` listener held
     until its address on another path committed; and copied every submit on its way as any form's
     answer drew, then searched that copy for each; that build was 157, 77 and 65 larger than the one
     before it, which let a write on its way
@@ -13114,7 +13121,11 @@ rules something out.
     or the platform gains a call that aborts a navigation on its way without beginning another,
     when a replace a page's listener holds could be ended rather than waited out.
 
-    Last checked: 2026-11-27, a write of another form held while a marked answer draws another
+    Last checked: 2026-11-27, an actionless POST queued after a marked patch drew while its replace
+    was held, a marked GET the draw queued behind a write, and an old write answered after a
+    held replace committed without delivering `currententrychange` to the runtime, in Linux
+    Playwright 1.65.1's Chromium (each regression reproduced against `e281140d6`);
+    2026-11-27, a write of another form held while a marked answer draws another
     route's `<main>` or a marked patch puts in an address on another path, a `currententrychange`
     the page dispatches itself as the runtime's replace runs, and a `navigate` listener that reads a
     marked patch's CSS variables as its address goes in, in Playwright 1.65.1's Chromium 159,

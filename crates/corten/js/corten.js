@@ -3363,7 +3363,7 @@ addEventListener("pagehide", () => (left += 1));
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for. A read is also dropped by a newer press of
  * the form drawn in its place ({@link pressed}).
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, kept: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextPress?: Press | null, here?: Press, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, kept?: Press, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextPress?: Press | null, here?: Press, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 /**
@@ -3447,10 +3447,11 @@ const holding = (press) => {
 };
 
 /**
- * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
+ * A press of a form: its id ({@link presses}) and the marked answer's draw that made it, if any
+ * ({@link drawingFor}); for a `data-address` form with an id also the entry
  * it was made on ({@link entry}), null for a write made while a visit of the runtime's or a held
- * replace ({@link held}) was on its way (a read made then is {@link refused}), and that entry exactly ({@link exact}), with the draw of the
- * marked answer that made it, if one did ({@link drawingFor}), and when it was made
+ * replace ({@link held}) was on its way (a read made then is {@link refused}), and that entry
+ * exactly ({@link exact}), and when it was made
  * (`performance.now()`), for a move the browser made before
  * it and says so only after it ({@link moves}). A marked form without an id cannot tell its latest
  * press from an older one, and is pressed as an unmarked form is: its answer leaves the address.
@@ -3476,7 +3477,7 @@ function pressed(form, read) {
   const marked = id && hasAttr(form, "data-address");
   const away = marked && (reading.size > 0 || holding());
   if (away && read) return refused;
-  const press = marked ? { id, at: away ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
+  const press = marked ? { id, at: away ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id, by: drawingFor };
   if (id) presses.set(id, press);
   return press;
 }
@@ -3635,17 +3636,23 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", went: false, answered: false, kept: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: read ?? undefined, mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", went: false, answered: false, kept: /** @type {Press | undefined} */ (undefined), n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: read ?? undefined, mine, busy, by: submitter };
   // Its presses are let go at once too: nothing is sent or drawn for them now, and what it awaits
-  // (a stylesheet a patch's element needs) may never end.
+  // (a stylesheet a patch's element needs) may never end. The exact press the next page's draw
+  // queued is still to be sent.
   signal.addEventListener("abort", () => {
     settled(press);
     settled(pending.here);
-    settled(pending.nextPress);
+    if (pending.nextPress !== pending.kept) settled(pending.nextPress);
   });
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
-  const here = (/** @type {boolean} */ drawing = false) => !pending.here || standing(pending.here, drawing);
+  const here = (/** @type {boolean} */ drawing = false) => {
+    // A listener may have stopped currententrychange. Check the address before this answer acts.
+    turnAt?.();
+    // A draw that already happened may still put its address in after a visit was cancelled.
+    return (drawing || !signal.aborted) && (!pending.here || standing(pending.here, drawing));
+  };
   // Begun once its draw passed this check (`drawIn`), after which it changes the page with nothing
   // of the page's run first; drawn once that draw returned without throwing: from then on nothing
   // read can say it failed. A draw begun that throws partway (a sibling in, then a field it cannot
@@ -3655,12 +3662,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // A marked answer's: puts its address in, and ends the submits of the page it leaves ({@link send}).
   /** @type {(() => void) | undefined} */
   let done;
-  // The submits on its way as a marked answer's draw began, each with the press waiting for it then:
-  // those it ends if it draws another page, as a visit does ({@link leaveSubmits}), but its own and
-  // any its draw made. Taken only for a marked answer, and looked up, not searched.
-  /** @type {Map<NonNullable<ReturnType<typeof submits.get>>, Press | null | undefined> | undefined} */
+  // The submits on their way as a marked answer's draw began: those it ends if it draws another
+  // page, but its own. A press its draw queued behind one can still be sent.
+  /** @type {Set<NonNullable<ReturnType<typeof submits.get>>> | undefined} */
   let earlier;
-  const drawIn = () => ((passed = here()) && done && (earlier = new Map(Array.from(submits.values(), (p) => [p, p.nextPress]))), passed);
+  const drawIn = () => ((passed = here()) && done && (earlier = new Set(submits.values())), passed);
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3788,10 +3794,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
         // write has ended, as a press waiting for a write is.
         const leave = () => {
           turns += 1;
-          for (const [other, waited] of earlier ?? []) if (other.nextPress !== waited) other.kept = true;
+          for (const other of earlier ?? []) if (other.next !== undefined && other.nextPress?.by === draw) other.kept = other.nextPress;
           leaveSubmits((other) => other === pending || !earlier?.has(other));
         };
         done = function replace() {
+          // The draw is over: history listeners and abort callbacks are not part of it.
+          drawingFor = null;
           // As the page is drawn, before anything of it runs again (the checks below): an answer of
           // theirs draws in a task of its own.
           if (!patch) leave();
@@ -3922,7 +3930,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
             // to its end, and is not held.
             if (now && now !== transition) {
               const was = now;
-              const end = () => void (held === was && (held = heldFor = turnAt = undefined));
+              const end = () => {
+                if (held !== was) return;
+                turnAt?.();
+                held = heldFor = turnAt = undefined;
+              };
               held = was;
               heldFor = pending.here;
               if (patch && location.pathname === path) turnAt = () => location.pathname !== path && location.href === to && ((turnAt = undefined), leave());
@@ -4025,7 +4037,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       // navigation cut it off, unless a marked answer that drew another page did, and its draw made
       // the press ({@link send}).
       const { next, nextWithin, nextPress } = pending;
-      if (next !== undefined && (!signal.aborted || pending.kept)) setTimeout(() => (left === leftAt ? sendAgain(form, next, nextWithin, nextPress) : settled(nextPress)));
+      if (next !== undefined && (!signal.aborted || (nextPress && nextPress === pending.kept))) setTimeout(() => (left === leftAt ? sendAgain(form, next, nextWithin, nextPress) : settled(nextPress)));
       else settled(nextPress);
     } else settled(pending.nextPress);
   }

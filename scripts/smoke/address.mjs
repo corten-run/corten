@@ -5179,18 +5179,32 @@ async function markedBoundaries(browser, errors) {
   const answer = await fetch(home, { headers: { corten: "nav" } });
   await answer.arrayBuffer();
   const pageHeaders = Object.fromEntries(["corten-page", "corten-shell", "content-type"].flatMap((name) => (answer.headers.has(name) ? [[name, answer.headers.get(name) ?? ""]] : [])));
-  // The write's answer's status, the marked answer's, and whether a page's `navigate` listener holds
-  // the marked answer's replace before its address goes in.
-  for (const [kind, status, drawn503, holds] of /** @type {const} */ ([["page", 200, false, false], ["page", 503, false, false], ["patch", 200, false, false], ["page", 200, true, false], ["patch", 200, false, true]])) {
-    const name = drawn503
-      ? "a write held while a marked form's 503 page answer draws another route's page draws nothing on it once its 200 patch comes"
-      : holds
-        ? "a write held while a marked patch's replace to another path is held until its address commits draws nothing once its 200 patch comes"
-        : kind === "page"
-          ? `a write held while a marked form's page answer draws another route's page ${status === 200 ? "draws nothing on it once its 200 patch comes" : "says no corten:error on its form of the same id once its 503 comes"}`
-          : "a write held while a marked patch moves the address to another path draws nothing once its 200 patch comes";
+  // The two answer statuses, whether a page listener holds the replace before its address goes
+  // in, and whether another listener stops the commit event.
+  for (const [kind, status, drawn503, holds, stops] of /** @type {const} */ ([
+    ["page", 200, false, false, false], ["page", 503, false, false, false], ["patch", 200, false, false, false],
+    ["page", 200, true, false, false], ["patch", 200, false, true, false], ["patch", 200, false, true, true],
+  ])) {
+    const name = stops
+      ? "a held replace cuts off an old write even when an earlier listener stops its commit event"
+      : drawn503
+        ? "a write held while a marked form's 503 page answer draws another route's page draws nothing on it once its 200 patch comes"
+        : holds
+          ? "a write held while a marked patch's replace to another path is held until its address commits draws nothing once its 200 patch comes"
+          : kind === "page"
+            ? `a write held while a marked form's page answer draws another route's page ${status === 200 ? "draws nothing on it once its 200 patch comes" : "says no corten:error on its form of the same id once its 503 comes"}`
+            : "a write held while a marked patch moves the address to another path draws nothing once its 200 patch comes";
     const page = await browser.newPage();
     page.on("pageerror", (e) => errors.push(`boundary ${kind} ${status}: ${e.message}`));
+    if (stops)
+      await page.addInitScript(() => {
+        const w = /** @type {any} */ (window);
+        w.navigation?.addEventListener("currententrychange", (/** @type {Event} */ event) => {
+          if (!event.isTrusted || location.pathname !== "/smoke/address-boundary") return;
+          w.__stopped = true;
+          event.stopImmediatePropagation();
+        });
+      });
     await page.goto(home);
     if (holds && !(await page.evaluate(() => "NavigationPrecommitController" in window))) {
       skip(name, "no precommitHandler");
@@ -5254,18 +5268,19 @@ async function markedBoundaries(browser, errors) {
     const saveSent = await posted;
     // Held until the panel is drawn, then let go: the address commits after the panel drew.
     if (holds)
-      await page.evaluate(() => {
+      await page.evaluate((stops) => {
         const w = /** @type {any} */ (window);
         /** @type {(value?: unknown) => void} */
         let commit = () => {};
         const holding = new Promise((resolve) => (commit = resolve));
+        const finishing = stops ? new Promise((resolve) => { w.__finish = resolve; }) : undefined;
         Object.assign(w, { __commit: commit, __held: false });
         w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
           if (w.__held || event.navigationType !== "replace" || new URL(event.destination.url).pathname !== "/smoke/address-boundary") return;
-          event.intercept({ precommitHandler: () => holding });
+          event.intercept({ precommitHandler: () => holding, handler: () => finishing });
           w.__held = true;
         });
-      });
+      }, stops);
     await page.evaluate(() => /** @type {any} */ (window).__go.requestSubmit());
     // Drawn while the address is held, before it commits.
     const heldDrawn = holds
@@ -5278,8 +5293,8 @@ async function markedBoundaries(browser, errors) {
     const to = drawn503 ? "/smoke/address" : "/smoke/address-boundary";
     const drawn = await page
       .waitForFunction(
-        (to) => location.pathname === to && document.getElementById("smoke-boundary-panel")?.textContent === "destination" && !(/** @type {any} */ (window).navigation?.transition),
-        to,
+        ({ to, stops }) => location.pathname === to && document.getElementById("smoke-boundary-panel")?.textContent === "destination" && !!(/** @type {any} */ (window).navigation?.transition) === stops,
+        { to, stops },
         { timeout: 5000 },
       )
       .then(() => true, () => false);
@@ -5291,56 +5306,72 @@ async function markedBoundaries(browser, errors) {
       at: location.pathname + location.search,
       panel: document.getElementById("smoke-boundary-panel")?.textContent,
       said: /** @type {string[]} */ (/** @type {any} */ (window).__said),
+      stopped: !!(/** @type {any} */ (window).__stopped),
     }));
+    if (stops) await page.evaluate(() => /** @type {any} */ (window).__finish());
     await page.close();
     const at = drawn503 ? "/smoke/address" : "/smoke/address-boundary?scope=week";
-    check(name, saveSent && heldDrawn && drawn && end.at === at && end.panel === "destination" && end.said.length === 0, JSON.stringify({ saveSent, heldDrawn, drawn, ...end }));
+    check(name, saveSent && heldDrawn && drawn && end.at === at && end.panel === "destination" && end.said.length === 0 && end.stopped === stops, JSON.stringify({ saveSent, heldDrawn, drawn, ...end }));
   }
 
   // A press the marked answer's draw makes (an element's `connectedCallback`) of a form of the
   // layout whose write is on its way waits for that write as any press does, and is sent once the
   // turn has ended it, as a press made once a visit began is.
   const layoutSave = `${base}/smoke/address-boundary-layout`;
-  for (const kind of /** @type {const} */ (["page", "patch"])) {
-    const name = `a press a marked ${kind === "page" ? "page answer" : "patch to another path"}'s draw makes, of a layout form whose write it ends, is sent once that write has ended`;
+  for (const [kind, press] of /** @type {const} */ ([["page", "POST"], ["patch", "POST"], ["page", "GET"], ["patch", "GET"], ["patch", "late"], ["patch", "navigate"]])) {
+    const late = press === "late" || press === "navigate";
+    const name = late
+      ? `an actionless POST queued ${press === "navigate" ? "by the navigate listener that holds the replace" : "after the patch drew but before its held replace commits"} is never replayed to the new address`
+      : `a ${press} a marked ${kind === "page" ? "page answer" : "patch to another path"}'s draw queues behind a layout write is sent once that write ends`;
     const page = await browser.newPage();
     page.on("pageerror", (e) => errors.push(`boundary press ${kind}: ${e.message}`));
     await page.goto(home);
+    if (late && !(await page.evaluate(() => "NavigationPrecommitController" in window))) {
+      skip(name, "no precommitHandler");
+      await page.close();
+      continue;
+    }
     /** @type {string[]} */
-    const bodies = [];
-    await page.route(layoutSave, async (route) => {
-      const body = route.request().postData() ?? "";
-      bodies.push(body);
+    const requests = [];
+    const firstUrl = late ? home : layoutSave;
+    await page.route((url) => url.href === firstUrl || url.href === layoutSave + "?v=second" || (late && url.href === destination + "?scope=week"), async (route) => {
+      const request = route.request();
+      if (request.headers()["corten"] !== "action" || (request.method() === "GET" && request.url() !== layoutSave + "?v=second")) return route.fallback();
+      const body = request.postData() ?? "";
+      requests.push(`${request.method()} ${request.url().slice(base.length)} ${body}`.trimEnd());
       // The first is on its way as the marked answer draws, and never answered.
       if (body !== "v=first") await route.fulfill({ status: 204 }).catch(() => {});
     });
-    const drawnPress = '<p id="smoke-boundary-panel">destination<smoke-boundary-press></smoke-boundary-press></p>';
+    const drawnPress = `<p id="smoke-boundary-panel">destination${late ? "" : "<smoke-boundary-press></smoke-boundary-press>"}</p>`;
     await page.route(`${destination}?scope=week`, (route) =>
-      route.request().headers()["corten"] !== "action"
-        ? route.continue()
+      route.request().method() !== "GET" || route.request().headers()["corten"] !== "action"
+        ? route.fallback()
         : route.fulfill(kind === "page" ? { headers: pageHeaders, body: drawnPress } : { headers: { "corten-patch": "1", "content-type": "text/html" }, body: drawnPress }),
     );
-    const first = page.waitForRequest((r) => r.url() === layoutSave, { timeout: 5000 }).then(() => true, () => false);
-    await page.evaluate(() => {
+    const first = page.waitForRequest((r) => r.url() === firstUrl && r.method() === "POST", { timeout: 5000 }).then(() => true, () => false);
+    await page.evaluate((press) => {
       const w = /** @type {any} */ (window);
+      const layout = document.createElement("form");
+      const field = document.createElement("input");
+      const again = () => {
+        w.__pressed = true;
+        field.value = "second";
+        if (press === "GET") layout.method = "get";
+        layout.requestSubmit();
+      };
       customElements.define(
         "smoke-boundary-press",
         class extends HTMLElement {
           connectedCallback() {
-            const form = /** @type {HTMLFormElement | null} */ (document.getElementById("smoke-boundary-layout"));
-            if (!form || w.__pressed) return;
-            w.__pressed = true;
-            /** @type {HTMLInputElement} */ (form.elements.namedItem("v")).value = "second";
-            form.requestSubmit();
+            if (!w.__pressed) again();
           }
         },
       );
-      const layout = document.createElement("form");
       layout.id = "smoke-boundary-layout";
       layout.dataset.patch = "";
       layout.method = "post";
-      layout.action = "/smoke/address-boundary-layout";
-      const field = document.createElement("input");
+      if (press !== "late" && press !== "navigate") layout.action = "/smoke/address-boundary-layout";
+      if (press === "GET") layout.dataset.address = "";
       field.name = "v";
       field.value = "first";
       layout.append(field);
@@ -5361,15 +5392,40 @@ async function markedBoundaries(browser, errors) {
       go.append(scope);
       /** @type {Element} */ (document.querySelector("main")).append(panel, go);
       w.__go = go;
+      if (press === "late" || press === "navigate") {
+        const hold = new Promise((resolve) => { w.__commit = resolve; });
+        w.__again = again;
+        w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+          if (event.navigationType !== "replace" || new URL(event.destination.url).pathname !== "/smoke/address-boundary") return;
+          if (press === "navigate") again();
+          event.intercept({ precommitHandler: () => hold });
+          w.__held = true;
+        });
+      }
       layout.requestSubmit();
-    });
+    }, press);
     const firstSent = await first;
-    const second = page.waitForRequest((r) => r.url() === layoutSave && r.postData() === "v=second", { timeout: 5000 }).then(() => true, () => false);
+    const second = late ? null : page
+      .waitForRequest((r) => r.method() === press && (press === "GET" ? r.url() === layoutSave + "?v=second" : r.url() === layoutSave && r.postData() === "v=second"), { timeout: 5000 })
+      .then(() => true, () => false);
     await page.evaluate(() => /** @type {any} */ (window).__go.requestSubmit());
-    const secondSent = await second;
+    const heldDrawn = !late || await page
+      .waitForFunction(() => location.pathname === "/smoke/address" && /** @type {any} */ (window).__held && document.getElementById("smoke-boundary-panel")?.textContent === "destination", undefined, { timeout: 5000 })
+      .then(() => true, () => false);
+    if (late) {
+      await page.evaluate((press) => {
+        const w = /** @type {any} */ (window);
+        if (press === "late") w.__again();
+        w.__commit();
+      }, press);
+      // Wait for the old write's abort and the task that would send the queued one.
+      await page.waitForFunction(() => location.pathname === "/smoke/address-boundary" && !document.getElementById("smoke-boundary-layout")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 });
+      await page.waitForTimeout(300);
+    }
+    const secondSent = late ? requests.length > 1 : await second;
     const end = await page.evaluate(() => ({ at: location.pathname + location.search, pressed: !!(/** @type {any} */ (window).__pressed) }));
     await page.close();
-    check(name, firstSent && secondSent && end.pressed && end.at === "/smoke/address-boundary?scope=week", JSON.stringify({ firstSent, secondSent, ...end, bodies }));
+    check(name, firstSent && heldDrawn && secondSent === !late && end.pressed && end.at === "/smoke/address-boundary?scope=week", JSON.stringify({ firstSent, heldDrawn, secondSent, ...end, requests }));
   }
 
   const page = await browser.newPage();
