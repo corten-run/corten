@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, steps, pollAsync, cleanUp, exchange, letThrough } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, steps, pollAsync, cleanUp, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
 
 /**
  * The seconds the watchlist's alerts part waits before it reads itself again while a write lands
@@ -11,6 +11,69 @@ const AGAIN_SECONDS = 1;
 /** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
 const savedLine = '<p id="alert-status" role="status">Saved.</p>';
 const savingLine = '<p id="alert-status" role="status">Saving...</p>';
+
+/**
+ * The runtime inserts an already formed note, with its text and marker set, directly or inside
+ * an added subtree in a connected document. MutationObserver delivers records after the task,
+ * with live node references; it cannot recover text, attributes or connectedness at insertion.
+ * Page-script detachment of main, insertion into detached subtrees, and same-task rewrites of
+ * a note's text or marker after insertion are outside this check.
+ * @param {MutationRecord[]} records @param {string} selector
+ * @param {(element: Element) => boolean} [accept]
+ */
+function firstAddedMatch(records, selector, accept = () => true) {
+  for (const { addedNodes } of records) {
+    for (const node of addedNodes) {
+      if (!(node instanceof Element)) continue;
+      if (Element.prototype.matches.call(node, selector) && accept(node)) return node;
+      for (const child of Element.prototype.querySelectorAll.call(node, selector)) {
+        if (accept(child)) return child;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Pass the same scan to each Playwright script, which runs without the Node module's scope.
+ * @template T
+ * @param {(firstAdded: typeof firstAddedMatch, arg: T) => unknown} observe @param {T} arg
+ */
+const drawScript = (observe, arg) => `(${observe})(${firstAddedMatch}, ${JSON.stringify(arg)})`;
+
+/**
+ * Exercise the real note in a separate document so the control cannot supply the case's first draw.
+ * @param {import("@playwright/test").Page} page @param {"part" | "full-load"} kind
+ * @param {(page: import("@playwright/test").Page) => Promise<unknown>} addNote
+ * @param {(page: import("@playwright/test").Page) => Promise<string | null | undefined>} firstMark
+ */
+async function checkSameTaskSaved(page, kind, addNote, firstMark) {
+  const browser = page.context().browser();
+  if (!browser) throw new Error(`the ${kind} first-draw control has no browser`);
+  const context = await opened(`the ${kind} first-draw control context`, browser.newContext());
+  try {
+    const control = await opened(`the ${kind} first-draw control page`, context.newPage());
+    const url = `${base}/alerts`;
+    await within(5000, `the ${kind} control route was not set within 5 s`, control.route(url, (route) =>
+      route.fulfill({ contentType: "text/html", body: "<!doctype html><main></main>" }),
+    ));
+    await within(5000, `the ${kind} control note was not added within 5 s`, addNote(control));
+    await actWithin(`the ${kind} control page load`, control.goto(url));
+    await readWithin(`the ${kind} same-task draws`, control.evaluate((mark) => {
+      const first = document.createElement("p");
+      first.id = "alert-status";
+      first.textContent = "Saved.";
+      const later = /** @type {Element} */ (first.cloneNode(true));
+      later.setAttribute(mark, "later");
+      document.querySelector("main")?.append(first);
+      first.replaceWith(later);
+    }, kind === "part" ? "data-smoke-read" : "data-smoke-full"));
+    const mark = await readWithin(`the ${kind} control's first draw`, firstMark(control));
+    check(`the ${kind} note keeps the first Saved. in the same task`, mark === null, `first mark: ${JSON.stringify(mark)}`);
+  } finally {
+    await closeContext(context, `the ${kind} first-draw control context`);
+  }
+}
 
 /**
  * The seconds the leave-before-read case's page waits before its part's first read: the wait its
@@ -700,8 +763,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // `Saved.` again before the check looks is not taken for it, marked or not. Once the case
         // ends (`__smokeOff`) the script does nothing in the document it ran in, and nothing in a
         // later one (`offKey`).
-        script = page.addInitScript(
-          ({ movedFrom, offKey }) => {
+        const partNote = drawScript(
+          (firstAdded, { movedFrom, offKey }) => {
             try {
               if (sessionStorage.getItem(offKey)) return;
             } catch {
@@ -716,17 +779,19 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               { once: true },
             );
             if (location.pathname !== "/alerts") return;
-            const observer = new MutationObserver(() => {
-              const status = document.getElementById("alert-status");
-              if (w.__smokeOff || !status) return;
-              const read = status.getAttribute("data-smoke-read");
+            const observer = new MutationObserver((records) => {
+              if (w.__smokeOff) return;
               // The first `Saved.` drawn is noted whatever drew it, with its answer's mark or null
               // for none, so a later marked `Saved.` cannot stand in for an unmarked first one.
-              if (w.__firstSaved === undefined && status.textContent === "Saved.") w.__firstSaved = read;
-              if (read == null) return;
+              if (w.__firstSaved === undefined) {
+                const saved = firstAdded(records, "#alert-status", (status) => status.textContent === "Saved.");
+                if (saved) w.__firstSaved = saved.getAttribute("data-smoke-read");
+              }
+              // Moving a tag is separate from noting the first Saved.: it acts on the live page.
               if (w.__moved === undefined) {
+                const read = document.getElementById("alert-status")?.getAttribute("data-smoke-read");
                 const tag = document.querySelector("main template[data-corten-read-again][data-from]");
-                if (tag && tag !== w.__pageTag) {
+                if (read != null && tag && tag !== w.__pageTag) {
                   tag.setAttribute("data-from", movedFrom);
                   w.__moved = read;
                 }
@@ -734,10 +799,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               if (w.__moved !== undefined && w.__firstSaved !== undefined) observer.disconnect();
             });
             w.__smokeObserver = observer;
-            observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-read"] });
+            observer.observe(document, { childList: true, subtree: true });
           },
           { movedFrom, offKey },
         );
+        await checkSameTaskSaved(page, "part", (control) => control.addInitScript(partNote), (control) =>
+          control.evaluate(() => /** @type {string | null | undefined} */ ((/** @type {any} */ (window)).__firstSaved)),
+        );
+        script = page.addInitScript(partNote);
         script.catch(() => {});
         await within(5000, "the case's init script was not added within 5 s", script);
         try {
@@ -1529,28 +1598,36 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const initialKey = `${firstKey}-initial`;
         fullReads.length = 0;
         fullLoadAnswer = null;
-        const noting = page.addInitScript((/** @type {{ key: string, initialKey: string }} */ { key, initialKey }) => {
+        const fullNote = drawScript((firstAdded, { key, initialKey }) => {
           if (window !== window.top) return;
-          /** Whether the first `Saved.` is noted, noting it (and the first status line drawn) if the page shows it now. */
-          const look = () => {
+          const observer = new MutationObserver((records) => {
             try {
-              const status = document.getElementById("alert-status");
-              const read = status?.getAttribute("data-smoke-full");
-              const text = status?.textContent;
-              if (read != null && (text === "Saving..." || text === "Saved.") && sessionStorage.getItem(initialKey) === null) sessionStorage.setItem(initialKey, JSON.stringify({ text, read }));
-              if (sessionStorage.getItem(key) !== null) return true;
-              if (text !== "Saved.") return false;
-              // The first `Saved.` drawn, with the mark its answer carried (null for none), so a later
-              // marked draw cannot take its place.
-              sessionStorage.setItem(key, JSON.stringify({ read: read ?? null }));
-              return true;
+              if (sessionStorage.getItem(initialKey) === null) {
+                const initial = firstAdded(records, "#alert-status[data-smoke-full]", (status) =>
+                  status.textContent === "Saving..." || status.textContent === "Saved.",
+                );
+                if (initial) sessionStorage.setItem(initialKey, JSON.stringify({ text: initial.textContent, read: initial.getAttribute("data-smoke-full") }));
+              }
+              if (sessionStorage.getItem(key) === null) {
+                const saved = firstAdded(records, "#alert-status", (status) => status.textContent === "Saved.");
+                if (!saved) return;
+                // A null mark is still a first draw; a later marked answer cannot take its place.
+                sessionStorage.setItem(key, JSON.stringify({ read: saved.getAttribute("data-smoke-full") }));
+              }
             } catch {
-              return true;
+              // If storage is unavailable, no note can be read by the check.
             }
-          };
-          const observer = new MutationObserver(() => look() && observer.disconnect());
-          observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-full"] });
+            observer.disconnect();
+          });
+          observer.observe(document, { childList: true, subtree: true });
         }, { key: firstKey, initialKey });
+        await checkSameTaskSaved(page, "full-load", (control) => control.addInitScript(fullNote), (control) =>
+          control.evaluate((key) => {
+            const note = sessionStorage.getItem(key);
+            return note === null ? undefined : /** @type {{ read: string | null }} */ (JSON.parse(note)).read;
+          }, firstKey),
+        );
+        const noting = page.addInitScript(fullNote);
         noting.catch(() => {});
         /** The `sessionStorage` key of the case's count of documents, its own each run. */
         const documentKey = `${firstKey}-documents`;
@@ -2354,7 +2431,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       }
     };
     /** @param {string | null} button If given, record the first click of this button in the page's clock. */
-    const noteTerminalDraw = (button = null) => readWithin("arming the note of the first Saved. draw", page.evaluate(({ run, button }) => {
+    const noteTerminalDraw = (button = null) => readWithin("arming the note of the first Saved. draw", page.evaluate(drawScript((firstAdded, { run, button }) => {
       const w = /** @type {any} */ (window);
       if (w.__smokeTerminalOff === run) return;
       w.__smokeTerminalObserver?.disconnect();
@@ -2368,20 +2445,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       }
       delete w.__smokeTerminalDraw;
       const observer = new MutationObserver((records) => {
-        // A patch inserts the status line as a node. Take the first insertion, even if another
-        // patch has already replaced that line by the time this batch is delivered.
-        for (const { addedNodes } of records) {
-          for (const node of addedNodes) {
-            if (!(node instanceof Element) || node.id !== "alert-status" || node.textContent !== "Saved.") continue;
-            w.__smokeTerminalDraw = { at: performance.now(), mark: node.getAttribute("data-smoke-terminal") };
-            observer.disconnect();
-            return;
-          }
-        }
+        const saved = firstAdded(records, "#alert-status", (status) => status.textContent === "Saved.");
+        if (!saved) return;
+        w.__smokeTerminalDraw = { at: performance.now(), mark: saved.getAttribute("data-smoke-terminal") };
+        observer.disconnect();
       });
       w.__smokeTerminalObserver = observer;
       observer.observe(document, { subtree: true, childList: true });
-    }, { run: terminalMark, button }));
+    }, { run: terminalMark, button })));
     /** @typedef {{ at: number, mark: string | null }} TerminalDraw */
     /** Read the first draw against the page's own press time, regardless of driver acknowledgement. @param {number | null} pressed */
     const timelyTerminal = async (pressed) => {
@@ -2535,27 +2606,31 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     errors.splice(errorsAtShadowed);
     await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7)));
     try {
-      await noteTerminalDraw();
-      const firstDraw = await readWithin("the same-task Saved. draw control", page.evaluate(async () => {
-        const previous = document.getElementById("alert-status");
-        const first = document.createElement("p");
-        first.id = "alert-status";
-        first.textContent = "Saved.";
-        const marked = /** @type {Element} */ (first.cloneNode(true));
-        marked.setAttribute("data-smoke-terminal", "later");
-        if (previous) previous.replaceWith(first);
-        else document.body.append(first);
-        first.replaceWith(marked);
-        try {
-          // Both replacements are in one batch. Read the note only after its delivery.
-          await Promise.resolve();
-          return /** @type {any} */ (window).__smokeTerminalDraw?.mark;
-        } finally {
-          if (previous) marked.replaceWith(previous);
-          else marked.remove();
-        }
-      }));
-      check("the terminal-patch note keeps the first Saved. in the same task", firstDraw === null, `first mark: ${JSON.stringify(firstDraw)}`);
+      for (const nested of [false, true]) {
+        await noteTerminalDraw();
+        const firstDraw = await readWithin("the same-task Saved. draw control", page.evaluate(async (nested) => {
+          const previous = document.getElementById("alert-status");
+          const first = document.createElement("p");
+          first.id = "alert-status";
+          first.textContent = "Saved.";
+          const marked = /** @type {Element} */ (first.cloneNode(true));
+          marked.setAttribute("data-smoke-terminal", "later");
+          const inserted = nested ? document.createElement("div") : first;
+          if (nested) inserted.append(first);
+          if (previous) previous.replaceWith(inserted);
+          else document.body.append(inserted);
+          inserted.replaceWith(marked);
+          try {
+            // Both replacements are in one batch. Read the note only after its delivery.
+            await Promise.resolve();
+            return /** @type {any} */ (window).__smokeTerminalDraw?.mark;
+          } finally {
+            if (previous) marked.replaceWith(previous);
+            else marked.remove();
+          }
+        }, nested));
+        check(`the terminal-patch note keeps the first Saved. in the same task${nested ? " when inserted inside a wrapper" : ""}`, firstDraw === null, `first mark: ${JSON.stringify(firstDraw)}`);
+      }
       await within(5000, "the terminal-patch route was not set within 5 s", page.route(alertsPath, markTerminal));
       await noteTerminalDraw(save);
       await submit();
@@ -2975,59 +3050,29 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         /** @param {string | undefined} fault */
         const noteHeldDraw = (fault) => readWithin(
           "the News page's note of the held answer",
-          page.evaluate(async ({ mark, fault }) => {
+          page.evaluate(drawScript(async (firstAdded, { mark, fault }) => {
             const w = /** @type {any} */ (window);
             w.__smokeHeldSeen?.disconnect();
             const selector = `[data-smoke-held="${mark}"]`;
             w.__smokeHeldDrawn = !!document.querySelector(selector);
             const seen = new MutationObserver((records) => {
-              const marked = new Set();
-              for (const { addedNodes, removedNodes } of records) {
-                for (const node of [...addedNodes, ...removedNodes]) {
-                  if (!(node instanceof Element)) continue;
-                  if (node.matches(selector)) marked.add(node);
-                  for (const child of node.querySelectorAll(selector)) marked.add(child);
-                }
-              }
-              if (!marked.size) return;
-              // The nodes are live, but the records say where each parent edge changed. Undo the
-              // batch to find a connection that existed before a child or its subtree was removed.
-              // Mutations reported on a detached subtree do not by themselves show a News draw.
-              const parents = new Map();
-              const inNews = (/** @type {Node | null} */ node) => {
-                while (node && node !== document) node = parents.has(node) ? parents.get(node) : node.parentNode;
-                return node === document;
-              };
-              const lines = [...marked];
-              for (let i = records.length; ; i--) {
-                if (lines.some(inNews)) {
-                  w.__smokeHeldDrawn = true;
-                  return;
-                }
-                if (i === 0) return;
-                const { target, addedNodes, removedNodes } = records[i - 1];
-                for (const node of addedNodes) parents.set(node, null);
-                for (const node of removedNodes) parents.set(node, target);
-              }
+              if (firstAdded(records, selector)) w.__smokeHeldDrawn = true;
             });
             w.__smokeHeldSeen = seen;
             seen.observe(document, { subtree: true, childList: true });
-            if (fault === "transient-draw" || fault === "detach-child" || fault === "off-document") {
+            if (fault === "transient-draw") {
               const subtree = document.createElement("div");
               const line = document.createElement("p");
               line.setAttribute("data-smoke-held", mark);
-              if (fault !== "off-document") subtree.append(line);
+              subtree.append(line);
               document.body.append(subtree);
-              if (fault === "detach-child") line.remove();
               subtree.remove();
-              if (fault === "off-document") subtree.append(line);
               await Promise.resolve();
             }
             return w.__smokeHeldDrawn === true;
-          }, { mark: heldMark, fault }),
+          }, { mark: heldMark, fault })),
         );
-        check("the News note sees a marked child detached in the same task", await noteHeldDraw("detach-child"));
-        check("the News note ignores a marked child added after detachment", !(await noteHeldDraw("off-document")));
+        check("the News note sees a marked subtree inserted and removed in the same task", await noteHeldDraw("transient-draw"));
         await noteHeldDraw(departureFault === "transient-draw" ? departureFault : undefined);
         releasedAt = performance.now();
         letGo();

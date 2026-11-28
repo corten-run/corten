@@ -750,7 +750,12 @@ list after the removal the list before it without that alert, in order, and the 
 failed marks, read once each wait has come or run out. The terminal-patch quiet check marks only a
 successful `corten-patch` answer with `Saved.` and no read-again tag. An observer armed before the
 press notes the first `Saved.` draw, which must carry the mark of a part read at the address named
-by that press's POST answer. The page records the press and the draw on its own monotonic clock:
+by that press's POST answer. The terminal, part, full-load and News notes scan added nodes and
+their subtrees in mutation-record order for already formed notes inserted into a connected
+document by the runtime; MutationObserver delivers live node references after the task and cannot
+recover text, attributes or connectedness at insertion, so page-script detachment of main,
+insertion into detached subtrees, and same-task rewrites of a note's text or marker after insertion
+are outside the guarantee. The page records the press and the draw on its own monotonic clock:
 the draw must follow the press within six seconds even if the driver acknowledges it later. The
 check waits 2.2 s once it has that note and counts every read logged after the marked request,
 including any sent before the check read the note. The check that navigating away stops a
@@ -783,8 +788,8 @@ driver's News title wait returns, and before the answer is let go, so a read tha
 document before unloading, or one ended by the route's own release or abort, is not taken for the
 departure's. In either case, an observer checks the nodes added in each mutation record, including
 their descendants, for the held answer's marked status line in News. Inserting and removing the
-line in one task still counts. No part read may follow the held one in the log as it stands 2.2 s
-later, nor the held answer ever enter the News page. In Chromium, run the smoke with
+line or its intact subtree in one task still counts. No part read may follow the held one in the
+log as it stands 2.2 s later, nor the held answer ever enter the News page. In Chromium, run the smoke with
 `SMOKE_PATCH_DEPARTURE_FAULT=wrong-first-read` or `SMOKE_PATCH_DEPARTURE_FAULT=transient-draw`
 in the browser runner to make this check fail on purpose: the first sends a different part read
 before the POST's receipt read, and the second inserts and immediately removes a marked subtree.
