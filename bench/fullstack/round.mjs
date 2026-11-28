@@ -728,9 +728,9 @@ export function countHalt({ stopped, code }) {
  * whose output was released (superviseCall's `live`), stops it there: the reason is recorded as the step's skip, and no later
  * call, clean slate, step or summary runs, nor is the step's end or the round's finish recorded; this throws, and run-all.mjs records the round failed, which it does not
  * start again (resumeAt). The effects are run-all.mjs's, passed in, so round.test.mjs runs this
- * loop itself. An ordinary count error is recorded before the end of the step; later steps and
- * the summary still run, but the round fails instead of recording a finish. A successful count
- * clears any earlier failure for this round.
+ * loop itself. Count evidence is marked incomplete before the call, including if it halts. An
+ * ordinary count error still lets later steps and the summary run, but the round fails instead
+ * of recording a finish. Only a successful count call clears the marker.
  * @param {string[]} list
  * @param {ReturnType<typeof calls>} all
  * @param {{
@@ -759,6 +759,10 @@ export async function runSteps(list, all, { call, progress, skip, countFailed = 
     if (edgeFailed) skip(step, `browser.mjs: ${edgeFailed}`);
     if (step === "build") await build(clock());
     else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
+      if (step === "count") {
+        countFailed = true;
+        recordCount(true);
+      }
       const result = await call(limit, args);
       // A count's own halt is named first (it says why a perf may still count); any call left
       // running or with its output released stops the round all the same.
@@ -768,9 +772,9 @@ export async function runSteps(list, all, { call, progress, skip, countFailed = 
         throw new Error(`${halt}; the round stopped in its count step`);
       }
       leftRunning(step, result, skip);
-      if (step === "count") {
-        countFailed = result.code !== 0;
-        recordCount(countFailed);
+      if (step === "count" && result.code === 0) {
+        recordCount(false);
+        countFailed = false;
       }
       if (result.stopped) {
         skip(step, result.stopped);

@@ -122,6 +122,22 @@ test("recorded load-tool identity cannot cross a missing or changed tool baselin
   assert.doesNotThrow(() => report(aliases, { round: "r1" }), "another alias is not a different executable");
 });
 
+test("count review: a countFailed round without metrics needs no load-tool receipt", () => {
+  const [base, latest] = roundsOf([100_000, 105_000]);
+  const tool = k6Provenance({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [k6Image],
+    Os: "linux", Architecture: "amd64" }, "k6 v2.4.0 (synthetic test executable)");
+  const baseline = { ...base, summary: { ...base.summary, tools: { k6: tool } } };
+  const failed = { ...latest, summary: { countFailed: true, instructions: {} } };
+  const out = report([baseline, failed], { round: "r1" });
+  assert.equal(out.latest.round, "r2");
+  const page = out.metrics.find((m) => m.name === "instructions, item page");
+  assert.equal(page.latest, null);
+  assert.equal(page.verdict, "unknown");
+  assert.deepEqual(page.series, [{ round: "r1", value: 100_000 }, { round: "r2", value: null }]);
+  failed.summary.instructions = { "corten/page": { user: 105_000 } };
+  assert.throws(() => report([baseline, failed], { round: "r1" }), /incompatible k6 provenance in r2 for "instructions, item page"/);
+});
+
 test("a baseline round that is not among the rounds, or lacks the number, is an error, not a fallback", () => {
   assert.throws(() => report(roundsOf([100_000, 101_000]), { round: "r9" }), /the baseline r9 is not among the rounds/);
   const rounds = roundsOf([100_000, 101_000]);

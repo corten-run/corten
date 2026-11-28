@@ -29,7 +29,7 @@
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +72,30 @@ const progress = (/** @type {string} */ what) => {
 const results = join(here, "results", round);
 const skippedFile = join(results, "skipped.txt");
 const countFailureFile = join(results, COUNT_FAILED_FILE);
+const instructionsFile = join(results, "instructions.json");
+const countStat = () => statSync(instructionsFile, { bigint: true, throwIfNoEntry: false });
+
+/** Verify that this call wrote a usable artifact. Identical measurements can rewrite the same bytes.
+ * @param {ReturnType<typeof countStat>} before */
+function freshCount(before) {
+  try {
+    const after = countStat();
+    if (!after?.isFile() || (before && after.ino === before.ino && after.mtimeNs === before.mtimeNs && after.ctimeNs === before.ctimeNs)) return false;
+    const rows = JSON.parse(readFileSync(instructionsFile, "utf8"));
+    if (!rows || typeof rows !== "object" || Array.isArray(rows)) return false;
+    const targets = Object.values(rows);
+    const count = (/** @type {unknown} */ n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+    return targets.length > 0 && targets.every((runs) => Array.isArray(runs)
+      ? runs.length > 0 && runs.every((row) => row && count(row.failed)
+        && (row.userPerRequest === null || count(row.userPerRequest))
+        && (row.kernelPerRequest === null || count(row.kernelPerRequest))
+        && (row.kernelPass == null || count(row.kernelPass.failed)))
+      : typeof runs?.failed === "string" && runs.failed.trim().length > 0);
+  } catch {
+    return false;
+  }
+}
+
 const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
   const line = `${now()} step ${step} skipped: ${why}`;
   console.log(line);
@@ -85,6 +109,8 @@ const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
 // started holds open after it exits is released (round.mjs, superviseCall).
 const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
   console.log(now(), "node", args.join(" "));
+  const counting = args[0] === "count.mjs";
+  const before = counting ? countStat() : undefined;
   // Unattended, its output passes through here so a quiet call can be told from a busy one.
   const child = spawn("node", args, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
   const result = await superviseCall(child, {
@@ -94,6 +120,10 @@ const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) =
     signalGroup: (pid, signal) => process.kill(-pid, signal),
     write: (chunk) => process.stdout.write(chunk),
   });
+  if (counting && result.code === 0 && !result.stopped && !result.live && !freshCount(before)) {
+    console.log(now(), "count.mjs exited 0 without fresh, valid instruction rows; continuing without instruction counts");
+    return { ...result, code: 1 };
+  }
   if (!result.stopped && result.code !== 0) console.log(`step failed with ${result.code}`);
   return result;
 };
@@ -247,7 +277,6 @@ try {
       if (failed) {
         mkdirSync(results, { recursive: true });
         writeFileSync(countFailureFile, "count step failed\n", { flush: true });
-        console.log(now(), "count step failed; continuing without instruction counts");
       } else rmSync(countFailureFile, { force: true });
     },
     reset: () => { if (unattended) reset(); },
