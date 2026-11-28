@@ -32,8 +32,8 @@ test("Evidence scopes the full diff on pull requests and main without fail-open 
   assert.equal(scope.outputs.run, "${{ steps.scope.outputs.run }}");
   assert.equal(scope.outputs.kernel, "${{ steps.scope.outputs.kernel }}");
   const selector = scope.steps.find((step) => step.id === "scope");
-  assert.equal(selector.run, "node scripts/benchmark-scope.mjs evidence");
-  assert.equal(selector.env.PUSH_BEFORE, "${{ github.event.before }}");
+  assert.equal(selector.run, "node scripts/benchmark-scope.mjs evidence-cumulative-v1");
+  assert.equal(selector.env.GITHUB_TOKEN, "${{ github.event_name == 'push' && github.token || '' }}");
   assert.equal(scope.steps.find((step) => step.uses?.startsWith("actions/checkout@")).with["fetch-depth"], 0);
   const job = workflow.jobs.evidence;
   assert.deepEqual(job.strategy.matrix.suite, ["core", "contracts", "browser"]);
