@@ -265,6 +265,25 @@ test("explicit diagnostics run only the observer-on idle plan on both builds and
   assert.deepEqual(called(), before);
 });
 
+for (const failure of ["replaced executable", "missing checksum"]) {
+  test(`diagnostics do not launch either probe with a ${failure} on head`, { skip }, (t) => {
+    const { builds, head, job, called } = fixture(t);
+    assert.equal(job({}, "build", builds).status, 0);
+    // Base is valid. Resolve and check head before letting even the base probe run.
+    if (failure === "replaced executable") {
+      writeFileSync(join(builds, "bin", head), "#!/bin/sh\n# replacement probe\n");
+    } else {
+      rmSync(join(builds, "head", "sha256"));
+    }
+    const directory = join(builds, "refused diagnostics");
+    const result = job({ STOP_AT: later() }, "diagnose", builds, "3", directory);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, failure === "replaced executable" ? /probe checksum does not match the build for head/ : /no build checksum for head/);
+    assert.deepEqual(called(), []);
+    assert.equal(allocatorReport(directory).status, 1);
+  });
+}
+
 test("diagnostics do not run either probe when one side was skipped by the build", { skip }, (t) => {
   const { builds, base, head, job, called } = fixture(t);
   assert.equal(job({ STAND_IN_FAILS: head }, "build", builds).status, 0);

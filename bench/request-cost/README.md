@@ -174,7 +174,10 @@ node bench/request-cost/compare.mjs <new-diagnostic-directory> --allocator
 ```
 
 The diagnostic directory must not exist: use a fresh path for every collection, including
-retries. Both probes must be executable. Do not rebuild them while a collection runs.
+retries. Before running either probe, the collector checks that both are executable and
+match the SHA-256 records left by their successful builds. Use a trusted local host and
+build directory. Do not rebuild either probe or edit the build or collection files while
+collection runs.
 This runs the same three idle cases three times per build, without capturing answers
 or repeating the instruction or allocation counts. The completion record holds the commits
 and the SHA-256 of each receipt in its base or head run slot. The report checks the exact bytes

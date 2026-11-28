@@ -128,6 +128,15 @@ read|diagnose)
         echo "job.sh diagnose: no executable probe for $side" >&2
         exit 1
       fi
+      checksum=$builds/$side/sha256
+      if [ ! -f "$checksum" ]; then
+        echo "job.sh diagnose: no build checksum for $side" >&2
+        exit 1
+      fi
+      if ! sha256sum < "$binary" | cut -c 1-64 | cmp -s -- - "$checksum"; then
+        echo "job.sh diagnose: probe checksum does not match the build for $side" >&2
+        exit 1
+      fi
       diagnostic_probes[$side]=$binary
     done
     mkdir -- "$output/base" "$output/head"
