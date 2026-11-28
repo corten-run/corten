@@ -1480,10 +1480,10 @@ digest, with no intent or retirement) under the same custody check as the intent
 Before publishing that state, it writes an exclusive proof stage
 (`state.json.delete-unsent-<intent-sha256>.tmp`) with the hash of the exact saved
 intent and the state to restore. It then stages and publishes that restored state
-separately and removes the unchanged proof. The collect refuses with `DELETE was
-not dispatched; the next collect retires on a fresh proof`. The not-dispatched
-answer does not say whether expiry or cancellation refused, so the message names
-neither. The next collect keeps that
+separately and normally removes the unchanged proof after publication. The collect
+refuses with `DELETE was not dispatched; the next collect retires on a fresh proof`.
+The not-dispatched answer does not say whether expiry or cancellation refused, so
+the message names neither. The next collect keeps that
 receipt as an interrupted one (below) and retires on a fresh drain proof of the
 same session.
 The restore only records how the DELETE ended, so it runs even after
@@ -1551,15 +1551,25 @@ What the next collect does with it depends on the retirement kind:
 2. If a drain withdrawal could not publish the restored state but left a complete
    proof stage, the next collect under its operation lock verifies the existing
    v3 receipt and compares the stage byte for byte with the proof reconstructed
-   from the exact saved intent. It finishes the withdrawal and retires only on a
-   fresh drain proof. The interrupted receipt is kept for archival only. A partial
-   or mismatched stage, an older unbound stage (`state.json.delete-unsent-<random>.tmp`),
-   and a missing or uncertain dispatch acknowledgement do not authorize a withdrawal.
-   An ordinary collect's torn withdrawal also remains absence-only. In these cases,
-   while the droplet still exists, collect refuses with `deletion not confirmed;
-   outcome uncertain` and sends no DELETE. The operator cleanup below removes that
-   exact host and leaves the intent as saved; the next collect then confirms exact
-   absence and records `destroyedAt`, sending no DELETE of its own.
+   from the exact saved intent. Only a positive exact-ID read allows the collect
+   to finish the withdrawal and retire on a fresh drain proof. The interrupted
+   receipt is then kept for archival only. If operator cleanup already removed
+   the host, even a complete stage leaves the intent in place: collect confirms
+   exact absence and records `destroyedAt` without sending a DELETE. A failed or
+   inconclusive read also leaves the intent in place, without recording absence.
+   A partial or mismatched stage, an older unbound stage
+   (`state.json.delete-unsent-<random>.tmp`), and a missing or uncertain dispatch
+   acknowledgement do not authorize a withdrawal. An ordinary collect's torn
+   withdrawal also remains absence-only. Without a usable withdrawal proof, if
+   the droplet remains present, collect refuses with `deletion not confirmed;
+   outcome uncertain` and sends no DELETE. The operator cleanup below removes
+   that exact host and leaves the intent as saved for the next collect to confirm
+   absence.
+   A torn restore can leave `state.json.delete-unsent-restore-<random>.tmp`, and a
+   stop after the restore's rename but before unlink can leave the proof stage
+   beside a state with no deletion intent. These leftovers do not affect ordinary
+   drain recovery: it does not read the restore stage or use a proof that does not
+   match the current intent. They can remain on disk for the operator to archive.
 3. The handoff and exit-one retirements refuse. Their state save rechecks handoff
    custody and keeps the operation lock when it fails, and their publication check
    refuses every `state.json.*.tmp` name as an unsettled publication.

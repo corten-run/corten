@@ -996,7 +996,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     state = restore;
     if (matchesWithdrawal(proof)) { unlinkSync(proof.path); syncDirectory(local); }
   };
-  const resumeDrainWithdrawal = () => {
+  const resumeDrainWithdrawal = async () => {
     if (state.status !== "retired" || state.retirement.kind !== "setup-failed" || state.destroyedAt) return;
     const intent = regular(statePath, 1024 * 1024);
     if (!intent.equals(Buffer.from(stateBytes(state)))) return;
@@ -1009,6 +1009,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const path = join(local, retirementFile("setup-failed")), limit = 8 * 1024 * 1024;
     const receipt = regular(path, limit);
     if (digest(receipt) !== state.retirement.evidenceSha256 || JSON.parse(receipt).schema !== "benchmark-failed-setup-retirement/v3") return;
+    // Keep the intent if the operator already removed this host. The retired path
+    // can then confirm absence; an inconclusive read throws without changing state.
+    if (await exactHost() === undefined) return;
     verifyRetirementRecord(receipt, "setup-failed");
     const fence = () => {
       check();
@@ -1937,7 +1940,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           && state.control.ledger.length === 0), "unused bootstrap requires an approved pinned observation");
         assert.equal(!!state.preBootstrapTerminal, setupCandidate, "pre-bootstrap reservation changed; preserve host");
         if (setupCandidate) assert.ok(beforeRegistration(state), "ambiguous pre-bootstrap custody; preserve host");
-        if (setupCandidate && !options.r21MeasuredCheckout) resumeDrainWithdrawal();
+        // ownedR21 above excludes both retired and pre-bootstrap reservations.
+        if (setupCandidate) await resumeDrainWithdrawal();
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();

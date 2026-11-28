@@ -495,6 +495,8 @@ const receiptName = /^failed-setup-host\.json(?:\.stage)?$/, historyName = /^fai
 const withdrawalModes = {
   "withdrawal-save-torn": "a partial unsent withdrawal stage leaves the intent and permits only exact absence",
   "withdrawal-save-complete": "a complete unsent withdrawal stage resumes on a fresh drain proof and sends only one DELETE across retries",
+  "withdrawal-save-complete-absent": "a complete unsent withdrawal stage preserves the intent when the exact host is already absent",
+  "withdrawal-save-complete-unavailable": "a complete unsent withdrawal stage preserves the intent when the exact host read fails",
   "withdrawal-other-attempt": "a withdrawal stage for a different create attempt leaves the DELETE intent",
   "withdrawal-other-session": "a withdrawal stage for a different control session leaves the DELETE intent",
   "withdrawal-other-host": "a withdrawal stage for a different droplet leaves the DELETE intent",
@@ -1245,8 +1247,40 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       const stages = readdirSync(h.local).filter((name) => /^state\.json\.delete-unsent-[a-f0-9]+\.tmp$/.test(name));
       assert.equal(stages.length, 1);
       let stage = join(h.local, stages[0]);
-      if (partial) assert.equal(readFileSync(stage).length, 80);
-      else if (mode === "withdrawal-save-complete") {
+      if (partial) {
+        assert.equal(readFileSync(stage).length, 80);
+      } else if (mode === "withdrawal-save-complete-absent" || mode === "withdrawal-save-complete-unavailable") {
+        const intentBytes = readFileSync(statePath);
+        const stageBytes = readFileSync(stage);
+        assert.equal(JSON.parse(stageBytes).intentSha256, digest(intentBytes));
+        const calls = h.calls.length;
+        if (mode === "withdrawal-save-complete-unavailable") {
+          const unavailable = (binary, args, ...rest) => {
+            if (binary === "doctl" && args[2] === "get") {
+              assert.equal(args[3], intent.id);
+              return { status: 1, providerDiagnostic: { code: "get-http", httpStatus: 503 } };
+            }
+            return run(binary, args, ...rest);
+          };
+          await assert.rejects(h.task({ run: unavailable }).collect(), /exact host observation failed; preserve state/);
+          assert.ok(readFileSync(statePath).equals(intentBytes));
+          assert.ok(readFileSync(stage).equals(stageBytes));
+        }
+        h.hosts([]);
+        assert.equal(await h.task({ run }).collect(), 1);
+        const saved = h.saved();
+        assert.ok(saved.destroyedAt);
+        assert.deepEqual(saved, { ...intent, destroyedAt: saved.destroyedAt });
+        assert.ok(readFileSync(stage).equals(stageBytes));
+        assert.ok(readFileSync(receipt).equals(old));
+        assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, saved));
+        assert.equal(await h.task({ run }).collect(), 1);
+        assert.deepEqual(h.saved(), saved);
+        assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+        assert.ok(h.calls.slice(calls).every(([binary, resource, kind, verb, id]) =>
+          binary === "doctl" && (resource === "account" || resource === "compute" && kind === "droplet" && verb === "get" && id === intent.id)));
+        return;
+      } else if (mode === "withdrawal-save-complete") {
         assert.equal(await h.task({ run }).collect(), 1);
         const saved = h.saved(), fresh = readFileSync(receipt);
         assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(saved.destroyedAt);
