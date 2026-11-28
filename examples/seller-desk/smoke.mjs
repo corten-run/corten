@@ -561,6 +561,18 @@ try {
     return Promise.race([work, late]).finally(() => clearTimeout(timer));
   };
 
+  // Playwright's :visible tests layout, not opacity or whether a control is covered.
+  /** @param {Element[]} elements @param {boolean} [hitTest] */
+  const drawnIds = (elements, hitTest = false) => elements.filter((element) => {
+    if (hitTest) element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    const { left, top, width, height } = element.getBoundingClientRect();
+    if (width <= 0 || height <= 0 || getComputedStyle(element).visibility !== "visible") return false;
+    for (let node = /** @type {Element | null} */ (element); node; node = node.parentElement) {
+      if (Number(getComputedStyle(node).opacity) <= 0) return false;
+    }
+    return !hitTest || element.contains(document.elementFromPoint(left + width / 2, top + height / 2));
+  }).map((element) => element.id);
+
   /**
    * Loads the grid with JavaScript on and its module never loading (every request for it, the
    * runtime's retries too, aborted), filters through the visible Filter button, and reads the
@@ -643,11 +655,16 @@ try {
       expected: rows.filter((r) => (/** @type {HTMLTableRowElement} */ (r)).cells[2]?.textContent === "Tidebreak").map((r) => r.id),
     })));
     const all = inventory.length;
+    if (expected.length === 0 || expected.length >= all) {
+      return { ok: false, detail: `expected a strict subset of the inventory; ${expected.length} of ${all} rows match` };
+    }
     const button = "form[role=search] button";
     await filterStep("type the filter", blocked.fill("input[type=search]", "tidebreak"));
     // Typing filtered nothing: no grid handler ran.
     const before = await filterStep("count rows after typing", blocked.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length));
-    if (!(await filterStep("check that Filter is drawn", blocked.isVisible(button)))) return { ok: false, detail: `aborted ${aborted}; the Filter button is not drawn` };
+    if (!(await filterStep("check that Filter is drawn", blocked.locator(button).evaluateAll(drawnIds, true))).length) {
+      return { ok: false, detail: `aborted ${aborted}; the Filter button is not drawn` };
+    }
     // The runtime still sends a GET form itself (a client navigation), so the answer may be a
     // fetch rather than a document load: either is the server's filter.
     const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "tidebreak", { timeout: 0 });
@@ -697,7 +714,7 @@ try {
     const shown = await filterStep("read the page's unhidden rows", unhiddenRows.evaluateAll((rows) =>
       rows.map((r) => ({ id: r.id, set: /** @type {HTMLTableRowElement} */ (r).cells[2]?.textContent ?? "" }))));
     const shownIds = shown.map((r) => r.id);
-    const drawn = await filterStep("read the browser's drawn row ids", blocked.locator(`${rows}:visible`).evaluateAll((rows) => rows.map((r) => r.id)));
+    const drawn = await filterStep("read the browser's drawn row ids", blocked.locator(rows).evaluateAll(drawnIds));
     const n = sent.ids.length;
     const reached = aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 &&
       new URL(blocked.url()).searchParams.get("q") === "tidebreak";
@@ -710,9 +727,9 @@ try {
     return {
       ok: reached && answerOk && matches,
       answerOk,
-      masked: reached && sameIds(sent.ids, inventory) && expected.length > 0 && sameIds(shownIds, expected) &&
+      masked: reached && sameIds(sent.ids, inventory) && sameIds(shownIds, expected) &&
         sameIds(drawn, expected) && shown.every((r) => r.set === "Tidebreak"),
-      delayed: all > 0 && heldRows === all,
+      delayed: heldRows === all,
       detail: `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ` +
         `answer: ${n} of ${sent.inventory.length} rows unhidden, ${sent.inSet} in the set, unhidden ids ${exact ? "as expected" : "differ"}, ` +
         `all ids ${keptInventory ? "as expected" : "differ"}, says "${sent.says}"; ` +
