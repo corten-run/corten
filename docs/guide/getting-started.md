@@ -176,7 +176,7 @@ The form posts to its page's own route, so that page is at an address that answe
 can be bookmarked and shared; a write with a path of its own redirects once it is done
 ([the rule](requests-and-forms.md#where-a-form-posts)).
 
-```rust,no_run
+```rust,no_run,edition2024
 use corten::prelude::*;
 
 # corten::assets::embed! { pub struct Static = "src/assets/fixture"; }
