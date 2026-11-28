@@ -46,7 +46,8 @@ These are what the framework is built around. Code that breaks them fights the f
    have go to the server. Do not default to a server patch for something the browser can do.
 5. **Pages and actions work without JavaScript.** Links are links, and forms post and get the
    whole page back. A handler that makes a server action instant keeps the form that does it
-   without. Direct patches require `Some(action)` from `req.action()`, then
+   without, its submit button drawn with scripts on too (not hidden under
+   `@media (scripting: enabled)`, which stays true when the module fails to load). Direct patches require `Some(action)` from `req.action()`, then
    `action.patch(view)` or `action.patch_with_status(status, view)`; otherwise return a page
    or redirect. Prefer `req.patch_or(view, page)` when no custom branch is needed. Never
    build a slow part before selecting its mode: `patch_or_with` passes `corten::Action` to its part

@@ -71,7 +71,7 @@ export function timedFixture(f, failure = { app: "fastapi", source: "api", pass:
       exit: { code: 0, signal: null, expired: false, interrupted: false } });
     tick += 1000;
   }
-  for (const { app, source, pass } of timingPlan(s.options, s.group.sources, s.group.targets)) {
+  for (const { app, source, pass } of timingPlan(s.options, s.group.sources, s.group.targets, s.group.contractSha256)) {
     const entry = s.apps[app], run = entry.runs[`${source}-page`].find((r) => r.pass === pass);
     const raw = `${source}/${app}/p${run.pass}-page`, appName = `${s.runId}-${app}`;
     const runStartedAt = tick, cold = { ...run.cold, containerStartedAt: stamp(tick), first200At: stamp(tick + 200) };

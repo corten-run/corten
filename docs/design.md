@@ -8553,11 +8553,13 @@ rules something out.
     that decides, not from a second list of its rules, which could drift from what the build does.
     That code is compiled twice, the route's and its answer's checks alike (`Keeping` and
     `Missed::keep`, by a `TELL` parameter): `corten dev`'s copy records each refusal, a drawn
-    submit key at the same watch and the same return as a release build (so a key drawn as the
-    body is read is said by neither), counts the head of an answer whose locale was chosen late as
-    a release build names it, from a copy, so the answer the app's middleware sees is the one it
-    saw with no store, and leaves an answer it would keep for its body to be watched; a release
-    build's copy does none of this. In `router_cost` (callgrind, three rounds each, against
+    submit key from the same marks and at the same return as a release build (the answer's mark,
+    read before `Missed::keep`, and the request's signal, which `Missed::keep` reads first, each
+    said as `Verdict::DrewKey`; so a key drawn as the body is read is said by neither), counts
+    the head of an answer whose locale was chosen late as a release build names it, from a copy,
+    so the answer the app's middleware sees is the one it saw with no store, and leaves an answer
+    it would keep for its body to be watched; a release build's copy does none of this. In
+    `router_cost` (callgrind, three rounds each, against
     `c46092aeb`, rustc 1.100.0) a kept page given again costs what it did (14,559.9 to 14,560.1
     instructions a request), a `Public` page that is not kept 3 more (21,238.0 to 21,240.7) and
     one that is made and stored 32 more (28,589.6 to 28,621.6). With rustc 1.99.1 the three are 9,
@@ -8566,9 +8568,11 @@ rules something out.
     copy does no more work; with a second copy in the program the compiler no longer inlines
     putting the kept entry on the answer (about 29 of those 32 under rustc 1.100.0) and lays out
     the rest slightly otherwise, and the ways tried to keep one copy as it was cost more than
-    these. `corten dev`'s copy watches the handler through a borrow, a type of its own, since
-    sharing the release copy's watch made the compiler stop inlining it there, 23 more on each
-    page not kept or stored.
+    these. `corten dev`'s copy runs no watch of its own: the handler is watched inside the route's
+    own answer future, the same future in both builds (`8ae94288d`), and both read the marks that
+    watch and a render leave. The copy main had when this change merged it (`027178adf`, which
+    dropped it) watched the handler through a borrow, a type of its own, since sharing the release
+    copy's watch made the compiler stop inlining it there, 23 more on each page not kept or stored.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
@@ -8747,7 +8751,7 @@ rules something out.
     A route of streams or of such files leaves the store out after its first 64 answers, as a route of small
     bodies does. A kept file is sent with the headers its handler gave it, its
     `Content-Disposition` among them, and an unstaged route's file is never kept: its handler is routed
-    bare, with no stage to ask the store, and counts for nothing in whether the app has one. What a page route answers in a page's place is kept as the page would be, as it was
+    with no stage to ask the store, and counts for nothing in whether the app has one. What a page route answers in a page's place is kept as the page would be, as it was
     before this: a file of a known size from a route that says it answers a page or a file
     (`PageOr`), and an answer type of the app's own that says it is a page. So a file is kept
     by its route's rule: from a route of files from 1,024 bytes, and from a page
@@ -8762,16 +8766,259 @@ rules something out.
     route asked both ways holds its body twice. It can read the request's language too
     (`req.t()`, `req.lang()`), and a body is kept for the header as it was sent and names it
     in `Vary`, as a page is. With both, a URL's eight copies are shared by the ways of asking
-    times the languages asked in. An answer may hold markup its handler rendered, and one with a form's new submit key is
-    not kept; it is still sent `public`, a fault this does not mend
-    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)). A page's render marks the key it drew; markup rendered any other way (into JSON,
-    text or a file) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
+    times the languages asked in. An answer may hold markup its handler rendered, and one with a
+    form's new submit key is the request's alone: not kept, and sent `private, no-cache` without
+    a CDN's caching header, as a page whose render drew the key is, and without a tag it was
+    given (the app's, a middleware's or a relayed upstream's): that tag names a body whose key a
+    browser may have sent already, and a `304` to it would keep that body. The store reads the
+    request's signal before it keeps an answer, so one whose key `req.rendered` drew on a thread
+    the handler's watch did not poll is not kept either. That read costs a request that misses
+    the store 5.0 more instructions in `router_cost`'s `unkept` (`c0da2d63c` against
+    `186572163`, all of it in `Keeping<false>::call::{closure#2}`, where `Missed::keep` is
+    inlined) and 3.6 to 6.2 more in its `inserted`; a store hit (`router_cost`'s `kept`,
+    `what_settling_a_page_costs`'s `public`) and an answer that returns before `Missed::keep`
+    (its `keyed`) cost none more, and its `json` 7.0 fewer, all in glibc's `memcmp`, whose
+    count turns on where the bytes it compares lie. Its cycles were not run. A lifetime a middleware
+    or the app gave it goes too, so the browser asks again before it shows a key it may have sent:
+    a plain `private, max-age=60` goes out `private, no-cache`, and one with a `no-store`
+    (`private, no-store, max-age=60`) `private, no-store`, which `b910dedf7` sent as written
+    (`cache::tests::an_answer_that_drew_a_submit_key_is_not_shared` fails there); the scan of its
+    `Cache-Control` for a `no-store` that decides which (`cache::keyed_private`) is made only on
+    an answer that drew a key and whose header is a plain `private` already. A page's render marks the key it drew; markup rendered any other way (into JSON,
+    text or a file, or to a string a page holds as `raw` markup)
+    carries no mark, so the handler of every route whose answer may be `Public` is watched (its
+    own polls) for one being drawn, and the watch marks the answer (`cache::Unrepeatable`) as a
+    page's render does. It cannot tell a key placed in the answer from one drawn and dropped, so
+    either makes the answer private.
+    Which answers may be `Public` is known from the answer's type when the crate compiles, by a
+    hidden function of `IntoResponse` with no arguments, `may_share`, whose body a release build
+    folds where it is read: `Public` says yes, and so do a page and a JSON answer
+    (`HtmlResponse`, `JsonResponse`), whose `DerefMut` lets a handler put any response in their
+    place, a `Public` one it converted among them (`*answer = Public::new(..).into_response()`:
+    `e4a2e3db1`, which said no for them, sent such an `App::api` answer and such a page
+    `public, max-age=60` with the key in them, and
+    `tests::cache::a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key`
+    fails there), and what holds one (`HtmlResult`, `PageOr`, `JsonError`, whose own refusal is a
+    `JsonResponse`, and so `JsonResult<T>`); each of Corten's other answers says no (text,
+    `Json<T>` alone, whose `ToJson` writes its value and no more: the response it is sent in
+    (`ToJson::__into_response`) has a type an app cannot name, so an app's own `ToJson` cannot
+    hand back a `Public` response it converted, which an override did at `b910dedf7` (a
+    `compile_fail` doctest); a status, a file, a relay, a live stream, a feed), and
+    one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
+    what that one does, a tuple what each part's refusal does too, since a part that refuses
+    answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
+    header where it was, so the watch must still see a `Public` answer under it); a type of the app's own always says yes, since Corten cannot see what its
+    `into_response` makes (an enum with a `Public` variant beside a private one), and the type
+    it returns is one an app cannot name, so it cannot say no, nor return what one of Corten's
+    does (`compile_fail` doctests). It is a function that needs `Self: Sized`, not an associated
+    constant: a constant would make `dyn IntoResponse` fail to compile, and with it an app's own
+    trait over `IntoResponse` that answers from a box (`self: Box<Self>`), both of which compiled
+    before the watch (a doctest); such a box is a type of the app's own, so it is watched.
+    A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
+    app's or the upstream's, as it was. The watch wraps such a route in every build and whatever
+    the store does (none kept, `corten dev`, a body route that leaves the store out, a build
+    without `compress`), staged or `unstaged`: an unstaged route has no stage to settle its
+    caching, so one whose handler drew a key is made `private, no-cache` there, with no caching
+    header a CDN reads first and no tag, as one that sets a cookie is, and it carries a mark of
+    that as such a one does, for an app that relays it inline (the lane's pass over one
+    that sets a cookie keeps a plain `private` beside its `no-store`, so the watch's
+    `private, no-store` stays as written); any other unstaged handler is routed
+    as it was, with nothing around it. Refusing `Public` on an unstaged route was not chosen: the
+    guide names it as how an unstaged answer that changes says so, and covering it costs no other
+    unstaged route anything. On any route whose answer cannot be `Public` the watch compiles away.
+    A render that draws a key and reads for itself that it did (a page's, a patch's, the layout
+    reads', and one made with `req.rendered`, wherever that one is placed) also marks the
+    request's signal (a bit beside the notice's, in
+    the byte that held it); a key drawn any other way (a field's `to_html`) is seen only by a
+    watch around its handler, and one a live stream's fragment draws by neither (below). The
+    stages read the signal
+    before they settle the answer, so a middleware of the
+    app's that makes a new response of the one it was given, with its body and headers and none
+    of its extensions, does not take the mark away; a layer around the app (`App::layer`) still
+    runs after the answer is settled. A middleware can also give `next` a request rebuilt
+    without the first one's extensions, or with a signal of its own, and a render then marks a
+    signal the stages do not read (or none), so the stages mark their own signal as the route's
+    answer comes back past the middleware. The route's side of the chain (`middleware::handle`,
+    which no middleware can stand in for) looks at the answer as it comes back
+    (`middleware::Keyed`) and, when it has the mark, whoever put it on, marks the stages' own
+    signal before any middleware sees the answer. A render made with `req.rendered` and placed
+    in an answer no watch is around (text, `Json<T>`) marks only the signal of the `Req` it is
+    called on, so for a request that does not carry the stages' signal `handle` takes the one it
+    carries, or makes one for a request with none, which each of its `Req`s shares
+    (`signal::Detached`, beside the request's extensions, so what reads a `Signal` still finds
+    none), and marks the answer from it as it comes back, in a box of its own (the box a layout read's
+    fill takes holds no signal): every staged request pays a look for its signal in its
+    extensions, compared by pointer, and looks for a layout read's fill only in an app with layout
+    reads, the one place the stages start it, and the route's future is the size it was (costs
+    below). Before this a middleware that passed text or
+    `Json<T>` such a request sent that key with its own lifetime and CDN caching headers
+    (`tests::cache::an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches`
+    fails at `b910dedf7` for `/rendered-text` and `/rendered-json`). The stages hold the route and a reference to
+    their signal in one place (`middleware::Ends`), and each link of the chain carries a
+    reference to it, so the route goes down the chain as one pointer where it was two, and the
+    signal with it. A
+    middleware is given the rest of the chain as a `Next`, which promises no `'static`, so it
+    cannot hand the route's future to a task of its own, but it may call it or poll it on a
+    scoped thread of its own (a `Next` and its future are `Send`); the mark is the signal's, not
+    a thread's, so it reaches the stages from there too. So a middleware that rebuilds both the
+    request and the response does not take the mark away either, on whatever thread it polled
+    `next`. That holds for an answer that comes back through the `next` of the request the
+    stages gave: a middleware that asks another router for an answer on its own and makes a new
+    response of that one without its extensions takes the mark away, and the guide says to keep
+    them. An earlier head (`cf2ea1a01`) set a flag of the thread's there instead, which each
+    poll of the stages' chain read and reset: a middleware that polled `next` on a scoped thread
+    and rebuilt both sides sent a keyed `Public` answer as `public, max-age=60`
+    (`tests::cache::an_answer_a_middleware_rebuilt_on_a_thread_of_its_own_keeps_its_submit_key_from_shared_caches`
+    fails there). The watch marks the answer alone: every
+    staged route's answer comes back that way, so an earlier head's mark on the request's signal
+    from the watch as well was a second of the same, which no test needed, and it held the
+    request's signal in every watched route's future. An earlier head (`9c8cd07e7`) gave the
+    stages' signal to the route's side of the chain in the futures `next` makes, a pointer
+    more in each: 87 instructions a request were copies of that larger future and 66 polling the
+    one that held the signal. Here the route's future holds the signal once, in `Keyed`, and the
+    404 for a path under an API that a route outside it matched is made as that future is
+    polled rather than held in it from the start, so the future is a few words where it held a
+    whole response: with the response held and the signal beside it, the stages' poll called
+    `memcpy` four times a request where main calls it once (87 instructions more on the settle
+    test's `Public` page, callgrind), and once again with the 404 made as it is polled. Making the
+    404 as it is polled is cheaper with or without the mark, so main given only that change is
+    the control the counts below compare with as well. The mark costs the usual request a look
+    for it in the answer's extensions, which the usual answer has none of, and a read of the
+    signal's byte before settling. The notice and the key share that byte, each set with an
+    atomic `or` where main stored the notice with a plain atomic store: the key is set on
+    whatever thread polled the answer and the notice on whatever task renders, and nothing orders
+    the two, so a store of one bit could clear the other; a byte of the key's own would make every
+    signal 8 bytes larger without `zones` (its shared state 136 bytes, 144 with one more, read
+    with `size_of` at main). So this change to the request path is measured, not counted
+    ([CONTRIBUTING](../CONTRIBUTING.md#pull-requests), item 2): the notice's store became an `or`
+    (`fetch_or`), the key's `or` is new on a request whose answer drew one, and the key's relaxed
+    read is new on every staged request. Request provenance that
+    survives a rebuilt request was to come from
+    [#1890 Drop CDN caching headers from answers that are one visitor's alone and from unanswered failures](https://github.com/corten-run/corten/pull/1890),
+    which marks its failures on the answer instead and has none, so this is the watch's own.
+    Held beside the handler's work in the future the route already makes, the watch adds a read and
+    a reset of a thread's mark around each poll. A request answered in process from inside a
+    handler (one that polls another route on its own stack) is polled within the outer watch, so
+    a key the inner answer drew marks the outer one private too, even when the handler drops the
+    inner answer: a private answer that could have been shared, never the other way round; the
+    inner request's own answer is marked through its own signal. Measured on 2026-11-26 with
+    `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
+    request at main (`9b8834fcc`), at main with only the 404 made as it is polled (`da6420d62`,
+    the control, not for merge) and with this change (`d10bedc5f`): a `Public` page given from
+    the store 16,044, 15,991 and 16,009 (-0.22% against main, +0.11% against the control); one
+    made for each request (`kept_answers(0)`) 19,015, 18,962 and 18,976 (-0.21%, +0.07%); a
+    `Public` JSON body given 15,580, 15,527 and 15,545 (-0.22%, +0.12%), made for each 54,247,
+    54,194 and 54,163 (-0.15%, -0.06%); a `Public` text body from an unstaged route 7,736, 7,736
+    and 7,764 (+0.36%), which no stage runs, so the 404 changes nothing there and the 28 are the
+    watch around its handler (by function at `613ced773`); text from an unstaged route that is
+    not `Public` 6,439, 6,439 and 6,438; a private page, whose form draws a key, 17,537, 17,484
+    and 17,591 (+0.31%, +0.61%);
+    and a `Public` page with a keyed form 21,391, 21,338 and 21,508 (+0.55%, +0.80%). Each count
+    is the same within 1.2 in two rounds in opposite orders. By function, against the control,
+    the page given from the store counts 24 more in the stages' future, which read the signal's
+    byte and settle with it, 8 in `page::run`, which polls `Keyed`, and 5 in settling, less 18
+    polling and dropping the futures around it; the 53 by which the control is under main are
+    building, moving and dropping the route's side of the chain, which held a whole response (24
+    dropping it, 18 in `page::run`, 15 in `middleware::handle`). The private page
+    adds the look for the mark the stages make (`cache::unrepeatable`, 59), 35 in `page::run`
+    where `Keyed` finds the mark and marks the signal, 27 in the stages' future and 7 reading the
+    mark's type, with settling 7 fewer; the keyed page, whose watch marks the answer too, looks
+    for the mark once more (118 in all), and its settling and watch count the rest. At
+    `613ced773`, with `Keyed`'s poll `#[inline]` rather than `#[inline(always)]`, the page given
+    from the store counted 40 more, the private page 36 and the keyed one 35. Against the same
+    main, `cf2ea1a01`, the thread's flag in place of the signal, counted 16,098 for the page given
+    from the store, 19,065 for one made for each request, 15,633 and 54,252 for the JSON, 7,770
+    for the unstaged text body, 17,676 for the private page and 21,593 for the keyed one, and
+    `66d66c28e`, the signal without the 404 made as it is polled, 16,142, 19,109, 15,678, 54,297,
+    7,764, 17,724 and 21,641 (+0.61% for the page given from the store, the three more calls to
+    `memcpy` above); `9c8cd07e7` counted 16,198 for the page given
+    from the store (+0.96%), 19,166 for one made for each request, 15,734 and 54,354 for the JSON,
+    7,766 for the unstaged text body, 17,886 for the private page (+1.99%) and 21,807 for the
+    keyed one (+1.94%); `7a7ac7aa8`, whose watch marked the request's signal as well, counted 34
+    more than `9c8cd07e7` for the page made for each request, 20 for the JSON made for each and
+    44 for the keyed page, the signal each watched route's future held, and the other cases
+    within about 1. No `may_share` is left in the release build's symbols, so saying whether an
+    answer may be `Public` is not a call. These are instruction counts, not cycles, and the
+    shared byte's `or` and read are among them only as instructions: what they cost under load on
+    a quiet host is not measured here. With
+    `bench/request-cost` (Last checked), instructions a request, median of three, main, the
+    control and this change read `get` 18,335, 18,284 and 18,224 (-0.61% against main), `post`
+    22,785, 22,735 and 22,673, `text` 17,181, 17,131 and 17,073, `page` 43,222, 43,172 and 43,146
+    (-0.18%), `get-browser` 23,875, 23,825 and 23,764, `text-browser` 25,827, 25,777 and 25,721,
+    `page-browser` 221,837, 221,787 and 221,762, at a depth of 16 `get` 16,200, 16,150 and
+    16,089 and `text` 15,056, 15,007 and 14,949, and `unstaged` and `pipeline` within 2, with the
+    same allocations and answers; `cf2ea1a01` read `get` 18,316, `page` 43,240, `66d66c28e`
+    `get` 18,346 and `page` 43,271, and `9c8cd07e7` `get` +77 against main, `text` +90 and
+    `page` +111. The future a staged page's stages run is 2,472 bytes at main and the control,
+    2,480 with this change (the reference to `middleware::Ends` that `Next` carries) and was
+    2,488 at `9c8cd07e7`, the handler's 760 at all of them (`staged_page_future_sizes`); with
+    `Ends` owning the stages' hold on their signal in place of the reference (`273e27b05`) it
+    was 2,480 too, and `bench/request-cost` read 7, 5 and 8 more than `66d66c28e` for `get`,
+    `post` and `page`. Watching a page's and a JSON answer's handler too adds the watch to a
+    page route that had none (an `HtmlResult` handler): `bench/request-cost` (Last checked,
+    2026-11-26), `e4a2e3db1`, whose counts are `d10bedc5f`'s above, against `6fbba4f8d`, reads
+    `page` 43,146 and 43,173 (+27, +0.06%; -0.12% against main's 43,223) and `page-browser`
+    221,762 and 221,788 (+26), the read and reset of the thread's mark around the handler's
+    polls, every other case within 1, at a depth of 16 too, with the same allocations and
+    answers; the futures are the same size, 2,480 and 760 bytes in release and 3,152 and 760 in
+    a debug build. In `what_settling_a_page_costs`, whose `Public` answers were watched already
+    and whose private page is routed by Corten's own `router::get`, which is never watched, every
+    case is within 2.4 of `e4a2e3db1` in both rounds (the page given from the store 16,009 there
+    and 16,010 and 16,011 here, one made for each request 18,975 and 18,976 there and 18,977
+    here) but one: a `Public` JSON body made
+    for each request counts 54,164 and 54,188 (+25), which by function is `Json`'s
+    `into_response` no longer folded into `Public`'s (96 more there, 72 fewer in `Public`'s), an
+    optimizer's choice in that binary rather than work the request does. The review's later
+    changes were counted on 2026-11-27 (Last checked) at `e4a2e3db1`, at `b910dedf7` and with
+    them (`3431fd85b`), in two rounds in opposite orders, each count the same within 1.6, with a
+    plain `JsonResult` route added to `what_settling_a_page_costs` (`json-private`, made with
+    `route::get` and so watched since `6fbba4f8d`): it counts 50,427.3, 50,434.3 and 50,479.3
+    (+52, +0.10% against `e4a2e3db1`), the same made for each request, so its watch is 7 and the
+    rest is the look for the request's signal that `middleware::handle` makes on every staged
+    request, which adds 38 to 45 to each case (a `Public` page given from the store 15,995.0,
+    16,002.0 and 16,040.1; a `Public` JSON body 15,532.2, 15,532.6 and 15,576.6; the private
+    page, whose key is settled where `cache::keyed_private` is, 17,585.7, 17,585.7 and 17,629.7;
+    one behind a middleware that reads the caller 20,385.9, 20,386.9 and 20,430.9). A page in an
+    app with layout reads counts 37,009.0, 37,009.0 and 37,077.5 (+68.5), 58 of them in `handle`,
+    which looks for both there; with the signal in the fill's box (`792100504`) it was +143, the
+    box's future 63 more. With `bench/request-cost`, `b910dedf7` and `3431fd85b` read `get`
+    18,224 and 18,268 (+44, +0.24%), `post` 22,674 and 22,717, `text` 17,074 and 17,118, `page`
+    43,173 and 43,219 (+0.11%), `get-browser` 23,764 and 23,808, `text-browser` 25,723 and
+    25,766, `page-browser` 221,790 and 221,837, at a depth of 16 `get` 16,090 and 16,133 and
+    `text` 14,950 and 14,993, and `unstaged` and `pipeline` within 1, with the same allocations
+    and answers and 8,470 to 8,471 bytes for each idle connection at both; by function
+    (`792100504`, whose `get` read 18,266) the look is 35 in `handle` and 7 reading the signal's
+    type. Looking for a layout read's fill in every app as well, as `b910dedf7` did, counted
+    about 20 more (`899e8dd13`, `get` 18,286). The futures are 2,480 and 760 bytes at all three
+    (`staged_page_future_sizes`, release). A `req.rendered` adds a read of the flag its render
+    set and a branch, and the signal's `or` only when it drew a key. The scan of
+    `Cache-Control` for a `no-store` (`cache::keyed_private`) is made only on an answer that
+    drew a key and whose header is a plain `private`; on one with a `no-store` too it takes the
+    place of the branch that answer took before. These are instructions, not cycles. A first
+    version, a router endpoint around the handler, cost the page made for each request 149 more
+    and the private page 24, from a second copy of the answer and a second form of every route's
+    call. A render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
-    page as markup. A key drawn outside the handler's polls, or on another thread during one
-    (by a task it spawned, a render it handed to a blocking task, a thread of its own), is not
-    seen, and such an answer is kept with it, as every cache in front already
-    keeps it for the lifetime its route wrote. `Json` of bytes the app holds (`json::Raw`) is
+    page as markup. The watch does not see a key drawn outside the handler's polls, or on another
+    thread during one (by a task it spawned, a render it handed to a blocking task, a thread of
+    its own): one a bare render (`to_html()`) draws there is kept with the answer and sent
+    `public`, as its route wrote. A render that marks the signal itself (a page's, a patch's,
+    one made with `req.rendered`) does not rely on the watch and is seen on whatever thread it
+    runs. Nor is a key
+    drawn as a body is sent after the handler returned (`Media::stream`, a relay's body whose
+    code renders as it is read, a live stream's fragments), one already in bytes the app relays,
+    or one in a feed's rows, snapshot or replay: the guides say such an answer is not `Public`
+    and a per-visitor key never goes in a feed. Making the
+    mistake a compile error instead (a key field that renders only into something that carries
+    the mark) was looked at and not done
+    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)):
+    a key is drawn inside an outer view (a form, a component, a branch taken at run time), and
+    that view's `to_html()` gives a plain string, so the mark would have to be in every view's
+    type through `html!`, components, `dyn Render` and an app's own `Render`, whose
+    `render(&self, &mut String)` writes any field to a plain string; and it would refuse what
+    apps use, a live stream's fragment that draws a form (`Fragment::new(view.to_html())`) and
+    a view rendered to text for a test or an agent's tool result. `Json` of bytes the app holds (`json::Raw`) is
     left out by its type: it keeps its compressed forms itself, so the store would refuse
     every one. In a build without `compress` it holds none and is left out all the same, so
     outside an API its tag is hashed for each request there, as before this. An API's `Access-Control-Allow-Origin` is
@@ -9638,8 +9885,11 @@ rules something out.
     handler's, as for a page, and gains nothing by this), and
     are worth a second copy in memory while kept, and the hour
     `seo` writes for a sitemap or `robots.txt` where it wrote none, and does in its
-    handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
-    runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
+    handler nothing that must happen for every request; markup with a form's new submit key
+    that only the watch sees (a bare `to_html()`) is rendered by the handler itself on the
+    thread that runs it before it returns, not by a task it spawned, one it handed a render to,
+    a thread of its own, a body sent after it returned or a feed's rows; an app's own answer type is rare,
+    so the watch its route always runs costs an app little; no app finishes work again and again on the
     `Signal` of a write from before its first answer that may be kept; an app's kept answers
     are given again at ages of 1,000 to 9,999 seconds, which a lifetime of an hour reaches,
     often enough to be worth the 36,000 bytes of the table's fourth digit); value (fast and proven fast; standards
@@ -9681,8 +9931,10 @@ rules something out.
     its path to count by; a kept answer given again with a head of many names or many values
     of one name is measured costing more than its handler's map cost to clone, so the head
     should be held as a map past some size; an app
-    is found rendering a form's submit key in a task its `Public` handler spawned or on a
-    thread of the handler's own, which the watch does not see; an app's binary is held to a
+    is found rendering a form's submit key with a bare `to_html()` in a task its `Public` handler spawned, on a
+    thread of the handler's own or in a body it streams, which the watch does not see; an
+    app's own answer type, which is always watched, is found on a hot path where the watch's
+    cost shows, so such a type should be able to say it is never `Public`; an app's binary is held to a
     size where 36,000 bytes count and its answers are kept for under 16 minutes 39 seconds,
     so the table of ages should be of three digits; or the rule for a touched request comes
     to tell where a build's code sits from what the change costs, so an older answer's
@@ -9724,7 +9976,45 @@ rules something out.
     whose size is set when it is built), kept under the tag `evidence/cheaper-ask-1925`;
     2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
-    `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-26 for the stages' mark
+    past the middleware, the probe of `bench/request-cost` at `d10bedc5f` (this change as it was
+    then, before its later production changes: the count for that head, which has no `Public`
+    route, so the store's later read of the signal was counted with `router_cost` instead,
+    below), the control `da6420d62`, `273e27b05`,
+    `66d66c28e` and `cf2ea1a01` against `9b8834fcc` (`9c8cd07e7` in an earlier run), built
+    one after another in one directory with rustc 1.100.0, counted with valgrind 3.24.0 and
+    `--cpu 2` in a `rust:1-trixie` container on a 12-CPU workstation, answers compared first
+    with no difference; 2026-11-26 for the watch for a submit key, `d10bedc5f` (this change),
+    the control `da6420d62` (kept under the tag `evidence/api-404-control-1863`), `66d66c28e` and
+    `cf2ea1a01` against main's `9b8834fcc`
+    (`613ced773`, `9c8cd07e7` and `7a7ac7aa8` in earlier rounds), each with the same
+    `tests::cache::what_settling_a_page_costs` (the function, its doc and its two unstaged routes
+    as at `9c8cd07e7`, which the others have unchanged, applied to `9b8834fcc` and the control),
+    built at one path with rustc 1.100.0 in release with all features and counted under callgrind
+    (valgrind 3.24.0, Debian's `libjemalloc2`, in a `rust:1-trixie` container), each count the
+    difference of a run of 1,200 requests and one of 200, eight cases in two rounds in opposite
+    orders of the builds (the control in a pair of its own), every count within 1.2 instructions
+    of the other round's, the counts by function read with `callgrind_annotate` for three of the
+    cases and the callers of `memcpy`
+    for one, `613ced773` with `Keyed`'s poll `#[inline]` counted once for four, the future
+    sizes from `staged_page_future_sizes` in the same builds (2,472 bytes at main with default
+    features and `log` too, where the signal's shared state was read with `size_of`), and no
+    cycles under load measured for it; 2026-11-27 for the review's later changes to it, `3431fd85b` (this
+    change) against `b910dedf7` and `e4a2e3db1` (`792100504` and `899e8dd13` in earlier
+    rounds), each with the `json-private` case of `what_settling_a_page_costs`, built in
+    release with all features and rustc 1.99.1, each in a target directory of its own, and counted
+    as above (valgrind 3.24.0, Debian's `libjemalloc2`) for seven cases in two rounds in opposite
+    orders, `fill` read by function, with the future sizes from the same builds, and the probe of
+    `bench/request-cost` at `3431fd85b` and `b910dedf7`, built one after another in one
+    directory with rustc 1.100.0 and counted with valgrind 3.24.0, answers compared first with no
+    difference, idle memory in two rounds, and no cycles measured; 2026-11-27 for the store's
+    read of the request's signal (the review's round 12), `c0da2d63c` against `186572163`, each
+    built from its own `git archive` tree at one path with rustc 1.99.1 in release with all
+    features, `router_cost`'s `unkept`, `inserted` and `kept` and
+    `what_settling_a_page_costs`'s `public`, `json` and `keyed` counted under callgrind as
+    the difference of a run of 1,200 requests and one of 200, in two rounds in opposite orders,
+    the counts by function compared for `unkept` (no other function moved by 0.5 or more) and
+    `json`, and no cycles measured; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
@@ -11821,27 +12111,51 @@ rules something out.
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
     one. The job
     [#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
-    asked for now reads it: the `Request Cost` workflow counts a pull request that changes what
-    a request is built from against its merge base, on one runner, and holds the figures to
-    the rule ([the kit's page](../bench/request-cost/README.md#the-hosted-job)). So the line now
-    decides what the job does with a miss, and it stays; the job does not require it, and does
-    not confirm what a change declared measured then gives. The job counts; it cannot tell
-    from a diff a lock, a wake or a structure's layout, the kinds a count cannot judge, so the way is still the author's to
-    say and the review's to accept, and the line is what tells the job whether a miss fails
-    the change or is only reported: with `counted` a miss fails, with `measured` the counts
-    are reported and decide nothing, and with neither the job fails only on a miss and names
-    the line. The job reads the description from the event it was started by, and its green
+    asked for now reads it: the `Request Cost` workflow counts a pull request against its merge
+    base when it changes what the probe is built from or counted with. The line is optional:
+    `measured` makes a miss report-only, so it decides nothing, and the job verifies no
+    measurement ([The hosted job](../bench/request-cost/README.md#the-hosted-job)).
+    The job cannot tell from a diff a lock, a wake or a structure's layout, the kinds a count
+    cannot judge, so the way is still the author's to say and the review's to accept. Its green
     check is counts of the pull request's own tree by its own kit, for a reviewer to read, not
-    an attestation by anything apart from the change. A change goes from
-    counted to measured when a count sends it there. A pull request that declares a plan does
-    not go from measured to counted, by item 2's rule that a declaration is never added or
+    an attestation by anything apart from the change. That check, `request-cost`, is required on
+    `main` from the merge of
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and report ambiguous build exits](https://github.com/corten-run/corten/pull/2245),
+    by the maintainer's decision, which its description gives as it was asked and answered:
+    asked when the hosted job becomes a required check, the maintainer answered "After the idle
+    floor lands". The floor landed on 2026-11-27, in merge commit `456d8fd68`
+    ([#2225 Record two rulings of the maintainer: the trend's threshold settled at +2%, and the counted lane's idle-memory floor raised to four pages](https://github.com/corten-run/corten/pull/2225)).
+    The answer gives an order and no reason. By the kit's fitted model, two builds of one
+    binary would read as an idle-memory miss under the two-binary rule in about one job in
+    fifty with four pages and one in ten with one page (The idle floor, above). These are
+    modelled misses, not failures of the required check: the first ruling below makes one
+    binary pass uncompared. Being required makes the check no more an attestation than it was.
+    A change goes from counted to measured when a count sends it there. A pull request that
+    declares a plan does not go from measured to counted, by item 2's rule that a declaration is never added or
     changed after a run to clear its result. A reading published under the rule as it stood
     stays published, since a reading taken back is a result chosen after it was read. One that
     was not decided, inside the spread or the band or with an A/A not resolved, said nothing of
     the change, and no longer keeps its pull request from being counted. A decided miss keeps
     its pull request measured: item 2 says a placement run declared after such a miss does not
     clear it, and a count must not clear what that cannot. The maintainer may decide otherwise
-    on one pull request, in the maintainer's own words, as for any reading.
+    on one pull request, in the maintainer's own words, as for any reading. Where the required
+    check is red, that decision shows as a bypass of the ruleset with the maintainer's reason
+    written on the pull request, so the check keeps meaning one thing (the fourth ruling below).
+
+    The required check's rulings. On 2026-11-27 the maintainer answered four questions about
+    the required check, each by choosing one of the answers offered; the description of
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and report ambiguous build exits](https://github.com/corten-run/corten/pull/2245)
+    gives each question as it was put, with its choices. How a pull request goes on that the
+    job counts, that changes only documents and that fails on the runner between two builds of
+    one binary: "Pass when one binary (Recommended)", so where base's and head's probes have
+    one checksum the job compares nothing and passes, and two binaries are compared as before.
+    When a job that ends with no verdict may be run again: "When nothing was compared
+    (Recommended)". Which run decides when each push counts again: "The head's run
+    (Recommended)". How the maintainer deciding otherwise on one pull request shows on a red
+    required check: "Ruleset bypass (Recommended)". The kit's page says what each does in the
+    job ([The hosted job](../bench/request-cost/README.md#the-hosted-job)). The first takes
+    away nothing a count could see: one binary run twice by one kit has no difference that is
+    the change's. Its two sets of readings are kept as evidence for the idle floor.
 
     Not chosen: cycles asked of every change, the rule as it stood, at a pilot and a gated run
     across placements for an effect one build cannot show; a count for every change, which passes
@@ -11930,8 +12244,9 @@ rules something out.
     a change shown to hold memory a connection keeps passes the idle rule under the four
     pages, so the floor hides a real cost; the hosted job fails a change on idle memory alone
     at four pages, with no memory a connection keeps shown, so four pages are still under
-    what a run reads of where things were put; a run shows what the pages of the readings the
-    floor rests on are, either way;
+    what a run reads of where things were put (since the first of the required check's
+    rulings, of two binaries alone: one binary fails nothing); a run shows what the pages of
+    the readings the floor rests on are, either way;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
@@ -11956,9 +12271,14 @@ rules something out.
     a quarter of the budget apart in a case, which fails no job and means its count no longer
     resolves the budget there (two binaries of the same crates that differ so are where the
     code was placed, which a count cannot tell from a change); the hosted job reads idle
-    memory to rise between two builds of the same crates, so it fails a change for what the
-    runner did (three runs a build drawn from one distribution read a rise in about one
-    comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
+    memory to rise between two builds of the same crates, which since the first of the required
+    check's rulings fails no job where they are one binary, the verdict saying what the rule
+    would have read, and so shows the runner reading more than the floor allows, which a change
+    of two binaries is held to (the first run of
+    [#2245 Say the request-cost check is required on main, pass one binary uncompared, and report ambiguous build exits](https://github.com/corten-run/corten/pull/2245),
+    of one binary, read before any byte 16,384 bytes over base's with 16,384 allowed, at the
+    floor and not over it, so it did not meet this; three runs a build drawn from one
+    distribution read a rise in about one comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
     growths in 4,096-byte pages and base's span alone, in about one in nineteen by those
     growths with one page allowed, and in about one in 260 with the four pages now allowed,
     on the same draws, at a spread of 1.5 bytes a
@@ -12016,7 +12336,20 @@ rules something out.
     base's mean span of three in the nine hosted logs read for the floor (6,827 bytes after
     one request, 4,551 after three of a browser's requests, 18,660 before any byte), 0.71%
     of comparisons and 2.14% of jobs with four pages at both seeds, and 3.35% and 9.79%, and
-    3.37% and 9.87%, with one.
+    3.37% and 9.87%, with one; 2026-11-27, for the check made required,
+    `.github/workflows/request-cost.yml`, `scripts/benchmark-scope.mjs`,
+    `bench/request-cost/compare.mjs` and the kit's page read at `4fd6fd348` for what the job
+    passes and fails: it passes, uncounted, a pull request that changes nothing the probe is
+    built from or counted with, passes one declared measured whatever its counts, its verdict
+    failing that one only when the probe does not build against head, reads
+    the description from the event its run was started by, and is started by a pull request
+    opened, pushed to or reopened and not by an edit, with a token that reads and no secret, so
+    a fork's pull request runs it as any other, once a first-time contributor's run is approved
+    as every workflow's is; 2026-11-27, for the required check's rulings, the log of hosted run
+    46060985339 on `969ac34e4`, whose two probes printed one checksum and whose reading before
+    any byte was 16,384 bytes over base's with 16,384 allowed, and `job.sh` and `build.sh` read
+    at `969ac34e4` for what a checksum covers: the probe's binary alone, built from each side's
+    crates in one directory, the scripts that run it being the checkout's for both sides.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits
@@ -13085,8 +13418,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     are not in the tag, so one that only some answers at a URL carry (`Content-Disposition`) stays
     on a cache's copy after a `304`. An app value drawn at random for each render (a token in the
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
-    own (the nonce, a submit key), which saves time only, and not for a submit key placed as
-    `raw(..)` markup.
+    own (the nonce, a submit key), which saves time only. For a key placed as `raw(..)` markup,
+    it skips the hash in any answer of a staged route, text and a bare `Json<T>` included, when the
+    key was made with `req.rendered`, which marks the request; a key rendered bare with
+    `to_html()` is seen only in an answer that may be `Public`, whose handler is watched for one:
+    `Public`, a page or JSON answer (`HtmlResponse`, `JsonResponse`) or an answer type of the app's
+    own, which the handler may replace with a `Public` one it converted, and `NoStore` or a tuple of
+    headers around any of them, as the [forms guide](guide/requests-and-forms.md) lists them.
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which

@@ -120,7 +120,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assertHandoffState();
   };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
-  const stateStage = (kind) => kind ? `${statePath}.${kind}-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
+  const stateStage = (kind, suffix) => kind ? `${statePath}.${kind}-${suffix ?? randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
   const stateBytes = (value) => `${JSON.stringify(value, null, 2)}\n`;
   const writeState = (value, replace = renameSync, kind = value.control?.monitor?.phase === "invalid" ? "revoked" : undefined) => {
     controllerState(value, options.round);
@@ -972,6 +972,55 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
     verifyRetirementRecord(bytes, state.retirement.kind, false, pins);
   };
+  // Only the positive not-dispatched acknowledgement creates this stage. The digest
+  // binds the exact retired state, both in the filename and in the stage: the same
+  // pre-intent state can yield a different intent, and copying the stage cannot rebind it.
+  const drainWithdrawal = (intentBytes, restore) => {
+    const intentSha256 = digest(intentBytes);
+    return { path: stateStage("delete-unsent", intentSha256), bytes: Buffer.from(stateBytes({ intentSha256, restore })) };
+  };
+  const matchesWithdrawal = ({ path, bytes }) => {
+    try { return regular(path, bytes.length).equals(bytes); } catch { return false; }
+  };
+  const publishWithdrawal = (proof, restore, fence) => {
+    const restoredBytes = Buffer.from(stateBytes(restore));
+    // The proof itself cannot be renamed over state.json. Save the canonical
+    // restoration durably; if that save fails, keep the proof for the next collect.
+    writeState(restore, (stage, target) => {
+      assert.ok(matchesWithdrawal(proof), "drain withdrawal proof changed; preserve deletion intent");
+      fence();
+      assert.ok(regular(stage, restoredBytes.length).equals(restoredBytes) && matchesWithdrawal(proof),
+        "drain withdrawal stage changed; preserve deletion intent");
+      renameSync(stage, target);
+    }, "delete-unsent-restore");
+    state = restore;
+    if (matchesWithdrawal(proof)) { unlinkSync(proof.path); syncDirectory(local); }
+  };
+  const resumeDrainWithdrawal = async () => {
+    if (state.status !== "retired" || state.retirement.kind !== "setup-failed" || state.destroyedAt) return;
+    const intent = regular(statePath, 1024 * 1024);
+    if (!intent.equals(Buffer.from(stateBytes(state)))) return;
+    // The pre-registration drain path can only have retired a starting state.
+    // Reconstruct it, rather than loading any state from the stage.
+    const restore = { ...state, status: "starting", pendingRetirement: state.retirement };
+    delete restore.retirement; delete restore.deletionIntentAt;
+    const proof = drainWithdrawal(intent, restore);
+    if (!matchesWithdrawal(proof)) return;
+    const path = join(local, retirementFile("setup-failed")), limit = 8 * 1024 * 1024;
+    const receipt = regular(path, limit);
+    if (digest(receipt) !== state.retirement.evidenceSha256 || JSON.parse(receipt).schema !== "benchmark-failed-setup-retirement/v3") return;
+    // Keep the intent if the operator already removed this host. The retired path
+    // can then confirm absence; an inconclusive read throws without changing state.
+    if (await exactHost() === undefined) return;
+    verifyRetirementRecord(receipt, "setup-failed");
+    const fence = () => {
+      check();
+      assert.ok(regular(path, limit).equals(receipt), "retirement evidence changed during drain withdrawal");
+      heldLock.own();
+      assert.ok(regular(statePath, 1024 * 1024).equals(intent), "saved retirement reservation changed; preserve host");
+    };
+    fence(); publishWithdrawal(proof, restore, fence);
+  };
   const requireUnusedBootstrapCustody = () => {
     const interrupted = interruptedFirstUpload(state, local), uploads = interrupted || settledBootstrap(state, local);
     assert.ok(unusedBootstrapApproval && (uploads || unusedBootstrap(state)), "exact approved unused bootstrap required");
@@ -1090,10 +1139,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // A state save writes and syncs its stage before the rename that replaces state.json, so
     // custody is checked again between the two: a change made while the stage was written
     // refuses before the rename, and the stage this call created is removed unread.
-    // Withdrawing an unsent intent only records how the DELETE ended, so, like the generic
-    // unsent path, it checks the reservation's boundary rather than refusing on cancellation.
-    const saveState = (kind, recording = false) => {
-      if (recording) boundary(); else check();
+    const saveState = (kind) => {
+      check();
       writeState(state, (stage, target) => {
         try { requireCustody(); } catch (error) { unlinkSync(stage); throw error; }
         renameSync(stage, target);
@@ -1167,17 +1214,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // engine or the production checkpoint can positively acknowledge that it never sent the
     // request (its deadline or cancellation refused before dispatch; the acknowledgement does
     // not say which, so the refusal names neither). Only then is the intent
-    // withdrawn: the state this process saved before it (the receipt's recorded digest, with
-    // no intent) is restored under the same custody, through its own fresh stage, so the next
-    // collect keeps this receipt for archival and retires on a fresh drain proof of the same
-    // session. A missing, failed or lost acknowledgement never reaches here and keeps the
+    // withdrawn. Record the exact intent and its restoration even under cancellation.
+    // A missing, failed or lost acknowledgement never creates that proof and keeps the
     // intent, whose recovery is exact absence alone.
     const withdrawUnsentIntent = () => {
       assert.ok(intentSaved && beforeIntent && !dispatched, "no unsent deletion intent to withdraw; preserve host");
-      const intended = state;
-      state = beforeIntent;
-      try { saveState("delete-unsent", true); } catch (error) { state = intended; throw error; }
-      trusted = Buffer.from(stateBytes(state)); intentSaved = false;
+      const fence = () => { boundary(); requireCustody(); };
+      const proof = drainWithdrawal(trusted, beforeIntent);
+      fence(); durable(proof.path, proof.bytes);
+      publishWithdrawal(proof, beforeIntent, fence);
       throw new Error("DELETE was not dispatched; the next collect retires on a fresh proof");
     };
     // Everything the DELETE relies on, as this process left it, through the same custody
@@ -1895,6 +1940,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           && state.control.ledger.length === 0), "unused bootstrap requires an approved pinned observation");
         assert.equal(!!state.preBootstrapTerminal, setupCandidate, "pre-bootstrap reservation changed; preserve host");
         if (setupCandidate) assert.ok(beforeRegistration(state), "ambiguous pre-bootstrap custody; preserve host");
+        // ownedR21 above already excludes retired and pre-bootstrap reservations; the r21
+        // test stays so the resume never runs for a measured checkout if that changes.
+        if (setupCandidate && !options.r21MeasuredCheckout) await resumeDrainWithdrawal();
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();

@@ -117,8 +117,8 @@ test("catalog reuses strict native/controller gates including exact options, sou
   assert.equal(report.diagnosticNativeReport.baseline, true);
   assert.equal(report.qualification, "blocked"); assert.equal(report.rawCompleteness, "not-established");
   assert.equal(report.rawSupport.state, "missing-native-artifacts");
-  assert.equal(report.rawSupport.required.length, 946, "derive all seven apps, both sources and all three passes from native capture layout");
-  assert.equal(report.rawSupport.missing.length, 946);
+  assert.equal(report.rawSupport.required.length, 1 + 135 * b.selection.apps.length, "derive every app, both sources and all three passes from native capture layout");
+  assert.equal(report.rawSupport.missing.length, report.rawSupport.required.length);
   for (const path of ["fixture/corten/qualification.json", "api/gin/checks.json", "api/gin/p3-page/sat256.json",
     "api/gin/p3-page/sat256-cpu.json", "api/gin/p3-page/sat256-stats.log.json", "api/gin/p3-page/cold.log"])
     assert.ok(report.rawSupport.required.includes(path), path);

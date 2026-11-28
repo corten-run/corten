@@ -46,6 +46,8 @@ export function verifyProducerAtCommit(producer, commit, repo = process.cwd()) {
 }
 
 export function inspectJson(summary, { load, commit } = {}) {
+  if (commit !== undefined) assert.equal(summary.group?.contractSha256, descriptor().contractSha256,
+    "strict comparison requires this checkout's roster; use the measured checkout to qualify a historical group");
   return inspectReport(summary, { load, commit, verifySource: commit === undefined ? undefined : () => {
     const required = producerPolicyAtCommit(commit);
     const timed = summary.schema === timedSummarySchema;
@@ -65,7 +67,7 @@ export function inspectBoundJson(summary, { load, commit, verifyBoundProducer })
 function inspectReport(summary, { load, commit, verifySource }) {
   const timed = summary.schema === timedSummarySchema;
   assert.ok(summary.schema === schema || timed, "not a json-api result schema");
-  assert.deepEqual(summary.group, descriptor(), "JSON group contract/selection differs");
+  assert.deepEqual(summary.group, descriptor(summary.group?.contractSha256), "JSON group contract/selection differs");
   assert.deepEqual(summary.options?.apps, summary.group.apps, "exact JSON registry selection required");
   assert.equal(summary.options.group, "json-api");
   assert.match(summary.round ?? "", /^j[1-9]\d*$/); assert.equal(summary.options.round, summary.round);
@@ -92,7 +94,7 @@ function inspectReport(summary, { load, commit, verifySource }) {
   if (verifySource) check("producer provenance", verifySource);
   check("configuration", () => {
     if (timed) verifyProducer(summary.producer);
-    assert.deepEqual(summary.timingPlan, timingPlan(summary.options), "missing/wrong effective timing plan");
+    assert.deepEqual(summary.timingPlan, timingPlan(summary.options, summary.group.contractSha256), "missing/wrong effective timing plan");
     for (const [key, max] of [["duration", 300], ["warmup", 120], ["rate", 10000], ["startupTimeout", 300]]) {
       assert.ok(Number.isSafeInteger(summary.options[key]) && summary.options[key] >= 1 && summary.options[key] <= max, `invalid ${key}`);
     }
@@ -129,7 +131,7 @@ function inspectReport(summary, { load, commit, verifySource }) {
     const entry = summary.apps?.[app], rows = apps[app] = {};
     check(`${app} images`, () => {
       assert.deepEqual(Object.keys(entry?.images ?? {}).sort(), Object.keys(payloads).sort(), "missing/extra native image payload");
-      for (const payload of Object.keys(payloads)) verifyImage(entry.images[payload], summary.commit, app, payload);
+      for (const payload of Object.keys(payloads)) verifyImage(entry.images[payload], summary.commit, app, payload, summary.group.contractSha256);
     });
     for (const section of ["checks", "runs", "aggregates", ...(timed ? ["projections"] : [])]) check(`${app} ${section} matrix`, () => {
       assert.deepEqual(Object.keys(entry?.[section] ?? {}).sort(), cases.map((c) => c.key).sort(), "missing/extra payload/source/target evidence");
@@ -227,7 +229,7 @@ function inspectReport(summary, { load, commit, verifySource }) {
   const negative = Object.values(apps).some((rows) => Object.values(rows).some((r) => r.functionalComplete && !r.functional));
   if (timed && !gated && !preparation) check("executed matrix continuity", () => {
     const seen = new Set(), tails = {}, upstreamLives = {}; let previousEnd = Date.parse(summary.startedAt);
-    for (const item of timingPlan(summary.options)) {
+    for (const item of timingPlan(summary.options, summary.group.contractSha256)) {
       const window = execution.get(`${item.app}/${item.profile.key}/${item.pass}`), payload = item.profile.payload;
       assert.ok(window && window.startedAt >= previousEnd && window.finishedAt >= window.startedAt, "missing/overlapping/reordered native timing cell");
       assert.ok(!seen.has(window.appId), "native app reused across timing passes/cases"); seen.add(window.appId);
@@ -335,6 +337,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const measured = commit ?? summary.commit;
     if (strict) requireMeasuredCommit(measured);
     const report = strict ? inspectJson(summary, { load, commit: measured }) : inspectReport(summary, { load, commit });
-    console.log(renderJson(report)); if (strict && !report.baseline) process.exitCode = 1;
+    console.log(renderJson(report));
+    if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

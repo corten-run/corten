@@ -8,20 +8,28 @@ const timedSchema = "catalog-saved-evidence/v3";
 export const groupResultSchema = "catalog-group-results/v1";
 // The pre-header catalog-page contract, not an alias for the current one.
 const historicalContract = "c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee";
-export function groupDescriptor(name, { historical = false } = {}) {
+const sevenAppContract = "67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0";
+export const originalCatalogApps = Object.freeze(["corten", "aspnet", "express", "fastapi", "axum-maud", "drogon", "gin"]);
+export function groupDescriptor(name, { historical = false, savedHash } = {}) {
   assert.equal(name, "catalog-page", "catalog runner supports only --group catalog-page");
-  const { cases, documentHeaders } = structuredClone(definition(name));
+  historical ||= savedHash === historicalContract;
+  const previous = savedHash === sevenAppContract;
+  const { cases, documentHeaders } = historical || previous ? {
+    documentHeaders: "catalog-document-headers/v1", cases: ["fixture", "api"].map((source) => ({
+      key: `catalog-v1-${source}-neutral-page`, payload: "catalog-v1", source, locale: null, target: "page",
+    })),
+  } : structuredClone(definition(name));
   assert.ok(cases.every((c) => c.payload === "catalog-v1" && c.target === "page" && c.locale === null), "not a native catalog-page contract");
-  return { schema: "catalog-group/v1", registrySchema, group: name, contractSha256: historical ? historicalContract : contractSha256(name),
+  return { schema: "catalog-group/v1", registrySchema, group: name, contractSha256: historical ? historicalContract : previous ? sevenAppContract : contractSha256(name),
     ...(historical ? {} : { documentHeaders }),
-    apps: selectedApps(name), cases, sources: [...new Set(cases.map((c) => c.source))],
+    apps: historical || previous ? [...originalCatalogApps] : selectedApps(name), cases, sources: [...new Set(cases.map((c) => c.source))],
     targets: [...new Set(cases.map((c) => c.target))], correctnessTargets: ["page", "json"] };
 }
 
 // The runner consumes this plan for cold probes, warmup AND every load phase.
 // Legacy callers retain their original source/app/target order and both targets.
-export function timingPlan(options, sources, targets) {
-  const group = options.group === undefined ? null : groupDescriptor(options.group);
+export function timingPlan(options, sources, targets, savedHash) {
+  const group = options.group === undefined ? null : groupDescriptor(options.group, { savedHash });
   if (group) assert.deepEqual(options.apps, group.apps, "group requires the exact registry apps");
   const cases = group?.cases ?? sources.flatMap((source) => targets.map((target) => ({ source, target })));
   const plan = [];
@@ -57,7 +65,7 @@ function completedTimedLoad(phase, measured) {
 export function inspectGroupEvidence(summary, phases, aggregate) {
   if (summary.group === undefined && summary.options?.group === undefined && summary.schema !== groupResultSchema) return null;
   assert.equal(summary.schema, groupResultSchema, "missing or unsupported catalog group result schema");
-  const group = groupDescriptor(summary.options?.group, { historical: summary.group?.contractSha256 === historicalContract });
+  const group = groupDescriptor(summary.options?.group, { savedHash: summary.group?.contractSha256 });
   assert.deepEqual(summary.group, group, "catalog group descriptor/contract differs");
   assert.deepEqual(summary.options.apps, group.apps, "group requires the exact registry apps");
   const warnings = [];
