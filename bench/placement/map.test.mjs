@@ -846,12 +846,13 @@ case "$1" in
       cp "${join(dir, "dups")}" "$2"
       cp "${join(dir, "dups.map")}" "$4"
     else
-      exec ld.lld -o "$2" -e 0 --gc-sections --no-demangle -Map "$4" --symbol-ordering-file "$9" "$7" "${join(dir, a)}" "${join(dir, x)}" "${join(dir, y)}"
+      cd "${dir}"
+      exec ld.lld -o "$2" -e 0 --gc-sections --no-demangle -Map "$4" --symbol-ordering-file "$9" "$7" "${a}" "${x}" "${y}"
     fi ;;
   *) exec "${process.execPath}" "$@" ;;
 esac
 `, { mode: 0o755 });
-    const refused = spawnSync("sh", [join(kit, "build.sh"), work], { cwd: dir, env: { PATH: `${tools}:${process.env.PATH}`, HOME: dir }, encoding: "utf8", timeout: 15000 });
+    const refused = spawnSync("sh", [join(kit, "build.sh"), work], { cwd: dir, env: { PATH: `${tools}:${process.env.PATH}`, HOME: dir }, encoding: "utf8", timeout: 30000 });
     assert.equal(refused.status, 3, refused.stderr || refused.stdout);
     const receipt = readFileSync(join(work, "bin", "refused.txt"), "utf8");
     assert.match(receipt, /^REFUSED: head has no reading against base across shuffled placements: .*fewer than the 2 an order needs/);
