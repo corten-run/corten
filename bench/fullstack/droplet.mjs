@@ -57,7 +57,7 @@ import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps, buildArgs } from "./apps.mjs";
-import { ARCHIVE, pack } from "./pack.mjs";
+import { ARCHIVE, COUNT_FAILED_FILE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
 import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, parseSnapshot, snapshotsEnded, startSettled, startUnit, steps, takeLaunch, unit, unitSnapshot } from "./round.mjs";
@@ -105,7 +105,7 @@ const collect = args.includes("--collect");
 const attach = args.includes("--attach");
 const detach = args.includes("--detach");
 const keep = args.includes("--keep") || Boolean(flag("host"));
-// The last line of a finished run: bench/browser's run-all.mjs prints its own after fullstack's.
+// Completion for the suites without the fullstack progress journal.
 const doneMarker = suite === "browser" ? /browser suite (done|finished)/ : /all done/;
 const minute = 60_000;
 const stallFlag = Number(flag("stall", "15"));
@@ -265,20 +265,43 @@ const answers = async (/** @type {number} */ tries) => {
 const write = (/** @type {string} */ path, /** @type {string} */ text) => `echo ${Buffer.from(text).toString("base64")} | base64 -d > ${path}`;
 
 const log = `${suiteDir}/results-${round}.log`;
+const progressFile = `/bench/bench/fullstack/results-${round}.progress`;
+const localCountFence = join(here, "results", round, COUNT_FAILED_FILE);
 // host.txt: the CPU model and the rest, since droplets of one size are not all the same machine.
 const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --version; npx playwright --version)";
-const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label) => {
+const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label, checkCountFence = false) => {
   const local = join(here, "..", localName, "results");
   mkdirSync(local, { recursive: true });
   await retry(3, () => remote(`cd ${remoteDir} && mkdir -p results/${round} && (cp ${log} results/${round}/run.log 2>/dev/null || true) && ${hostInfo} > results/${round}/host.txt 2>&1; tar -czf /tmp/results.tgz -C results ${round}`, 5));
-  await retry(3, () => scp(`root@${host}:/tmp/results.tgz`, join(local, ".results.tgz")));
-  run("tar", ["-xzf", join(local, ".results.tgz"), "-C", local], { timeout: 5 * minute });
-  remove(join(local, ".results.tgz"));
-  console.log(`${label} in ${join(local, round)}`);
+  // Listing and extraction must read the same download. Only a finished fullstack round with a
+  // local fence needs the extra pass; share the original five-minute extraction budget.
+  const inspecting = checkCountFence && existsSync(localCountFence);
+  const archive = join(local, inspecting ? `.results-${randomUUID()}.tgz` : ".results.tgz");
+  let extracted = false;
+  try {
+    await retry(3, () => scp(`root@${host}:/tmp/results.tgz`, archive));
+    const deadline = performance.now() + 5 * minute;
+    let replacesCount = false;
+    if (inspecting) {
+      const listed = run("tar", ["-tzf", archive], { quiet: true, timeout: 5 * minute });
+      const members = new Set(listed.stdout.split(/\r?\n/));
+      replacesCount = !members.has(`${round}/${COUNT_FAILED_FILE}`)
+        && members.has(`${round}/instructions.json`) && members.has(`${round}/summary.json`);
+    }
+    const remaining = inspecting ? Math.floor(deadline - performance.now()) : 5 * minute;
+    if (remaining <= 0) throw new Error("results archive inspection exhausted the extraction deadline");
+    run("tar", ["-xzf", archive, "-C", local], { timeout: remaining });
+    extracted = true;
+    console.log(`${label} in ${join(local, round)}`);
+    return replacesCount;
+  } finally {
+    if (inspecting || extracted) remove(archive);
+  }
 };
-const downloadAll = async (/** @type {string} */ label) => {
-  await download(suiteDir, suite === "live" ? "live" : "fullstack", label);
+const downloadAll = async (/** @type {string} */ label, checkCountFence = false) => {
+  const replacesCount = await download(suiteDir, suite === "live" ? "live" : "fullstack", label, checkCountFence);
   if (suite === "browser") await download("/bench/bench/browser", "browser", label);
+  return replacesCount;
 };
 // The round's unit as it reads now when two snapshots of it agree and show it ended (round.mjs,
 // snapshotsEnded), or null: not ended, changing, or not read (no answer, or a query that failed).
@@ -395,7 +418,6 @@ const launch = async () => {
     // ends, and removing that file would leave run-all.mjs nothing to refuse on (round.mjs,
     // relaunchError). The full-stack round's file is read whatever the suite, as every suite's unit
     // has this name and clears /bench. A lock another launch holds is not tried again.
-    const progressFile = `/bench/bench/fullstack/results-${round}.progress`;
     const check = relaunchCustody(unitName, progressFile);
     const custody = /** @type {{ stdout?: string }} */ (await custodyStep(() => retry(3, () => remote(`${takeLaunch(lock, token)}\n${check}`, 2, { quiet: true }), lockHeldElsewhere)));
     const refused = relaunchError(String(custody.stdout ?? ""));
@@ -529,15 +551,17 @@ const find = () => {
 // that agree, each one query (round.mjs, snapshotsEnded), one taken before the log is read and one
 // after: until then nothing is collected or destroyed, whatever the log says. A state and a job
 // queue read in two queries could tear: a start that completed between them read as inactive with
-// nothing queued while the unit was active. The log's last line ("all done") only says how a round
-// that has ended ended: a line printed before the unit's process exits, or one a round resumed
-// with --from kept from an earlier run, is read while the unit is still active, and is not taken
-// as the round's end.
+// nothing queued while the unit was active. A fullstack launch clears its progress file under
+// custody even when --from keeps the old log. Only that file's complete terminal record can
+// distinguish the current launch's outcome; the log is for display. Other suites use their log.
 // A droplet that does not answer for `stall`
 // (and is not cut off from here: DigitalOcean answers) is power-cycled, at most twice; a full-stack
 // round goes on by itself after that. --collect waits that long too, and gives up (leaving the
 // droplet) only when DigitalOcean cannot be reached either.
 const watch = async (/** @type {boolean} */ once) => {
+  const progressRead = suite === "fullstack"
+    ? `tail -n 1 -- ${progressFile} 2>/dev/null | { IFS= read -r result || result=; printf 'progress %s\\n' "$result"; }\n`
+    : "";
   let shown = 0;
   let silentSince = /** @type {number | null} */ (null);
   let silentPolls = 0;
@@ -547,8 +571,8 @@ const watch = async (/** @type {boolean} */ once) => {
   for (let poll = 0; ; poll += 1) {
     if (poll) await sleep(minute);
     // Seconds since boot, a snapshot of the unit (its state and queued job from one query, or
-    // "unreadable"), the log, and a second snapshot, last: the log is read between the two.
-    const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || before=unreadable\necho "$(cut -d. -f1 /proc/uptime)"\necho "before $before"\ncat ${log} 2>/dev/null\necho\nafter=$(snap) || after=unreadable\necho "after $after"\ntrue`, { quiet: true, allowFail: true });
+    // "unreadable"), outcome and log, then a second snapshot. read requires the terminal newline.
+    const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || before=unreadable\necho "$(cut -d. -f1 /proc/uptime)"\necho "before $before"\n${progressRead}cat ${log} 2>/dev/null\necho\nafter=$(snap) || after=unreadable\necho "after $after"\ntrue`, { quiet: true, allowFail: true });
     if (r.status === 0) {
       silentSince = null;
       silentPolls = 0;
@@ -556,6 +580,9 @@ const watch = async (/** @type {boolean} */ once) => {
       while (all.length && all.at(-1) === "") all.pop();
       const [uptime = "", beforeLine = "", ...rest] = all;
       const afterLine = rest.pop() ?? "";
+      const terminal = suite === "fullstack"
+        ? /^progress \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (finished|failed)$/.exec(rest.shift() ?? "")?.[1]
+        : undefined;
       const before = beforeLine.startsWith("before ") ? beforeLine.slice(7) : "unreadable";
       const after = afterLine.startsWith("after ") ? afterLine.slice(6) : "unreadable";
       const text = rest.join("\n");
@@ -564,12 +591,12 @@ const watch = async (/** @type {boolean} */ once) => {
       shown = lines.length;
       const unreadable = !parseSnapshot(before) || !parseSnapshot(after);
       const ended = snapshotsEnded(before, after);
-      if (ended && doneMarker.test(text)) return { state: "finished", snapshot: before.trim() };
+      if (ended && (suite === "fullstack" ? terminal === "finished" : doneMarker.test(text))) return { state: "finished", snapshot: before.trim() };
       // The unit has ended and the round did not finish. A full-stack round's droplet that
       // restarted less than five minutes ago may not have started the unit again yet, and the unit
       // may be between states, so this has to hold for three polls.
       stopped = ended && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
-      if (stopped >= 3 || (stopped && /round failed/.test(text))) return { state: "stopped", snapshot: before.trim() };
+      if (stopped >= 3 || (stopped && (suite === "fullstack" ? terminal === "failed" : /round failed/.test(text)))) return { state: "stopped", snapshot: before.trim() };
       if (once && !stopped) return { state: unreadable ? "unknown" : "running", snapshot: null };
       if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its queued job could not be read (${before}; ${after}): round ${round} is watched until it reads as ended`);
       unreadableSaid = unreadable;
@@ -619,9 +646,16 @@ try {
   } else {
     // The droplet goes only once its results are here: a download that fails leaves it for the
     // next --collect.
+    let confirmed = true;
     if (state === "finished") {
       console.log("downloading the results");
-      await downloadAll("results");
+      const replacesCount = await downloadAll("results", suite === "fullstack");
+      if (replacesCount) {
+        // The incoming files alone cannot retire the fence if a different invocation could have
+        // supplied them. Keep the existing final custody check after packing and trend as well.
+        confirmed = stillEnded(snapshot, "the download");
+        if (confirmed) rmSync(localCountFence, { force: true });
+      }
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
       // harden.mjs prints the marker only when every phase ran and its file was written; a download
@@ -630,7 +664,7 @@ try {
         console.log(`results/${round}/hardening.json did not come down with the round`);
         process.exitCode = 1;
       }
-      if (suite === "fullstack") {
+      if (suite === "fullstack" && confirmed) {
         try {
           // A round collected before was packed: the download brought every file again, so its
           // archive goes before they are packed anew.
@@ -657,7 +691,7 @@ try {
     }
     // The watch saw the unit ended before its log was read and after; it goes only if it still
     // reads so once the results are down.
-    if (stillEnded(snapshot, "the download")) mayDestroy = true;
+    if (confirmed && stillEnded(snapshot, "the download")) mayDestroy = true;
     else {
       leftRunning();
       process.exitCode = 3;

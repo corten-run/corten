@@ -1478,10 +1478,16 @@ three runs:
    be read is watched on (`--collect` leaves it, exit 3). A launch or `--attach` whose watch gives
    up (the droplet stopped answering) downloads and destroys under the same rule: when the unit
    cannot then be confirmed ended, nothing is downloaded and the droplet is left, with how to delete
-   it. The log's `all done` only says whether a round
-   that has ended finished or stopped short: it is printed before the unit's process exits, and a
-   round going on with `--from` keeps the earlier run's log, so one read while the unit is active
-   is not the round's end, whichever run printed it. The
+   it. For a fullstack round, the last complete `finished` or `failed` record in the
+   current launch's progress file says how the ended unit finished. A missing, nonterminal or
+   cut-short last record cannot prove success. A launch clears that file even when `--from`
+   keeps the earlier log, so an old `all done` cannot turn a failed recount into a finished
+   round. The other suites still use their log's completion line. None of these records
+   substitutes for the unit snapshots. If a prior partial download left a local `count-failed.txt`,
+   the collector removes it only after a finished fullstack archive supplies both
+   `instructions.json` and `summary.json` without the marker, extraction succeeds, and the same
+   ended unit is confirmed again. An incomplete download or a changed unit leaves the fence in
+   place. Listing and extraction share the same local five-minute bound. The
    upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.

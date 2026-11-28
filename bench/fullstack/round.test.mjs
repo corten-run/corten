@@ -329,8 +329,8 @@ test("a relaunch on a droplet reads the round's progress file there as run-all.m
 // which is then active, unless they say otherwise; FAKE_RELOAD_HOOK, when set, runs at
 // daemon-reload; with FAKE_STARTED, a start makes that file, and while it exists the unit reads
 // FAKE_STARTED_STATE, active unless set, as another run of it (InvocationID and state change time);
-// with FAKE_START_DONE, a start appends "all done" to that file, as a round that finished at once
-// would; a job is queued for it, its id the first word of the file FAKE_JOBS names, while that file
+// with FAKE_START_DONE or FAKE_START_PROGRESS, a start writes the specified completion record,
+// as a round that finished at once would; a job is queued for it, its id the first word of the file FAKE_JOBS names, while that file
 // exists; a snapshot (show with several -p, unitSnapshot) leaves out its Job line with
 // FAKE_JOBS_FAIL; with FAKE_FLIP, a file counting the state reads, the unit reads as started (a
 // start that completed meanwhile) from read FAKE_FLIP_AT on, the second unless set); while the file
@@ -361,7 +361,7 @@ const fakeSystemctl = [
   "    esac ;;",
   '  disable) exit "${FAKE_DISABLE_RC:-0}" ;;',
   '  stop) exit "${FAKE_STOP_RC:-0}" ;;',
-  '  start) [ -z "$FAKE_STARTED" ] || : > "$FAKE_STARTED"; [ -z "$FAKE_START_DONE" ] || echo "all done" >> "$FAKE_START_DONE"; exit "${FAKE_START_RC:-0}" ;;',
+  '  start) [ -z "$FAKE_STARTED" ] || : > "$FAKE_STARTED"; [ -z "$FAKE_START_DONE" ] || echo "all done" >> "$FAKE_START_DONE"; [ -z "$FAKE_START_PROGRESS" ] || echo "2026-11-27T00:02:00.000Z finished" >> "$FAKE_START_PROGRESS"; exit "${FAKE_START_RC:-0}" ;;',
   '  is-active) exit "${FAKE_ACTIVE_RC:-0}" ;;',
   '  list-jobs) [ -z "$FAKE_JOBS_FAIL" ] || exit 1; if [ -n "$FAKE_JOBS" ] && [ -e "$FAKE_JOBS" ]; then cat "$FAKE_JOBS"; fi ;;',
   '  daemon-reload) [ -z "$FAKE_RELOAD_HOOK" ] || sh "$FAKE_RELOAD_HOOK" ;;',
@@ -673,7 +673,7 @@ test("droplet.mjs uploads none of a round's progress files or logs from the work
   for (const member of ["./bench/fullstack/round.mjs", "./bench/fullstack/results-r1.progress.bak", "./bench/browser/results-r1.log", "./bench/fullstack/results/r1/run.log", "./x/bench/fullstack/results-r1.progress"]) assert.ok(!hostOnlyFile(member), member);
 });
 
-test("droplet.mjs on a reused droplet holds the round's launch from its custody check through its unit's start, clears what that round left only under it, and uploads no progress file", { skip: process.platform === "win32" && "stands in for ssh with a shell script" }, async () => {
+test("droplet.mjs on a reused droplet holds the round's launch from its custody check through its unit's start, clears what that round left only under it, and uploads no progress file", { skip: process.platform === "win32" && "stands in for ssh with a shell script" }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "relaunch-droplet-"));
   try {
     // droplet.mjs and what it imports, in a tree of their own with a fixture, so the launch
@@ -685,6 +685,9 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     mkdirSync(join(tree, "bench", "live"));
     for (const file of ["droplet.mjs", "apps.mjs", "conformance.mjs", "inventory.mjs", "pack.mjs", "passes.mjs", "round.mjs", "count-perf.mjs"]) copyFileSync(join(import.meta.dirname, file), join(fullstack, file));
     copyFileSync(join(import.meta.dirname, "..", "live", "apps.mjs"), join(tree, "bench", "live", "apps.mjs"));
+    writeFileSync(join(fullstack, "trend.mjs"), `import { existsSync } from "node:fs";
+const fence = new URL("results/r1/${COUNT_FAILED_FILE}", import.meta.url);
+console.log(existsSync(fence) ? "trend saw the count fence" : "trend saw no count fence");\n`);
     writeFileSync(join(fullstack, "fixtures", "items.json"), JSON.stringify({ item_1: { id: "item_1" } }));
     writeFileSync(join(fullstack, "results-r1.progress"), "t boot\nt finished\n");
     writeFileSync(join(fullstack, "results-r1.log"), "all done\n");
@@ -712,6 +715,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       // FAKE_DROP_WATCH: the watch's look at the round (its script reads /proc/uptime) gets no
       // answer, as from a droplet that stopped answering; other calls go through.
       'case "$last" in */proc/uptime*) if [ -n "$FAKE_DROP_WATCH" ]; then echo "ssh: connect to host 203.0.113.9 port 22: Connection timed out" >&2; exit 255; fi ;; esac',
+      'script=$(printf "%s" "$script" | sed "s#/proc/uptime#$FAKE_REMOTE/uptime#g")',
       // FAKE_START_IN_DOWNLOAD: a download's archive step makes that file, as a start of the unit
       // that ran while the results were packed (the systemctl stand-in then reads it active).
       'case "$last" in *"tar -czf /tmp/results.tgz"*) if [ -n "$FAKE_START_IN_DOWNLOAD" ]; then : > "$FAKE_START_IN_DOWNLOAD"; fi ;; esac',
@@ -747,6 +751,14 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       "",
     ].join("\n"), { mode: 0o755 });
     writeFileSync(join(bin, "systemctl"), fakeSystemctl, { mode: 0o755 });
+    // Fail one local archive pass without changing the other pass or remote tar.
+    writeFileSync(join(bin, "tar"), [
+      "#!/bin/bash",
+      'if [ -n "$FAKE_LIST_FAIL" ] && [ "$1" = -tzf ] && [[ "$2" = */.results-*.tgz ]]; then exit 95; fi',
+      'if [ -n "$FAKE_EXTRACT_FAIL" ] && [ "$1" = -xzf ] && [[ "$2" = */.results-*.tgz ]]; then exit 96; fi',
+      `exec ${quote(spawnSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).stdout.trim())} "$@"`,
+      "",
+    ].join("\n"), { mode: 0o755 });
     // docker exits FAKE_DOCKER_RC (0 unless set), as a build that failed would.
     writeFileSync(join(bin, "docker"), '#!/bin/sh\nexit "${FAKE_DOCKER_RC:-0}"\n', { mode: 0o755 });
     for (const stub of ["npm", "npx"]) writeFileSync(join(bin, stub), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -773,6 +785,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       mkdirSync(join(remote, "systemd"), { recursive: true });
       mkdirSync(join(remote, "cgroup"), { recursive: true });
       writeFileSync(join(remote, "cgroup", "cgroup.controllers"), "cpu io memory pids\n");
+      writeFileSync(join(remote, "uptime"), "600.00 600.00\n");
       writeFileSync(remoteLog, log);
       if (progress !== null) writeFileSync(remoteProgress, progress);
       if (held) {
@@ -1069,19 +1082,18 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.ok(!buildFailed.stdout.includes("was refused"), buildFailed.stdout);
     assert.ok(buildFailed.calls.some((c) => c.includes("launch release")), "a failed build kept the lock");
     assert.equal(target(), null);
-    // The watch collects a round only once its unit reads inactive or failed with no job queued
-    // for it: the log's "all done" alone, printed before the unit's process exits or kept by a
-    // round resumed with --from, is not the round's end. A --collect that finds the unit active, a
+    // Even a finished progress file cannot replace the terminal unit snapshots. A --collect that finds the unit active, a
     // start queued, or its state or job queue unreadable, downloads and destroys nothing and says
     // where the round is (exit 3).
     const done = "2026-11-27T00:00:00.000Z all done\n";
+    const end = (/** @type {string} */ result) => `2026-11-27T00:01:00.000Z boot\n2026-11-27T00:02:00.000Z ${result}\n`;
     for (const [what, fake, said] of /** @type {const} */ ([
       ["active", { FAKE_STATE: "active" }, /round r1 is still running/],
       ["start queued", { FAKE_JOBS: jobsFile }, /round r1 is still running/],
       ["state unreadable", { FAKE_STATE_FAIL: "1" }, /whether round r1 has ended is not known: the state of corten-bench-r1 or its job queue could not be read, so nothing is downloaded or destroyed/],
       ["snapshot without its job", { FAKE_JOBS_FAIL: "1" }, /whether round r1 has ended is not known/],
     ])) {
-      const { argv, options } = prepare({ log: done, collect: true, fake });
+      const { argv, options } = prepare({ log: done, progress: end("finished"), collect: true, fake });
       if (what === "start queued") writeFileSync(jobsFile, "4242 corten-bench-r1.service start waiting\n");
       const r = outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
       assert.equal(r.status, 3, `${what}: ${r.stdout}${r.stderr}`);
@@ -1090,9 +1102,9 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       assert.ok(!r.deleted, `${what}: deleted the droplet`);
       assert.match(r.stdout, /droplet 203\.0\.113\.9 is left as it is/, what);
     }
-    // The control: the unit inactive with no job queued and the log all done is a finished round,
-    // downloaded and its droplet destroyed.
-    const finished = (() => { const { argv, options } = prepare({ log: done, collect: true }); return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 })); })();
+    // An ended unit and a complete finished record suffice even if the display log is missing it.
+    const finished = launch({ progress: end("finished"), collect: true });
+    assert.equal(finished.status, 0, finished.stdout + finished.stderr);
     assert.match(finished.stdout, /downloading the results/, `${finished.stdout}${finished.stderr}`);
     assert.ok(finished.downloaded, finished.calls.join("\n---\n").slice(0, 2000));
     assert.ok(finished.deleted, finished.calls.join("\n---\n").slice(0, 2000));
@@ -1105,19 +1117,17 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.match(keptMarker.stdout, /succeeded, but whether the unit was then active could not be confirmed/);
     assert.ok(!keptMarker.downloaded, "a watch that read the unit active downloaded results");
     assert.ok(!keptMarker.deleted, "a watch that read the unit active deleted the droplet");
-    // An ordinary launch, waited on, whose round finishes (its unit then inactive with no job
-    // queued and its log all done) is still downloaded and its droplet destroyed.
-    const ordinary = launch({ progress: unfinished(other), fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_START_DONE: remoteLog }, create: true, detach: false, fast: true });
+    // An ordinary launch whose progress records finish and whose unit then reads ended is still
+    // downloaded and its droplet destroyed.
+    const ordinary = launch({ progress: unfinished(other), fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_START_DONE: remoteLog, FAKE_START_PROGRESS: remoteProgress }, create: true, detach: false, fast: true });
     assert.match(ordinary.stdout, /downloading the results/, `${ordinary.stdout}${ordinary.stderr}`);
     assert.ok(!ordinary.stdout.includes("could not be confirmed"), ordinary.stdout);
     assert.ok(ordinary.started && ordinary.downloaded && ordinary.deleted, ordinary.calls.join("\n---\n").slice(0, 2000));
     const collectWith = (/** @type {Setup} */ setup) => { const { argv, options } = prepare({ log: done, collect: true, ...setup }); return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 })); };
-    // A start that completes between the watch's reads, with the log's "all done" kept from an
-    // earlier run: read as a state and then a job queue, it was inactive with nothing queued while
-    // the unit was active, and the round was collected and its droplet destroyed. Two snapshots
-    // around the log, each its state and job from one query, disagree, so the round is running.
+    // A start that completes between the watch's reads. Even with a finished record from the
+    // earlier run, two snapshots around it disagree, so the round is running.
     const flips = join(root, "flips");
-    const torn = collectWith({ fake: { FAKE_FLIP: flips } });
+    const torn = collectWith({ progress: end("finished"), fake: { FAKE_FLIP: flips } });
     assert.ok(!torn.deleted, "a watch whose reads tore deleted the droplet");
     assert.ok(!torn.downloaded, "a watch whose reads tore downloaded results");
     assert.equal(torn.status, 3, `${torn.stdout}${torn.stderr}`);
@@ -1125,13 +1135,82 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     // The unit starts after the watch saw it ended and before the droplet would be destroyed: the
     // results come down, but a snapshot after the download no longer reads as the watch saw it, so
     // the droplet is left (exit 3).
-    const lateStart = collectWith({ fake: { FAKE_FLIP: flips, FAKE_FLIP_AT: "3" } });
+    const lateStart = collectWith({ progress: end("finished"), fake: { FAKE_FLIP: flips, FAKE_FLIP_AT: "3" } });
     assert.ok(!lateStart.deleted, "a unit that started after the watch saw it end had its droplet deleted");
     assert.equal(lateStart.status, 3, `${lateStart.stdout}${lateStart.stderr}`);
     assert.match(lateStart.stdout, /downloading the results/);
     assert.ok(lateStart.downloaded, lateStart.calls.join("\n---\n").slice(0, 2000));
     assert.match(lateStart.stdout, /corten-bench-r1 on the droplet at 203\.0\.113\.9 could not be confirmed ended after the download/);
     assert.match(lateStart.stdout, /delete it with doctl compute droplet delete 4242 --force/);
+    await t.test("collect uses the current fullstack outcome, not all done in the retained log", () => {
+      const failed = collectWith({ progress: end("failed"), log: `${done}2026-11-27T00:02:00.000Z round failed: count step failed; summary omits instruction counts\n`, fake: { FAKE_STATE: "failed" }, fast: true });
+      assert.match(failed.stdout, /the round stopped before it finished/, failed.stdout);
+      assert.doesNotMatch(failed.stdout, /downloading the results/, failed.stdout);
+      assert.equal(failed.status, 1, failed.stderr);
+      assert.ok(failed.downloaded && failed.deleted, failed.stdout);
+      for (const progress of [null, end("finished").trimEnd(), `${end("finished")}2026-11-27T00:03:00.000Z boot\n`]) {
+        const partial = collectWith({ progress, fast: true });
+        assert.match(partial.stdout, /the round stopped before it finished/, partial.stdout);
+        assert.equal(partial.status, 1, partial.stderr);
+        assert.ok(partial.downloaded && partial.deleted, partial.stdout);
+      }
+    });
+    const remoteResult = join(dirname(remoteProgress), "results", "r1");
+    const localResult = join(fullstack, "results", "r1");
+    const localMarker = join(localResult, COUNT_FAILED_FILE);
+    const summary = JSON.stringify({ instructions: { "corten/page": { user: 123456 } } });
+    const collectCount = (/** @type {{ result?: string, oldFence?: boolean, incomingFence?: boolean, both?: boolean, fake?: Record<string, string> }} */
+      { result = "finished", oldFence = true, incomingFence = false, both = true, fake = {} } = {}) => {
+      const { argv, options } = prepare({ log: done, progress: end(result), collect: true, fast: true, fake });
+      if (oldFence) {
+        mkdirSync(localResult, { recursive: true });
+        writeFileSync(localMarker, "old failure\n");
+        writeFileSync(join(localResult, "instructions.json"), "{}");
+      }
+      mkdirSync(remoteResult, { recursive: true });
+      writeFileSync(join(remoteResult, "summary.json"), summary);
+      if (both) writeFileSync(join(remoteResult, "instructions.json"), "{}");
+      if (incomingFence) writeFileSync(join(remoteResult, COUNT_FAILED_FILE), "new failure\n");
+      return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
+    };
+    await t.test("collect replaces a partial count fence only with a complete finished download", () => {
+      const good = collectCount();
+      assert.equal(good.status, 0, good.stdout + good.stderr);
+      assert.ok(good.downloaded && good.deleted, good.stdout + good.stderr);
+      assert.equal(readFileSync(join(localResult, "summary.json"), "utf8"), summary);
+      assert.ok(!existsSync(localMarker), "the complete downloaded recount is still fenced by the local marker");
+      assert.match(good.stdout, /trend saw no count fence/);
+
+      const failed = collectCount({ result: "failed", incomingFence: true, oldFence: false });
+      assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+      assert.match(failed.stdout, /the round stopped before it finished/);
+      assert.equal(readFileSync(localMarker, "utf8"), "new failure\n");
+
+      const short = collectCount({ both: false });
+      assert.ok(short.downloaded && short.deleted, short.stdout + short.stderr);
+      assert.match(short.stdout, /trend saw the count fence/);
+      assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "a local stale instructions file is not archive membership");
+
+      const early = collectCount({ result: "failed" });
+      assert.equal(early.status, 1, early.stdout + early.stderr);
+      assert.equal(readFileSync(localMarker, "utf8"), "old failure\n", "a markerless partial download does not clear the fence");
+
+      for (const [fault, message] of /** @type {const} */ ([
+        ["FAKE_LIST_FAIL", /tar -tzf .* failed:/], ["FAKE_EXTRACT_FAIL", /tar -xzf .* failed: exit 96/],
+      ])) {
+        const broken = collectCount({ fake: { [fault]: "1" } });
+        assert.notEqual(broken.status, 0, broken.stdout + broken.stderr);
+        assert.match(broken.stderr, message);
+        assert.ok(!broken.deleted, broken.stdout + broken.stderr);
+        assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
+      }
+
+      const changed = collectCount({ fake: { FAKE_START_IN_DOWNLOAD: join(root, "download-start") } });
+      assert.equal(changed.status, 3, changed.stdout + changed.stderr);
+      assert.ok(!changed.deleted, changed.stdout + changed.stderr);
+      assert.doesNotMatch(changed.stdout, /trend saw/);
+      assert.equal(readFileSync(localMarker, "utf8"), "old failure\n");
+    });
     // The first custody check finds a start queued for the unit (its job waiting): a refusal, as
     // the clear's is, so the droplet this launch created is not destroyed, nothing is cleared,
     // started or downloaded, and the operator is told how to delete it.
