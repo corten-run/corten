@@ -1372,12 +1372,10 @@ any `*-cache-control` header and the other caching headers a CDN reads first tha
 visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
 staged answer does: another app of Corten's whose staged middleware relays it inline and takes
 the cookie off still sends it as that visitor's ([Caching](#caching)).
-A `Public` answer, an answer type of the app's own or a JSON answer (including bare `Json<T>`),
-whose handler drew a form's new submit key ([Caching](#caching)), in `NoStore` or a tuple of
-headers too, goes out as one that
-sets a cookie does, carrying that with it to an app that relays it inline as that one does, and
-also loses a tag (`ETag`) it was given: its handler is watched for one, as a staged route's is,
-and any other unstaged handler runs with nothing around it.
+Each declared unstaged handler is watched for a form's new submit key, as a staged handler is.
+Its answer, whatever type it returns, goes out as one that sets a cookie does when the watch
+sees a key ([Caching](#caching)). It carries that mark to an app that relays it inline and also
+loses any tag (`ETag`) it was given.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1589,18 +1587,10 @@ its CDN is configured to read (RFC 9213 allows any), a layer around the app (`Ap
 runs after Corten settles the answer), and an edge rule that caches whatever the origin says. A
 submit key marks the answer it is rendered for: a page, a patch, the layout's reads, and a
 `Rendered` placed in one; one made with `req.rendered` marks the request's answer wherever it is
-placed (in text or `Json<T>` too). A `Public` route's handler is also watched
-for a key it draws any other way, rendered to a string and put in JSON, in text, in a file or
-relay it made, or in a page as `raw` markup, and such an answer goes out as a page that draws
-one does, in every build, with or without the app's kept answers, and on a route that says
-`unstaged` too. So is the handler of an answer type of the app's own (one that implements
-`Answer`), since it may hold a `Public` answer on one branch, and of `NoStore` or a tuple of
-headers around either (a `no-store` there does not take away a CDN's own caching header), or a
-tuple whose header part of the app's own refuses with one, since a refusal is the whole answer.
-So is the handler of a page or a JSON answer (`HtmlResult`, `PageOr`, `JsonResponse`, and
-`JsonResult<T>`, whose `JsonError` may hold a `JsonResponse`): the handler may replace the
-response through `DerefMut`. Bare `Json<T>` is watched too, including when wrapped in a result,
-`NoStore` or a tuple, because the value's serializer may supply its own response. The
+placed (in text or `Json<T>` too). Every declared handler, staged or `unstaged`, is also watched
+for a key drawn during its polls, regardless of its answer type. A key drawn into JSON, text, a
+file or relay the handler made, or a page as `raw` markup makes the answer go out as a page that
+draws one does, in every build and with or without kept answers. The
 stages keep the mark past the app's middleware for an answer that comes back through the `next`
 of the request they gave it: a middleware that makes a new response of that answer does not take
 the mark away, nor one that also gives `next` a request rebuilt without the first one's

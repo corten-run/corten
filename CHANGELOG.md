@@ -9,10 +9,11 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 ## 0.3.1 (2026-11-27)
 
-- A `Public` answer, or an app's own answer type, whose handler rendered a submit key to a
-  string (JSON, text, `raw`) is now sent private with no tag, staged or `unstaged`, even when a
-  middleware rebuilds the request and the response. A key drawn after it returns or put in feed
-  rows is not seen
+- A declared handler that draws a submit key while it runs now sends its answer private with
+  no tag, even if it renders the key into JSON, text or `raw` markup. This applies to staged
+  and `unstaged` handlers, including staged requests and responses rebuilt in middleware.
+  The watch does not see bare renders on another thread, keys drawn after the handler returns,
+  or keys put in feed rows
   ([#1895 Keep a Public answer whose handler rendered a submit key out of shared caches, however it was rendered](https://github.com/corten-run/corten/pull/1895)).
 
   If a CDN or other shared cache could have stored these responses, invalidate the affected

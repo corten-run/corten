@@ -907,8 +907,8 @@ async fn unstaged_boxed_keyed() -> Box<dyn Boxed> {
     Box::new(unstaged_shared_keyed().await)
 }
 
-/// An unstaged route has no stage to settle its caching, so one whose answer may be `Public` is
-/// watched for a submit key its handler draws, as a staged one is: an answer that holds one goes
+/// An unstaged route has no stage to settle its caching. It is watched for a submit key its
+/// handler draws, as a staged one is: an answer that holds one goes
 /// out `private, no-cache`, a new key for each request, and one without keeps its lifetime.
 #[tokio::test]
 async fn an_unstaged_public_answer_whose_handler_drew_a_submit_key_is_the_browser_s_alone() {

@@ -329,9 +329,9 @@ fn rebuilt(req: &mut Request) -> crate::Signal {
 pin_project_lite::pin_project! {
     /// The route's answer (its page filled), which marks the stages' own signal ([`Ends`]) when it
     /// drew a form's new submit key (`crate::cache::Unrepeatable`, put on by the render that drew
-    /// it or the watch around a `Public` handler, which marks only the answer, or by [`handle`] for
+    /// it or the handler's watch, which marks only the answer, or by [`handle`] for
     /// a request a middleware rebuilt, from the signal its `Req`s mark: `req.rendered` marks only
-    /// that one, even in an answer no watch is around, such as text). A render marks the
+    /// that one, even if the render ran on another thread). A render marks the
     /// signal its request carries too, and a middleware may have given it one it made, with no
     /// signal or another one: the stages read theirs before they settle the answer, so a middleware
     /// that then makes a new response of this one, without its extensions, takes the mark away no

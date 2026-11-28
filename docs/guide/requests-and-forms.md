@@ -1132,10 +1132,8 @@ no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer
 for: a page, a patch, the layout's reads, and a `Rendered` placed in one; one made with
 `req.rendered` marks its request's answer wherever it is placed. Text carries no mark: a
 live stream's fragment
-(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A `Public`
-route's handler (and an answer type of the app's own, a page or a JSON answer, whose response
-the handler may replace with a `Public` one it converted, `NoStore` or a tuple of headers around
-any of them, staged or `unstaged`) is watched for a key
+(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. Each declared
+handler, staged or `unstaged`, is watched during its polls, regardless of its answer type, for a key
 it draws as text too (in JSON, in text, in a file, or placed in a page with `raw`), and that
 answer is sent as a keyed page is. The watch sees only what the handler draws on its own thread
 before it returns: not a key a bare render (`to_html()`) draws in a task it spawned or on

@@ -8541,50 +8541,23 @@ rules something out.
     (`private, no-store, max-age=60`) `private, no-store`, which `b910dedf7` sent as written
     (`cache::tests::an_answer_that_drew_a_submit_key_is_not_shared` fails there); the scan of its
     `Cache-Control` for a `no-store` that decides which (`cache::keyed_private`) is made only on
-    an answer that drew a key and whose header is a plain `private` already. A page's render marks the key it drew; markup rendered any other way (into JSON,
-    text or a file, or to a string a page holds as `raw` markup)
-    carries no mark, so the handler of every route whose answer may be `Public` is watched (its
-    own polls) for one being drawn, and the watch marks the answer (`cache::Unrepeatable`) as a
-    page's render does. It cannot tell a key placed in the answer from one drawn and dropped, so
-    either makes the answer private.
-    Which answers may be `Public` is known from the answer's type when the crate compiles, by a
-    hidden function of `IntoResponse` with no arguments, `__corten_may_share`, whose body a release build
-    folds where it is read: `Public` says yes, and so do a page and a JSON answer
-    (`HtmlResponse`, `JsonResponse`), whose `DerefMut` lets a handler put any response in their
-    place, a `Public` one it converted among them (`*answer = Public::new(..).into_response()`:
-    `e4a2e3db1`, which said no for them, sent such an `App::api` answer and such a page
-    `public, max-age=60` with the key in them, and
-    `tests::cache::a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key`
-    fails there), and what holds one (`HtmlResult`, `PageOr`, `JsonError`, whose own refusal is a
-    `JsonResponse`, and so `JsonResult<T>`). Bare `Json<T>` is also watched: the hidden
-    `ToJson::__into_response` hook keeps the `Response` return type of 0.3.0, so Corten
-    cannot assume that the value only writes JSON bytes. Corten's text, status, file, relay,
-    live stream and feed answers say no. One that holds another
-    (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
-    what that one does, a tuple what each part's refusal does too, since a part that refuses
-    answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
-    header where it was, so the watch must still see a `Public` answer under it); a type of the app's own always says yes, since Corten cannot see what its
-    `into_response` makes (an enum with a `Public` variant beside a private one), and the type
-    it returns is one an app cannot name, so it cannot say no, nor return what one of Corten's
-    does (`compile_fail` doctests). It is a function that needs `Self: Sized`, not an associated
-    constant: a constant would make `dyn IntoResponse` fail to compile, and with it an app's own
-    trait over `IntoResponse` that answers from a box (`self: Box<Self>`), both of which compiled
-    before the watch (a doctest); such a box is a type of the app's own, so it is watched.
-    The `__corten_` prefix leaves an app trait's `may_share` unambiguous (a downstream test).
-    The hook is hidden in rustdoc, not in Rust's name lookup: an app trait using the exact
-    prefixed name can still conflict.
-    A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
-    app's or the upstream's, as it was. The watch wraps such a route in every build and whatever
-    the store does (none kept, `corten dev`, a body route that leaves the store out, a build
-    without `compress`), staged or `unstaged`: an unstaged route has no stage to settle its
-    caching, so one whose handler drew a key is made `private, no-cache` there, with no caching
-    header a CDN reads first and no tag, as one that sets a cookie is, and it carries a mark of
-    that as such a one does, for an app that relays it inline (the lane's pass over one
-    that sets a cookie keeps a plain `private` beside its `no-store`, so the watch's
-    `private, no-store` stays as written); any other unstaged handler is routed
-    as it was, with nothing around it. Refusing `Public` on an unstaged route was not chosen: the
-    guide names it as how an unstaged answer that changes says so, and covering it costs no other
-    unstaged route anything. On any route whose answer cannot be `Public` the watch compiles away.
+    an answer that drew a key and whose header is a plain `private` already. A page's render
+    marks the key it drew. Markup rendered into JSON, text, a file or `raw` markup carries no
+    mark, so every declared handler is watched during its polls, regardless of answer type.
+    The watch marks the answer (`cache::Unrepeatable`) as a page's render does. It cannot tell
+    a key placed in the answer from one drawn and dropped, so either makes the answer private.
+    The 0.3.1 patch does not add a response classifier to a public trait. Even a rustdoc-hidden
+    associated name participates in downstream method lookup. The existing route metadata
+    describes routing and retention, not whether response headers later permit sharing. An app
+    may supply its own response, including through the existing `ToJson::__into_response` hook,
+    and a staged middleware can change its caching policy. Watching the handler leaves those
+    extension points and their bounds unchanged.
+    The watch covers those handlers with or without kept answers or `compress`, staged or
+    `unstaged`. No stage settles an unstaged answer's caching, so one whose handler drew a key
+    is made `private, no-cache` (`private, no-store` when it says `no-store`) as the handler
+    returns, with no caching header a CDN reads first and no tag. It carries that mark to an app
+    that relays it inline. Framework routes wired directly through the internal router are
+    not wrapped by this handler watch.
     A render that draws a key and reads for itself that it did (a page's, a patch's, the layout
     reads', and one made with `req.rendered`, wherever that one is placed) also marks the
     request's signal (a bit beside the notice's, in
@@ -8600,9 +8573,9 @@ rules something out.
     answer comes back past the middleware. The route's side of the chain (`middleware::handle`,
     which no middleware can stand in for) looks at the answer as it comes back
     (`middleware::Keyed`) and, when it has the mark, whoever put it on, marks the stages' own
-    signal before any middleware sees the answer. A render made with `req.rendered` and placed
-    in an answer no watch is around (such as text) marks only the signal of the `Req` it is
-    called on, so for a request that does not carry the stages' signal `handle` takes the one it
+    signal before any middleware sees the answer. A render made with `req.rendered` on a
+    different thread is not seen by the watch. It marks the signal of the `Req` it is called on,
+    so for a request that does not carry the stages' signal `handle` takes the one it
     carries, or makes one for a request with none, which each of its `Req`s shares
     (`signal::Detached`, beside the request's extensions, so what reads a `Signal` still finds
     none), and marks the answer from it as it comes back, in a box of its own (the box a layout read's
@@ -8660,7 +8633,11 @@ rules something out.
     handler (one that polls another route on its own stack) is polled within the outer watch, so
     a key the inner answer drew marks the outer one private too, even when the handler drops the
     inner answer: a private answer that could have been shared, never the other way round; the
-    inner request's own answer is marked through its own signal. Measured on 2026-11-26 with
+    inner request's own answer is marked through its own signal. The figures below are for
+    earlier builds that selected watched routes by answer type; they do not measure 0.3.1's
+    watch on every declared handler. In particular, staged text and some other ordinary return
+    types now perform a thread-local watch around each poll, and formerly unwrapped unstaged
+    handlers now have a watch future. Measured on 2026-11-26 with
     `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
     request at main (`9b8834fcc`), at main with only the 404 made as it is polled (`da6420d62`,
     the control, not for merge) and with this change (`d10bedc5f`): a `Public` page given from
@@ -8696,8 +8673,7 @@ rules something out.
     keyed one (+1.94%); `7a7ac7aa8`, whose watch marked the request's signal as well, counted 34
     more than `9c8cd07e7` for the page made for each request, 20 for the JSON made for each and
     44 for the keyed page, the signal each watched route's future held, and the other cases
-    within about 1. The measured build had no `may_share` symbol, so saying whether an
-    answer may be `Public` is not a call. These are instruction counts, not cycles, and the
+    within about 1. These are instruction counts, not cycles, and the
     shared byte's `or` and read are among them only as instructions: what they cost under load on
     a quiet host is not measured here. With
     `bench/request-cost` (Last checked), instructions a request, median of three, main, the
@@ -9645,8 +9621,7 @@ rules something out.
     handler nothing that must happen for every request; markup with a form's new submit key
     that only the watch sees (a bare `to_html()`) is rendered by the handler itself on the
     thread that runs it before it returns, not by a task it spawned, one it handed a render to,
-    a thread of its own, a body sent after it returned or a feed's rows; an app's own answer type is rare,
-    so the watch its route always runs costs an app little; no app finishes work again and again on the
+    a thread of its own, a body sent after it returned or a feed's rows; no app finishes work again and again on the
     `Signal` of a write from before its first answer that may be kept; an app's kept answers
     are given again at ages of 1,000 to 9,999 seconds, which a lifetime of an hour reaches,
     often enough to be worth the 36,000 bytes of the table's fourth digit); value (fast and proven fast; standards
@@ -9689,9 +9664,9 @@ rules something out.
     of one name is measured costing more than its handler's map cost to clone, so the head
     should be held as a map past some size; an app
     is found rendering a form's submit key with a bare `to_html()` in a task its `Public` handler spawned, on a
-    thread of the handler's own or in a body it streams, which the watch does not see; an
-    app's own answer type, which is always watched, is found on a hot path where the watch's
-    cost shows, so such a type should be able to say it is never `Public`; an app's binary is held to a
+    thread of the handler's own or in a body it streams, which the watch does not see; the
+    watch has a measured cost on a hot path, so look for a way to avoid it without adding
+    app-facing trait names or assuming a response cannot be shared; an app's binary is held to a
     size where 36,000 bytes count and its answers are kept for under 16 minutes 39 seconds,
     so the table of ages should be of three digits; or the rule for a touched request comes
     to tell where a build's code sits from what the change costs, so an older answer's
@@ -12218,13 +12193,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     are not in the tag, so one that only some answers at a URL carry (`Content-Disposition`) stays
     on a cache's copy after a `304`. An app value drawn at random for each render (a token in the
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
-    own (the nonce, a submit key), which saves time only. For a key placed as `raw(..)` markup,
-    it skips the hash in any answer of a staged route, text and a bare `Json<T>` included, when the
-    key was made with `req.rendered`, which marks the request; a key rendered bare with
-    `to_html()` is seen only in an answer that may be `Public`, whose handler is watched for one:
-    `Public`, a page or JSON answer (`HtmlResponse`, `JsonResponse`, `Json<T>`) or an answer type of the app's
-    own, which the handler may replace with a `Public` one it converted, and `NoStore` or a tuple of
-    headers around any of them, as the [forms guide](guide/requests-and-forms.md) lists them.
+    own (the nonce, a submit key), which saves time only. A render through `req.rendered` can
+    mark a staged request itself, and the handler watch sees a bare render (`to_html()`)
+    during a declared handler's polls, regardless of answer type. See the limits in the
+    [forms guide](guide/requests-and-forms.md).
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which

@@ -3912,11 +3912,6 @@ pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &http::request::P
 }
 
 impl crate::response::IntoResponse for ParamsRejection {
-    #[inline]
-    fn __corten_may_share() -> crate::answer::sealed::MayShare {
-        crate::answer::sealed::MayShare::NO
-    }
-
     fn into_response(self) -> crate::response::Response {
         *self.0
     }
@@ -4573,7 +4568,7 @@ fn written_checked<R: Route + ?Sized>() {
 /// caching header, so no shared cache hands one visitor's cookie to another, and is marked as that
 /// visitor's, as a staged one is, for an app that relays it inline. A handler that panics
 /// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
-/// the connection. A handler whose answer may be `Public` is watched for a form's new submit key
+/// the connection. The handler is watched for a form's new submit key
 /// ([`Watched`]), and an answer whose handler drew one is shared with no cache either. Under an
 /// API's prefix a failure after the host check is the API's JSON, as every failure there is. It
 /// wraps the handler's boxed future in one box of its own ([`laned`]); only a failure under an API
@@ -4678,13 +4673,10 @@ fn unshared(headers: &mut http::HeaderMap, no_store: bool) {
     }
 }
 
-/// An unstaged route's handler whose answer may be `Public` (`IntoResponse::__corten_may_share`: a
-/// `Public` answer, or a type of the app's own, which may hold one), watched for a form's new
-/// submit key in its polls as a staged one is
-/// (`answer::Made`). No stage settles an unstaged answer's caching, so one whose handler drew a
-/// key is made private here: `private, no-cache` (`private, no-store` where it names `no-store`),
-/// with no caching header a CDN reads first and no tag. Chosen by the answer's type when the route is made,
-/// so the handler of any other unstaged route is the one it was, with nothing around it.
+/// An unstaged route's handler, watched for a form's new submit key in its polls as a staged one
+/// is (`answer::Made`). No stage settles an unstaged answer's caching, so one whose handler drew
+/// a key is made private here: `private, no-cache` (`private, no-store` where it names `no-store`),
+/// with no caching header a CDN reads first and no tag.
 #[derive(Clone)]
 pub(crate) struct Watched<H>(pub(crate) H);
 
@@ -4851,25 +4843,18 @@ pub mod __private {
         }
     }
 
-    /// An unstaged route's `get`, its only method. A handler whose answer may be `Public` is
-    /// watched for a form's new submit key ([`super::Watched`]); any other is routed as it is.
+    /// An unstaged route's `get`, its only method. The handler is watched for a form's new
+    /// submit key ([`super::Watched`]).
     #[inline]
     pub fn unstaged_get<H, T, S, P, J>(handler: H) -> UnstagedMethods<S>
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
         <H as crate::answer::Signature<T>>::Args: crate::answer::AllUnstaged + crate::answer::Holds<P, J>,
-        <H as crate::answer::Signature<T>>::Out: crate::response::IntoResponse,
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        let handler = handler.into_handler();
-        // Known from the answer's type, folded in a release build.
-        if <<H as crate::answer::Signature<T>>::Out as crate::response::IntoResponse>::__corten_may_share().0 {
-            UnstagedMethods(crate::router::get(super::Watched(handler)))
-        } else {
-            UnstagedMethods(crate::router::get(handler))
-        }
+        UnstagedMethods(crate::router::get(super::Watched(handler.into_handler())))
     }
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names

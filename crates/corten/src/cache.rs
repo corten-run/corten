@@ -819,7 +819,7 @@ pub(crate) fn unrepeatable(res: &mut Response) {
 /// new key): its tag would never match, so it is not made; no cache may give it to another
 /// visitor or reuse it unasked ([`settle`]), and the app does not keep it ([`crate::kept`]).
 /// The render that draws the key sets it on a page, a patch or the layout's reads, and the watch
-/// around the handler of a route whose answer may be `Public` sets it on any answer whose handler
+/// around each declared route's handler sets it on any answer whose handler
 /// drew one, rendered to a string included (`answer::Made`; an unstaged route's `route::Watched`,
 /// whose mark another Corten app that relays the answer inline reads, as it reads [`Personal`]).
 /// A render also marks the request's signal ([`crate::Signal::mark_key_drawn`]); the watch marks

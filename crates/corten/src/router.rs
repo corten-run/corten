@@ -189,9 +189,9 @@ impl<const TELL: bool> Endpoint for Keeping<TELL> {
                 None => res,
             };
             // An answer with a form's new submit key is this request's alone: marked by the
-            // render that drew it (a page's, the layout's reads') or by the watch the handler of
-            // every route whose answer may be `Public` runs under (`answer::Made`), which sees one
-            // rendered any other way. A key `req.rendered` renders on a thread the watch does not
+            // render that drew it (a page's, the layout's reads') or by the watch around a
+            // declared handler's polls (`answer::Made`), which sees one rendered any other way
+            // on that thread. A key `req.rendered` renders on a thread the watch does not
             // poll (a blocking task) marks only the request's signal, which `Missed::keep` reads
             // before it keeps anything; a bare `to_html()` there marks neither.
             if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {

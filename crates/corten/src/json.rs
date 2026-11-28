@@ -341,7 +341,6 @@ pub use read::__private as __read;
 #[must_use]
 pub struct Json<T>(pub T);
 
-// Keep IntoResponse's conservative default: a downstream ToJson can supply a whole response.
 impl<T: ToJson> IntoResponse for Json<T> {
     fn into_response(self) -> Response {
         let mut res = self.0.__into_response();

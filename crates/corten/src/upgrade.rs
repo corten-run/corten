@@ -296,11 +296,6 @@ impl Switch {
 }
 
 impl IntoResponse for Switch {
-    #[inline]
-    fn __corten_may_share() -> crate::answer::sealed::MayShare {
-        crate::answer::sealed::MayShare::NO
-    }
-
     fn into_response(self) -> Response {
         self.0
     }
@@ -345,11 +340,6 @@ impl<A> From<Switch> for SwitchOr<A> {
 }
 
 impl<A: IntoResponse> IntoResponse for SwitchOr<A> {
-    #[inline]
-    fn __corten_may_share() -> crate::answer::sealed::MayShare {
-        A::__corten_may_share()
-    }
-
     fn into_response(self) -> Response {
         match self {
             SwitchOr::Switch(switch) => switch.0,

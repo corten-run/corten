@@ -1012,7 +1012,6 @@ async fn a_boxed_answer_of_the_app_s_own_is_watched_for_a_submit_key() {
     // `dyn IntoResponse` is a type, as it was before the watch.
     let erased: Box<dyn IntoResponse + Send> = Box::new("erased");
     drop(erased);
-    assert!(<Box<dyn Boxed> as IntoResponse>::__corten_may_share().0, "a box of the app's own may be `Public`");
 
     let minute = Duration::from_secs(60);
     let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
@@ -1176,31 +1175,59 @@ async fn replaced_plain() -> Result<crate::JsonResponse, JsonError> {
     Ok(replaced_json(false))
 }
 
-#[cfg(feature = "json")]
-#[test]
-fn json_body_types_keep_the_submit_key_watch_through_wrappers() {
-    use crate::response::IntoResponse;
+#[crate::routes]
+mod conservative_watch {
+    #[route("/text/drawn", get = marked_text)]
+    pub struct DrawnText;
 
-    fn watched<T: IntoResponse>() {
-        assert!(T::__corten_may_share().0, "{} must be watched", std::any::type_name::<T>());
+    #[route("/text/plain", get = plain_text)]
+    pub struct PlainText;
+
+    #[route("/raw/drawn", get = marked_raw, unstaged)]
+    pub struct DrawnRaw;
+
+    #[route("/raw/plain", get = plain_raw, unstaged)]
+    pub struct PlainRaw;
+}
+
+async fn marked_text() -> &'static str {
+    crate::form::DREW_KEY.set(true);
+    plain_text().await
+}
+
+async fn plain_text() -> &'static str {
+    "synthetic"
+}
+
+async fn marked_raw() -> crate::response::Response {
+    crate::form::DREW_KEY.set(true);
+    plain_raw().await
+}
+
+async fn plain_raw() -> crate::response::Response {
+    let mut res = crate::response::IntoResponse::into_response(plain_text().await);
+    res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
+    res.headers_mut().insert(header::ETAG, HeaderValue::from_static("\"synthetic\""));
+    for name in CDN_OVERRIDES {
+        res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
     }
+    res
+}
 
-    type Body = Json<bool>;
-    type Headers = [(http::HeaderName, &'static str); 1];
-    watched::<Body>();
-    watched::<Json<crate::json::Raw>>();
-    watched::<crate::JsonResponse>();
-    watched::<crate::JsonResult<bool>>();
-    watched::<crate::Result<Body>>();
-    watched::<Result<Body, StatusCode>>();
-    watched::<Result<StatusCode, Body>>();
-    watched::<NoStore<Body>>();
-    watched::<Public<Body>>();
-    watched::<(StatusCode, Body)>();
-    watched::<(Headers, Body)>();
-    watched::<(StatusCode, Headers, NoStore<Body>)>();
-    watched::<crate::upgrade::SwitchOr<Body>>();
-    assert!(!<(StatusCode, Headers, &'static str)>::__corten_may_share().0);
+#[tokio::test]
+async fn staged_text_and_unstaged_raw_watch_the_handler_without_classifying_its_answer() {
+    let router =
+        App::new(conservative_watch::router()).middleware((CdnRecaches(Some("public, max-age=60")), RebuiltAnswer)).router();
+    for (path, marked) in [("/text/drawn", true), ("/text/plain", false), ("/raw/drawn", true), ("/raw/plain", false)] {
+        let (status, headers, body) = fetch(&router, "GET", path, &[("if-none-match", "\"other\"")]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(body, "synthetic", "{path}");
+        assert_eq!(headers[header::CACHE_CONTROL], if marked { "private, no-cache" } else { "public, max-age=60" }, "{path}");
+        assert_eq!(headers.contains_key(header::ETAG), !marked, "{path}");
+        for name in CDN_OVERRIDES {
+            assert_eq!(headers.contains_key(name), !marked, "{path}: {name}");
+        }
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1221,8 +1248,8 @@ mod json_watch {
 
 #[cfg(feature = "json")]
 async fn json_after_drawing_a_key() -> Json<bool> {
-    // The watch records the draw even when the handler discards it; no key goes into the body.
-    drop(crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html());
+    // Set the synthetic draw marker without generating a key.
+    crate::form::DREW_KEY.set(true);
     Json(true)
 }
 
@@ -7427,8 +7454,7 @@ async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
     }
 }
 
-/// The unstaged routes of `what_settling_a_page_costs`: a `Public` answer, which is watched for
-/// a submit key, and text, which is not.
+/// The unstaged routes of `what_settling_a_page_costs`: a `Public` answer and text.
 #[crate::routes]
 mod settle_unstaged_url {
     #[route("/", get = settle_unstaged_public, unstaged)]
