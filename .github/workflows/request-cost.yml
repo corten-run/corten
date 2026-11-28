@@ -103,3 +103,15 @@ jobs:
             echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$builds/seconds" | sed 's/,/, /g'). The head is counted against the commit where it left the base's branch, not as merged: what the base gained since is in neither build. The description was read as it stood when this run started: a line added to it since is read by the next run a push or a reopening of the pull request starts, not by a rerun of this one."
           } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$status"
+      # Calibration only on this draft. Remove this step before any rule change is merged.
+      - name: Compare the idle allocator readings of one binary with itself
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          builds=$RUNNER_TEMP/request-cost
+          cmp "$builds/base/sha256" "$builds/head/sha256"
+          output=$RUNNER_TEMP/idle-calibration
+          bash bench/request-cost/job.sh diagnose "$builds" "$(( $(nproc) - 1 ))" "$output"
+          echo "Self-comparison probe SHA-256: $(cat "$builds/base/sha256")" | tee -a "$GITHUB_STEP_SUMMARY"
+          node bench/request-cost/compare.mjs "$output" --allocator | tee -a "$GITHUB_STEP_SUMMARY"
