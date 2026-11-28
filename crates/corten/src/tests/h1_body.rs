@@ -347,11 +347,11 @@ const HELLO: &str = "5\r\nhello\r\n0\r\n\r\n";
 
 /// How a request frames its body, in its head: every line a client can say it with, and get it
 /// wrong with. Both connections read a head's framing by the same rules (hyper 1.12's
-/// `Server::parse`), so each case is one expectation and the same bytes from both. RFC 9112,
-/// section 6.3: a `Transfer-Encoding` whose last coding is `chunked` frames the body, whatever
-/// `Content-Length` says, and the connection is closed behind the answer; one whose last coding
-/// is not `chunked` is a 400; a `Content-Length` that is not one number, or two that differ, is a
-/// 400; and on HTTP/1.0 a `Transfer-Encoding` is a 400.
+/// `Server::parse`), but for a head with both lines, so each case is one expectation and the
+/// same bytes from both. RFC 9112, section 6.3: a `Transfer-Encoding` whose last coding is
+/// `chunked` frames the body; one whose last coding is not `chunked` is a 400; a
+/// `Content-Length` that is not one number, or two that differ, is a 400; and on HTTP/1.0 a
+/// `Transfer-Encoding` is a 400.
 #[tokio::test(start_paused = true)]
 async fn a_bodys_framing_is_read_from_its_head_as_hyper_reads_it() {
     let pair = pair();
@@ -384,25 +384,8 @@ async fn a_bodys_framing_is_read_from_its_head_as_hyper_reads_it() {
         ("the largest but one", length("18446744073709551614"), Does::Refuses(431), ""),
         ("chunked", coded(CHUNKED), Does::Answers, "cl=[] te=[\"chunked\"] body=5"),
         ("chunked, in capitals", coded("Transfer-Encoding: CHUNKED\r\n"), Does::Answers, "te=[\"CHUNKED\"] body=5"),
-        // Chunks frame the body, the length is not given to the app, and the connection closes.
-        (
-            "a length, then chunked",
-            coded("content-length: 5\r\ntransfer-encoding: chunked\r\n"),
-            Does::AnswersAndCloses,
-            "cl=[] te=[\"chunked\"] body=5",
-        ),
-        (
-            "chunked, then a length",
-            coded("transfer-encoding: chunked\r\ncontent-length: 5\r\n"),
-            Does::AnswersAndCloses,
-            "cl=[] te=[\"chunked\"] body=5",
-        ),
-        (
-            "chunked, then a length that is no number",
-            coded("transfer-encoding: chunked\r\ncontent-length: x\r\n"),
-            Does::AnswersAndCloses,
-            "cl=[]",
-        ),
+        // Both, where the length is read first and is no number: a 400 from each for the length.
+        // Both otherwise: `a_head_with_a_length_and_chunks_is_refused_where_hyper_reads_the_chunks`.
         (
             "a length that is no number, then chunked",
             coded("content-length: x\r\ntransfer-encoding: chunked\r\n"),
@@ -453,7 +436,41 @@ async fn a_bodys_framing_is_read_from_its_head_as_hyper_reads_it() {
     }
     wrong.none();
     // The bodies were read by Corten's connection, not handed to hyper with theirs.
-    assert_eq!(crate::h1::BODIES.get(), 16, "the bodies Corten's connection read: every one of a request that was answered");
+    assert_eq!(crate::h1::BODIES.get(), 13, "the bodies Corten's connection read: every one of a request that was answered");
+}
+
+/// **A head with both a `Content-Length` and a `Transfer-Encoding` is refused by Corten's
+/// connection, where hyper's reads the body by its chunks**, held here from both sides so that
+/// either changing is seen. RFC 9112, section 6.3, lets a server do either, and closing behind
+/// the answer, which both do, keeps a proxy that framed the request by its length from having
+/// anything behind the chunks read as a request. It does not keep the other way round: where the
+/// length is shorter than the chunks, such a proxy sends the next client's request behind it,
+/// and hyper reads that request into this one's body, for this request's handler, here 52 bytes
+/// of it to a route that answers with the length of the first piece it is given.
+#[tokio::test(start_paused = true)]
+async fn a_head_with_a_length_and_chunks_is_refused_where_hyper_reads_the_chunks() {
+    let pair = pair();
+    let coded = |path: &str, lines: &str, body: &str| format!("POST {path} HTTP/1.1\r\nhost: localhost\r\n{lines}\r\n{body}");
+    let refused = (vec![(400, false)], false);
+    for lines in [
+        "content-length: 5\r\ntransfer-encoding: chunked\r\n",
+        "transfer-encoding: chunked\r\ncontent-length: 5\r\n",
+        "transfer-encoding: chunked\r\ncontent-length: x\r\n",
+        "content-length: 0\r\ntransfer-encoding: chunked\r\n",
+    ] {
+        let (theirs, ours) = pair.send(&[&coded("/framing", lines, HELLO)], false).await;
+        assert_eq!(did(&theirs), Does::AnswersAndCloses.did(), "hyper's, {lines:?}: {}", brief(&theirs));
+        assert!(find(&theirs.before.0, b"cl=[] te=[\"chunked\"] body=5").is_some(), "hyper's, {lines:?}: {}", brief(&theirs));
+        assert_eq!(did(&ours), refused, "{lines:?}: {}", brief(&ours));
+    }
+    // The proxy's frame: four bytes, `34\r\n`. What it sends behind them is another client's.
+    let theirs_too = "GET /seen HTTP/1.1\r\nhost: localhost\r\ncookie: a=b\r\n\r\n";
+    assert_eq!(theirs_too.len(), 0x34);
+    let sent = coded("/first", "content-length: 4\r\ntransfer-encoding: chunked\r\n", "34\r\n") + theirs_too;
+    let (theirs, ours) = pair.send(&[&sent], false).await;
+    assert!(find(&theirs.before.0, b"first 52").is_some(), "hyper's: {}", brief(&theirs));
+    assert!(find(&theirs.before.0, b"seen").is_none(), "hyper's: {}", brief(&theirs));
+    assert_eq!(did(&ours), refused, "{}", brief(&ours));
 }
 
 /// An HTTP/1.0 request with a body is read as any other, and its connection ends with it.

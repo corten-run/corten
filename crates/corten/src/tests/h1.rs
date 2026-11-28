@@ -1223,12 +1223,14 @@ async fn a_request_that_is_hypers_takes_the_rest_of_its_connection() {
         let answer = one(&mut client).await;
         assert!(answer.ends_with("read 100000"), "own: {own}: {answer}");
         got.push(answer);
-        // hyper reads this one as chunked and closes after it, on both.
+        // A length and chunks: hyper reads the chunks and closes behind the answer; Corten's own
+        // connection refuses the head and closes (`h1/head.rs`, item 1), so this one is not
+        // among what the two must answer alike.
         let both = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n");
         client.write_all(both.as_bytes()).await.unwrap();
         let (answer, closed) = read(&mut client, SOON).await;
-        assert!(closed && statuses(&answer) == [200], "own: {own}: {answer}");
-        got.push(answer);
+        let status = if own { 400 } else { 200 };
+        assert!(closed && statuses(&answer) == [status], "own: {own}: {answer}");
 
         // Shutdown: a connection handed over and idle since is closed, and one handed over at a
         // request still being answered finishes it and says that it closes.

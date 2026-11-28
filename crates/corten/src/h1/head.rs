@@ -11,15 +11,20 @@
 //!
 //! **What a head says about its body** ([`Framing`]) is read as hyper reads it, line for line in
 //! the head's order (`Server::parse` again), so the same heads are refused with the same status
-//! and the app is given the same headers. RFC 9112, section 6.3, is the rule, and where hyper is
-//! stricter than it, so is this:
-//! 1. A `Transfer-Encoding` frames the body in chunks, whatever a `Content-Length` says: the
-//!    length is taken out of the headers the app is given (a line before it is removed, one behind
-//!    it is not added), and the connection is closed behind the answer, since a client or a proxy
-//!    that sent both may not agree with this server about where the request ends.
-//! 2. One whose last coding is not `chunked`, read as hyper reads it (the last item of the line's
-//!    list, in any case, with spaces around it and nothing else: not `chunked;q=1`, not an empty
-//!    item behind a comma, not a value with a byte outside visible ASCII), is a 400; and so is
+//! and the app is given the same headers. RFC 9112, section 6.3, is the rule. Where hyper is
+//! stricter than it, so is this (items 2 on); in one thing this is stricter than hyper, as the
+//! RFC lets a server be (item 1):
+//! 1. A head with both a `Content-Length` and a `Transfer-Encoding` line is a 400, in either
+//!    order and whatever either says, and the connection is closed with nothing behind the head
+//!    read. hyper reads such a body by its chunks and closes behind the answer, which the RFC
+//!    also allows; but a proxy in front that took the length for the frame, with a length
+//!    shorter than the chunks, sends the next client's request behind it, and hyper reads that
+//!    request into this one's body, for this request's handler. Refused at the head, no byte of
+//!    it is read.
+//! 2. A `Transfer-Encoding` whose last coding is not `chunked`, read as hyper reads it (the last
+//!    item of the line's list, in any case, with spaces around it and nothing else: not
+//!    `chunked;q=1`, not an empty item behind a comma, not a value with a byte outside visible
+//!    ASCII), is a 400; and so is
 //!    any `Transfer-Encoding` on an HTTP/1.0 request. The last line of several decides.
 //! 3. A `Content-Length` is decimal digits and nothing else: a sign, a space inside it, a comma
 //!    (a list, even of equal numbers), `0x`, a fraction, an empty value and a number that does
@@ -239,10 +244,10 @@ pub(crate) fn build(
     let mut keep_alive = http11;
     let mut closes = false;
     // The body's framing, as hyper's `Server::parse` finds it, in its order and with its names:
-    // the length the lines so far give, whether any line was a `Content-Length` or a
-    // `Transfer-Encoding`, and whether the last of those ended in `chunked`.
+    // the length the lines so far give, whether any line was a `Transfer-Encoding`, and whether
+    // the last of those ended in `chunked`.
     let mut length: Option<u64> = None;
-    let (mut is_cl, mut is_te, mut is_te_chunked, mut expects) = (false, false, false, false);
+    let (mut is_te, mut is_te_chunked, mut expects) = (false, false, false);
     for &(name, name_end, value, value_end) in indices {
         let name = HeaderName::from_bytes(&bytes[name..name_end]).map_err(|_| Refusal::Bad)?;
         // `httparse` let the same bytes through as `HeaderValue` does, which checks them again:
@@ -253,18 +258,18 @@ pub(crate) fn build(
                 if !http11 {
                     return Err(Refusal::Bad);
                 }
-                is_te = true;
-                // The length a line before this one gave frames nothing, and is not the app's.
-                if is_cl && length.take().is_some() {
-                    headers.remove(header::CONTENT_LENGTH);
+                // Behind a `Content-Length` (every one that was read is a number): refused, where
+                // hyper reads the chunks (the module's comment, item 1).
+                if length.is_some() {
+                    return Err(both());
                 }
+                is_te = true;
                 is_te_chunked = ends_chunked(&value);
             }
             header::CONTENT_LENGTH => {
-                is_cl = true;
-                // Behind a `Transfer-Encoding` it is not read at all, and not the app's.
+                // Behind a `Transfer-Encoding`, whatever it says.
                 if is_te {
-                    continue;
+                    return Err(both());
                 }
                 let said = digits(value.as_bytes()).ok_or(Refusal::Bad)?;
                 if let Some(first) = length {
@@ -296,20 +301,14 @@ pub(crate) fn build(
     if is_te && !is_te_chunked {
         return Err(Refusal::Bad);
     }
-    // Both were sent: the chunks frame the body, and the connection ends with this request.
-    if is_te && is_cl {
-        keep_alive = false;
-    }
-    if is_te || is_cl {
-        let framing = match length {
-            _ if is_te => Framing::Chunked,
-            Some(length) if length > 0 => Framing::Length(length),
-            _ => Framing::None,
-        };
-        // A client that expects to be told, with no body to send, is told nothing.
-        if framing != Framing::None {
-            *said = Said { framing, expects: expects && http11 };
-        }
+    let framing = match length {
+        _ if is_te => Framing::Chunked,
+        Some(length) if length > 0 => Framing::Length(length),
+        _ => Framing::None,
+    };
+    // A client that expects to be told, with no body to send, is told nothing.
+    if framing != Framing::None {
+        *said = Said { framing, expects: expects && http11 };
     }
     let (mut parts, ()) = http::Request::new(()).into_parts();
     parts.method = method;
@@ -317,6 +316,21 @@ pub(crate) fn build(
     parts.version = if http11 { Version::HTTP_11 } else { Version::HTTP_10 };
     parts.headers = headers;
     Ok(Head { parts, keep_alive })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// How many heads of this thread's connections were refused for a `Content-Length` and a
+    /// `Transfer-Encoding` together, which hyper takes: the gate lists a stream that has one.
+    pub(crate) static BOTH_FRAMINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The refusal of a head that has both a `Content-Length` and a `Transfer-Encoding`.
+#[cold]
+fn both() -> Refusal {
+    #[cfg(test)]
+    BOTH_FRAMINGS.set(BOTH_FRAMINGS.get() + 1);
+    Refusal::Bad
 }
 
 /// Whether a `Transfer-Encoding` line's last coding is `chunked`, as hyper reads it
@@ -767,9 +781,19 @@ mod tests {
         assert_eq!(read("content-length: 5\r\n").unwrap(), (Framing::Length(5), true, false, 1));
         assert_eq!(read("content-length: 5\r\nContent-Length: 05\r\n").unwrap(), (Framing::Length(5), true, false, 1));
         assert_eq!(read("transfer-encoding: gzip, Chunked \r\n").unwrap(), (Framing::Chunked, true, false, 0));
-        // Both: the chunks frame it, the length is not the app's, and the connection ends.
-        assert_eq!(read("content-length: 5\r\ntransfer-encoding: chunked\r\n").unwrap(), (Framing::Chunked, false, false, 0));
-        assert_eq!(read("transfer-encoding: chunked\r\ncontent-length: x\r\n").unwrap(), (Framing::Chunked, false, false, 0));
+        // Both, in either order and whatever either says: refused, where hyper reads the chunks.
+        for both in [
+            "content-length: 5\r\ntransfer-encoding: chunked\r\n",
+            "transfer-encoding: chunked\r\ncontent-length: 5\r\n",
+            "transfer-encoding: chunked\r\ncontent-length: x\r\n",
+            "content-length: 0\r\ntransfer-encoding: chunked\r\n",
+            "content-length: 5\r\ncontent-length: 5\r\ntransfer-encoding: chunked\r\n",
+            "transfer-encoding: gzip\r\ncontent-length: 5\r\ntransfer-encoding: chunked\r\n",
+        ] {
+            BOTH_FRAMINGS.set(0);
+            assert_eq!(read(both).err(), Some(Refusal::Bad), "{both:?}");
+            assert_eq!(BOTH_FRAMINGS.get(), 1, "{both:?}");
+        }
         assert_eq!(read("content-length: 5\r\nexpect: 100-Continue\r\n").unwrap(), (Framing::Length(5), true, true, 1));
         assert!(!read("content-length: 5\r\nexpect: 100-continue\r\nexpect: x\r\n").unwrap().2);
         let length = |value: u64| format!("content-length: {value}\r\n");

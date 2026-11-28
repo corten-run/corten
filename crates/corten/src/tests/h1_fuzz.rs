@@ -62,6 +62,11 @@
 //!    connection refused a body for that, by its own count of them, closed the connection, and
 //!    answered every request before the last it answered as hyper's did; it is never one in
 //!    which Corten's connection is the laxer.
+//! 3. A head with both a `Content-Length` and a `Transfer-Encoding` line is refused by Corten's
+//!    connection with 400, and read by hyper's, which takes the body by its chunks and closes
+//!    behind the answer (`crate::h1::head` says why Corten's does not follow it). The class is of
+//!    a stream in which Corten's connection refused a head for that, by its own count of them,
+//!    with the same conditions as the second.
 //!
 //! The servers of a run are on one thread, the run's own, over pipes in memory, with tokio's time
 //! paused: a client that waits for the server to go quiet waits until every task is idle, not for
@@ -480,9 +485,13 @@ fn refused_head_reaches(sent: &[u8], hyper: &Outcome, limit: usize) -> bool {
     unanswered_from(sent, answered).is_some_and(|from| sent.len() - from >= limit && !head_ends(&sent[from..from + limit]))
 }
 
-/// The other: Corten's connection refused a body for an LF with no CR before it among its
+/// The second: Corten's connection refused a body for an LF with no CR before it among its
 /// trailers, which hyper's takes for a byte of a trailer and reads on behind.
 const BARE_LF: &str = "a body with a bare LF among its trailers: refused by own, read on by hyper";
+
+/// The third: Corten's connection refused a head for a `Content-Length` and a
+/// `Transfer-Encoding` together, whose body hyper's reads by its chunks.
+const BOTH_FRAMINGS: &str = "a head with a length and chunks: refused by own, read by its chunks by hyper";
 
 /// Every answer a server sent, to the stream and to the last request.
 fn all(outcome: &Outcome) -> Vec<Answer> {
@@ -492,27 +501,28 @@ fn all(outcome: &Outcome) -> Vec<Answer> {
 }
 
 /// `reaches_limit`: the head the servers refused is as long as the app's limit on a head, or
-/// longer ([`refused_head_reaches`]). `bare_lf`: Corten's connection refused a body of the stream
-/// for an LF with no CR before it among its trailers.
-fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool, bare_lf: bool) -> Verdict {
-    match differs(hyper, own, reaches_limit) {
-        // The second class: never where Corten's connection is the laxer one, and only where it
-        // closed the connection (at the request whose body it refused, which is so the last it
+/// longer ([`refused_head_reaches`]). `stricter`: the class, [`BARE_LF`] or [`BOTH_FRAMINGS`], of
+/// a rule by which Corten's connection refused a request of the stream that hyper's takes, by
+/// Corten's own count of them.
+fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool, stricter: Option<&'static str>) -> Verdict {
+    match (differs(hyper, own, reaches_limit), stricter) {
+        // The second and third classes: never where Corten's connection is the laxer one, and
+        // only where it closed the connection (at the request it refused, which is so the last it
         // answered) and answered the requests before that one as hyper's did.
-        Verdict::Unlisted(_)
-            if bare_lf && own.closed && {
+        (Verdict::Unlisted(_), Some(class))
+            if own.closed && {
                 let (theirs, ours) = (all(hyper), all(own));
                 let before = ours.len().saturating_sub(1);
                 theirs.len() >= before && theirs[..before] == ours[..before]
             } =>
         {
-            Verdict::Listed(BARE_LF)
+            Verdict::Listed(class)
         }
-        verdict => verdict,
+        (verdict, _) => verdict,
     }
 }
 
-/// [`judge`], but for the second listed class.
+/// [`judge`], but for the second and third listed classes.
 fn differs(hyper: &Outcome, own: &Outcome, reaches_limit: bool) -> Verdict {
     if hyper == own {
         return Verdict::Same;
@@ -584,14 +594,13 @@ fn bases() -> Vec<Vec<u8>> {
         "\r\n\r\nGET /none HTTP/1.1\nhost: localhost\n\nGET /close HTTP/1.1\r\nhost: localhost\r\n\r\n".to_owned(),
         format!("GET /unread HTTP/1.1\r\nhost: localhost\r\ncontent-length: 3\r\n\r\nabc{get}"),
         // Bodies of both framings, read by Corten's connection: with extensions and trailers,
-        // one behind another, expected, left unread, half read, framed twice, framed wrong, on
-        // HTTP/1.0, and given back.
+        // one behind another, expected, left unread, half read, framed wrong, on HTTP/1.0, and
+        // given back. (Framed twice: [`both_bases`].)
         format!("{}5;x=1\r\nhello\r\n6\r\n world\r\n0;last\r\nx-t: 1\r\n\r\n{get}", post("/seen", CODED)),
         format!("{}hello{}3\r\nabc\r\n0\r\n\r\n{get}", post("/read", "content-length: 5\r\n"), post("/seen", CODED)),
         format!("{}5\r\nhello\r\n0\r\n\r\n{get}", post("/seen", "transfer-encoding: chunked\r\nexpect: 100-continue\r\n")),
         format!("{}5\r\nhello\r\n0\r\n\r\n{get}", post("/unread", CODED)),
         format!("{}5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n{get}", post("/first", CODED)),
-        format!("{}5\r\nhello\r\n0\r\n\r\n{get}", post("/seen", "content-length: 5\r\ntransfer-encoding: chunked\r\n")),
         format!("{}5\r\nhello\r\nz\r\n{get}", post("/seen", CODED)),
         "POST /seen HTTP/1.0\r\ncontent-length: 5\r\n\r\nhello".to_owned(),
         format!("{}hello world{get}", post("/echo", "content-length: 11\r\n")),
@@ -605,6 +614,15 @@ fn bases() -> Vec<Vec<u8>> {
         format!("{}hello world{get}", post("/held", "content-length: 11\r\n")),
     ];
     texts.into_iter().map(String::into_bytes).collect()
+}
+
+/// A body framed twice, by a length and by chunks, cut and ended at every byte as [`bases`] are,
+/// in a test of its own: every one of its streams whose head is whole differs by the third listed
+/// class, which [`own_and_hyper_answer_every_stream_alike`] would count against the few the list
+/// may let through.
+fn both_bases() -> Vec<Vec<u8>> {
+    let post = "POST /seen HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\ntransfer-encoding: chunked\r\n\r\n";
+    vec![format!("{post}5\r\nhello\r\n0\r\n\r\nGET / HTTP/1.1\r\nhost: localhost\r\n\r\n").into_bytes()]
 }
 
 fn pick<'a, T: ?Sized>(dice: &mut Dice, of: &[&'a T]) -> &'a T {
@@ -1156,18 +1174,21 @@ struct Found {
     answered: usize,
     /// Streams the last request was sent on, and those where it found the connection closed.
     asked: usize,
-    /// Streams whose outcomes differ by a class on the list, those of them by the second class,
-    /// and the first of each.
+    /// Streams whose outcomes differ by a class on the list, those of them by the second class
+    /// and by the third, and the first of each class.
     listed: usize,
     bare_lfs: usize,
+    both_framings: usize,
     first_listed: Option<String>,
     first_bare_lf: Option<String>,
+    first_both: Option<String>,
     failures: Vec<String>,
 }
 
 /// Sends the streams `which` gives to both connections, under each of two limits on a head (the
-/// app's own unless set, and one a long line of the grammar passes), and judges each.
-async fn run(seed: u64, which: impl Iterator<Item = usize>, done: &AtomicUsize) -> Found {
+/// app's own unless set, and one a long line of the grammar passes), and judges each. The first
+/// streams are cut from `bases` ([`stream`]).
+async fn run(seed: u64, bases: fn() -> Vec<Vec<u8>>, which: impl Iterator<Item = usize>, done: &AtomicUsize) -> Found {
     count_panics();
     let bases = bases();
     // Hyper's connection and Corten's own, for each limit.
@@ -1179,16 +1200,21 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>, done: &AtomicUsize) 
         let stream = stream(seed, index, &bases);
         let (hyper, own) = &servers[index % 2];
         // Both servers are on this thread, and only Corten's connection counts here.
-        let bare_lfs = crate::h1::body::BARE_LFS.get();
+        let counts = || (crate::h1::body::BARE_LFS.get(), crate::h1::head::BOTH_FRAMINGS.get());
+        let (bare_lfs, both) = counts();
         let (theirs, ours) = (exchange(hyper, &stream).await, exchange(own, &stream).await);
-        let bare_lf = crate::h1::body::BARE_LFS.get() != bare_lfs;
+        let stricter = match counts() {
+            (now, _) if now != bare_lfs => Some(BARE_LF),
+            (_, now) if now != both => Some(BOTH_FRAMINGS),
+            _ => None,
+        };
         found.streams += 1;
         found.asked += usize::from(!ours.after.0.is_empty());
         let mut sent = stream.bytes();
         if !(theirs.after.0.is_empty() && ours.after.0.is_empty()) {
             sent.extend_from_slice(last_request(index).as_bytes());
         }
-        let verdict = judge(&theirs, &ours, refused_head_reaches(&sent, &theirs, limits[index % 2]), bare_lf);
+        let verdict = judge(&theirs, &ours, refused_head_reaches(&sent, &theirs, limits[index % 2]), stricter);
         let describe = |what: &str| {
             let sent = String::from_utf8_lossy(&stream.bytes()).into_owned();
             let writes: Vec<usize> = stream.writes.iter().map(Vec::len).collect();
@@ -1208,6 +1234,11 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>, done: &AtomicUsize) 
                 found.listed += 1;
                 found.bare_lfs += 1;
                 found.first_bare_lf.get_or_insert_with(|| describe(class));
+            }
+            Verdict::Listed(class) if class == BOTH_FRAMINGS => {
+                found.listed += 1;
+                found.both_framings += 1;
+                found.first_both.get_or_insert_with(|| describe(class));
             }
             Verdict::Listed(class) => {
                 found.listed += 1;
@@ -1229,7 +1260,7 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>, done: &AtomicUsize) 
 /// and what they found together. The caller's thread watches them by the clock: a run that
 /// finishes no stream for `stalled` fails here, since a server that never stops working on a
 /// stream keeps its own thread from ever seeing time pass.
-fn watched<W>(seed: u64, parts: Vec<W>, stalled: Duration) -> Found
+fn watched<W>(seed: u64, bases: fn() -> Vec<Vec<u8>>, parts: Vec<W>, stalled: Duration) -> Found
 where
     W: Iterator<Item = usize> + Send + 'static,
 {
@@ -1240,7 +1271,7 @@ where
         let (done, finding) = (done.clone(), finding.clone());
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap();
-            let _ = finding.send(runtime.block_on(run(seed, part, &done)));
+            let _ = finding.send(runtime.block_on(run(seed, bases, part, &done)));
         });
     }
     drop(finding);
@@ -1263,20 +1294,34 @@ where
         all.asked += found.asked;
         all.listed += found.listed;
         all.bare_lfs += found.bare_lfs;
+        all.both_framings += found.both_framings;
         all.first_listed = all.first_listed.or(found.first_listed);
         all.first_bare_lf = all.first_bare_lf.or(found.first_bare_lf);
+        all.first_both = all.first_both.or(found.first_both);
         all.failures.extend(found.failures);
     }
     all
 }
 
 fn report(seed: u64, found: &Found) {
-    let Found { streams, same, answered, asked, listed, bare_lfs, first_listed, first_bare_lf, failures } = found;
+    let Found {
+        streams,
+        same,
+        answered,
+        asked,
+        listed,
+        bare_lfs,
+        both_framings,
+        first_listed,
+        first_bare_lf,
+        first_both,
+        failures,
+    } = found;
     eprintln!(
-        "H1 FUZZ seed={seed} streams={streams} same={same} (the app answered in {answered}) listed={listed} (a bare LF among trailers in {bare_lfs}) failed={} last_request_sent={asked}",
+        "H1 FUZZ seed={seed} streams={streams} same={same} (the app answered in {answered}) listed={listed} (a bare LF among trailers in {bare_lfs}, a length and chunks in {both_framings}) failed={} last_request_sent={asked}",
         failures.len()
     );
-    for first in [first_listed, first_bare_lf].into_iter().flatten() {
+    for first in [first_listed, first_bare_lf, first_both].into_iter().flatten() {
         eprintln!("the first listed difference of its class: {first}");
     }
     for failure in failures.iter().take(20) {
@@ -1288,7 +1333,7 @@ fn report(seed: u64, found: &Found) {
 /// random.
 #[test]
 fn own_and_hyper_answer_every_stream_alike() {
-    let found = watched(SEED, std::iter::once(0..fixed(&bases()) + IN_SUITE).collect(), STALLED);
+    let found = watched(SEED, bases, std::iter::once(0..fixed(&bases()) + IN_SUITE).collect(), STALLED);
     report(SEED, &found);
     assert!(
         found.failures.is_empty(),
@@ -1302,6 +1347,22 @@ fn own_and_hyper_answer_every_stream_alike() {
     // The run is of streams that reach the app, and that reach the end of what was sent.
     assert!(found.answered * 2 > found.streams, "the app answered in {} of {} streams", found.answered, found.streams);
     assert!(found.asked * 4 > found.streams, "the last request was sent on {} of {} streams", found.asked, found.streams);
+}
+
+/// The gate over [`both_bases`]: a head with a length and chunks, cut in two writes and ended at
+/// every byte. Each stream is answered alike while the head is not whole, and differs by the
+/// third listed class, and by nothing else, from the byte that ends it: Corten's connection
+/// refuses it there and closes, with the same answers before it, where hyper's reads the chunks.
+#[test]
+fn a_head_with_a_length_and_chunks_differs_by_its_class_alone_wherever_it_is_cut() {
+    let base = both_bases().concat();
+    let head = find(&base, b"\r\n\r\n").unwrap() + 4;
+    let found = watched(SEED, both_bases, std::iter::once(0..fixed(&both_bases())).collect(), STALLED);
+    report(SEED, &found);
+    assert!(found.failures.is_empty(), "{} streams fail the gate; the first:\n{}", found.failures.len(), found.failures[0]);
+    // Cut in two, the whole stream is sent; ended, its head is whole from `head` bytes on.
+    let whole = base.len() + (base.len() - head);
+    assert_eq!((found.both_framings, found.listed, found.same), (whole, whole, head), "of {} streams", found.streams);
 }
 
 /// The gate at the size a pull request reports: `H1_FUZZ_STREAMS` streams made at random (250,000
@@ -1318,14 +1379,14 @@ fn own_and_hyper_answer_every_stream_of_a_long_run_alike() {
     if let Ok(only) = std::env::var("H1_FUZZ_ONLY") {
         let only: Vec<usize> =
             only.split(',').map(|index| index.trim().parse().expect("H1_FUZZ_ONLY is stream numbers")).collect();
-        let found = watched(seed, vec![only.into_iter()], STALLED);
+        let found = watched(seed, bases, vec![only.into_iter()], STALLED);
         report(seed, &found);
         assert!(found.failures.is_empty(), "{} of {} streams fail the gate", found.failures.len(), found.streams);
         return;
     }
     let streams = fixed(&bases()) + number("H1_FUZZ_STREAMS").unwrap_or(250_000) as usize;
     let threads = std::thread::available_parallelism().map_or(4, usize::from);
-    let all = watched(seed, (0..threads).map(|thread| (thread..streams).step_by(threads)).collect(), STALLED);
+    let all = watched(seed, bases, (0..threads).map(|thread| (thread..streams).step_by(threads)).collect(), STALLED);
     report(seed, &all);
     assert_eq!(all.streams, streams, "every stream was sent");
     assert!(all.failures.is_empty(), "{} of {} streams fail the gate", all.failures.len(), all.streams);
@@ -1346,7 +1407,8 @@ fn the_judge_names_each_kind_of_difference() {
         closed_after: true,
     };
     let (one, two) = (app(200, "hi"), app(200, "hi") + &app(200, "hi"));
-    let (short, bare_lf) = (|hyper: &Outcome, own: &Outcome, reaches: bool| judge(hyper, own, reaches, false), judge);
+    let short = |hyper: &Outcome, own: &Outcome, reaches: bool| judge(hyper, own, reaches, None);
+    let stricter = |hyper: &Outcome, own: &Outcome, class: Option<&'static str>| judge(hyper, own, false, class);
     let judge = |hyper: &Outcome, own: &Outcome| short(hyper, own, true);
     assert_eq!(judge(&outcome(&one, false, &one), &outcome(&one, false, &one)), Verdict::Same);
     let laxer = [
@@ -1398,19 +1460,28 @@ fn the_judge_names_each_kind_of_difference() {
         (outcome(&one, false, &one), outcome(&one, true, "")),
         (outcome(&one, false, &one), outcome(&(one.clone() + &app(400, "")), true, "")),
     ];
-    for (hyper, own) in &listed {
-        assert_eq!(bare_lf(hyper, own, false, true), Verdict::Listed(BARE_LF), "{hyper:?} against {own:?}");
-        // Not of a stream in which no body was refused for one.
-        assert!(matches!(bare_lf(hyper, own, false, false), Verdict::Unlisted(_)), "{hyper:?} against {own:?}");
+    // The third: Corten's connection refused a head with a length and chunks, and closed, where
+    // hyper's answered it (and closed, as it does behind such a request).
+    let listed = listed.into_iter().map(|pair| (pair, BARE_LF)).chain([
+        ((outcome(&one, true, ""), outcome(&refusal, true, "")), BOTH_FRAMINGS),
+        ((outcome(&two, true, ""), outcome(&(one.clone() + &refusal), true, "")), BOTH_FRAMINGS),
+    ]);
+    for ((hyper, own), class) in listed {
+        assert_eq!(stricter(&hyper, &own, Some(class)), Verdict::Listed(class), "{hyper:?} against {own:?}");
+        // Not of a stream in which no request was refused for one.
+        assert!(matches!(stricter(&hyper, &own, None), Verdict::Unlisted(_)), "{hyper:?} against {own:?}");
     }
     // Not where Corten's connection is the laxer, kept its connection, or answered a request
     // before that one otherwise than hyper's; and the same is the same.
-    assert!(matches!(bare_lf(&outcome(&one, true, ""), &outcome(&two, true, ""), false, true), Verdict::Laxer(_)));
-    assert!(matches!(bare_lf(&outcome(&refusal, true, ""), &outcome(&one, true, ""), false, true), Verdict::Laxer(_)));
-    assert!(matches!(bare_lf(&outcome(&one, false, &one), &outcome(&failed, false, ""), false, true), Verdict::Unlisted(_)));
-    let other = outcome(&(app(404, "") + &failed), true, "");
-    assert!(matches!(bare_lf(&outcome(&one, false, &two), &other, false, true), Verdict::Unlisted(_)));
-    assert_eq!(bare_lf(&outcome(&one, true, ""), &outcome(&one, true, ""), false, true), Verdict::Same);
+    for class in [BARE_LF, BOTH_FRAMINGS] {
+        let class = Some(class);
+        assert!(matches!(stricter(&outcome(&one, true, ""), &outcome(&two, true, ""), class), Verdict::Laxer(_)));
+        assert!(matches!(stricter(&outcome(&refusal, true, ""), &outcome(&one, true, ""), class), Verdict::Laxer(_)));
+        assert!(matches!(stricter(&outcome(&one, false, &one), &outcome(&failed, false, ""), class), Verdict::Unlisted(_)));
+        let other = outcome(&(app(404, "") + &failed), true, "");
+        assert!(matches!(stricter(&outcome(&one, false, &two), &other, class), Verdict::Unlisted(_)));
+        assert_eq!(stricter(&outcome(&one, true, ""), &outcome(&one, true, ""), class), Verdict::Same);
+    }
     // Not bytes that only read alike as text: what was sent is compared as it was sent.
     let odd = |byte: &[u8]| Outcome {
         before: Sent([one.as_bytes(), byte].concat()),
@@ -1490,7 +1561,7 @@ fn a_run_that_hangs_fails_by_the_clock() {
             std::thread::park();
         }
     });
-    let watching = std::panic::catch_unwind(|| watched(SEED, vec![hangs], Duration::from_millis(300)));
+    let watching = std::panic::catch_unwind(|| watched(SEED, bases, vec![hangs], Duration::from_millis(300)));
     let message = watching.err().and_then(|panic| panic.downcast::<String>().ok()).expect("the run fails");
     assert!(message.contains("a server hangs"), "{message}");
 }
