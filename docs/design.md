@@ -8556,12 +8556,11 @@ rules something out.
     `public, max-age=60` with the key in them, and
     `tests::cache::a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key`
     fails there), and what holds one (`HtmlResult`, `PageOr`, `JsonError`, whose own refusal is a
-    `JsonResponse`, and so `JsonResult<T>`); each of Corten's other answers says no (text,
-    `Json<T>` alone, whose `ToJson` writes its value and no more: the response it is sent in
-    (`ToJson::__into_response`) has a type an app cannot name, so an app's own `ToJson` cannot
-    hand back a `Public` response it converted, which an override did at `b910dedf7` (a
-    `compile_fail` doctest); a status, a file, a relay, a live stream, a feed), and
-    one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
+    `JsonResponse`, and so `JsonResult<T>`). Bare `Json<T>` is also watched: the hidden
+    `ToJson::__into_response` hook keeps the `Response` return type of 0.3.0, so Corten
+    cannot assume that the value only writes JSON bytes. Corten's text, status, file, relay,
+    live stream and feed answers say no. One that holds another
+    (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
     what that one does, a tuple what each part's refusal does too, since a part that refuses
     answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
     header where it was, so the watch must still see a `Public` answer under it); a type of the app's own always says yes, since Corten cannot see what its
@@ -8599,7 +8598,7 @@ rules something out.
     which no middleware can stand in for) looks at the answer as it comes back
     (`middleware::Keyed`) and, when it has the mark, whoever put it on, marks the stages' own
     signal before any middleware sees the answer. A render made with `req.rendered` and placed
-    in an answer no watch is around (text, `Json<T>`) marks only the signal of the `Req` it is
+    in an answer no watch is around (such as text) marks only the signal of the `Req` it is
     called on, so for a request that does not carry the stages' signal `handle` takes the one it
     carries, or makes one for a request with none, which each of its `Req`s shares
     (`signal::Detached`, beside the request's extensions, so what reads a `Signal` still finds

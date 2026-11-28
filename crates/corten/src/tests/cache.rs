@@ -1163,8 +1163,7 @@ async fn replaced_keyed() -> Result<crate::JsonResponse, JsonError> {
     Ok(replaced_json(true))
 }
 
-/// A refusal that holds such a response, `409`, on a route whose success (`Json<T>`) is never
-/// `Public`: only the refusal's `JsonError` says its handler is watched.
+/// A refusal that holds such a response, `409`, on a route returning `JsonResult`.
 #[cfg(feature = "json")]
 async fn replaced_refused() -> crate::JsonResult<u32> {
     let mut refusal = replaced_json(true);
@@ -1177,11 +1176,91 @@ async fn replaced_plain() -> Result<crate::JsonResponse, JsonError> {
     Ok(replaced_json(false))
 }
 
+#[cfg(feature = "json")]
+#[test]
+fn json_body_types_keep_the_submit_key_watch_through_wrappers() {
+    use crate::response::IntoResponse;
+
+    fn watched<T: IntoResponse>() {
+        assert!(T::may_share().0, "{} must be watched", std::any::type_name::<T>());
+    }
+
+    type Body = Json<bool>;
+    type Headers = [(http::HeaderName, &'static str); 1];
+    watched::<Body>();
+    watched::<Json<crate::json::Raw>>();
+    watched::<crate::JsonResponse>();
+    watched::<crate::JsonResult<bool>>();
+    watched::<crate::Result<Body>>();
+    watched::<Result<Body, StatusCode>>();
+    watched::<Result<StatusCode, Body>>();
+    watched::<NoStore<Body>>();
+    watched::<Public<Body>>();
+    watched::<(StatusCode, Body)>();
+    watched::<(Headers, Body)>();
+    watched::<(StatusCode, Headers, NoStore<Body>)>();
+    watched::<crate::upgrade::SwitchOr<Body>>();
+    assert!(!<(StatusCode, Headers, &'static str)>::may_share().0);
+}
+
+#[cfg(feature = "json")]
+#[crate::routes]
+mod json_watch {
+    #[route("/drawn", get = json_after_drawing_a_key)]
+    pub struct Drawn;
+
+    #[route("/plain", get = plain_json)]
+    pub struct Plain;
+
+    #[route("/unstaged/drawn", get = json_after_drawing_a_key, unstaged)]
+    pub struct UnstagedDrawn;
+
+    #[route("/unstaged/plain", get = plain_json, unstaged)]
+    pub struct UnstagedPlain;
+}
+
+#[cfg(feature = "json")]
+async fn json_after_drawing_a_key() -> Json<bool> {
+    // The watch records the draw even when the handler discards it; no key goes into the body.
+    drop(crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html());
+    Json(true)
+}
+
+#[cfg(feature = "json")]
+async fn plain_json() -> Json<bool> {
+    Json(true)
+}
+
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn bare_json_is_watched_on_staged_and_unstaged_routes() {
+    let router = App::new(json_watch::router()).middleware((CdnRecaches(Some("public, max-age=60")), RebuiltAnswer)).router();
+    for (path, cache) in [
+        ("/drawn", Some("private, no-cache")),
+        ("/plain", Some("public, max-age=60")),
+        ("/unstaged/drawn", Some("private, no-cache")),
+        ("/unstaged/plain", None),
+    ] {
+        let (status, headers, body) = fetch(&router, "GET", path, &[("if-none-match", "\"other\"")]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers[header::CONTENT_TYPE], "application/json", "{path}");
+        assert_eq!(body, "true", "{path}");
+        assert_eq!(headers.get(header::CACHE_CONTROL).map(|v| v.to_str().unwrap()), cache, "{path}");
+        if cache == Some("public, max-age=60") {
+            assert!(headers.contains_key(header::ETAG), "{path}");
+            assert!(CDN_OVERRIDES.iter().all(|name| headers.contains_key(*name)), "{path}");
+        } else {
+            assert!(!headers.contains_key(header::ETAG), "{path}");
+            assert!(CDN_OVERRIDES.iter().all(|name| !headers.contains_key(*name)), "{path}");
+        }
+    }
+}
+
 /// An answer that drew a form's new submit key is asked about again before the browser shows it,
 /// whatever lifetime a middleware gave it: a `private, max-age=60` goes out `private, no-cache`
 /// (a `private, no-store` stays), without the CDN caching headers the middleware wrote. So does
-/// one whose key a render made with `req.rendered` drew, placed in an answer no watch is around
-/// (text, `Json<T>`): that render marks the request's answer as a page's render does. An answer
+/// one whose key a render made with `req.rendered` drew, placed in text or `Json<T>`: that
+/// render marks the request's answer as a page's render does, independently of the watch. An answer
 /// with no key keeps the middleware's lifetime and headers.
 #[tokio::test]
 async fn an_answer_that_drew_a_submit_key_is_asked_about_again_whatever_lifetime_a_middleware_gave_it() {
@@ -1250,7 +1329,7 @@ async fn an_answer_that_drew_a_submit_key_is_asked_about_again_whatever_lifetime
 /// the stages hold their signal past the middleware, and the end of the chain carries the mark of
 /// the signal the route's request had (the middleware's, or one made for it) as the answer comes
 /// back: an answer whose handler or page drew a form's new submit key, or that holds one a
-/// `req.rendered` render drew (text and `Json<T>`, which no watch is around), still goes out the
+/// `req.rendered` render drew (text or `Json<T>`), still goes out the
 /// browser's alone, without the CDN caching headers the middleware wrote and without a tag,
 /// whatever the app keeps. One with no key keeps its lifetime, those headers and its tag.
 #[tokio::test]
@@ -1400,8 +1479,8 @@ impl crate::Middleware for OnAThread {
 /// The keyed answers `steps()`'s middleware sends open to a CDN (`private, no-cache` is the only
 /// right `Cache-Control`; no CDN caching header the middleware wrote, no tag), for `/text`, a
 /// `Public` text whose handler drew a form's new submit key, `/page`, a `Public` page with such
-/// a form, and `/rendered-text` and `/rendered-json`, text and `Json<T>`, which no watch is
-/// around, with a key made with `req.rendered`, which marks the signal of the request the route
+/// a form, and `/rendered-text` and `/rendered-json`, text and `Json<T>`
+/// with a key made with `req.rendered`, which marks the signal of the request the route
 /// was given, with the default store and with none kept. `/plain`, with no key, must keep its
 /// lifetime, those headers and its tag.
 async fn rebuilt_keyed_answers_open_to_a_cdn<M: crate::Middleware>(label: &str, steps: impl Fn() -> M) -> Vec<String> {
@@ -7392,7 +7471,7 @@ async fn settle_unstaged_private() -> String {
 /// `fill`, a page with a layout read's place ([`SettleCount`]) whose body fails as it is read to be
 /// filled, asked for as HTML: Corten's `500` with the error page in its place. `json` is a `Public`
 /// JSON body with no key, and `json-private` the same body as a plain `JsonResult<T>`, whose handler
-/// is watched since its `JsonError` may hold a `JsonResponse`; `unstaged-public` a `Public` text body from a route that says `unstaged`,
+/// is watched; `unstaged-public` a `Public` text body from a route that says `unstaged`,
 /// with no key, which is watched for one; `unstaged-private` text from such a route, which says no
 /// caching. The pages are made as an app's routes are (`corten::get`), where an answer is known to
 /// be `Public`. `SETTLE_KEPT=0` keeps none (`App::kept_answers(0)`), so a `Public` answer's handler

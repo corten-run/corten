@@ -341,16 +341,10 @@ pub use read::__private as __read;
 #[must_use]
 pub struct Json<T>(pub T);
 
+// Keep IntoResponse's conservative default: a downstream ToJson can supply a whole response.
 impl<T: ToJson> IntoResponse for Json<T> {
-    // A `ToJson` writes its value and no more (the response it is sent in is Corten's alone,
-    // `ToJson::__into_response`), so a `Json<T>` is never a `Public` answer: not watched.
-    #[inline]
-    fn may_share() -> crate::answer::sealed::MayShare {
-        crate::answer::sealed::MayShare::NO
-    }
-
     fn into_response(self) -> Response {
-        let mut res = self.0.__into_response().0;
+        let mut res = self.0.__into_response();
         // Room for the headers `App` adds too, so the map is allocated once.
         res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(crate::api::JSON));
@@ -420,48 +414,14 @@ pub trait ToJson {
     const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
 
     /// The response [`Json`] sends, before its headers: the value written into a new vector, or
-    /// for [`Raw`] the bytes it holds. Not a public API: its type is one an app cannot name, as
-    /// `__KEPT`'s is, so a `ToJson` of the app's own writes its value and no more. One that made
-    /// the whole response could hand back a `Public` one it converted, with a form's new submit
-    /// key in it, from a `Json<T>` route, whose handler is not watched for one
-    /// (`IntoResponse::may_share`):
-    ///
-    /// ```compile_fail,E0053
-    /// use corten::http::{IntoResponse, Response};
-    ///
-    /// struct Mine;
-    ///
-    /// impl corten::ToJson for Mine {
-    ///     fn write_json(&self, out: &mut Vec<u8>) {
-    ///         out.extend_from_slice(b"1");
-    ///     }
-    ///
-    ///     fn __into_response(self) -> Response {
-    ///         corten::Public::new(std::time::Duration::from_secs(60), "1".to_string()).into_response()
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// ```compile_fail,E0603
-    /// struct Mine;
-    ///
-    /// impl corten::ToJson for Mine {
-    ///     fn write_json(&self, out: &mut Vec<u8>) {
-    ///         out.extend_from_slice(b"1");
-    ///     }
-    ///
-    ///     fn __into_response(self) -> corten::answer::sealed::JsonBody {
-    ///         unimplemented!()
-    ///     }
-    /// }
-    /// ```
+    /// for [`Raw`] the bytes it holds. Not a public API, but retains its 0.3.0 signature.
     #[doc(hidden)]
-    fn __into_response(self) -> crate::answer::sealed::JsonBody
+    fn __into_response(self) -> Response
     where
         Self: Sized,
     {
         // `Body::from(Vec)` keeps the vector's allocation: no copy.
-        crate::answer::sealed::JsonBody(Response::new(Body::from(to_vec(&self))))
+        Response::new(Body::from(to_vec(&self)))
     }
 }
 
@@ -592,12 +552,12 @@ impl ToJson for Raw {
         true
     }
 
-    fn __into_response(self) -> crate::answer::sealed::JsonBody {
+    fn __into_response(self) -> Response {
         #[cfg_attr(not(feature = "compress"), allow(unused_mut))]
         let mut res = Response::new(Body::from(self.bytes().clone()));
         #[cfg(feature = "compress")]
         res.extensions_mut().insert(crate::compress::Stored(self.0));
-        crate::answer::sealed::JsonBody(res)
+        res
     }
 }
 

@@ -1372,9 +1372,9 @@ any `*-cache-control` header and the other caching headers a CDN reads first tha
 visitor's cookie or one-time answer to another. One that sets a cookie carries that with it, as a
 staged answer does: another app of Corten's whose staged middleware relays it inline and takes
 the cookie off still sends it as that visitor's ([Caching](#caching)).
-A `Public` answer, or one of an answer type of the app's own or a JSON answer (`JsonResponse`,
-whose response the handler may replace with a `Public` one), whose handler drew a form's new
-submit key ([Caching](#caching)), in `NoStore` or a tuple of headers too, goes out as one that
+A `Public` answer, an answer type of the app's own or a JSON answer (including bare `Json<T>`),
+whose handler drew a form's new submit key ([Caching](#caching)), in `NoStore` or a tuple of
+headers too, goes out as one that
 sets a cookie does, carrying that with it to an app that relays it inline as that one does, and
 also loses a tag (`ETag`) it was given: its handler is watched for one, as a staged route's is,
 and any other unstaged handler runs with nothing around it.
@@ -1598,8 +1598,9 @@ one does, in every build, with or without the app's kept answers, and on a route
 headers around either (a `no-store` there does not take away a CDN's own caching header), or a
 tuple whose header part of the app's own refuses with one, since a refusal is the whole answer.
 So is the handler of a page or a JSON answer (`HtmlResult`, `PageOr`, `JsonResponse`, and
-`JsonResult<T>`, whose `JsonError` may hold a `JsonResponse`): its `DerefMut` lets the handler
-put a `Public` answer it converted in its place (`*page = Public::new(..).into_response()`). The
+`JsonResult<T>`, whose `JsonError` may hold a `JsonResponse`): the handler may replace the
+response through `DerefMut`. Bare `Json<T>` is watched too, including when wrapped in a result,
+`NoStore` or a tuple, because the value's serializer may supply its own response. The
 stages keep the mark past the app's middleware for an answer that comes back through the `next`
 of the request they gave it: a middleware that makes a new response of that answer does not take
 the mark away, nor one that also gives `next` a request rebuilt without the first one's

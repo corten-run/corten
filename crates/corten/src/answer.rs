@@ -740,11 +740,6 @@ pub(crate) mod sealed {
     /// say no.
     pub struct MayShare(pub(crate) bool);
 
-    /// What `ToJson::__into_response` gives, the response `Json` sends. Only Corten can name it,
-    /// so a `ToJson` of the app's own writes its value and no more: no whole response of its own
-    /// (a `Public` one it converted) from a `Json<T>` route, whose handler is not watched.
-    pub struct JsonBody(pub(crate) crate::response::Response);
-
     impl MayShare {
         /// A type of Corten's that is never [`Public`].
         pub(crate) const NO: Self = MayShare(false);
@@ -2823,10 +2818,10 @@ fn mark<O: Answer>(res: &mut Response) {
 
 pin_project_lite::pin_project! {
     /// A route's answer as its handler makes it, [`mark`]ed. One that may be `Public`
-    /// (`IntoResponse::may_share`: a `Public` answer, a page or a JSON answer, whose response the
-    /// handler may replace with a `Public` one it converted, or a type of the app's own, which
-    /// may hold one; known from the answer's type, so a route of text, `Json<T>` alone, a status,
-    /// a file, a relay, a live stream or a feed does none of this) is
+    /// (`IntoResponse::may_share`: a `Public` answer, a page or a JSON answer, whose response
+    /// the app may supply or replace, or a type of the app's own, which may hold one; known from
+    /// the answer's type, so a route of text, a status, a file, a relay, a live stream or a feed
+    /// does none of this) is
     /// watched for a form's new submit key drawn in the handler's polls however it was rendered
     /// (into JSON or text, into a file, or to a string placed in a page as markup)
     /// ([`crate::form::KeyWatch`]): an answer whose handler drew one is the request's alone

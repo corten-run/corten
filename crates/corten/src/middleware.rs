@@ -331,7 +331,7 @@ pin_project_lite::pin_project! {
     /// drew a form's new submit key (`crate::cache::Unrepeatable`, put on by the render that drew
     /// it or the watch around a `Public` handler, which marks only the answer, or by [`handle`] for
     /// a request a middleware rebuilt, from the signal its `Req`s mark: `req.rendered` marks only
-    /// that one, in an answer no watch is around, text or `Json<T>`). A render marks the
+    /// that one, even in an answer no watch is around, such as text). A render marks the
     /// signal its request carries too, and a middleware may have given it one it made, with no
     /// signal or another one: the stages read theirs before they settle the answer, so a middleware
     /// that then makes a new response of this one, without its extensions, takes the mark away no

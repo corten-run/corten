@@ -56,7 +56,8 @@ pub trait IntoResponse {
     /// the whole answer. A page's and a JSON answer's ([`crate::HtmlResponse`],
     /// `JsonResponse`) say so too, and with them what holds one (`HtmlResult`, `PageOr`,
     /// `JsonError`): their `DerefMut` lets a handler put any response in their place, a `Public`
-    /// one it converted among them. A type of the app's own always does, since Corten cannot see what its
+    /// one it converted among them. `Json<T>` says so because a `ToJson` can supply a whole
+    /// response. A type of the app's own always does, since Corten cannot see what its
     /// `into_response` makes (a `Public` answer on one branch): its route's handler is watched
     /// for a form's new submit key, as a `Public` one's is, and an answer whose handler drew one is
     /// sent to no shared cache. A raw `Response`, a `[(name, value)]` of headers and a
