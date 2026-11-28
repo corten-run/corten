@@ -8,9 +8,9 @@
 //          the kit's script and its options (all but the probe's binary, --cpu and --port)
 //        node compare.mjs <base's directory> <head's directory> [--description <file>] [--base <name>] [--head <name>]
 //          the table and the verdict, in Markdown
-//        node compare.mjs <base's directory> <head's directory> --allocator [--base <name>] [--head <name>]
-//          only the matched observer-on diagnostic report; missing figures fail this command,
-//          never the separate observer-off RSS verdict
+//        node compare.mjs <diagnostic directory from job.sh diagnose> --allocator
+//          only the matched observer-on diagnostic report; an unfinished collection or missing
+//          figures fail this command, never the separate observer-off RSS verdict
 //
 // A build's directory holds what the kit printed with `--json`, a file a run, named as
 // `--readings` names it; `answers/`, as `count.mjs --answers` wrote it; beside a run that was
@@ -225,18 +225,24 @@ const table = (/** @type {string[]} */ head, /** @type {string[][]} */ rows) =>
   [`| ${head.join(" | ")} |`, `| ${head.map((_, column) => (column === 0 || column >= head.length - 3 ? "---" : "---:")).join(" | ")} |`, ...rows.map((row) => `| ${row.join(" | ")} |`)].join("\n");
 
 /**
- * Report a separate match of observer-on idle runs without reading or deciding the gate's runs.
- * @param {string} base @param {string} head @param {{ base: string, head: string }} names
+ * Report one finished collection of observer-on runs, without reading the gate's runs.
+ * @param {string} directory
  */
-export function allocatorReport(base, head, names = { base: "base", head: "head" }) {
-  const dirs = { base, head };
-  const unbuilt = Object.fromEntries(SIDES.map((side) => [side, existsSync(join(dirs[side], "unbuilt"))]));
+export function allocatorReport(directory) {
+  let commits;
+  try {
+    commits = /^([0-9a-f]{40})\n([0-9a-f]{40})\n$/.exec(readFileSync(join(directory, "complete"), "utf8"));
+  } catch { /* missing or unreadable completion record */ }
+  if (!commits) {
+    return { markdown: "**Incomplete diagnostic match.** No valid completion record from job.sh diagnose.\n", status: 1 };
+  }
+  const [, base, head] = commits;
   const rows = [];
   const refused = [];
   let missing = false;
   for (const reading of idleReadings(true)) {
     const pair = SIDES.map((side) => {
-      const { figure: run, why, refused: attempts } = unbuilt[side] ? { figure: null, why: "the probe did not build", refused: [] } : taken(dirs[side], reading);
+      const { figure: run, why, refused: attempts } = taken(join(directory, side), reading);
       for (const attempt of attempts) refused.push(`- ${code(reading.file)} on ${side}: ${code(attempt)}`);
       if (!run) {
         missing = true;
@@ -253,7 +259,7 @@ export function allocatorReport(base, head, names = { base: "base", head: "head"
     }
   }
   const markdown = [
-    `## Idle allocator diagnostics: ${code(short(names.head))} and ${code(short(names.base))}`,
+    `## Idle allocator diagnostics: ${code(short(head))} and ${code(short(base))}`,
     missing ? "**Incomplete diagnostic match.**" : "**Every diagnostic pair is present.**",
     "Observer on. Each run used 5,000 connections from one address. The growths in bytes below, including resident growth, do not enter the separate observer-off RSS verdict.",
     table(["Build", "Reading", "Run", "Page size", "Resident", "Jemalloc live", "Serving-thread net", "Jemalloc active"], rows),
@@ -464,20 +470,23 @@ function main() {
     parsed = null;
     console.error(/** @type {Error} */ (error).message);
   }
-  const usage = "usage: node compare.mjs --readings [--allocator] | node compare.mjs <base's directory> <head's directory> [--description <file> | --allocator] [--base <name>] [--head <name>]";
+  const usage = "usage: node compare.mjs --readings [--allocator] | node compare.mjs <base's directory> <head's directory> [--description <file>] [--base <name>] [--head <name>] | node compare.mjs <diagnostic directory> --allocator";
   if (parsed?.values.readings && parsed.positionals.length === 0) {
     for (const { file, script, options } of readings({ allocator: parsed.values.allocator })) console.log([file, script, ...options].join(" "));
     return;
   }
   const [base, head] = parsed?.positionals ?? [];
-  if (!parsed || !base || !head || parsed.positionals.length !== 2 || parsed.values.readings || (parsed.values.allocator && parsed.values.description !== undefined)) {
+  const valid = parsed?.values.allocator
+    ? parsed.positionals.length === 1 && [parsed.values.description, parsed.values.base, parsed.values.head].every((value) => value === undefined)
+    : head && parsed?.positionals.length === 2;
+  if (!parsed || !base || !valid || parsed.values.readings) {
     console.error(usage);
     process.exitCode = 2;
     return;
   }
   const { description, allocator, base: baseName, head: headName } = parsed.values;
   const names = { base: baseName ?? "base", head: headName ?? "head" };
-  const { markdown, status } = allocator ? allocatorReport(base, head, names)
+  const { markdown, status } = allocator ? allocatorReport(base)
     : compare(base, head, { description: description === undefined ? "" : readFileSync(description, "utf8"), names });
   process.stdout.write(markdown);
   process.exitCode = status;

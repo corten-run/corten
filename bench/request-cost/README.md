@@ -169,16 +169,20 @@ kit's full matched diagnostic set from both binaries left by `job.sh build` in a
 checkout, run the separate plan and report:
 
 ```sh
-STOP_AT=$(($(date +%s) + 1440)) bash bench/request-cost/job.sh diagnose <directory> <cpu>
-node bench/request-cost/compare.mjs <directory>/base <directory>/head --allocator
+STOP_AT=$(($(date +%s) + 1440)) bash bench/request-cost/job.sh diagnose <build-directory> <cpu> <new-diagnostic-directory>
+node bench/request-cost/compare.mjs <new-diagnostic-directory> --allocator
 ```
 
+The diagnostic directory must not exist: use a fresh path for every collection, including
+retries. Both probes must be executable. Do not rebuild them while a collection runs.
 This runs the same three idle cases three times per build, without capturing answers
-or repeating the instruction or allocation counts. The report shows resident growth
-alongside all three allocator growths for each run. A missing or mismatched diagnostic pair
-leaves this report incomplete and exits 1. Neither the observed RSS nor missing diagnostics
-can change a verdict from the required observer-off runs. The hosted job does not run this
-optional plan.
+or repeating the instruction or allocation counts. The report uses the commits recorded by
+that collection once its plan finishes. An interrupted collection, or a missing or mismatched
+diagnostic pair, leaves the report incomplete and it exits 1. An older complete directory
+still reports only its own pair, not the current contents of the build directory.
+The report shows resident growth alongside all three allocator growths for each run. Neither
+the observed RSS nor missing diagnostics can change the verdict from the required observer-off
+runs. The hosted job does not run this optional plan.
 
 Observer-off JSON keeps `kind: "idle"`. An explicit `--allocator --json` run writes
 `kind: "idle-allocator"` and adds `allocator` growths and two `sweepNanos` values (before

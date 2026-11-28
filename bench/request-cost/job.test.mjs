@@ -12,11 +12,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { compare } from "./compare.mjs";
+import { allocatorReport, compare, readings } from "./compare.mjs";
 
 const kit = dirname(fileURLToPath(import.meta.url));
 const linux = process.platform === "linux" && spawnSync("bash", ["-c", "git --version"]).status === 0;
 const skip = !linux && "needs Linux with bash and git";
+const allocatorPlan = readings({ allocator: true });
+const allocatorCases = Object.fromEntries(allocatorPlan.map(({ options, expect }) => [options.join(" "), expect]));
 
 const standIns = {
   // sh build.sh <commit> <directory>: a probe that is a file, or a build that does not compile.
@@ -35,12 +37,13 @@ const standIns = {
   ],
   // node compare.mjs --readings: the two required runs or the separate idle diagnostic.
   "compare.mjs": [
-    'if (process.argv.includes("--allocator")) console.log("idle-allocator-silent-1.json idle.mjs --json --allocator --silent");',
+    `if (process.argv.includes("--allocator")) console.log(${JSON.stringify(allocatorPlan.map(({ file, script, options }) => [file, script, ...options].join(" ")).join("\n"))});`,
     'else console.log("count-get.json count.mjs --json --cases get\\nidle-silent-1.json idle.mjs --json --silent");',
   ],
   // node count.mjs <probe> --cpu <cpu> <options>: notes the call, as `<commit> <options>`, and
   // does what STAND_IN_DOES says of that call's first time, second time and so on: refuses as the
-  // kit does, exits 124, waits for or ignores TERM, or prints a line and ends.
+  // kit does, exits 124, waits for or ignores TERM, or prints a line and ends. One allocator
+  // stand-in can signal its own waiting job after writing the last complete line.
   "count.mjs": [
     'import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
     'import { basename, join } from "node:path";',
@@ -66,6 +69,10 @@ const standIns = {
     '  }',
     '  process.stdout.write(\'{"kind":"instructions","case":"get","counts":[1001,\');',
     "  setInterval(() => {}, 1000);",
+    '} else if (options.includes("--allocator")) {',
+    `  const expect = ${JSON.stringify(allocatorCases)}[options.join(" ")];`,
+    '  writeFileSync(1, JSON.stringify({ ...expect, page: 4096, before: 4096, after: 8192, grown: 4096, bytes: 1, allocator: { live: 17, threadNet: 1, active: 4096 }, sweepNanos: [1, 2] }) + "\\n");',
+    '  if (does === "interrupts diagnostics") process.kill(Number(process.env.STAND_IN_JOB_PID), "SIGTERM");',
     "} else {",
     "  console.log(JSON.stringify({ call }));",
     "}",
@@ -106,7 +113,7 @@ function fixture(t, { merged = true, escapedPath = false } = {}) {
     git("merge", "-q", "--no-ff", "--no-edit", "change");
   }
   const job = (/** @type {Record<string, string>} */ asked, /** @type {string[]} */ ...args) =>
-    spawnSync("bash", [join(copy, "job.sh"), ...args], { cwd: checkout, env: { ...env, STAND_IN_CALLS: calls, ...asked }, encoding: "utf8" });
+    spawnSync("bash", ["-c", 'export STAND_IN_JOB_PID=$$; exec bash "$@"', "job fixture", join(copy, "job.sh"), ...args], { cwd: checkout, env: { ...env, STAND_IN_CALLS: calls, ...asked }, encoding: "utf8" });
   /** The calls of the stand-in for count.mjs and idle.mjs, in order. */
   const called = () => (existsSync(calls) ? readFileSync(calls, "utf8").trimEnd().split("\n") : []);
   const left = (/** @type {string} */ file) => (existsSync(join(builds, file)) ? readFileSync(join(builds, file), "utf8") : null);
@@ -226,12 +233,71 @@ test("explicit diagnostics run only the observer-on idle plan on both builds and
   const off = ["base", "head"].map((side) => left(`${side}/idle-silent-1.json`));
   assert.ok(off.every(Boolean));
   assert.equal(left("base/idle-allocator-silent-1.json"), null);
-  const diagnose = job(env, "diagnose", builds, "3");
+  const directory = join(builds, "fresh diagnostics");
+  const diagnose = job(env, "diagnose", builds, "3", directory);
   assert.equal(diagnose.status, 0, diagnose.stderr);
-  assert.deepEqual(called().slice(required.length), [`${base} --json --allocator --silent`, `${head} --json --allocator --silent`]);
-  assert.equal(left("base/idle-allocator-silent-1.json"), `${JSON.stringify({ call: `${base} --json --allocator --silent` })}\n`);
-  assert.equal(left("head/idle-allocator-silent-1.json"), `${JSON.stringify({ call: `${head} --json --allocator --silent` })}\n`);
-  assert.deepEqual(["base", "head"].map((side) => left(`${side}/idle-silent-1.json`)), off);
+  assert.deepEqual(called().slice(required.length), allocatorPlan.flatMap(({ options }) => [base, head].map((commit) => [commit, ...options].join(" "))));
+  const report = allocatorReport(directory);
+  assert.equal(report.status, 0, report.markdown);
+  assert.match(report.markdown, /Every diagnostic pair is present/);
+  assert.equal(report.markdown.split("\n")[0], `## Idle allocator diagnostics: \`${head.slice(0, 9)}\` and \`${base.slice(0, 9)}\``);
+  assert.deepEqual(["base", "head"].map((side) => left(side + "/idle-silent-1.json")), off);
+  assert.equal(left("base/idle-allocator-silent-1.json"), null);
+
+  // Seed the former locations with valid receipts, then point the build record at an absent
+  // executable. Neither those old files nor the old complete directory may supply a new pair.
+  for (const side of ["base", "head"]) for (const { file } of allocatorPlan) {
+    copyFileSync(join(directory, side, file), join(builds, side, file));
+  }
+  assert.equal(allocatorReport(builds).status, 1);
+  writeFileSync(join(builds, "head", "commit"), "f".repeat(40) + "\n");
+  const before = called();
+  const reused = job(env, "diagnose", builds, "3", directory);
+  assert.equal(reused.status, 1, reused.stderr);
+  assert.match(reused.stderr, /give a new diagnostic directory/);
+  assert.deepEqual(allocatorReport(directory), report);
+  const next = join(builds, "missing executable");
+  const absent = job(env, "diagnose", builds, "3", next);
+  assert.equal(absent.status, 1, absent.stderr);
+  assert.match(absent.stderr, /no executable probe for head/);
+  assert.equal(allocatorReport(next).status, 1);
+  assert.ok(!existsSync(join(next, "complete")));
+  assert.deepEqual(called(), before);
+});
+
+test("diagnostics do not run either probe when one side was skipped by the build", { skip }, (t) => {
+  const { builds, base, head, job, called } = fixture(t);
+  assert.equal(job({ STAND_IN_FAILS: head }, "build", builds).status, 0);
+  // A failed build may leave an executable. The unbuilt marker still makes it ineligible.
+  copyFileSync(join(builds, "bin", base), join(builds, "bin", head));
+  chmodSync(join(builds, "bin", head), 0o755);
+  const directory = join(builds, "skipped diagnostics");
+  const result = job({ STOP_AT: later() }, "diagnose", builds, "3", directory);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /no executable probe for head/);
+  assert.deepEqual(called(), []);
+  assert.equal(allocatorReport(directory).status, 1);
+});
+
+test("interrupting diagnostics after the last JSON cannot publish a complete pair", { skip }, (t) => {
+  const { builds, head, job } = fixture(t);
+  assert.equal(job({}, "build", builds).status, 0);
+  const directory = join(builds, "interrupted diagnostics");
+  const last = allocatorPlan.at(-1);
+  assert.ok(last);
+  const call = [head, ...last.options].join(" ");
+  const result = job({
+    STOP_AT: later(),
+    STAND_IN_DOES: JSON.stringify({ [call]: ["", "", "interrupts diagnostics"] }),
+  }, "diagnose", builds, "3", directory);
+  assert.equal(result.signal, "SIGTERM", result.stderr);
+  for (const side of ["base", "head"]) for (const { file } of allocatorPlan) {
+    assert.equal(JSON.parse(readFileSync(join(directory, side, file), "utf8")).kind, "idle-allocator");
+  }
+  assert.ok(!existsSync(join(directory, "complete")));
+  const report = allocatorReport(directory);
+  assert.equal(report.status, 1);
+  assert.match(report.markdown, /No valid completion record/);
 });
 
 test("a reading that exits 124 early records its status and seconds and is taken again", { skip }, (t) => {

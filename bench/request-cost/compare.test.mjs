@@ -24,12 +24,22 @@ const expect = Object.fromEntries(readings().map((reading) => [reading.file, rea
 const diagnosticPlan = readings({ allocator: true });
 const observed = { allocator: { live: 0, threadNet: -1, active: 4096 }, sweepNanos: [123, 456] };
 
-/** Write a diagnostic fixture in a distinct file, using the original run's settings.
- * @param {string} dir @param {string} file @param {object} [changes]
+/** A diagnostic fixture separate from the original runs, but using their settings.
+ * @param {{ base: string, head: string }} runs
  */
-function observer(dir, file, changes = {}) {
-  const rss = JSON.parse(readFileSync(join(dir, file.replace("idle-allocator-", "idle-")), "utf8"));
-  writeFileSync(join(dir, file), JSON.stringify({ ...rss, kind: "idle-allocator", ...observed, ...changes }));
+function diagnostics(runs) {
+  const directory = join(dirname(runs.base), "diagnostics");
+  const sides = /** @type {const} */ (["base", "head"]);
+  for (const side of sides) mkdirSync(join(directory, side), { recursive: true });
+  const observer = (/** @type {"base" | "head"} */ side, /** @type {string} */ file, changes = {}) => {
+    const rss = JSON.parse(readFileSync(join(runs[side], file.replace("idle-allocator-", "idle-")), "utf8"));
+    writeFileSync(join(directory, side, file), JSON.stringify({ ...rss, kind: "idle-allocator", ...observed, ...changes }));
+  };
+  const complete = () => writeFileSync(join(directory, "complete"), `${"a".repeat(40)}\n${"b".repeat(40)}\n`);
+  const seed = () => {
+    for (const side of sides) for (const { file } of diagnosticPlan) observer(side, file);
+  };
+  return { directory, observer, complete, seed };
 }
 
 /**
@@ -262,17 +272,20 @@ test("a change inside the budget passes as counted, and the table gives every ru
 
 test("the explicit allocator report shows both builds' matching diagnostic runs; the gate never reads them", (t) => {
   const { base, head } = builds(t);
+  const { directory, observer, complete, seed } = diagnostics({ base, head });
   const required = compare(base, head, { description: counting });
   assert.equal(required.status, 0);
-  for (const dir of [base, head]) for (const { file } of diagnosticPlan) observer(dir, file);
+  seed();
   for (let n = 1; n <= 3; n += 1) {
     const file = `idle-allocator-request-${n}.json`;
-    observer(base, file, { allocator: { live: n, threadNet: -n, active: 0 } });
-    observer(head, file, { allocator: { live: 1_000_000 * n, threadNet: n, active: -4096 * n } });
+    observer("base", file, { allocator: { live: n, threadNet: -n, active: 0 } });
+    observer("head", file, { allocator: { live: 1_000_000 * n, threadNet: n, active: -4096 * n } });
   }
+  complete();
   assert.deepEqual(compare(base, head, { description: counting }), required);
-  const read = allocatorReport(base, head);
+  const read = allocatorReport(directory);
   assert.equal(read.status, 0);
+  assert.match(read.markdown, /^## Idle allocator diagnostics: `bbbbbbbbb` and `aaaaaaaaa`/);
   assert.match(read.markdown, /Observer on/);
   assert.match(read.markdown, /\| Resident \| Jemalloc live \| Serving-thread net \| Jemalloc active \|/);
   assert.equal(read.markdown.split("\n").filter((line) => /^\| (?:base|head) \|/.test(line)).length, 18);
@@ -281,7 +294,7 @@ test("the explicit allocator report shows both builds' matching diagnostic runs;
   // The diagnostic report requires no answers or instruction/allocation figures.
   unlinkSync(join(base, "count-get.json"));
   unlinkSync(join(base, "idle-request-1.json"));
-  const cli = spawnSync(process.execPath, [join(kit, "compare.mjs"), base, head, "--allocator"], { encoding: "utf8" });
+  const cli = spawnSync(process.execPath, [join(kit, "compare.mjs"), directory, "--allocator"], { encoding: "utf8" });
   assert.equal(cli.status, 0, cli.stderr);
   assert.equal(cli.stdout, read.markdown);
 });
@@ -310,15 +323,18 @@ test("observer-on receipts never decide the observer-off gate, even if all are o
 
 test("requested diagnostics refuse missing, wrong-mode, mismatched or incomplete probe evidence", (t) => {
   const { base, head } = builds(t);
+  const { directory, observer, complete, seed } = diagnostics({ base, head });
   const check = (/** @type {RegExp} */ why) => {
-    const read = allocatorReport(base, head);
+    const read = allocatorReport(directory);
     assert.equal(read.status, 1, read.markdown);
     assert.match(read.markdown, /Incomplete diagnostic match/);
     assert.match(read.markdown, why);
     assert.equal(compare(base, head, { description: counting }).status, 0);
   };
+  check(/No valid completion record/);
+  complete();
   check(/left no output/);
-  for (const dir of [base, head]) for (const { file } of diagnosticPlan) observer(dir, file);
+  seed();
   const file = "idle-allocator-request-1.json";
   for (const fields of [
     { kind: "idle" },
@@ -330,15 +346,15 @@ test("requested diagnostics refuse missing, wrong-mode, mismatched or incomplete
     { sweepNanos: [123] },
     { sweepNanos: [123, -1] },
   ]) {
-    observer(head, file, fields);
+    observer("head", file, fields);
     check(/whole observer-on reading/);
   }
-  observer(head, file, { page: 2048 });
+  observer("head", file, { page: 2048 });
   check(/different page sizes/);
-  unlinkSync(join(head, file));
-  writeFileSync(join(head, `${file}.refused`), "Error: no allocator sample\n");
+  unlinkSync(join(directory, "head", file));
+  writeFileSync(join(directory, "head", `${file}.refused`), "Error: no allocator sample\n");
   check(/head: `no allocator sample`/);
-  const cli = spawnSync(process.execPath, [join(kit, "compare.mjs"), base, head, "--allocator"], { encoding: "utf8" });
+  const cli = spawnSync(process.execPath, [join(kit, "compare.mjs"), directory, "--allocator"], { encoding: "utf8" });
   assert.equal(cli.status, 1, cli.stderr);
   assert.match(cli.stdout, /Incomplete diagnostic match/);
 });
@@ -785,7 +801,8 @@ test("compare.mjs prints the table and exits by the verdict, and refuses argumen
   // With no description, the change declares nothing.
   assert.equal(run(base, head).status, 1);
   assert.equal(run(base, base).status, 0);
-  for (const args of [[], [base], [base, head, head], [base, head, "--readings"], [base, head, "--budget", "1"], [base, head, "--allocator", "--description", description]]) {
+  for (const args of [[], [base], [base, head, head], [base, head, "--readings"], [base, head, "--budget", "1"],
+    [base, head, "--allocator"], [base, "--allocator", "--description", description], [base, "--allocator", "--head", "a different build"]]) {
     const refused = run(...args);
     assert.equal(refused.status, 2, args.join(" "));
     assert.match(refused.stderr, /usage: node compare\.mjs --readings \[--allocator\] \| node compare\.mjs <base's directory> <head's directory>/);
