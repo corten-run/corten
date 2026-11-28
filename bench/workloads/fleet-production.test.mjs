@@ -128,7 +128,7 @@ function fixture(t, mode = "success", fakeRoleGroup, dispatch) {
       // transport, controller and worker protocol remain the production code.
       const before = "spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
       const after = "spawn = synthetic.spawn, streamSpawn = synthetic.streamSpawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
-      const roleDefault = "compiler, roleCheck, remainingAdmission = false";
+      const roleDefault = "compiler, roleCheck, captureReplay, remainingAdmission = false";
       assert.equal(source.split(before).length, 2, "review fixture injection when production signature changes");
       assert.equal(source.split(roleDefault).length, 2, "review role-check fixture default");
       if (dispatch?.move) {
@@ -137,7 +137,7 @@ function fixture(t, mode = "success", fakeRoleGroup, dispatch) {
         assert.equal(source.split(beforeCheck).length, 2, "review retired state movement seam");
         source = source.replace(beforeCheck, `syntheticFs.renameSync(${pathLiteral}, ${pathLiteral} + '.moved');\n          ${beforeCheck}`);
       }
-      source = source.replace(before, after).replace(roleDefault, "compiler, roleCheck = syntheticRoleCheck, remainingAdmission = false") + `\nimport * as syntheticFs from 'node:fs';
+      source = source.replace(before, after).replace(roleDefault, "compiler, roleCheck = syntheticRoleCheck, captureReplay, remainingAdmission = false") + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
 import { fork as syntheticFork } from 'node:child_process';
