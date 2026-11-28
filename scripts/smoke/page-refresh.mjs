@@ -2367,21 +2367,20 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         addEventListener("click", w.__smokeTerminalClick, true);
       }
       delete w.__smokeTerminalDraw;
-      let previous = document.getElementById("alert-status");
-      let text = previous?.textContent;
-      const observer = new MutationObserver(() => {
-        const status = document.getElementById("alert-status");
-        const next = status?.textContent;
-        // Ignore a Saved. already on the page when the observer was armed, not a new unmarked draw.
-        if (next === "Saved." && (status !== previous || next !== text)) {
-          w.__smokeTerminalDraw = { at: performance.now(), mark: status?.getAttribute("data-smoke-terminal") ?? null };
-          observer.disconnect();
+      const observer = new MutationObserver((records) => {
+        // A patch inserts the status line as a node. Take the first insertion, even if another
+        // patch has already replaced that line by the time this batch is delivered.
+        for (const { addedNodes } of records) {
+          for (const node of addedNodes) {
+            if (!(node instanceof Element) || node.id !== "alert-status" || node.textContent !== "Saved.") continue;
+            w.__smokeTerminalDraw = { at: performance.now(), mark: node.getAttribute("data-smoke-terminal") };
+            observer.disconnect();
+            return;
+          }
         }
-        previous = status;
-        text = next;
       });
       w.__smokeTerminalObserver = observer;
-      observer.observe(document, { subtree: true, childList: true, characterData: true });
+      observer.observe(document, { subtree: true, childList: true });
     }, { run: terminalMark, button }));
     /** @typedef {{ at: number, mark: string | null }} TerminalDraw */
     /** Read the first draw against the page's own press time, regardless of driver acknowledgement. @param {number | null} pressed */
@@ -2536,6 +2535,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     errors.splice(errorsAtShadowed);
     await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7)));
     try {
+      await noteTerminalDraw();
+      const firstDraw = await readWithin("the same-task Saved. draw control", page.evaluate(async () => {
+        const previous = document.getElementById("alert-status");
+        const first = document.createElement("p");
+        first.id = "alert-status";
+        first.textContent = "Saved.";
+        const marked = /** @type {Element} */ (first.cloneNode(true));
+        marked.setAttribute("data-smoke-terminal", "later");
+        if (previous) previous.replaceWith(first);
+        else document.body.append(first);
+        first.replaceWith(marked);
+        try {
+          // Both replacements are in one batch. Read the note only after its delivery.
+          await Promise.resolve();
+          return /** @type {any} */ (window).__smokeTerminalDraw?.mark;
+        } finally {
+          if (previous) marked.replaceWith(previous);
+          else marked.remove();
+        }
+      }));
+      check("the terminal-patch note keeps the first Saved. in the same task", firstDraw === null, `first mark: ${JSON.stringify(firstDraw)}`);
       await within(5000, "the terminal-patch route was not set within 5 s", page.route(alertsPath, markTerminal));
       await noteTerminalDraw(save);
       await submit();
@@ -2952,29 +2972,63 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           : { not: heldEndedAt === null ? "the browser neither finished nor failed the held read by 5 s after the News title wait returned" : `the browser ended the held read only ${Math.round(heldEndedAt - newsAt)} ms after the News title wait returned` };
       }
       if (heldConfirmed) {
-        await readWithin(
+        /** @param {string | undefined} fault */
+        const noteHeldDraw = (fault) => readWithin(
           "the News page's note of the held answer",
-          page.evaluate(({ mark, transientDraw }) => {
+          page.evaluate(async ({ mark, fault }) => {
             const w = /** @type {any} */ (window);
+            w.__smokeHeldSeen?.disconnect();
             const selector = `[data-smoke-held="${mark}"]`;
-            /** @param {Node} node */
-            const holds = (node) => node instanceof Element && (node.matches(selector) || !!node.querySelector(selector));
             w.__smokeHeldDrawn = !!document.querySelector(selector);
             const seen = new MutationObserver((records) => {
-              if (records.some((r) => Array.from(r.addedNodes).some(holds))) w.__smokeHeldDrawn = true;
+              const marked = new Set();
+              for (const { addedNodes, removedNodes } of records) {
+                for (const node of [...addedNodes, ...removedNodes]) {
+                  if (!(node instanceof Element)) continue;
+                  if (node.matches(selector)) marked.add(node);
+                  for (const child of node.querySelectorAll(selector)) marked.add(child);
+                }
+              }
+              if (!marked.size) return;
+              // The nodes are live, but the records say where each parent edge changed. Undo the
+              // batch to find a connection that existed before a child or its subtree was removed.
+              // Mutations reported on a detached subtree do not by themselves show a News draw.
+              const parents = new Map();
+              const inNews = (/** @type {Node | null} */ node) => {
+                while (node && node !== document) node = parents.has(node) ? parents.get(node) : node.parentNode;
+                return node === document;
+              };
+              const lines = [...marked];
+              for (let i = records.length; ; i--) {
+                if (lines.some(inNews)) {
+                  w.__smokeHeldDrawn = true;
+                  return;
+                }
+                if (i === 0) return;
+                const { target, addedNodes, removedNodes } = records[i - 1];
+                for (const node of addedNodes) parents.set(node, null);
+                for (const node of removedNodes) parents.set(node, target);
+              }
             });
             w.__smokeHeldSeen = seen;
             seen.observe(document, { subtree: true, childList: true });
-            if (transientDraw) {
+            if (fault === "transient-draw" || fault === "detach-child" || fault === "off-document") {
               const subtree = document.createElement("div");
               const line = document.createElement("p");
               line.setAttribute("data-smoke-held", mark);
-              subtree.append(line);
+              if (fault !== "off-document") subtree.append(line);
               document.body.append(subtree);
+              if (fault === "detach-child") line.remove();
               subtree.remove();
+              if (fault === "off-document") subtree.append(line);
+              await Promise.resolve();
             }
-          }, { mark: heldMark, transientDraw: departureFault === "transient-draw" }),
+            return w.__smokeHeldDrawn === true;
+          }, { mark: heldMark, fault }),
         );
+        check("the News note sees a marked child detached in the same task", await noteHeldDraw("detach-child"));
+        check("the News note ignores a marked child added after detachment", !(await noteHeldDraw("off-document")));
+        await noteHeldDraw(departureFault === "transient-draw" ? departureFault : undefined);
         releasedAt = performance.now();
         letGo();
         if (swaps) heldFinish = await within(15_000, "", heldEnd).catch(() => ({ not: "the browser did not finish or fail the held read within 15 s of its release" }));
