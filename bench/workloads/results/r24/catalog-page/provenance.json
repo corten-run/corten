@@ -1,0 +1,238 @@
+{
+  "group": "catalog-page",
+  "fleetRound": "r24",
+  "nativeRound": "c24",
+  "measuredCommit": "30b39d455ad4c9840e1a4206cbd716f519448f1a",
+  "startedAt": "2026-11-21T12:29:09.247Z",
+  "finishedAt": "2026-11-21T15:14:40.533Z",
+  "hardware": "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz",
+  "archiveSha256": "98a525f1f5bbb201bb057b2f4c53e306a83ac987ec7ff1712f8bd3ede422e2df",
+  "custodyRef": "cbcustody-f84f8acf76e341988cd74a078bc9186c",
+  "exportLocator": "https://github.com/corten-run/benchmark-evidence/releases/download/results-r24-catalog-page/r24-report-inputs.json",
+  "exportSha256": "19f64c06825794bd609ce4fc95a4bc2a25cbe97d32ee55d3335ce9370387cd65",
+  "archiveSummarySuffix": "/00-catalog-page-timing/native/summary.json",
+  "summarySha256": "82817f39ff5892cd7fc0c0ae0c90d1357b02e4cecd9c9e59e20981cdc31ff202",
+  "nativeReportSha256": "655e936c3975fab93f842e1e8f00d5f738c604e73c47720c209f463bf68107b9",
+  "publishedReportSha256": "79fc06bd6b22227383fc952cdb9f37b00e40b451e6bf2914d4739339b90c7cfa",
+  "result": "Verified complete attempt with recorded contender failures",
+  "allContendersPassed": false,
+  "throughputMetric": "successful requests per second at 64 users",
+  "rows": [
+    {
+      "app": "corten",
+      "outcome": "passed",
+      "comparisonEligible": true,
+      "throughput": {
+        "fixture-page": {
+          "median": 29160.33713081619,
+          "min": 28050.75221231337,
+          "max": 29802.641395375078
+        },
+        "api-page": {
+          "median": 9226.922079665048,
+          "min": 9037.344695677342,
+          "max": 9272.923356526968
+        }
+      },
+      "recordedTargetFailures": []
+    },
+    {
+      "app": "aspnet",
+      "outcome": "passed",
+      "comparisonEligible": true,
+      "throughput": {
+        "fixture-page": {
+          "median": 6328.452591105523,
+          "min": 6316.716731403442,
+          "max": 6336.228654452578
+        },
+        "api-page": {
+          "median": 3296.133636310989,
+          "min": 3268.987615425631,
+          "max": 3323.1051726136884
+        }
+      },
+      "recordedTargetFailures": []
+    },
+    {
+      "app": "express",
+      "outcome": "failed",
+      "comparisonEligible": false,
+      "throughput": {
+        "fixture-page": {
+          "median": 5306.599222936842,
+          "min": 5209.711919978977,
+          "max": 5348.833762776821
+        },
+        "api-page": {
+          "median": 1728.9521545392604,
+          "min": 1689.6283470510439,
+          "max": 1734.7206321291721
+        }
+      },
+      "recordedTargetFailures": [
+        {
+          "app": "express",
+          "source": "api",
+          "target": "page",
+          "pass": 2,
+          "phase": "sat256",
+          "failed": 1,
+          "timeouts": 1,
+          "httpErrors": 0,
+          "dropped": 0
+        },
+        {
+          "app": "express",
+          "source": "api",
+          "target": "page",
+          "pass": 3,
+          "phase": "sat256",
+          "failed": 5,
+          "timeouts": 5,
+          "httpErrors": 0,
+          "dropped": 0
+        }
+      ]
+    },
+    {
+      "app": "fastapi",
+      "outcome": "failed",
+      "comparisonEligible": false,
+      "throughput": {
+        "fixture-page": {
+          "median": 2160.5276825798533,
+          "min": 2112.0330489300245,
+          "max": 2333.181298739583
+        },
+        "api-page": {
+          "median": 268.26191146699244,
+          "min": 262.028143676342,
+          "max": 279.3244342271239
+        }
+      },
+      "recordedTargetFailures": [
+        {
+          "app": "fastapi",
+          "source": "fixture",
+          "target": "page",
+          "pass": 1,
+          "phase": "sat256",
+          "failed": 50,
+          "timeouts": 50,
+          "httpErrors": 0,
+          "dropped": 0
+        },
+        {
+          "app": "fastapi",
+          "source": "api",
+          "target": "page",
+          "pass": 1,
+          "phase": "sat256",
+          "failed": 2,
+          "timeouts": 2,
+          "httpErrors": 0,
+          "dropped": 0
+        },
+        {
+          "app": "fastapi",
+          "source": "fixture",
+          "target": "page",
+          "pass": 2,
+          "phase": "sat256",
+          "failed": 46,
+          "timeouts": 46,
+          "httpErrors": 0,
+          "dropped": 0
+        },
+        {
+          "app": "fastapi",
+          "source": "api",
+          "target": "page",
+          "pass": 2,
+          "phase": "sat256",
+          "failed": 1,
+          "timeouts": 1,
+          "httpErrors": 0,
+          "dropped": 0
+        },
+        {
+          "app": "fastapi",
+          "source": "fixture",
+          "target": "page",
+          "pass": 3,
+          "phase": "sat256",
+          "failed": 38,
+          "timeouts": 38,
+          "httpErrors": 0,
+          "dropped": 0
+        },
+        {
+          "app": "fastapi",
+          "source": "api",
+          "target": "page",
+          "pass": 3,
+          "phase": "sat256",
+          "failed": 2,
+          "timeouts": 2,
+          "httpErrors": 0,
+          "dropped": 0
+        }
+      ]
+    },
+    {
+      "app": "axum-maud",
+      "outcome": "passed",
+      "comparisonEligible": true,
+      "throughput": {
+        "fixture-page": {
+          "median": 25709.295702914504,
+          "min": 25200.75204516081,
+          "max": 25920.00291953953
+        },
+        "api-page": {
+          "median": 8687.90922474332,
+          "min": 8664.552604024186,
+          "max": 8782.69207517156
+        }
+      },
+      "recordedTargetFailures": []
+    },
+    {
+      "app": "drogon",
+      "outcome": "passed",
+      "comparisonEligible": true,
+      "throughput": {
+        "fixture-page": {
+          "median": 19195.483167989674,
+          "min": 19137.847959211227,
+          "max": 19221.848803644338
+        },
+        "api-page": {
+          "median": 5187.4557064722785,
+          "min": 5073.084180836284,
+          "max": 5459.275625640578
+        }
+      },
+      "recordedTargetFailures": []
+    },
+    {
+      "app": "gin",
+      "outcome": "passed",
+      "comparisonEligible": true,
+      "throughput": {
+        "fixture-page": {
+          "median": 11307.110010869656,
+          "min": 11118.668101623258,
+          "max": 11597.145502997868
+        },
+        "api-page": {
+          "median": 4166.82017162605,
+          "min": 3795.2555392621016,
+          "max": 4246.123268366489
+        }
+      },
+      "recordedTargetFailures": []
+    }
+  ]
+}

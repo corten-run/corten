@@ -6,6 +6,7 @@ const PERFORMANCE: &str = include_str!("../../../docs/performance.md");
 const README: &str = include_str!("../../../README.md");
 const DESIGN: &str = include_str!("../../../docs/design.md");
 const MANIFEST: &str = include_str!("../../../Cargo.toml");
+const R24: &str = include_str!("../../../bench/workloads/results/r24/catalog-page/report.md");
 
 const CERT: &str = include_str!("cert.rs");
 const AFTER: &str = include_str!("after.rs");
@@ -14,7 +15,7 @@ const STEEL: &str = include_str!("steel.rs");
 const CORTEN: &str = include_str!("../../../crates/corten/Cargo.toml");
 
 /// The file that says it, what it says, the document, and what the document says.
-const HELD: [(&str, &str, &str, &str); 20] = [
+const HELD: [(&str, &str, &str, &str); 27] = [
     (STEEL, r#"With the Cargo feature " <code>"agent"</code>"#, CORTEN, "agent = ["),
     (
         CERT,
@@ -60,6 +61,13 @@ const HELD: [(&str, &str, &str, &str); 20] = [
     ),
     (CERT, "corten-run 0.3", MANIFEST, "version = \"0.3."),
     (SURFACE, "16.5 KB gzipped", README, "A 16.5 KB (gzip) runtime."),
+    (AFTER, "there Corten rendered 29,160 a second", R24, "| corten | 29,160 [28,051, 29,803] (3/3) |"),
+    (AFTER, "29,160 a second against 25,709", R24, "| axum-maud | 25,709 [25,201, 25,920] (3/3) |"),
+    (AFTER, "from memory at 64 users", R24, "At 64 users, Corten had the highest successful page throughput"),
+    (AFTER, "from memory at 64 users on one core", R24, "| app | 1.0 | 1 |"),
+    (AFTER, "(2026-11-21, at 30b39d455)", R24, "Started: 2026-11-21T"),
+    (AFTER, "(2026-11-21, at 30b39d455)", R24, "Measured commit: `30b39d455"),
+    (AFTER, "not a before and after", R24, "No change against a prior round is claimed."),
     (
         AFTER,
         "Firefox 147 and later, Safari 26.2 and later",

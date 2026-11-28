@@ -5,6 +5,10 @@
 Speed at the user's end is Corten's first value, so every claim about it has a measured number.
 This page gathers the comparisons; how each number is taken is in the benchmark READMEs it links.
 
+The [benchmark group results](../bench/workloads/results/README.md) list measurements by
+workload and commit. Start there for the lean catalog page; the historical marketplace
+tables below measure different work.
+
 ## Reading the comparisons
 
 No single table establishes overall framework speed. The historical marketplace measures a

@@ -1,0 +1,17 @@
+{
+  "group": "hardening",
+  "fleetRound": "r112",
+  "measuredCommit": "6345df88c530fe7fcca7f10bab934aa324179de5",
+  "nativeSchema": "native-hardening-run/v3",
+  "profile": "bounded",
+  "nativeStartedAt": "2026-11-27T21:25:58.341Z",
+  "nativeFinishedAt": "2026-11-28T00:02:16.71Z",
+  "archiveSha256": "fd761d332e3f8515e4a2fda68b72d4e77ad547ac23dfe231de993bf5f86669e1",
+  "custodyRef": "cbcustody-7e547ec0146249b8bda91ebb15f26a94",
+  "archiveBytes": 86873064,
+  "archiveResultSuffix": "/00-hardening-timing/native/summary.json",
+  "nativeSummarySha256": "da6a85386e246a77a969df5de10bb3bd255b3673d98c2dcf67fb48dfd131b92e",
+  "publishedReportSha256": "f70aa8ff52fc4c4d5b415fdb7b5b938635910dab35246b759f8e72b5b71d755b",
+  "exportLocator": "https://github.com/corten-run/benchmark-evidence/releases/download/results-r112-hardening/r112-report-inputs.json",
+  "exportSha256": "241ecd87a1481253148f9d38633b11378345d2fc7f7b306db17c3fc11b434e35"
+}

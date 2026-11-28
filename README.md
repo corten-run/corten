@@ -60,6 +60,10 @@ cd my-app
 corten dev    # serves http://localhost:3000 and reloads on save
 ```
 
+Node.js is there for one step: `corten check` runs TypeScript's `tsc` over the JSDoc in your
+scripts, so a wrong type in one fails the check. Nothing bundles or transpiles them, and
+`corten dev`, the build and the deployed app run without Node.js.
+
 `cargo binstall` checks the prebuilt binary's download only by HTTPS; to check it against its
 build first, download it as in
 [Verify a prebuilt binary](docs/guide/getting-started.md#verify-a-prebuilt-binary), using GitHub
@@ -210,20 +214,46 @@ says an `HTMLOutputElement` and the ref is on an `<output>`. Either mismatch is 
 
 ## Performance
 
-Historical round r20 is the **first validated v2 production baseline**, measured on 2026-11-12 (UTC)
-at `43550265076e378d2159a9ebc254cf9412a2355a` on one dedicated c-8 (Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz).
-It is a saved measurement of that commit, not today's code or a baseline for the newer
-workload-group campaign. There is no speed delta from r16, catalog c1/c2 or another workload.
+Held to one core, Corten rendered 29,160 catalog pages a second from data held in memory, and
+9,227 a second when each page fetched its data over HTTP first (64 users). axum + Maud was next
+among the contenders that passed every phase, at 25,709 and 8,688.
 
-Group `production`, feature profile `marketplace-production/v1`, native
-`PROFILE=matched`, connection cap 1000. Corten and ASP.NET Core qualified in both sources
-and passed every browser/content gate. Next.js, FastAPI, Express, Topcoat, Leptos were
-probed and excluded, not timed. The report preserves each missing requirement and lists all
-omitted adapters, which were not tested. These are measured adapter configurations, not claims
-about what their frameworks could implement. Conditional GET/ETag and downstream readiness
-are disclosed exceptions; logging remains native, not normalized.
+Those are the medians of 3 passes in round r24, measured on 2026-11-21 (UTC)
+at `30b39d455ad4c9840e1a4206cbd716f519448f1a` on an Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz, with each
+app pinned to one core. They compare the contenders of one group at 64 users, not frameworks in
+general: [what the numbers cover](#what-the-numbers-cover) says what they leave out.
 
-The table is Corten's median [min-max] of 3 passes. Pages format values per request;
+| Lean catalog page, 64 users | From memory, req/s | From HTTP, req/s |
+|---|---:|---:|
+| Corten | 29,160 [28,051-29,803] | 9,227 [9,037-9,273] |
+| axum + Maud | 25,709 [25,201-25,920] | 8,688 [8,665-8,783] |
+| Drogon | 19,195 [19,138-19,222] | 5,187 [5,073-5,459] |
+| Gin + templ | 11,307 [11,119-11,597] | 4,167 [3,795-4,246] |
+| ASP.NET Core | 6,328 [6,317-6,336] | 3,296 [3,269-3,323] |
+
+Each cell is the median [min-max] of the passes. Corten's p95 was 2.85 ms from memory and
+9.75 ms from HTTP, and the median of its per-pass memory peaks was 9.62 MiB and 9.73 MiB.
+Express and FastAPI ran too and had requests time out at 256 users, so they are not ranked; the
+report records what happened, not why. Their numbers, the 256-user phase, pass counts and ranges are in
+the [r24 report](bench/workloads/results/r24/catalog-page/report.md), listed with the other
+groups in the [group results](bench/workloads/results/README.md).
+
+### Round r20: the marketplace page
+
+The lean catalog page is strings only. Round r20's marketplace page formats its values per
+request in three locales, and it was measured earlier, at another commit and on another host:
+its numbers are not a before or an after of the ones above.
+
+Held to one core, Corten rendered 20,545 localized item pages a second from data held in memory
+(p95 8.1 ms at 64 users), used 11.4 MiB of memory at a steady 150 pages a second, and answered
+its first page 182 ms after its container started.
+
+Those are the medians of 3 passes in round r20, measured on 2026-11-12 (UTC)
+at `43550265076e378d2159a9ebc254cf9412a2355a` on one dedicated c-8 (Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz),
+with the app pinned to one core and 1 GiB. They are a saved measurement of that commit, not
+today's code and not a framework ranking.
+
+The table is Corten's median [min-max] of those passes. Pages format values per request;
 the other page locales and both admitted adapters are in the
 [full results](docs/performance.md#on-the-server) and [raw report](bench/marketplace/results/r20/report.md).
 
@@ -239,7 +269,32 @@ and 11.39 [11.25-11.41] MiB steady memory (11.64 [11.60-11.65] MiB sampled peak)
 Container start to first complete en-US memory page was 182.00 [176.00-183.00] ms,
 before readiness/warmup, not process-exec or browser-interactive time.
 
-Warmup is 10s and each phase 15s, with identity encoding. Closed-loop throughput is
+### What the numbers cover
+
+Round r24 is the lean catalog group of the workload-group campaign: Corten, ASP.NET Core,
+Express, FastAPI, axum + Maud, Drogon and Gin + templ, of which five passed every timed phase.
+For each contender and data source, each pass ran one 30s warmup followed by three 60s
+phases, with identity encoding. It is a saved measurement of
+r24's commit, not today's code, and a comparison within that group, not the historical
+twenty-app catalog baseline; it claims no change against an earlier round. Its ranges are the
+spread of three passes, not confidence intervals. At 256 users Corten's median stays ahead from
+both sources, but from HTTP its range overlaps axum + Maud's. CPU is counted for the whole
+container, and the round does not measure build times, instruction counts or browser
+interactivity.
+
+Historical round r20 is the **first validated v2 production baseline**. It is a saved
+measurement of r20's commit, not today's code or a baseline for the newer workload-group
+campaign. There is no speed delta from r16, catalog c1/c2 or another workload.
+
+Group `production`, feature profile `marketplace-production/v1`, native
+`PROFILE=matched`, connection cap 1000. Corten and ASP.NET Core qualified in both sources
+and passed every browser/content gate. Next.js, FastAPI, Express, Topcoat, Leptos were
+probed and excluded, not timed. The report preserves each missing requirement and lists all
+omitted adapters, which were not tested. These are measured adapter configurations, not claims
+about what their frameworks could implement. Conditional GET/ETag and downstream readiness
+are disclosed exceptions; logging remains native, not normalized.
+
+In r20, warmup is 10s and each phase 15s, with identity encoding. Closed-loop throughput is
 observed, not proven maximum capacity: Corten's memory-source app CPU is below 95% in some
 closed-loop passes. No measured HTTP phase reached 80% upstream CPU; the highest phase average was 74.89% of one core.
 Full pass-specific limits stay
@@ -417,6 +472,10 @@ convenience, and a nicer API that slows every page loses. Every pull request is 
 these values, in this order, before it merges ([CONTRIBUTING.md](CONTRIBUTING.md#review)).
 
 ## Contributing
+
+Tried Corten and something got in the way, or have a question? Say so in
+[Discussions](https://github.com/corten-run/corten/discussions): what stopped you is what we most
+want to hear.
 
 Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the layout, the
 checks and how a change is reviewed; report security issues as [SECURITY.md](SECURITY.md)

@@ -56,7 +56,7 @@ const LIMITS: [&str; 4] = [
 const AGAINST: [(&str, &str); 5] = [
     (
         "axum with a template engine",
-        "A Rust server either way. Corten adds typed seams between markup, scripts and handlers, form patches, live streams and production defaults. In round r16, axum with Maud rendered more pages a second: 27,327 against Corten's 20,705.",
+        "A Rust server either way. Corten adds typed seams between markup, scripts and handlers, form patches, live streams and production defaults. In round r16, axum with Maud rendered more pages a second: 27,327 against Corten's 20,705. Round r24 measured a different page, the lean catalog page, from memory at 64 users on one core (2026-11-21, at 30b39d455): there Corten rendered 29,160 a second against 25,709. The two rounds are different work, not a before and after.",
     ),
     (
         "htmx",
