@@ -2343,7 +2343,7 @@ DELETE intent, no recorded destruction and a previously verified, monitored
 result, a fresh collect may use up to 25 minutes for replay only after a
 same-account exact 404. It checks absence again and rechecks the archive,
 extracted evidence and terminal campaign and seal before recording cleanup.
-It never sends another DELETE. Other replay deadlines are unchanged.
+It never sends another DELETE.
 If ordinary collection at the measured commit cannot finish that replay, a
 reviewed merged successor can reconcile an already verified, successfully
 collected child with closed monitoring and a saved DELETE intent. Run the child
@@ -2356,6 +2356,21 @@ account and host may be read; a present host, changed reservation, or different
 replay result refuses. This route records only `destroyedAt`; it cannot connect
 to the guest or send another DELETE. Other collection paths keep their source
 requirements.
+
+If a completed monitored child already has a saved archive and extraction but
+ordinary replay exceeded its deadline, run the
+`cloud-production.mjs ROUND --state-dir PATH --collect --sealed-measured-checkout CHECKOUT --print-approval`
+preview from the reviewed controller. Use the clean original measured checkout
+for `CHECKOUT`. A closed terminal seal and a successful saved exit marker are
+required. The approval names `collect-saved-sealed-archive-with-measured-replay`
+and binds the measured commit, reservation, host, archive, extraction and
+terminal seal. Each replay may take up to 45 minutes; the measured source
+snapshot and all archive and native checks are unchanged. The ordinary
+ownership, remote idle and archive checks still precede any DELETE. A timeout,
+interruption or unverified replay does not authorize a DELETE. A retry after a
+recorded deletion intent confirms absence without sending another DELETE.
+This mode does not pack, download or start a job. Other replay budgets are unchanged.
+
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider

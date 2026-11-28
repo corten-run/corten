@@ -242,6 +242,64 @@ test("ordinary collection of a finalized result keeps the ordinary replay budget
   assert.equal(h.deletes, 1);
 });
 
+test("approved sealed collection uses the measured replay and does not create or retire an unverified result", async (t) => {
+  const flags = { active: true, reportStatus: "verified" };
+  const p = productionHarness(t, flags), { h } = p;
+  await h.launch().launch();
+  const closePath = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(closePath));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(closePath, JSON.stringify(closed));
+  Object.assign(flags, { active: false, expired: true });
+  h.setArchive(archive([...metadata().filter(e => e.name !== "exit-code"), { name: "exit-code", body: "0\n" }, { name: "campaign/" }]));
+  await assert.rejects(h.task({ inspect: async () => { throw new Error("unavailable"); } }).collect(),
+    e => e.controllerStage === "collect-native-replay-refused");
+  const before = readFileSync(h.statePath), saved = h.saved(), head = "b".repeat(40);
+  assert.equal(saved.status, "running"); assert.ok(saved.archiveSha256 && saved.evidenceSha256);
+  const measuredRoot = join(h.temp, "measured"); mkdirSync(measuredRoot);
+  Object.assign(flags, { wrongHead: true, remoteHead: head, measuredRoot });
+  p.deps.compiler = root => root === measuredRoot;
+  const args = [...p.args(), "--sealed-measured-checkout", measuredRoot];
+  const preview = () => productionMain([...args, "--print-approval"], p.deps);
+  flags.measuredDirty = " M bench/source";
+  await assert.rejects(preview(), /clean measured checkout/); delete flags.measuredDirty;
+  h.change(s => { s.control.monitor.phase = "live"; });
+  await assert.rejects(preview(), /sealed recovery requires a saved terminal archive/);
+  writeFileSync(h.statePath, before);
+  assert.equal(await preview(), 3);
+  const plan = p.stdout.at(-1);
+  assert.equal(plan.controllerCommit, head);
+  assert.equal(plan.recovery.measuredCommit, commit);
+  assert.equal(plan.recovery.archiveSha256, saved.archiveSha256);
+  assert.equal(plan.recovery.evidenceSha256, saved.evidenceSha256);
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  const approved = [...args, "--approve-reviewed-merged-ready", plan.approvalSha256];
+  const terminalPath = join(h.local, "monitor-terminal.json"), terminalBytes = readFileSync(terminalPath);
+  const terminal = JSON.parse(terminalBytes);
+  writeFileSync(terminalPath, JSON.stringify({ ...terminal, sealSha256: "e".repeat(64) }));
+  await assert.rejects(productionMain(approved, p.deps));
+  writeFileSync(terminalPath, terminalBytes);
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  const archivePath = join(h.local, "results.tgz"), archiveBytes = readFileSync(archivePath);
+  writeFileSync(archivePath, "changed");
+  await assert.rejects(productionMain(approved, p.deps), /archive changed/);
+  writeFileSync(archivePath, archiveBytes);
+  assert.ok(p.calls.every(([bin]) => bin === "git"));
+  assert.deepEqual(readFileSync(h.statePath), before);
+  const now = performance.now.bind(performance); let elapsed = 0, replayed = 0;
+  t.mock.method(performance, "now", () => now() + elapsed);
+  const run = () => productionMain(approved, { ...p.deps, inspect: async input => {
+    replayed++; assert.equal(input.commit, commit); elapsed += 16 * 60_000; return h.report();
+  } });
+  flags.reportStatus = "blocked";
+  await assert.rejects(run(), e => e.controllerStage === "collect-native-report-refused");
+  assert.equal(h.deletes, 0); assert.equal(h.creates, 1); assert.equal(replayed, 1);
+  // A read-only terminal probe extends the monitor ledger, so print a new approval.
+  flags.reportStatus = "verified";
+  assert.equal(await preview(), 3); approved[approved.length - 1] = p.stdout.at(-1).approvalSha256;
+  assert.equal(await run(), 0);
+  assert.equal(h.saved().validation.status, "verified"); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.deletes, 1); assert.equal(h.creates, 1); assert.equal(replayed, 4);
+});
+
 test("contradictory saved verification does not get the extended replay budget", async (t) => {
   const { h } = await verifiedDeletionRetry(t);
   h.change(s => { s.exitCode = 1; });

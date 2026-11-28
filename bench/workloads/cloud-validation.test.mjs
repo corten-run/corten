@@ -536,6 +536,23 @@ test("replay after confirmed host absence is still bounded, but permits 25 minut
   await rejected;
 });
 
+test("an approved sealed replay has a bounded 45 minute budget", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let stops = 0;
+  const pending = inspectCampaign({}, { sealedRecovery: true, start: () => ({
+    result: new Promise(() => {}), stop: () => stops++,
+  }) });
+  const rejected = assert.rejects(pending, { controllerStage: "collect-native-replay-deadline" });
+  t.mock.timers.tick(45 * 60_000 - 1);
+  try { assert.equal(stops, 0); }
+  finally {
+    t.mock.timers.tick(1);
+    t.mock.timers.tick(validationStopLimit);
+    await rejected;
+  }
+  assert.equal(stops, 1);
+});
+
 test("native replay startup, interruption and worker refusal have closed stages", async () => {
   const raw = Object.assign(new Error("PRIVATE_EVIDENCE_VALUE"), { controllerStage: "collect-native-replay-deadline" });
   const message = "native campaign validation unavailable or invalid; evidence/host preserved";

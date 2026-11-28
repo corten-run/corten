@@ -1,0 +1,1 @@
+- Retry a timed-out replay of a saved sealed benchmark archive from its original measured commit without rerunning the benchmark. Regular collection keeps its deadline. This extends [#2139 Let verified benchmark cleanup finish replay after confirmed host deletion](https://github.com/corten-run/corten/pull/2139).

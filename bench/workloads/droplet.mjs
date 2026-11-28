@@ -10,7 +10,8 @@ import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleet
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, discardPublicationStage, durable, durableCopy, durableNew, evidenceFileIdentity, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
-import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full,
+  pendingCreate, providerAccount, providerFailure, sealedCollectionCandidate, sealedCollectionPolicy, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
 import { captureValidation, validationTask } from "./cloud-validation-snapshot.mjs";
@@ -90,7 +91,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
   const groupedExitOne = recoveryApproval?.policy === failedExitOnePolicy, pinnedRetirement = groupedHandoff || groupedExitOne;
   const absenceOnly = recoveryApproval?.policy === absentCollectionPolicy;
+  const sealedRecovery = recoveryApproval?.policy === sealedCollectionPolicy;
   assert.equal(options.absentMeasuredCheckout !== undefined, absenceOnly, "production absence approval required");
+  assert.equal(options.sealedMeasuredCheckout !== undefined, sealedRecovery, "production sealed replay approval required");
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
   // The lock this process's current locked() operation holds, while it holds it: its name
@@ -893,15 +896,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     } catch { throw collectRefusal("collect-native-report-refused"); }
     let replay;
     try {
+      if (sealedRecovery) start = (input) => {
+        const root = realpathSync(options.sealedMeasuredCheckout);
+        assert.equal(root, recoveryApproval.measuredRoot, "measured checkout changed");
+        return validationTask(input, { snapshot: captureValidation(input.commit, { root }) });
+      };
       replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect, start };
     } catch { throw collectRefusal("collect-native-replay-start"); }
     report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
-      ...replay, interrupted, confirmedAbsent, preserveLock: () => { preserveOperationLock = true; },
+      ...replay, interrupted, confirmedAbsent, sealedRecovery, preserveLock: () => { preserveOperationLock = true; },
     });
     try {
       check();
       assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
       outcome = campaignOutcome(report, state, exitCode);
+      if (sealedRecovery) {
+        assert.equal(report.status, "verified", "sealed recovery cannot retire an unverified result");
+        assert.equal(exitCode, 0);
+        assert.equal(report.campaign, recoveryApproval.campaign);
+        assert.equal(report.supervisedTerminal?.sealSha256, recoveryApproval.sealSha256);
+      }
       if (state.control?.monitor?.phase === "closed") {
         const terminal = JSON.parse(regular(join(local, "monitor-terminal.json")));
         assert.equal(terminal.id, state.control.monitor.id);
@@ -1829,6 +1843,20 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (failedMonitorRecovery) assert.equal(observed.control.monitor.phase, "invalid", "foreground monitor has not settled");
       }
       return locked(async () => {
+        if (sealedRecovery) {
+          assert.ok(sealedCollectionCandidate(state), "sealed recovery requires a saved terminal archive");
+          assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked sealed reservation changed");
+          assert.equal(state.commit, recoveryApproval.measuredCommit);
+          assert.equal(state.id, recoveryApproval.hostId);
+          assert.equal(state.archiveSha256, recoveryApproval.archiveSha256);
+          assert.equal(state.evidenceSha256, recoveryApproval.evidenceSha256);
+          const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+          const { terminal } = sealedMonitor(local, state);
+          assert.equal(terminal.campaign, recoveryApproval.campaign);
+          assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
+          assert.ok(regular(join(local, state.evidence, "exit-code"), 16).equals(Buffer.from("0\n")), "sealed recovery requires a successful exit marker");
+          verifyArchive();
+        }
         if (options.r21MeasuredCheckout) {
           ownedR21(state);
           full(recoveryApproval?.controllerCommit, /[a-f0-9]{40}/, "approved successor required");
