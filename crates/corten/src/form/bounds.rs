@@ -265,7 +265,7 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
     /// out an unset value.
     #[inline]
     pub fn input_value<'a>(&self, entry: &'a super::Entry<T>) -> impl AttrValue + use<'a, T, S> {
-        InputValue { entry, min: self.min, step: self.step }
+        InputValue { entry, bounds: *self }
     }
 
     /// What a typed field reads as when it is a number these bounds hold: `None` when it is blank,
@@ -285,8 +285,7 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
 
 struct InputValue<'a, T, S> {
     entry: &'a super::Entry<T>,
-    min: T,
-    step: S,
+    bounds: Bounds<T, S>,
 }
 
 impl<T: Numeric, S: Spacing<T>> AttrValue for InputValue<'_, T, S> {
@@ -295,7 +294,7 @@ impl<T: Numeric, S: Spacing<T>> AttrValue for InputValue<'_, T, S> {
         if let Some(text) = self.entry.text() {
             text.write_attr(name, out);
         } else if let Some(value) = self.entry.value() {
-            self.step.write_value_attr_from(self.min, name, value, out);
+            self.bounds.step.write_value_attr_from(&self.bounds, name, value, out);
         }
     }
 }
@@ -322,7 +321,7 @@ pub trait Spacing<T: Numeric>: Copy + sealed::Sealed + 'static {
     #[doc(hidden)]
     fn write_value_attr(self, name: &str, value: T, out: &mut String);
     #[doc(hidden)]
-    fn write_value_attr_from(self, _min: T, name: &str, value: T, out: &mut String) {
+    fn write_value_attr_from(self, _bounds: &Bounds<T, Self>, name: &str, value: T, out: &mut String) {
         self.write_value_attr(name, value, out);
     }
 }
@@ -346,8 +345,8 @@ impl<T: Numeric> Spacing<T> for T {
         quoted(name, &value.shown(self), out);
     }
 
-    fn write_value_attr_from(self, min: T, name: &str, value: T, out: &mut String) {
-        quoted(name, &value.shown_from(min, self), out);
+    fn write_value_attr_from(self, bounds: &Bounds<T>, name: &str, value: T, out: &mut String) {
+        quoted(name, &value.shown_from(bounds.min, Some(bounds.max), self), out);
     }
 }
 
@@ -420,7 +419,7 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     #[doc(hidden)]
     fn shown(self, step: Self) -> String;
     #[doc(hidden)]
-    fn shown_from(self, _min: Self, step: Self) -> String {
+    fn shown_from(self, _min: Self, _max: Option<Self>, step: Self) -> String {
         self.shown(step)
     }
 }
@@ -471,7 +470,7 @@ whole!(u8 => u8, u16 => u16, u32 => u32, u64 => u64, u128 => u128, usize => usiz
     i8 => u8, i16 => u16, i32 => u32, i64 => u64, i128 => u128, isize => usize);
 
 macro_rules! float {
-    ($($t:ty),*) => {$(
+    ($($t:ty => $safe_digits:literal),*) => {$(
         impl sealed::Sealed for $t {}
         impl Float for $t {
             fn write_value(self, out: &mut String) {
@@ -523,34 +522,15 @@ macro_rules! float {
                 let (Some(value), Some(from_at), Some(step_at)) = (Decimal::of(self), Decimal::of(from), Decimal::of(step)) else {
                     return false;
                 };
-                // The nearest step exactly, in decimal, where the digits line up in an `i128`;
-                // else estimated in f64, whose error grows with the number of steps, so this path
-                // mostly refuses: no step near the estimate reads as the value.
-                let near = match value.steps_from(from_at, step_at) {
-                    Some(near) => near,
-                    None => {
-                        let near = ((self as f64 - from as f64) / step as f64).round();
-                        if near.is_nan() || near.abs() >= 1e30 {
-                            return false;
-                        }
-                        near as i128
-                    }
+                let Some(near) = value.near_step(from_at, step_at, || (self as f64 - from as f64) / step as f64) else {
+                    return false;
                 };
-                let (from, step) = (from_at, step_at);
-                [near - 1, near, near + 1].into_iter().any(|k| {
-                    let mut text = Buf { bytes: [0; 64], len: 0 };
-                    k >= 0
-                        && from.plus_steps(step, k).is_some_and(|(digits, exponent)| {
-                            use std::fmt::Write;
-                            write!(text, "{digits}e{exponent}").is_ok()
-                                && std::str::from_utf8(&text.bytes[..text.len]).ok().and_then(|t| t.parse::<$t>().ok()) == Some(self)
-                        })
-                })
+                from_at.step_candidates(step_at, near, [-1, 0, 1]).any(|point| point.reads_as(self))
             }
             fn shown(self, step: Self) -> String {
-                self.shown_from(0.0, step)
+                self.shown_from(0.0, None, step)
             }
-            fn shown_from(self, min: Self, step: Self) -> String {
+            fn shown_from(self, min: Self, max: Option<Self>, step: Self) -> String {
                 use std::fmt::Write;
                 let mut text = String::new();
                 let mut decimals = 0;
@@ -565,12 +545,49 @@ macro_rules! float {
                 }
                 text.clear();
                 write!(text, "{self:.decimals$}").unwrap();
+                // With this many fixed digits (excluding sign and point), a float's rounding
+                // error is less than half the final decimal place. A grid point that reads back
+                // as this float must already be the spelling we wrote.
+                if text.len() <= $safe_digits + usize::from(decimals != 0) + usize::from(self.is_sign_negative()) {
+                    return text;
+                }
+                if let Some(max) = max {
+                    prefer_step_decimal(&mut text, self, Bounds { min, max, step }, || (self as f64 - min as f64) / step as f64);
+                }
                 text
             }
         }
     )*};
 }
-float!(f32, f64);
+float!(f32 => 6, f64 => 15);
+
+#[cold]
+fn prefer_step_decimal<T: Numeric + std::fmt::LowerExp + std::str::FromStr>(
+    text: &mut String,
+    value: T,
+    bounds: Bounds<T>,
+    estimate: impl FnOnce() -> f64,
+) {
+    let Bounds { min, max, step } = bounds;
+    if !(min <= value && value <= max && T::ZERO < step) {
+        return;
+    }
+    let (Some(shortest), Some(min_at), Some(step_at)) = (Decimal::of(value), Decimal::of(min), Decimal::of(step)) else { return };
+    // When value is below max, their rounding intervals do not overlap. At max, compare to
+    // the decimal hint rather than the binary float itself.
+    let limit = (value == max).then_some(shortest);
+    let fits = |point: Decimal| limit.is_none_or(|max| point.at_most(max));
+    if Decimal::from_mantissa(text, 0).is_some_and(|point| point.on_grid(min_at, step_at) && fits(point))
+        && text.parse::<T>().ok() == Some(value)
+    {
+        return;
+    }
+    if let Some(near) = shortest.near_step(min_at, step_at, estimate) {
+        if let Some(point) = min_at.step_candidates(step_at, near, [0, -1, 1]).find(|&p| fits(p) && p.reads_as(value)) {
+            point.write_fixed(text);
+        }
+    }
+}
 
 /// A float as the shortest decimal that reads back as it (what `Display` writes): `digits` times
 /// ten to `exponent`. `None` for an infinity or NaN.
@@ -588,6 +605,10 @@ impl Decimal {
         write!(text, "{value:e}").ok()?;
         let text = std::str::from_utf8(&text.bytes[..text.len]).ok()?;
         let (mantissa, exponent) = text.split_once('e')?;
+        Self::from_mantissa(mantissa, exponent.parse().ok()?)
+    }
+
+    fn from_mantissa(mantissa: &str, exponent: i32) -> Option<Self> {
         let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
         let negative = whole.starts_with('-');
         let whole = whole.trim_start_matches('-');
@@ -598,23 +619,75 @@ impl Decimal {
             }
             digits = digits.checked_mul(10)?.checked_add(i128::from(b - b'0'))?;
         }
-        let exponent = exponent.parse::<i32>().ok()?.checked_sub(i32::try_from(fraction.len()).ok()?)?;
+        let exponent = exponent.checked_sub(i32::try_from(fraction.len()).ok()?)?;
         Some(Decimal { digits: if negative { -digits } else { digits }, exponent })
     }
 
-    /// The whole number of `step`s nearest `self` from `from`: `None` when their digits do not
-    /// line up in an `i128`.
-    fn steps_from(self, from: Decimal, step: Decimal) -> Option<i128> {
+    fn step_distance(self, from: Decimal, step: Decimal) -> Option<(i128, i128)> {
         let exponent = self.exponent.min(from.exponent).min(step.exponent);
-        let (apart, step) = (self.at(exponent)?.checked_sub(from.at(exponent)?)?, step.at(exponent)?);
-        let (whole, left) = (apart.div_euclid(step), apart.rem_euclid(step));
-        Some(if left >= step - left { whole + 1 } else { whole })
+        Some((self.at(exponent)?.checked_sub(from.at(exponent)?)?, step.at(exponent)?))
     }
 
-    /// `self` plus `k` times `step`, exactly: digits and an exponent, `None` past an `i128`.
-    fn plus_steps(self, step: Decimal, k: i128) -> Option<(i128, i32)> {
+    fn on_grid(self, from: Decimal, step: Decimal) -> bool {
+        self.step_distance(from, step).is_some_and(|(apart, step)| apart >= 0 && apart % step == 0)
+    }
+
+    fn near_step(self, from: Decimal, step: Decimal, estimate: impl FnOnce() -> f64) -> Option<i128> {
+        // Use exact decimal arithmetic when it fits. Otherwise the estimate's error grows with
+        // the number of steps, so this path mostly refuses: no nearby step reads as the value.
+        if let Some((apart, step)) = self.step_distance(from, step) {
+            let (whole, left) = (apart.div_euclid(step), apart.rem_euclid(step));
+            Some(if left >= step - left { whole + 1 } else { whole })
+        } else {
+            let near = estimate().round();
+            (near.abs() < 1e30).then_some(near as i128)
+        }
+    }
+
+    /// The grid points around `near`, as exact decimals where the digits fit an `i128`.
+    fn step_candidates(self, step: Decimal, near: i128, offsets: [i128; 3]) -> impl Iterator<Item = Decimal> {
         let exponent = self.exponent.min(step.exponent);
-        Some((self.at(exponent)?.checked_add(step.at(exponent)?.checked_mul(k)?)?, exponent))
+        offsets.into_iter().filter_map(move |offset| {
+            let k = near.checked_add(offset)?;
+            if k < 0 {
+                return None;
+            }
+            let digits = self.at(exponent)?.checked_add(step.at(exponent)?.checked_mul(k)?)?;
+            Some(Decimal { digits, exponent })
+        })
+    }
+
+    fn reads_as<T: std::str::FromStr + PartialEq>(self, value: T) -> bool {
+        use std::fmt::Write;
+        let mut text = Buf { bytes: [0; 64], len: 0 };
+        write!(text, "{}e{}", self.digits, self.exponent).is_ok()
+            && std::str::from_utf8(&text.bytes[..text.len]).ok().and_then(|t| t.parse().ok()) == Some(value)
+    }
+
+    fn at_most(self, other: Decimal) -> bool {
+        // If scaling overflows, that coefficient's magnitude is greater than the other's.
+        if self.exponent < other.exponent {
+            other.at(self.exponent).map_or(other.digits > 0, |right| self.digits <= right)
+        } else {
+            self.at(other.exponent).map_or(self.digits < 0, |left| left <= other.digits)
+        }
+    }
+
+    fn write_fixed(self, out: &mut String) {
+        use std::fmt::Write;
+        out.clear();
+        if self.exponent >= 0 {
+            write!(out, "{}", self.digits).unwrap();
+            out.extend(std::iter::repeat_n('0', self.exponent as usize));
+        } else {
+            if self.digits < 0 {
+                out.push('-');
+            }
+            let places = self.exponent.unsigned_abs() as usize;
+            let width = places + 1;
+            write!(out, "{:0width$}", self.digits.unsigned_abs()).unwrap();
+            out.insert(out.len() - places, '.');
+        }
     }
 
     /// The digits at a smaller `exponent`: `None` past an `i128`.
@@ -889,10 +962,75 @@ mod tests {
         }
         // This f32's shortest spelling is 1234567.3, which is off the browser's grid.
         let bounds = Bounds::new(0.25f32, 2e6).step(1.0);
+        let value = Entry::typed("1234567.25").value().unwrap();
         let mut attr = String::new();
-        bounds.input_value(&Entry::from(1234567.25)).write_attr(" value", &mut attr);
+        bounds.input_value(&Entry::from(value)).write_attr(" value", &mut attr);
         assert_eq!(attr, r#" value="1234567.25""#);
-        assert_eq!(bounds.read(&Entry::typed("1234567.25")), Some(1234567.25));
+        assert_eq!(bounds.read(&Entry::typed("1234567.25")), Some(value));
+    }
+
+    #[test]
+    fn a_rounded_float_prefill_uses_a_decimal_on_the_step_grid() {
+        fn assert_prefill<T: Numeric>(bounds: Bounds<T>, submitted: &str, expected: &str) {
+            let entry = Entry::typed(submitted);
+            let value = entry.value().unwrap();
+            assert!(bounds.holds(value));
+            assert_eq!(bounds.read(&entry), Some(value));
+            let mut out = String::new();
+            bounds.input_value(&Entry::from(value)).write_attr(" value", &mut out);
+            assert_eq!(out, format!(r#" value="{expected}""#));
+            let rendered = out.strip_prefix(" value=\"").unwrap().strip_suffix('"').unwrap();
+            assert_eq!(bounds.read(&Entry::typed(rendered)), Some(value));
+        }
+        for (min, max, step, submitted, expected) in [
+            (0.25f32, 2e6, 0.1, "1000000.45", "1000000.45"),
+            (0.0, 1e6, 0.05, "335545.10", "335545.10"),
+            (0.35, 2e6, 1.0, "1234567.35", "1234567.35"),
+            (-2e6, 0.0, 0.05, "-1000000.05", "-1000000.05"),
+            // The old spelling is already on-grid, even though this float has other witnesses.
+            (0.0, 1e6, 0.01, "335545.10", "335545.09"),
+        ] {
+            assert_prefill(Bounds::new(min, max).step(step), submitted, expected);
+        }
+        assert_prefill(Bounds::new(0.25f64, 1e15).step(0.1), "500000000000000.45", "500000000000000.45");
+
+        // The binary value is 1234567.625, but max is rendered as 1234567.6.
+        let bounds = Bounds::new(0.0f32, "1234567.625".parse().unwrap()).step(0.025);
+        let mut attrs = String::new();
+        bounds.render_attrs(&mut attrs);
+        assert_eq!(attrs, r#" min="0" max="1234567.6" step="0.025""#);
+        assert_prefill(bounds, "1234567.625", "1234567.600");
+    }
+
+    #[test]
+    fn a_stepped_prefill_does_not_snap_an_invalid_value_to_the_grid() {
+        let bounds = Bounds::new(0.25f32, 2e6).step(0.1);
+        for (bounds, submitted, expected) in [
+            (bounds, "1000000.50", "1000000.50"),
+            (Bounds::new(0.25, 999999.0).step(0.1), "1000000.45", "1000000.44"),
+            (Bounds::new(0.25, 2e6).step(0.0), "1000000.45", "1000000.44"),
+            (Bounds::new(0.25, 2e6).step(-0.1), "1000000.45", "1000000.44"),
+            (Bounds::new(0.25, 2e6).step(f32::NAN), "1000000.45", "1000000.44"),
+            (Bounds::new(0.25, 2e6).step(f32::INFINITY), "1000000.45", "1000000.44"),
+        ] {
+            let value = Entry::typed(submitted).value().unwrap();
+            assert!(!bounds.holds(value));
+            let mut out = String::new();
+            bounds.input_value(&Entry::from(value)).write_attr(" value", &mut out);
+            assert_eq!(out, format!(r#" value="{expected}""#));
+        }
+        let mut out = String::new();
+        bounds.input_value(&Entry::typed("1000000.500")).write_attr(" value", &mut out);
+        assert_eq!(out, r#" value="1000000.500""#);
+
+        // Its only on-grid spelling is above the decimal max. Do not substitute it.
+        let value = Entry::typed("1000000.45").value().unwrap();
+        let bounds = Bounds::new(0.25f32, value).step(0.1);
+        assert!(bounds.holds(value));
+        out.clear();
+        bounds.input_value(&Entry::from(value)).write_attr(" value", &mut out);
+        bounds.render_attrs(&mut out);
+        assert_eq!(out, r#" value="1000000.44" min="0.25" max="1000000.44" step="0.1""#);
     }
 
     #[test]
@@ -901,7 +1039,8 @@ mod tests {
         Bounds::<f64>::any_step(0.0, 100.0).input_value(&Entry::from(1e-20)).write_attr(" value", &mut out);
         Bounds::<f32>::any_step(0.0, 100.0).input_value(&Entry::from(0.5)).write_attr(" value", &mut out);
         Bounds::new(0.0, 100.0).step(0.01).input_value(&Entry::from(12.5)).write_attr(" value", &mut out);
-        assert_eq!(out, r#" value="1e-20" value="0.5" value="12.50""#);
+        Bounds::new(-2i32, 10).step(3).input_value(&Entry::from(4)).write_attr(" value", &mut out);
+        assert_eq!(out, r#" value="1e-20" value="0.5" value="12.50" value="4""#);
     }
 
     #[test]

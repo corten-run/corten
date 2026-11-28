@@ -511,7 +511,11 @@ existing formatting. See [Choice 64](../design.md#choice-exclusive-ends) for whe
 
 Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
 `Bounds::new(0.1, 16.0).step(0.1)`. A stepped float prefill uses the greater of the
-minimum's and step's decimal places, so a half size stays `1.5` with minimum `0.5` and step `1`. Integers
+minimum's and step's decimal places, so a half size stays `1.5` with minimum `0.5` and step `1`.
+For example, with minimum `0` and step `0.05`, the stored `f32` nearest `335545.10` prefills
+as `335545.10`, not `335545.09`: both read as the same float, but only the first is a step.
+At an upper bound, the prefill cannot use a step above the maximum printed in the HTML. Choose
+a maximum that leaves room for the last wanted step when the two round to the same float. Integers
 cannot opt into any step: a number input that allows `2.5` cannot feed an integer.
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
