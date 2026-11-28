@@ -1337,7 +1337,9 @@ test("an unattended run-all.mjs whose count exits 4 starts no later step and doe
         assert.equal(exit, 0, said);
         assert.deepEqual(ran, ["count.mjs", "conform.mjs", "summarize.mjs"], said);
         assert.deepEqual(progress, ["boot", "start count", "end count", "start conform", "end conform", "start summary", "finished"], said);
-        assert.ok(!existsSync(join(here, "results", "r1", "skipped.txt")), said);
+        const skipped = join(here, "results", "r1", "skipped.txt");
+        if (code === 0) assert.ok(!existsSync(skipped), said);
+        else assert.match(readFileSync(skipped, "utf8"), /step count skipped: count\.mjs exited 1; do not treat the summary's instruction counts as this round's unless a later count replaced them/);
       }
     }
   } finally {

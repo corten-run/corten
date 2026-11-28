@@ -1638,11 +1638,19 @@ three runs:
    the reason when `perf` does not fit that kernel, a required event (`instructions:u` or
    `instructions:k`) has no row or has even one row without a whole count, `perf` prints a row
    the count would not read as an event of the set, or `perf` does not answer. In a round,
-   `run-all.mjs` leaves `BENCH_COUNT_EVERY_EVENT` unset in the count even if its caller set it.
+   `run-all.mjs` leaves `BENCH_COUNT_EVERY_EVENT` unset in the count even if its caller set it;
+   when it was set, the launcher logs that it ignores the setting without giving its value.
    A fault the default probe checks in the first pass's whole set that `perf` answered for is
    noted, not refused: the count goes on with the events it reads and repeats that load with
    `instructions:u` alone where that is unusable. A recognized optional row with
    `<not supported>` can pass the default probe without a note.
+   If `count.mjs` exits nonzero without a halt, for example after a refused probe, the round
+   records the exit status in `skipped.txt`, runs its remaining steps and summarizes as usual.
+   `summary.json` keeps the `skipped` warning and the summary prints `SKIPPED: step count`:
+   the instruction rows carry no run identity, so the summary still lists them but they are
+   not evidence of this round's count unless replaced by a later count. A retry in the same
+   directory clears this warning only when it finishes and replaces every saved row, with a
+   count or an app failure. A partial retry leaves the warning, and other skips are unchanged.
    `count-pairs.mjs` sets `BENCH_COUNT_EVERY_EVENT=1` for every invocation, requiring every
    event at the probe. An optional event that passes the probe but fails under load can still
    produce a null count, which the paired runner marks not valid. `count-kernel.txt` records

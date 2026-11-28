@@ -1137,7 +1137,12 @@ const shown = (e) => (e === "L1-icache-load-misses:u" ? process.env.FAKE_PERF_L1
 // With FAKE_BREAK too, it first makes that path a directory, so count.mjs's next write there fails.
 if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1] && process.env.FAKE_BREAK) { fs.rmSync(process.env.FAKE_BREAK, { force: true }); fs.mkdirSync(process.env.FAKE_BREAK); }
 if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1]) require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 9000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
-const probeRows = (e) => a.includes("-A") ? cpus.map((c) => "CPU" + c + ",1000,," + shown(e) + ",1000000,100.00,,").join("\\n") : "1000,," + shown(e) + ",1000000,100.00,,";
+const probeRows = (e) => {
+  const fault = a[a.indexOf("-e") + 1] === "instructions:u" && process.env.FAKE_PROBE_INSTRUCTIONS;
+  const row = (c, i) => (fault === "refused" || (fault === "partial" && c !== null && i === 0)
+    ? "<not counted>,," + shown(e) + ",0,100.00,," : "1000,," + shown(e) + ",1000000,100.00,,");
+  return a.includes("-A") ? cpus.map((c, i) => "CPU" + c + "," + row(c, i)).join("\\n") : row(null, 0);
+};
 if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "probe.jsonl"), JSON.stringify(a) + "\\n"); process.stdout.write(a[a.indexOf("-e") + 1].split(",").map(probeRows).join("\\n") + "\\n"); process.exit(0); }
 fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
 const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
@@ -1255,31 +1260,97 @@ test("count.mjs refuses BENCH_COUNT_EVERY_EVENT values other than 1 before probi
   }
 });
 
+const linuxRound = { skip: process.platform !== "linux" && "the count step runs only on Linux" };
+const ignoredMode = `the round's count ignores ${EVERY_EVENT}`;
+const staleCount = "count.mjs exited 1; do not treat the summary's instruction counts as this round's unless a later count replaced them";
+
+/** The real launcher and summarizer with a seeded earlier instruction count. */
+async function standInRoundKit(/** @type {import('node:test').TestContext} */ t) {
+  const root = mkdtempSync(join(tmpdir(), "count-round-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { kit, bin, k6Image } = await standInCountKit(root);
+  for (const name of ["run-all.mjs", "summarize.mjs", "edge.mjs", "mixed.mjs", "pack.mjs", "passes.mjs", "ssr.mjs"]) {
+    copyFileSync(join(import.meta.dirname, name), join(kit, name));
+  }
+  const dir = join(kit, "results", "r1");
+  mkdirSync(dir, { recursive: true });
+  const k6 = k6Provenance({ Id: fakeK6Id, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" }, fakeK6Version);
+  writeFileSync(join(dir, "tools.json"), JSON.stringify({ k6 }));
+  const old = [goodRow({ userPerRequest: 123456 })];
+  writeFileSync(join(dir, "instructions.json"), JSON.stringify({ "corten/page": old, "corten/json": old }));
+  const env = { PATH: `${bin}:${process.env.PATH}`, BENCH_APPS: "corten", BENCH_APP_CPUS: "0-1", FAKE_DIR: root, FAKE_K6: k6Image };
+  const run = (/** @type {string[]} */ args, /** @type {Record<string, string>} */ extra) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(kit, args[0]), ...args.slice(1)], { env: { ...env, ...extra }, stdio: ["ignore", "pipe", "pipe"], timeout: 30000 });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.once("error", reject);
+    child.once("close", (status) => resolve({ status, stdout, stderr }));
+  });
+  const launch = (/** @type {Record<string, string>} */ extra = {}, until = "count") => run(["run-all.mjs", "r1", "10", "count", until], extra);
+  const summary = () => JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+  return { dir, kit, launch, run, summary };
+}
+
 for (const value of ["0", "1"]) {
-  test(`a round ignores inherited ${EVERY_EVENT}=${value} instead of summarizing an old count`, { skip: process.platform !== "linux" && "the count step runs only on Linux" }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "count-round-mode-"));
-    t.after(() => rmSync(root, { recursive: true, force: true }));
-    const { kit, bin, k6Image } = await standInCountKit(root);
-    for (const name of ["run-all.mjs", "summarize.mjs", "edge.mjs", "mixed.mjs", "pack.mjs", "passes.mjs", "ssr.mjs"]) {
-      copyFileSync(join(import.meta.dirname, name), join(kit, name));
-    }
-    const dir = join(kit, "results", "r1");
-    mkdirSync(dir, { recursive: true });
-    const k6 = k6Provenance({ Id: fakeK6Id, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" }, fakeK6Version);
-    writeFileSync(join(dir, "tools.json"), JSON.stringify({ k6 }));
-    writeFileSync(join(dir, "instructions.json"), JSON.stringify({ "corten/json": [goodRow({ userPerRequest: 123456 })] }));
+  test(`a round ignores inherited ${EVERY_EVENT}=${value} instead of summarizing an old count`, linuxRound, async (t) => {
+    const { dir, launch, summary } = await standInRoundKit(t);
     // Unread L1i distinguishes default from strict. After the default probe's note, the stand-in
     // Docker fails the app start, so the stale successful count must be replaced by a failure.
-    const env = { PATH: `${bin}:${process.env.PATH}`, BENCH_APPS: "corten", BENCH_APP_CPUS: "1", FAKE_DIR: root, FAKE_K6: k6Image, FAKE_PROBE_ONLY: "1", FAKE_PERF_L1I: "cpu/L1-icache-load-misses/", [EVERY_EVENT]: value };
-    const result = spawnExec(process.execPath, [join(kit, "run-all.mjs"), "r1", "10", "count", "count"], { env, timeout: 10000 });
+    const result = await launch({ FAKE_PROBE_ONLY: "1", FAKE_PERF_L1I: "cpu/L1-icache-load-misses/", [EVERY_EVENT]: value });
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
-    assert.deepEqual(summary.instructions["corten/json"], { failed: "docker run failed (1): " }, result.stderr || result.stdout);
+    assert.deepEqual(summary().instructions["corten/json"], { failed: "docker run failed (1): " }, result.stderr || result.stdout);
     assert.match(readFileSync(join(dir, "count-kernel.txt"), "utf8"), /note: .*printed a row for "cpu\/L1-icache-load-misses\/"/);
-    assert.match(result.stdout ?? "", /all done/);
-    assert.doesNotMatch(result.stdout ?? "", /step failed with/);
+    assert.match(result.stdout, /all done/);
+    assert.doesNotMatch(result.stdout, /step failed with/);
+    assert.deepEqual(result.stdout.split("\n").filter((line) => line.includes(EVERY_EVENT)), [ignoredMode]);
   });
 }
+
+for (const fault of ["partial", "refused"]) {
+  test(`a round records a ${fault} instruction probe as skipped even with an old count`, linuxRound, async (t) => {
+    const { dir, kit, launch, summary } = await standInRoundKit(t);
+    // A later step must still run. The real summarizer reads the seeded earlier count.
+    writeFileSync(join(kit, "conform.mjs"), 'console.log("stand-in conform ran");\n');
+    const result = await launch({ FAKE_PROBE_INSTRUCTIONS: fault, FAKE_PROBE_ONLY: "1" }, "conform");
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stderr, /gave no count for instructions:u: CPU 0: <not counted>/);
+    assert.match(result.stdout, /step failed with 1[\s\S]*stand-in conform ran[\s\S]*all done/);
+    assert.ok(!result.stdout.includes(EVERY_EVENT));
+    const got = summary();
+    assert.equal(got.instructions["corten/json"].user, 123456);
+    assert.deepEqual(got.skipped?.map(({ step, why }) => ({ step, why })), [{ step: "count", why: staleCount }]);
+    assert.ok(result.stdout.includes(`SKIPPED: step count (${staleCount})`), result.stdout);
+    assert.ok(readFileSync(join(dir, "skipped.txt"), "utf8").includes(`step count skipped: ${staleCount}`));
+  });
+}
+
+test("a count retry clears the failure warning only after replacing all saved rows", linuxRound, async (t) => {
+  const { dir, launch, run, summary } = await standInRoundKit(t);
+  const skipped = join(dir, "skipped.txt");
+  const other = "2026-01-01T00:00:00.000Z step build skipped: an earlier build was interrupted\n";
+  writeFileSync(skipped, other);
+  const refused = await launch({ FAKE_PROBE_INSTRUCTIONS: "refused" });
+  assert.equal(refused.status, 0, refused.stderr || refused.stdout);
+  assert.ok(summary().skipped.some(({ why }) => why === staleCount));
+  const server = createServer((_, res) => res.end("{}"));
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(18410, resolve); });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const direct = await run(["count.mjs", "r1", "1", "corten", "json"], {});
+  assert.equal(direct.status, 0, direct.stderr || direct.stdout);
+  const partial = JSON.parse(readFileSync(join(dir, "instructions.json"), "utf8"));
+  assert.equal(partial["corten/json"][0].userPerRequest, 100000);
+  assert.equal(partial["corten/page"][0].userPerRequest, 123456);
+  assert.ok(readFileSync(skipped, "utf8").includes(staleCount));
+  const complete = await launch();
+  assert.equal(complete.status, 0, complete.stderr || complete.stdout);
+  const fresh = summary();
+  assert.equal(fresh.instructions["corten/page"].user, 100000);
+  assert.equal(fresh.instructions["corten/json"].user, 100000);
+  assert.deepEqual(fresh.skipped.map(({ step }) => step), ["build"]);
+  assert.equal(readFileSync(skipped, "utf8"), other);
+  assert.doesNotMatch(complete.stdout, /SKIPPED: step count/);
+});
 
 test("count.mjs attaches perf to the container docker run gave by its ID, and refuses a load fsw-corten may route to another container, by its name or an alias, before perf attaches or after it stops", posixStandIns, async () => {
   const root = mkdtempSync(join(tmpdir(), "count-mjs-"));
