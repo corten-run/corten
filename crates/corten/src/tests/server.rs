@@ -3335,7 +3335,8 @@ async fn deadlines_on_four_threads_fire_and_none_before_its_limit() {
 /// An inner request on a handler's own runtime can borrow the connection's timer, which belongs
 /// to the runtime that polls the connection. If that runtime shuts down while the deadline waits
 /// on the timer, its next poll panics inside the handler's catch. The inner request is answered
-/// 500, not the 503 it would get if its deadline fired (`docs/design.md#choice-deadline-timer`, cost 6).
+/// 500, not the 503 this request, which has no body, would get if its deadline fired
+/// (`docs/design.md#choice-deadline-timer`, cost 6).
 #[test]
 fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runtime_has_shut_down() {
     use std::{
@@ -3368,7 +3369,19 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
                     let before = taken();
                     let mut armed = Some(armed);
                     let mut answer = pin!(async move {
-                        let res = inner.oneshot(request).await.unwrap();
+                        let mut head = pin!(inner.oneshot(request));
+                        let res = poll_fn(|cx| {
+                            let polled = head.as_mut().poll(cx);
+                            if let Some(armed) = armed.take() {
+                                assert!(polled.is_pending(), "the inner request waits on its deadline");
+                                assert_eq!(taken() - before, 1, "the inner deadline borrowed the connection's timer");
+                                // Counted at reset, and the request's pending poll has now armed it.
+                                let _ = armed.send(());
+                            }
+                            polled
+                        })
+                        .await
+                        .unwrap();
                         // Timed where it was answered, not where the test's thread reads it.
                         let took = began.elapsed();
                         let status = res.status().as_u16();
@@ -3377,12 +3390,6 @@ fn a_request_on_a_handlers_own_runtime_is_answered_500_once_the_connections_runt
                     });
                     poll_fn(|cx| {
                         let polled = answer.as_mut().poll(cx);
-                        if let Some(armed) = armed.take() {
-                            assert!(polled.is_pending(), "the inner request waits on its deadline");
-                            assert_eq!(taken() - before, 1, "the inner deadline borrowed the connection's timer");
-                            // Counted at reset, and the request's pending poll has now armed it.
-                            let _ = armed.send(());
-                        }
                         // The answer first: the test's end never takes one that is ready away.
                         if polled.is_pending() && gone.as_mut().poll(cx).is_ready() {
                             return Poll::Ready(None);
