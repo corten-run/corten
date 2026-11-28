@@ -28,8 +28,9 @@ pub struct ArchiveDialogId;
 ///
 /// Without JavaScript the filter is a `GET` form and each sortable header a link, both to the
 /// page with its query (`?q=`, `?sort=`), which the server answers filtered and sorted; with it,
-/// their handlers do the same in the browser with no request, and the form's Filter button is not
-/// drawn.
+/// their handlers do the same in the browser with no request. The form's Filter button is drawn
+/// either way: it is the visible way to send the server's filter, so it still works when the
+/// grid's script did not load, and with the script it keeps the page as Enter does.
 ///
 /// The rows are `InventoryRow` views with no handlers of their own: one handler on the `<tbody>`
 /// gets the checkbox that was clicked (`select.closest()`), so 500 rows cost one `data-on`, and
@@ -69,7 +70,7 @@ pub fn InventoryGrid<'a>(lines: &'a [Line<'a>], view: &'a GridQuery, t: Msg) -> 
                         on:input={js::filter(target, found, sel)}
                     >
                     if let Some(sort) = view.sort { <input type="hidden" name={q.sort} value={sort}> }
-                    <button class={(Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }, NoScript)}>"Filter"</button>
+                    <button class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }}>"Filter"</button>
                 </form>
                 <BulkBar count={count} bar={bar} archive={ArchiveDialogId} on:clear={js::clear(sel)} />
                 <output ref={note} hidden></output>
