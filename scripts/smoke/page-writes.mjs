@@ -1,4 +1,4 @@
-import { base, skip, check } from "./helpers.mjs";
+import { base, skip, check, steps, within } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   // After a write, the page it sends the browser to is fetched whole; when that page's handler
@@ -826,20 +826,45 @@ export async function pageWrites(page, browser) {
     );
     // The patch was answered before that page was asked for, so the page's layout drew it: the
     // navigation after reads <main> alone, not the whole page again.
-    await own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written"));
-    const returned = await own
-      .waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
-      );
+    const target = new URL("/smoke/written", base).href;
+    /** @type {{ mode: string, purpose?: string }[]} */
+    const returnReads = [];
+    let recording = false;
+    let returned = false;
+    let returnError = "";
+    let closeError = null;
+    try {
+      // Record before the fixture answers, so the draw cannot beat its request onto the list.
+      await within(5000, "return route setup timed out", own.route((url) => url.href === target, (route) => {
+        const request = route.request();
+        if (recording && request.method() === "GET") {
+          const { corten, purpose } = request.headers();
+          returnReads.push({ mode: request.isNavigationRequest() ? "document" : corten ?? "-", purpose });
+        }
+        return route.fallback();
+      }));
+      const returning = steps(10_000, "return navigation did not draw within 10 s");
+      recording = true;
+      await returning.step(() => own.evaluate((url) => { /** @type {any} */ (window).navigation.navigate(url); }, target));
+      await returning.step(() => own.waitForFunction((url) =>
+        location.href === url && !!document.querySelector("main form") && !document.querySelector("main[aria-busy]"),
+      target, { timeout: 10_000 }));
+      returned = true;
+    } catch (error) {
+      returnError = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    } finally {
+      recording = false;
+      try {
+        await within(5000, "return context close timed out", own.context().close());
+      } catch (error) {
+        closeError = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      }
+    }
+    const visits = returnReads.filter(({ mode, purpose }) => mode !== "nav" || purpose !== "prefetch");
     check(
       "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone",
-      returned && seen.asked.at(-1) === "GET /smoke/written nav",
-      JSON.stringify({ returned, asked: seen.asked }),
+      returned && visits.length === 1 && visits[0].mode === "nav" && closeError === null,
+      JSON.stringify({ returned, returnReads, returnError, closeError, asked: seen.asked }),
     );
-    await own.context().close();
   }
 }
