@@ -119,6 +119,8 @@ function set(input, value) {
   if (input.disabled || input.readOnly) return;
   const before = input.value;
   input.value = value;
+  // The minimum anchors the grid, but the maximum need not be on it.
+  if (input.validity.stepMismatch) input.stepDown();
   commit(input, before);
 }
 

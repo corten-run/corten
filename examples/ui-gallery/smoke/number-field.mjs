@@ -151,11 +151,15 @@ async function stepBase(page) {
     { name: "a fractional value step base without a minimum", min: null, step: "0.25", from: "0.125", to: "0.375" },
     { name: "a step that pads an exact value", min: "0.25", step: "0.25", from: "0.75", to: "1.00" },
     { name: "a scale set by the minimum", min: "0.50", step: "1", from: "0.50", to: "1.50" },
+    { name: "the last whole step below the maximum", min: "0", max: "2.4", step: "1", from: "0", key: "End", to: "2" },
+    { name: "an aligned maximum", min: "0", max: "2", step: "1", from: "0", key: "End", to: "2" },
+    { name: "the last fractional step below the maximum", min: "0.25", max: "0.9", step: "0.5", from: "0.25", key: "End", to: "0.75" },
+    { name: "the last step below a negative maximum", min: "-2.3", max: "-0.1", step: "1", from: "-2.3", key: "End", to: "-0.3" },
     { name: "an exponent value in its native notation", min: "-5e-7", step: "0.00000001", from: "0", key: "Home", to: "-5e-7" },
     { name: "a value at a precision beyond toFixed", min: "0.5", step: `0.${"0".repeat(100)}1`, from: "1", key: "Home", to: "0.5" },
   ];
-  for (const { name, min, step, from, to, key } of cases) {
-    const state = await page.locator("#weight").evaluate(async (weight, { min, step, from, key }) => {
+  for (const { name, min, max, step, from, to, key } of cases) {
+    const state = await page.locator("#weight").evaluate(async (weight, { min, max, step, from, key }) => {
       // Let Corten connect a fresh copy inside a separate form. Leave the real gallery form,
       // its listeners, and the state other smoke areas use alone.
       const form = document.createElement("form");
@@ -166,6 +170,7 @@ async function stepBase(page) {
       for (const button of field.querySelectorAll("button")) button.setAttribute("aria-controls", input.id);
       if (min === null) input.removeAttribute("min");
       else input.min = min;
+      if (max !== undefined) input.max = max;
       input.step = step;
       input.setAttribute("value", from);
       input.value = from;
@@ -188,7 +193,7 @@ async function stepBase(page) {
       } finally {
         form.remove();
       }
-    }, { min, step, from, key });
+    }, { min, max, step, from, key });
     check(`NumberField keeps ${name} valid and submits it`, state.valid && state.changes === 1 &&
       state.value === to && state.submitted.length === 1 && state.submitted[0] === to, JSON.stringify(state));
   }

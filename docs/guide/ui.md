@@ -33,6 +33,7 @@ html! { <div class={Field}><label for={QtyId}>{t.quantity()}</label><NumberField
 
 Steps start at the minimum. For example, a minimum of `0.25` with a step of `0.5`
 gives `0.25`, `0.75`, `1.25` and so on, both in the initial HTML and when stepping.
+End goes to the last valid step: with a maximum of `0.9` in that example, it goes to `0.75`.
 The buttons keep the browser's spelling rather than pad it if it uses an exponent,
 needs more than 100 decimal places, or padding would change its value or validity.
 
